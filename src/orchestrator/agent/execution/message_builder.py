@@ -124,9 +124,10 @@ class MessageBuilder(IMessageBuilder):
         else:
             logger.warning("⚠️ Agent has no memory_config!")
 
-        # Add system prompt
-        if agent.system_prompt:
-            messages.append({"role": "system", "content": agent.system_prompt})
+        # Add system prompt (resolves templates, few-shot examples, and modifiers)
+        system_prompt = agent.resolve_system_prompt(context)
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
 
         # Inject ReAct scaffold if enabled (must come before user messages)
         if agent.config and agent.config.react_mode:

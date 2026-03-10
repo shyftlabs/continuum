@@ -21,8 +21,16 @@ from orchestrator.agent.types import (
 from orchestrator.config import settings
 
 if TYPE_CHECKING:
+    from orchestrator.agent.types import RunContext
     from orchestrator.llm.types import ToolDefinition
     from orchestrator.tools import MCPServer, ToolExecutor
+
+
+class _SafeFormatMap(dict):
+    """Format-map that leaves unresolved {slots} in place instead of raising KeyError."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 _THINK_TOOL: dict[str, Any] = {
@@ -126,6 +134,50 @@ class BaseAgent:
     metadata: dict[str, Any] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
 
+    # -------------------------------------------------------------------------
+    # Prompt engineering
+    # -------------------------------------------------------------------------
+
+    # PromptTemplate — static variables merged with runtime context when
+    # resolving {slot} placeholders in instructions.
+    # Runtime slots available automatically: {user_id}, {session_id},
+    # {run_id}, {agent_name}, {date}, plus any key from context.metadata.
+    # template_vars take highest priority and override all of the above.
+    #
+    # Example:
+    #   BaseAgent(
+    #       instructions="You are helping {user_name}. Today is {date}.",
+    #       template_vars={"user_name": "Alice"},
+    #   )
+    template_vars: dict[str, Any] = field(default_factory=dict)
+
+    # Few-shot examples — injected into the system prompt automatically.
+    # Each dict must have "input" and "output" keys.
+    #
+    # Example:
+    #   BaseAgent(
+    #       examples=[
+    #           {"input": "What is 2+2?", "output": "4"},
+    #           {"input": "Summarise in one word: the sky is blue.", "output": "Sky"},
+    #       ]
+    #   )
+    examples: list[dict[str, str]] = field(default_factory=list)
+
+    # Dynamic instruction modifiers — callables applied in order after
+    # template rendering and few-shot injection.  Each receives the current
+    # prompt string and the RunContext, and returns the modified prompt.
+    # Useful for context-aware changes (user tier, session length, memory topics).
+    #
+    # Example:
+    #   def add_tier_note(prompt: str, ctx: RunContext) -> str:
+    #       tier = ctx.metadata.get("user_tier", "free")
+    #       if tier == "enterprise":
+    #           return prompt + "\nThis is an enterprise user — prioritise SLA."
+    #       return prompt
+    #
+    #   BaseAgent(instruction_modifiers=[add_tier_note])
+    instruction_modifiers: list[Callable[[str, Any], str]] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         """Validate agent configuration after initialization."""
         self._validate()
@@ -148,11 +200,96 @@ class BaseAgent:
     @property
     def system_prompt(self) -> str:
         """
-        Get the full system prompt for the agent.
+        Get the system prompt without runtime context (backward-compatible).
 
-        Combines instructions with any additional context.
+        For full resolution including template variables, few-shot examples,
+        and dynamic modifiers, call resolve_system_prompt(context) instead.
         """
-        return self.instructions
+        return self.resolve_system_prompt(context=None)
+
+    def resolve_system_prompt(self, context: Any | None = None) -> str:
+        """
+        Build the final system prompt for this agent.
+
+        Applies three layers in order:
+
+        1. **Template rendering** — replaces ``{slot}`` placeholders in
+           ``instructions`` using (in ascending priority):
+           built-in runtime vars → ``context.metadata`` → ``template_vars``.
+
+           Built-in runtime vars:
+           - ``{agent_name}``  — this agent's name
+           - ``{date}``        — today's date (ISO 8601)
+           - ``{user_id}``     — context.user_id (empty string if None)
+           - ``{session_id}``  — context.session_id (empty string if None)
+           - ``{run_id}``      — context.run_id (empty string if None)
+
+           Unknown slots are left as-is (no KeyError).
+
+        2. **Few-shot examples** — if ``examples`` is non-empty, appends a
+           formatted "Examples:" block to the prompt.
+
+        3. **Instruction modifiers** — callables in ``instruction_modifiers``
+           are applied in order, each receiving ``(prompt, context)`` and
+           returning the modified prompt string.
+
+        Args:
+            context: RunContext for the current execution (may be None).
+
+        Returns:
+            The fully resolved system prompt string.
+        """
+        from datetime import date as _date
+
+        prompt = self.instructions
+
+        # ------------------------------------------------------------------
+        # 1. Template rendering
+        # ------------------------------------------------------------------
+        if "{" in prompt:
+            vars_map: dict[str, Any] = {
+                "agent_name": self.name,
+                "date": _date.today().isoformat(),
+                "user_id": "",
+                "session_id": "",
+                "run_id": "",
+            }
+            if context is not None:
+                vars_map["user_id"] = getattr(context, "user_id", None) or ""
+                vars_map["session_id"] = getattr(context, "session_id", None) or ""
+                vars_map["run_id"] = getattr(context, "run_id", None) or ""
+                # Merge context.metadata (lower priority than template_vars)
+                meta = getattr(context, "metadata", None)
+                if isinstance(meta, dict):
+                    vars_map.update(meta)
+            # template_vars override everything
+            vars_map.update(self.template_vars)
+            try:
+                prompt = prompt.format_map(_SafeFormatMap(vars_map))
+            except Exception:
+                pass  # never raise on template errors
+
+        # ------------------------------------------------------------------
+        # 2. Few-shot examples
+        # ------------------------------------------------------------------
+        if self.examples:
+            lines = ["\n\nExamples:"]
+            for ex in self.examples:
+                lines.append(f"Input: {ex.get('input', '')}")
+                lines.append(f"Output: {ex.get('output', '')}")
+                lines.append("")
+            prompt = prompt.rstrip() + "\n" + "\n".join(lines).rstrip()
+
+        # ------------------------------------------------------------------
+        # 3. Dynamic instruction modifiers
+        # ------------------------------------------------------------------
+        for modifier in self.instruction_modifiers:
+            try:
+                prompt = modifier(prompt, context)
+            except Exception:
+                pass  # never raise on modifier errors
+
+        return prompt
 
     def get_tools_for_llm(self) -> list[dict[str, Any]]:
         """
@@ -266,6 +403,9 @@ class BaseAgent:
             "on_handoff": self.on_handoff,
             "metadata": dict(self.metadata),
             "tags": list(self.tags),
+            "template_vars": dict(self.template_vars),
+            "examples": list(self.examples),
+            "instruction_modifiers": list(self.instruction_modifiers),
         }
 
         # Apply overrides
@@ -309,6 +449,9 @@ class BaseAgent:
             "json_strict": self.json_strict,
             "metadata": self.metadata,
             "tags": self.tags,
+            "template_vars": self.template_vars,
+            "examples": self.examples,
+            "has_instruction_modifiers": len(self.instruction_modifiers) > 0,
         }
 
     def to_tool_definition(self, description: str | None = None) -> dict[str, Any]:
