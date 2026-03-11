@@ -170,6 +170,17 @@ try:
 except ImportError:
     pass  # temporalio not installed
 
+# Evaluation (always available — deepeval/ragas are optional within the module)
+from orchestrator.evaluation import (
+    CriterionScore,
+    EvalCase,
+    EvalResult,
+    EvalStatus,
+    EvaluatorAgent,
+    LangfuseDatasetClient,
+    create_evaluator_agent,
+)
+
 # Session
 # Agent Orchestration
 from orchestrator.agent import (

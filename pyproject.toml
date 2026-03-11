@@ -67,6 +67,10 @@ cohere = [
 temporal = [
     "temporalio>=1.23.0",
 ]
+eval = [
+    "deepeval>=1.0.0",
+    "ragas>=0.2.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/bhavik-shyftlabs/shyftlabs-continuum"
