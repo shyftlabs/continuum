@@ -125,6 +125,10 @@ dmypy.json
 # IDEs
 .vscode/
 .idea/
+
+# Tool-generated
+.claude/
+.deepeval/
 *.swp
 *.swo
 *~
@@ -140,4 +144,5 @@ gap-analysis/
 run-related/
 iteration-docs/
 playground/comparisons/
+src/orchestrator/evaluation/eval-dataset/
 

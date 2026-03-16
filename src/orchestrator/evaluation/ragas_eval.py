@@ -4,7 +4,7 @@ RAGAS integration for the evaluation module.
 Wraps RAGAS retrieval-augmented evaluation metrics behind the project's
 EvalCase / EvalResult types.
 
-Requires:  pip install ragas datasets
+Requires:  pip install ragas datasets langchain-openai
 
 IMPORTANT — EvalCase.context must be non-empty.
 RAGAS metrics measure the relationship between a question, retrieved chunks,
@@ -40,6 +40,8 @@ Example::
 from __future__ import annotations
 
 import asyncio
+import os
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -58,18 +60,34 @@ def _require_ragas() -> None:
     except ImportError:
         raise ImportError(
             "ragas and/or datasets are not installed.\n"
-            "Install them with:  pip install ragas datasets"
+            "Install them with:  pip install ragas datasets langchain-openai"
         )
 
 
-def _build_metrics(metric_names: list[str]) -> list[Any]:
-    """Resolve metric name strings to RAGAS metric objects (deferred import)."""
-    from ragas.metrics import (
-        answer_relevancy,
-        context_precision,
-        context_recall,
-        faithfulness,
-    )
+def _build_metrics(metric_names: list[str], openai_api_key: str) -> list[Any]:
+    """Return old-style RAGAS metric singletons with LLM/embeddings patched in.
+
+    ragas.evaluate() checks isinstance(m, ragas.metrics.base.Metric), so we
+    must use the legacy singletons (ragas.metrics._xxx), not the collections
+    classes that inherit from BaseMetric.  We suppress the deprecation warnings
+    since this is intentional for ragas v0.4.x compatibility.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from ragas.metrics import (  # noqa: F401
+            answer_relevancy,
+            context_precision,
+            context_recall,
+            faithfulness,
+        )
+        from ragas.llms import LangchainLLMWrapper
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+    lc_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=openai_api_key)
+    lc_emb = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=openai_api_key)
+    ragas_llm = LangchainLLMWrapper(lc_llm)
+    ragas_emb = LangchainEmbeddingsWrapper(lc_emb)
 
     registry: dict[str, Any] = {
         "faithfulness": faithfulness,
@@ -77,6 +95,12 @@ def _build_metrics(metric_names: list[str]) -> list[Any]:
         "context_precision": context_precision,
         "context_recall": context_recall,
     }
+
+    # Patch LLM + embeddings onto each singleton
+    for m in registry.values():
+        m.llm = ragas_llm
+    for name in ("answer_relevancy", "context_precision", "context_recall"):
+        registry[name].embeddings = ragas_emb
 
     resolved = []
     for name in metric_names:
@@ -100,9 +124,8 @@ class RagasEvaluator:
         metric_names:      RAGAS metric name strings to evaluate.
                            Defaults to all four built-in metrics.
         name:              Identifier used in EvalResult.evaluator_name.
-        ragas_llm:         Optional LangchainLLM wrapper for RAGAS
-                           (if None, RAGAS uses its default LLM).
-        ragas_embeddings:  Optional embeddings wrapper for RAGAS.
+        ragas_llm:         Ignored (kept for API compatibility; LLM is built internally).
+        ragas_embeddings:  Ignored (kept for API compatibility).
     """
 
     metric_names: list[str] = field(default_factory=lambda: list(_ALL_METRIC_NAMES))
@@ -129,8 +152,11 @@ class RagasEvaluator:
             EvalResult with one CriterionScore per RAGAS metric.
         """
         import time
+        import warnings
         from datasets import Dataset
-        from ragas import evaluate as ragas_evaluate
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            from ragas import evaluate as ragas_evaluate
 
         t0 = time.monotonic()
 
@@ -140,6 +166,16 @@ class RagasEvaluator:
                 "RAGAS metrics will be unreliable without retrieved documents."
             )
 
+        openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not openai_api_key:
+            return EvalResult(
+                status=EvalStatus.ERROR,
+                evaluator_name=self.name,
+                case_id=case.case_id,
+                agent_response=agent_response_text,
+                metadata={"error": "OPENAI_API_KEY not set"},
+            )
+
         data = {
             "question": [case.input_text],
             "answer": [agent_response_text],
@@ -147,7 +183,7 @@ class RagasEvaluator:
             "ground_truth": [case.expected_output or ""],
         }
         dataset = Dataset.from_dict(data)
-        metrics = _build_metrics(self.metric_names)
+        metrics = _build_metrics(self.metric_names, openai_api_key)
 
         if not metrics:
             return EvalResult(
@@ -159,17 +195,13 @@ class RagasEvaluator:
             )
 
         try:
-            kwargs: dict[str, Any] = {}
-            if self.ragas_llm:
-                kwargs["llm"] = self.ragas_llm
-            if self.ragas_embeddings:
-                kwargs["embeddings"] = self.ragas_embeddings
-
             loop = asyncio.get_event_loop()
-            ragas_result = await loop.run_in_executor(
-                None,
-                lambda: ragas_evaluate(dataset=dataset, metrics=metrics, **kwargs),
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                ragas_result = await loop.run_in_executor(
+                    None,
+                    lambda: ragas_evaluate(dataset=dataset, metrics=metrics),
+                )
 
             result_row = ragas_result.to_pandas().iloc[0].to_dict()
 
