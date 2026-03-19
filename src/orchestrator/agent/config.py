@@ -181,6 +181,12 @@ class AgentConfig:
     reasoning_mode: bool = False  # two-pass: silent think-first LLM call before the turn loop
     react_mode: bool = False  # ReAct: appends Thought/Action/Observation template to system prompt
 
+    # Session history
+    session_history_limit: int | None = None  # None = use default (50); set to limit turns loaded
+
+    # Context requirement
+    require_context: bool = False  # if True, skip LLM and return no-knowledge message when no RAG context found
+
     # Tracing
     trace_all_turns: bool = True  # Trace every turn
     log_to_session: bool = True  # Log messages to session
@@ -312,28 +318,6 @@ class LoopConfig:
         return {
             "max_iterations": self.max_iterations,
             "check_interval": self.check_interval,
-        }
-
-
-@dataclass
-class PlanningConfig:
-    """Configuration for PlannerAgent — goal decomposition and dynamic replanning."""
-
-    max_steps: int = 10                  # Max steps the planner can generate
-    enable_replanning: bool = False      # Check after each successful step whether to replan
-    replan_on_failure: bool = True       # Always replan when a step fails
-    planning_model: str | None = None   # Model for plan generation (defaults to agent model)
-    fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
-    strict_agent_pool: bool = False      # Raise error if plan names an agent not in the pool
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "max_steps": self.max_steps,
-            "enable_replanning": self.enable_replanning,
-            "replan_on_failure": self.replan_on_failure,
-            "planning_model": self.planning_model,
-            "fail_strategy": self.fail_strategy.value,
-            "strict_agent_pool": self.strict_agent_pool,
         }
 
 

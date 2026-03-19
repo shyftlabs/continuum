@@ -124,10 +124,9 @@ class MessageBuilder(IMessageBuilder):
         else:
             logger.warning("⚠️ Agent has no memory_config!")
 
-        # Add system prompt (resolves templates, few-shot examples, and modifiers)
-        system_prompt = agent.resolve_system_prompt(context)
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+        # Add system prompt
+        if agent.system_prompt:
+            messages.append({"role": "system", "content": agent.system_prompt})
 
         # Inject ReAct scaffold if enabled (must come before user messages)
         if agent.config and agent.config.react_mode:
@@ -164,8 +163,13 @@ class MessageBuilder(IMessageBuilder):
         # Load session history if available
         if context.session_id and self._session_service:
             try:
+                history_limit = (
+                    agent.config.session_history_limit
+                    if agent.config and agent.config.session_history_limit is not None
+                    else 50
+                )
                 history = await self._session_service.get_conversation_history(
-                    context.session_id, limit=50
+                    context.session_id, limit=history_limit
                 )
                 messages.extend(history)
             except Exception as e:
@@ -228,6 +232,12 @@ class MessageBuilder(IMessageBuilder):
             logger.warning(
                 f"Context management failed for agent {agent.name}, continuing without compression: {e}"
             )
+
+        formatted = "\n".join(
+            f"[{m.get('role','?')}] {str(m.get('content', ''))[:2000]}"
+            for m in messages
+        )
+        logger.info("===== FINAL PROMPT =====\n%s\n========================", formatted)
 
         return messages
 

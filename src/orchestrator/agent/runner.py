@@ -452,6 +452,10 @@ class AgentRunner:
                 status=ResponseStatus.SUCCESS, trace_id=ctx.trace_id,
             )
 
+            # Append final assistant response to messages so it gets saved to Redis session
+            if content:
+                messages.append({"role": "assistant", "content": content})
+
             if agent.on_end:
                 agent.on_end(agent, {"context": ctx, "response": response})
 
