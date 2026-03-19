@@ -322,6 +322,28 @@ class LoopConfig:
 
 
 @dataclass
+class PlanningConfig:
+    """Configuration for PlannerAgent — goal decomposition and dynamic replanning."""
+
+    max_steps: int = 10                  # Max steps the planner can generate
+    enable_replanning: bool = False      # Check after each successful step whether to replan
+    replan_on_failure: bool = True       # Always replan when a step fails
+    planning_model: str | None = None   # Model for plan generation (defaults to agent model)
+    fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
+    strict_agent_pool: bool = False      # Raise error if plan names an agent not in the pool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_steps": self.max_steps,
+            "enable_replanning": self.enable_replanning,
+            "replan_on_failure": self.replan_on_failure,
+            "planning_model": self.planning_model,
+            "fail_strategy": self.fail_strategy.value,
+            "strict_agent_pool": self.strict_agent_pool,
+        }
+
+
+@dataclass
 class RouterConfig:
     """Configuration for router agent."""
 
