@@ -181,28 +181,25 @@ class SessionService(ISessionService):
                         f"💾 Session client not available for memory storage: session_client={'available' if self._session_client else 'not available'}"
                     )
 
-                # Log memory storage at INFO level
-                if should_store_in_memory:
-                    logger.info(
-                        f"💾 STORING MEMORY: role={role}, "
-                        f"content='{content[:100]}...', "
-                        f"session_id={session_id[:8] if session_id else 'none'}, "
-                        f"run_id={run_id[:8] if run_id else 'none'}, "
-                        f"metadata={msg_metadata}"
-                    )
-                else:
+                if not should_store_in_memory:
                     logger.debug("Skipping memory storage (empty content)")
+
+                # Extract memory hooks from agent config (product-level customization)
+                _mem_cfg = getattr(agent, "memory_config", None)
+                _extraction_prompt = getattr(_mem_cfg, "extraction_prompt", None)
+                _pre_store_filter = getattr(_mem_cfg, "pre_store_filter", None)
+                _on_stored = getattr(_mem_cfg, "on_stored", None)
 
                 await self._session_client.add_message(
                     session_id=session_id,
                     message=msg,
                     store_in_memory=should_store_in_memory,
                     metadata=msg_metadata,
+                    extraction_prompt=_extraction_prompt,
+                    pre_store_filter=_pre_store_filter,
+                    on_stored=_on_stored,
                 )
                 saved_count += 1
-
-                if should_store_in_memory:
-                    logger.info(f"✅ Memory stored successfully for {role} message")
 
             logger.debug(
                 f"Session {session_id}: saved {saved_count} messages, "

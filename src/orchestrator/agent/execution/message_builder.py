@@ -141,15 +141,14 @@ class MessageBuilder(IMessageBuilder):
                     "📋 Injected tool context into system prompt (existing session_id found)"
                 )
 
-        # Retrieve memories if enabled
+        # Inject memory facts early (user profile/background — stable context like instructions)
         if agent.memory_config.search_memories and self._memory_service:
             try:
                 query = input if isinstance(input, str) else str(input)
                 memories = await self._memory_service.retrieve_memories(agent, query, context)
 
                 if memories:
-                    # Add memories as context
-                    memory_content = "Relevant information from memory:\n"
+                    memory_content = "User profile (long-term preferences and context):\n"
                     for m in memories:
                         memory_content += f"- {m.get('memory', str(m))}\n"
 
@@ -175,6 +174,19 @@ class MessageBuilder(IMessageBuilder):
             except Exception as e:
                 logger.warning(f"Failed to load session history: {e}")
 
+        # Inject RAG context last (closest to current question for maximum recency effect)
+        rag_context = agent.config.rag_context if agent.config else None
+        if rag_context:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "--- PROVIDED CONTEXT (use for new factual/analytical questions; "
+                    "for references to this conversation use the conversation history above) ---\n\n"
+                    + rag_context
+                    + "\n\n--- END CONTEXT ---"
+                ),
+            })
+
         # Sanitize user input if enabled via agent config
         should_sanitize = not agent.config or agent.config.input_sanitization
         should_detect = agent.config and agent.config.injection_detection
@@ -187,6 +199,31 @@ class MessageBuilder(IMessageBuilder):
                     logger.warning(
                         f"Potential prompt injection detected in input to agent "
                         f"'{agent.name}': {detected}"
+                    )
+
+        # Run product input scanners (e.g. LLM Guard PromptInjection/Gibberish for TaxPilot).
+        # Any scanner that returns is_safe=False raises InputBlockedError — the calling router
+        # catches this and returns a blocked response without invoking the LLM.
+        if isinstance(input, str) and agent.config and agent.config.input_scanners:
+            from orchestrator.exceptions import InputBlockedError
+            for scanner in agent.config.input_scanners:
+                try:
+                    input, is_safe, reason = scanner(input)
+                    if not is_safe:
+                        logger.warning(
+                            "Input scanner blocked request — agent=%s scanner=%s",
+                            agent.name, reason,
+                        )
+                        raise InputBlockedError(
+                            f"Input blocked by scanner: {reason}",
+                            scanner=reason or "",
+                        )
+                except InputBlockedError:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        "Input scanner %s failed (fail-open): %s",
+                        getattr(scanner, "__name__", repr(scanner)), e,
                     )
 
         # Add user input
@@ -233,8 +270,11 @@ class MessageBuilder(IMessageBuilder):
                 f"Context management failed for agent {agent.name}, continuing without compression: {e}"
             )
 
+        import os
+        _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
+        _limit = None if _full else 2000
         formatted = "\n".join(
-            f"[{m.get('role','?')}] {str(m.get('content', ''))[:2000]}"
+            f"[{m.get('role','?')}] {str(m.get('content', ''))[:_limit]}"
             for m in messages
         )
         logger.info("===== FINAL PROMPT =====\n%s\n========================", formatted)

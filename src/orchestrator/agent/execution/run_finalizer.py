@@ -58,6 +58,27 @@ class RunFinalizer:
 
         self.attach_run_artifacts(agent, response)
 
+        # Run product output scanners (e.g. LLM Guard Sensitive/PII for TaxPilot).
+        # Scanners redact PII in response.content before it is saved to session or returned.
+        # Fail-open: if a scanner crashes the response is still returned unmodified.
+        if agent.config and agent.config.output_scanners and response.content:
+            prompt = ""
+            if messages:
+                # Use the last user message as the prompt context for output scanners
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        prompt = str(m.get("content", ""))
+                        break
+            for scanner in agent.config.output_scanners:
+                try:
+                    sanitized, _, _ = scanner(prompt, response.content)
+                    response.content = sanitized
+                except Exception as e:
+                    logger.warning(
+                        "Output scanner %s failed (fail-open): %s",
+                        getattr(scanner, "__name__", repr(scanner)), e,
+                    )
+
         run_state.status = RunStatus.COMPLETED
         await self._context_service.save_run_state(run_state)
 

@@ -6,8 +6,13 @@ Defines configuration classes for agents and agent execution.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
+
+# Type aliases for memory hooks
+MemoryPreStoreFilter = Callable[[list[str]], list[str]]
+MemoryOnStoredCallback = Callable[[list[str]], None]
 
 from orchestrator.agent.types import (
     FailStrategy,
@@ -45,6 +50,19 @@ class AgentMemoryConfig:
     store_scope: MemoryScope = MemoryScope.USER  # Scope for memory storage
     store_assistant_messages: bool = True  # Store assistant responses
     store_user_messages: bool = True  # Store user messages
+
+    # Memory policy hooks — product-level customization (domain-agnostic in SDK)
+    # extraction_prompt: custom fact extraction prompt; if None, mem0 default is used
+    extraction_prompt: str | None = None
+    # pre_store_filter: called with extracted fact texts after storage;
+    # facts not returned by the filter are deleted from the vector store (best-effort)
+    pre_store_filter: MemoryPreStoreFilter | None = field(
+        default=None, repr=False, compare=False, hash=False
+    )
+    # on_stored: fired with the final list of stored fact texts after add + filter
+    on_stored: MemoryOnStoredCallback | None = field(
+        default=None, repr=False, compare=False, hash=False
+    )
 
     # Sharing settings (for multi-agent)
     broadcast_learnings: bool = False  # Share important learnings
@@ -187,6 +205,20 @@ class AgentConfig:
     # Context requirement
     require_context: bool = False  # if True, skip LLM and return no-knowledge message when no RAG context found
 
+    # RAG retrieval hints — products read these in their retrieve_context() call.
+    # None means "use the product's own default".
+    retrieval_top_k: int | None = None      # how many chunks to return to the LLM
+    rerank_enabled: bool | None = None      # whether to run a cross-encoder reranker
+    rag_context: str | None = None          # RAG chunks injected after conversation history
+
+    # Scanner hooks — products plug domain-specific scanners here instead of hardcoding in routers.
+    # Input scanner signature:  (text: str) -> tuple[str, bool, str | None]
+    #   returns (sanitized_text, is_safe, reason); is_safe=False → InputBlockedError raised
+    # Output scanner signature: (prompt: str, output: str) -> tuple[str, bool, str | None]
+    #   returns (sanitized_output, is_safe, reason); output with PII redacted in-place
+    input_scanners: list[Callable[[str], tuple[str, bool, str | None]]] = field(default_factory=list)
+    output_scanners: list[Callable[[str, str], tuple[str, bool, str | None]]] = field(default_factory=list)
+
     # Tracing
     trace_all_turns: bool = True  # Trace every turn
     log_to_session: bool = True  # Log messages to session
@@ -318,28 +350,6 @@ class LoopConfig:
         return {
             "max_iterations": self.max_iterations,
             "check_interval": self.check_interval,
-        }
-
-
-@dataclass
-class PlanningConfig:
-    """Configuration for PlannerAgent — goal decomposition and dynamic replanning."""
-
-    max_steps: int = 10                  # Max steps the planner can generate
-    enable_replanning: bool = False      # Check after each successful step whether to replan
-    replan_on_failure: bool = True       # Always replan when a step fails
-    planning_model: str | None = None   # Model for plan generation (defaults to agent model)
-    fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
-    strict_agent_pool: bool = False      # Raise error if plan names an agent not in the pool
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "max_steps": self.max_steps,
-            "enable_replanning": self.enable_replanning,
-            "replan_on_failure": self.replan_on_failure,
-            "planning_model": self.planning_model,
-            "fail_strategy": self.fail_strategy.value,
-            "strict_agent_pool": self.strict_agent_pool,
         }
 
 

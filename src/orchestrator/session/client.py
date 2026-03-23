@@ -254,6 +254,9 @@ class SessionClient:
         *,
         metadata: dict[str, Any] | None = None,
         store_in_memory: bool = True,
+        extraction_prompt: str | None = None,
+        pre_store_filter: Any | None = None,
+        on_stored: Any | None = None,
     ) -> None:
         """
         Add a message to the session.
@@ -302,15 +305,10 @@ class SessionClient:
                         if session_metadata.agent_id:
                             memory_metadata["_agent_id"] = session_metadata.agent_id
 
-                        # Log memory storage attempt
-                        logger.info(
-                            f"💾 SESSION → MEMORY: Storing message in memory: "
-                            f"role={message.role}, "
-                            f"content='{message.content[:100] if message.content else 'empty'}...', "
-                            f"user_id={session_metadata.user_id[:8] if session_metadata.user_id else 'none'}, "
-                            f"agent_id={session_metadata.agent_id[:8] if session_metadata.agent_id else 'none'}, "
-                            f"run_id={session_id[:8] if session_id else 'none'}, "
-                            f"metadata={memory_metadata}"
+                        logger.debug(
+                            f"🧠 Extracting memory: role={message.role} "
+                            f"session={session_id[:8] if session_id else 'none'} "
+                            f"user={session_metadata.user_id[:8] if session_metadata.user_id else 'none'}"
                         )
 
                         result = await self.memory_client.add(
@@ -319,27 +317,59 @@ class SessionClient:
                             agent_id=session_metadata.agent_id,
                             run_id=session_id,
                             metadata=memory_metadata,
+                            custom_prompt=extraction_prompt,
                         )
 
-                        # Log memory storage result
-                        logger.info(
-                            f"✅ MEMORY STORED: {result.message}, "
-                            f"extracted {len(result.results)} facts/memories"
-                        )
-                        if result.results:
-                            for idx, fact in enumerate(result.results[:3], 1):  # Log first 3 facts
-                                # Handle both dict and object formats
-                                if isinstance(fact, dict):
-                                    fact_text = fact.get("memory") or fact.get("text") or str(fact)
-                                else:
-                                    fact_text = (
-                                        getattr(fact, "memory", None)
-                                        or getattr(fact, "text", None)
-                                        or str(fact)
-                                    )
-                                logger.info(
-                                    f"   Fact #{idx}: {fact_text[:100] if fact_text else 'N/A'}..."
+                        # Build list of (fact_text, fact_id) for stored facts
+                        stored_pairs: list[tuple[str, str | None]] = []
+                        for fact in result.results:
+                            if isinstance(fact, dict):
+                                fact_text = fact.get("memory") or fact.get("text") or str(fact)
+                                fact_id = fact.get("id")
+                            else:
+                                fact_text = (
+                                    getattr(fact, "memory", None)
+                                    or getattr(fact, "text", None)
+                                    or str(fact)
                                 )
+                                fact_id = getattr(fact, "id", None)
+                            if fact_text:
+                                stored_pairs.append((fact_text, fact_id))
+
+                        # Apply pre_store_filter: delete facts that don't pass (best-effort)
+                        if pre_store_filter and stored_pairs:
+                            fact_texts = [t for t, _ in stored_pairs]
+                            try:
+                                allowed = set(pre_store_filter(fact_texts))
+                            except Exception as fe:
+                                logger.warning(f"pre_store_filter failed: {fe}")
+                                allowed = set(fact_texts)
+                            filtered_out = [(t, i) for t, i in stored_pairs if t not in allowed]
+                            if filtered_out:
+                                logger.info(f"🚫 PII filter blocked {len(filtered_out)} fact(s): {[t for t, _ in filtered_out]}")
+                            for fact_text, fact_id in filtered_out:
+                                if fact_id:
+                                    try:
+                                        await self.memory_client.delete(fact_id)
+                                    except Exception as de:
+                                        logger.warning(f"Failed to delete filtered fact {fact_id}: {de}")
+                            stored_pairs = [(t, i) for t, i in stored_pairs if t in allowed]
+
+                        if stored_pairs:
+                            facts_preview = "; ".join(t[:60] for t, _ in stored_pairs[:3])
+                            logger.info(
+                                f"✅ Memory: {len(stored_pairs)} fact(s) stored — {facts_preview}"
+                            )
+                        else:
+                            logger.debug("🧠 Memory: no new facts extracted")
+
+                        # Fire on_stored callback with final stored fact texts
+                        final_facts = [t for t, _ in stored_pairs]
+                        if on_stored and final_facts:
+                            try:
+                                on_stored(final_facts)
+                            except Exception as ce:
+                                logger.warning(f"on_stored callback failed: {ce}")
                     else:
                         logger.warning(
                             f"⚠️ Cannot store memory: Session metadata not found for session_id={session_id[:8] if session_id else 'none'}"
