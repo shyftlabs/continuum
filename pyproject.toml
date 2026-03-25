@@ -34,8 +34,11 @@ classifiers = [
 
 dependencies = [
     "aiohttp>=3.13.2",  # Explicit dependency - latest version fixes enable_cleanup_closed deprecation warning for Python 3.13+
-    "litellm>=1.71.0",
-    "langfuse>=2.57.0,<3.0.0",  # Pin to v2.x for LiteLLM compatibility
+    "openai>=1.50.0",
+    "anthropic>=0.40.0",
+    "google-genai>=1.0.0",
+    "tiktoken>=0.7.0",
+    "langfuse>=2.57.0,<3.0.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     "python-dotenv>=1.0.1",
@@ -88,7 +91,7 @@ exclude = ["tests*", "playground*"]
 
 [tool.setuptools.package-data]
 "orchestrator" = ["py.typed"]
-"*" = ["litellm_config.yaml"]
+"*" = []
 
 [tool.ruff]
 line-length = 100

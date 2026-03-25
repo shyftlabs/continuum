@@ -1,28 +1,16 @@
 """
 LLM Client - Unified interface for multi-LLM provider support.
 
-Uses LiteLLM to provide access to 100+ LLM providers with a consistent API.
+Calls provider SDKs directly (openai, anthropic) — no LiteLLM dependency.
 Supports synchronous, asynchronous, and streaming modes.
-Includes full observability integration with Langfuse.
+Includes full observability integration with Langfuse via @observe decorator.
 """
 
 import asyncio
 import json
-import os
 import time
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
 from typing import Any
-
-import litellm
-from litellm import (
-    AuthenticationError,
-    BadRequestError,
-    ContextWindowExceededError,
-    RateLimitError,
-    ServiceUnavailableError,
-    Timeout,
-)
 
 from orchestrator.config import settings
 from orchestrator.llm.callbacks import (
@@ -31,20 +19,16 @@ from orchestrator.llm.callbacks import (
 )
 from orchestrator.llm.config import LLMConfig
 from orchestrator.llm.exceptions import (
-    LLMAuthenticationError,
-    LLMContextLengthError,
     LLMError,
-    LLMInvalidRequestError,
-    LLMRateLimitError,
-    LLMServiceUnavailableError,
-    LLMTimeoutError,
 )
+from orchestrator.llm.providers import get_provider
 from orchestrator.llm.types import (
     ChatMessage,
     LLMResponse,
     StreamChunk,
     ToolDefinition,
 )
+from orchestrator.llm.utils import supports_tools_with_json_mode
 from orchestrator.logging import get_logger
 from orchestrator.observability.decorators import observe
 from orchestrator.observability.trace_context import (
@@ -76,7 +60,8 @@ class _LLMRateLimiter:
             self.tokens = min(float(self.rpm), self.tokens + elapsed * (self.rpm / 60.0))
 
             if self.tokens < 1:
-                wait_time = (1 - self.tokens) / (self.rpm / 60.0)
+                wait_time = (1 - self.tokens) * (60.0 / self.rpm)
+                logger.warning(f"Rate limit reached, waiting {wait_time:.2f}s")
                 await asyncio.sleep(wait_time)
                 self.tokens = 0
             else:
@@ -85,49 +70,11 @@ class _LLMRateLimiter:
 
 class LLMClient:
     """
-    Unified LLM client with multi-provider support.
+    Unified LLM client that routes to OpenAI, Anthropic, or Gemini
+    based on the model name in LLMConfig.
 
-    This client uses LiteLLM under the hood to provide access to 100+ LLM providers
-    including OpenAI, Anthropic, Google Gemini, Azure OpenAI, and more.
-
-    Features:
-        - Synchronous and asynchronous completion methods
-        - Streaming support
-        - Function/tool calling with tracing
-        - Automatic fallback to backup models
-        - Retry logic with exponential backoff
-        - Langfuse integration for observability
-        - Automatic error reporting to Langfuse
-        - Trace context propagation
-
-    Example:
-        ```python
-        from orchestrator.llm import LLMClient, ChatMessage, LLMConfig
-        from orchestrator.llm.callbacks import LangfuseTraceContext
-
-        # Initialize client
-        client = LLMClient()
-
-        # Simple chat completion (auto-traced)
-        response = await client.chat([
-            ChatMessage(role="user", content="Hello, how are you?")
-        ])
-        print(response.content)
-
-        # With explicit trace context
-        with LangfuseTraceContext(name="my-agent", user_id="user-123") as trace:
-            response = await client.chat([
-                ChatMessage(role="user", content="Tell me a story")
-            ])
-            # LLM call is automatically associated with the trace
-
-        # Function calling with tracing
-        response = await client.chat(
-            messages,
-            tools=[weather_tool],
-            trace_metadata={"task": "weather-lookup"}
-        )
-        ```
+    All LLM calls are automatically traced via the @observe decorator.
+    Session management and context compression are handled transparently.
     """
 
     def __init__(
@@ -135,14 +82,6 @@ class LLMClient:
         config: LLMConfig | None = None,
         enable_langfuse: bool = True,
     ):
-        """
-        Initialize the LLM client.
-
-        Args:
-            config: Default configuration for all requests. If not provided,
-                   uses global settings from environment variables.
-            enable_langfuse: Whether to enable Langfuse logging. Defaults to True.
-        """
         self.default_config = config or LLMConfig()
         self._langfuse_enabled = enable_langfuse
         self._rate_limiter: _LLMRateLimiter | None = None
@@ -150,112 +89,19 @@ class LLMClient:
         if self.default_config.rate_limit_rpm and self.default_config.rate_limit_rpm > 0:
             self._rate_limiter = _LLMRateLimiter(self.default_config.rate_limit_rpm)
 
-        self._setup_litellm()
-
         if enable_langfuse:
             try:
                 setup_langfuse()
             except Exception:
                 logger.debug("Langfuse setup skipped (not configured or unavailable)")
 
-    def _handle_tools_with_json_mode(
-        self,
-        llm_kwargs: dict[str, Any],
-        effective_config: LLMConfig,
-        tools_dict: list[dict[str, Any]] | None,
-    ) -> None:
-        """
-        Handle compatibility between tools and JSON mode.
-
-        Some models (like Gemini) don't support function calling with JSON mode.
-        This method disables JSON mode when tools are present and the model doesn't support both.
-
-        Args:
-            llm_kwargs: Dictionary of kwargs to pass to LiteLLM (modified in place)
-            effective_config: LLMConfig instance
-            tools_dict: Converted tools dictionary or None
-        """
-        if tools_dict and (effective_config.json_mode or effective_config.response_format):
-            from orchestrator.llm.utils import supports_tools_with_json_mode
-
-            model_supports_both = supports_tools_with_json_mode(
-                model=effective_config.model,
-                custom_llm_provider=effective_config.custom_llm_provider,
-            )
-
-            if not model_supports_both:
-                # Disable JSON mode when tools are present (tools take priority)
-                if "response_format" in llm_kwargs:
-                    logger.warning(
-                        f"Model '{effective_config.model}' doesn't support function calling with JSON mode. "
-                        "Disabling JSON mode to allow tool usage."
-                    )
-                    del llm_kwargs["response_format"]
-
-    def _setup_litellm(self) -> None:
-        """Configure LiteLLM settings."""
-        # Set verbosity
-        litellm.set_verbose = settings.litellm_verbose
-
-        # Configure API keys from environment
-        if settings.openai_api_key:
-            litellm.openai_key = settings.openai_api_key
-
-        # Load YAML config file
-        # Default to litellm_config.yaml in project root if not specified
-        # Try multiple locations: current working directory, package root, or explicit path
-        config_path = settings.litellm_config_path or "litellm_config.yaml"
-
-        if os.path.isabs(config_path):
-            config_path = Path(config_path)
-        else:
-            # Try current working directory first (for development)
-            cwd_path = Path.cwd() / config_path
-            if cwd_path.exists():
-                config_path = cwd_path
-            else:
-                # Try package root (for installed package)
-                # Go up from src/orchestrator/llm/client.py to project root
-                package_root = Path(__file__).parent.parent.parent.parent
-                package_path = package_root / config_path
-                if package_path.exists():
-                    config_path = package_path
-                else:
-                    # Fallback to current working directory
-                    config_path = Path.cwd() / config_path
-
-        if config_path.exists():
-            # Load LiteLLM config from YAML file
-            # This loads models, pricing, and other settings
-            # LiteLLM uses this for automatic cost calculation in Langfuse callbacks
-            # Set config_path - LiteLLM will load it automatically
-            litellm.config_path = str(config_path)
-
-            # Try to explicitly load config if method is available
-            if hasattr(litellm, "load_config"):
-                try:
-                    litellm.load_config(config_path=str(config_path))
-                except Exception as e:
-                    # load_config might not be available or might fail
-                    logger.debug(f"load_config not available or failed: {e}")
-
-            logger.info(
-                f"Loaded LiteLLM config from: {config_path}. "
-                "Pricing will be used for automatic cost calculation in Langfuse."
-            )
-        else:
-            logger.warning(
-                f"LiteLLM config file not found: {config_path}. "
-                "Pricing will use LiteLLM defaults. Cost tracking may not work properly."
-            )
-
-        # Note: Other API keys are automatically picked up by LiteLLM
-        # from standard environment variables
+    # =========================================================================
+    # Internal helpers
+    # =========================================================================
 
     def _convert_messages(
         self, messages: list[ChatMessage] | list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Convert messages to LiteLLM format."""
         result = []
         for msg in messages:
             if isinstance(msg, ChatMessage):
@@ -267,7 +113,6 @@ class LLMClient:
     def _convert_tools(
         self, tools: list[ToolDefinition] | list[dict[str, Any]] | None
     ) -> list[dict[str, Any]] | None:
-        """Convert tools to LiteLLM format."""
         if tools is None:
             return None
         result = []
@@ -283,103 +128,57 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         trace_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """
-        Build metadata for Langfuse tracing.
-
-        Uses contextvars from @observe decorator for trace context.
-        """
         if not self._langfuse_enabled:
             return trace_metadata or {}
-
-        # Get metadata with trace context from contextvars
-        metadata = get_langfuse_metadata(
-            custom_metadata=trace_metadata,
-        )
-
-        # Add tool information for tracing
+        metadata = get_langfuse_metadata(custom_metadata=trace_metadata)
         if tools:
             tool_names = [t.get("function", {}).get("name", "unknown") for t in tools]
             metadata["tools_available"] = tool_names
-
         return metadata
 
-    def _handle_exception(
+    def _apply_json_mode_compat(
         self,
-        e: Exception,
-        model: str,
-    ) -> None:
-        """
-        Convert LiteLLM exceptions to custom exceptions.
+        config: LLMConfig,
+        tools_dict: list[dict[str, Any]] | None,
+    ) -> LLMConfig:
+        """Disable JSON mode when tools are present and model doesn't support both."""
+        if tools_dict and (config.json_mode or config.response_format):
+            if not supports_tools_with_json_mode(config.model, config.custom_llm_provider):
+                logger.warning(
+                    f"Model '{config.model}' does not support tools + JSON mode simultaneously. "
+                    "Disabling JSON mode to allow tool usage."
+                )
+                return config.model_copy(update={"json_mode": False, "response_format": None})
+        return config
 
-        Note: Error reporting is handled automatically by @observe decorator.
-        """
-        provider = self._get_provider_from_model(model)
+    def _log_json_mode_status(self, config: LLMConfig) -> None:
+        if config.json_mode:
+            logger.info(f"JSON mode active: json_object for model {config.model}")
+        elif config.response_format is not None:
+            logger.info(f"JSON mode active: schema for model {config.model}")
 
-        # Build context for error
-        error_context = {
-            "model": model,
-            "provider": provider,
-        }
-
-        if isinstance(e, AuthenticationError):
-            raise LLMAuthenticationError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        elif isinstance(e, RateLimitError):
-            raise LLMRateLimitError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        elif isinstance(e, Timeout):
-            raise LLMTimeoutError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        elif isinstance(e, ContextWindowExceededError):
-            raise LLMContextLengthError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        elif isinstance(e, BadRequestError):
-            raise LLMInvalidRequestError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        elif isinstance(e, ServiceUnavailableError):
-            raise LLMServiceUnavailableError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
-        else:
-            raise LLMError(
-                message=str(e),
-                model=model,
-                provider=provider,
-                original_error=e,
-                context=error_context,
-            ) from e
+    def _validate_json_response(self, content: str | None, config: LLMConfig) -> None:
+        if not (config.json_mode or config.response_format) or not content:
+            return
+        try:
+            stripped = content.strip()
+            is_json = (stripped.startswith("{") and stripped.endswith("}")) or (
+                stripped.startswith("[") and stripped.endswith("]")
+            )
+            if not is_json:
+                logger.warning(
+                    "LLM response is not JSON despite JSON mode being enabled",
+                    extra={"model": config.model, "preview": stripped[:100]},
+                )
+            else:
+                json.loads(content)
+        except json.JSONDecodeError:
+            logger.warning(
+                "LLM response is not valid JSON despite JSON mode",
+                extra={"model": config.model, "preview": content[:100]},
+            )
 
     def _get_provider_from_model(self, model: str) -> str:
-        """Extract provider name from model string."""
         if "/" in model:
             return model.split("/")[0]
         if model.startswith("gpt"):
@@ -389,73 +188,6 @@ class LLMClient:
         if model.startswith("gemini"):
             return "google"
         return "unknown"
-
-    # =========================================================================
-    # JSON mode helpers (extracted to eliminate duplication)
-    # =========================================================================
-
-    def _log_json_mode_status(self, llm_kwargs: dict, model: str) -> None:
-        """Log JSON mode configuration status if response_format is set."""
-        if "response_format" not in llm_kwargs:
-            return
-        response_format = llm_kwargs["response_format"]
-        if isinstance(response_format, dict):
-            if response_format.get("type") == "json_object":
-                logger.info(
-                    f"JSON mode active: json_object mode for model {model}",
-                    extra={"model": model, "json_mode": "json_object"},
-                )
-            elif response_format.get("type") == "json_schema":
-                logger.info(
-                    f"JSON mode active: json_schema mode for model {model}",
-                    extra={
-                        "model": model,
-                        "json_mode": "json_schema",
-                        "strict": response_format.get("json_schema", {}).get("strict", False),
-                    },
-                )
-        elif isinstance(response_format, type):
-            logger.info(
-                f"JSON mode active: Pydantic model schema ({response_format.__name__}) for model {model}",
-                extra={
-                    "model": model,
-                    "json_mode": "pydantic_schema",
-                    "schema_name": response_format.__name__,
-                },
-            )
-
-    def _validate_json_response(self, content: str | None, llm_kwargs: dict, model: str) -> None:
-        """Validate and log JSON response format if JSON mode was requested."""
-        if "response_format" not in llm_kwargs or not content:
-            return
-        try:
-            content_stripped = content.strip()
-            is_json = (
-                content_stripped.startswith("{") and content_stripped.endswith("}")
-            ) or (content_stripped.startswith("[") and content_stripped.endswith("]"))
-            if is_json:
-                parsed = json.loads(content)
-                logger.info(
-                    "LLM response is valid JSON format (expected with JSON mode)",
-                    extra={
-                        "model": model,
-                        "json_keys": list(parsed.keys()) if isinstance(parsed, dict) else None,
-                        "content_length": len(content),
-                    },
-                )
-            else:
-                logger.warning(
-                    "LLM response doesn't appear to be JSON format despite JSON mode being enabled",
-                    extra={"model": model, "content_preview": content_stripped[:100]},
-                )
-        except json.JSONDecodeError:
-            logger.warning(
-                "LLM response is not valid JSON despite JSON mode being enabled",
-                extra={
-                    "model": model,
-                    "content_preview": content[:100] if content else None,
-                },
-            )
 
     # =========================================================================
     # Synchronous Methods
@@ -472,69 +204,19 @@ class LLMClient:
         trace_metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """
-        Synchronous chat completion.
-
-        All calls are automatically traced via @observe decorator.
-        Trace context is automatically captured from contextvars.
-
-        Args:
-            messages: List of chat messages.
-            config: Optional config overrides.
-            tools: Optional list of tool definitions for function calling.
-            tool_choice: Optional tool choice specification.
-            trace_metadata: Additional metadata for tracing (merged with contextvars).
-            **kwargs: Additional arguments passed to LiteLLM.
-
-        Returns:
-            LLMResponse with the completion result.
-
-        Example:
-            ```python
-            response = client.chat_sync([
-                ChatMessage(role="user", content="Hello")
-            ])
-            ```
-        """
+        """Synchronous chat completion. Auto-traced via @observe."""
         effective_config = config or self.default_config
-        llm_kwargs = effective_config.to_litellm_kwargs()
-        llm_kwargs.update(kwargs)
-
         messages_dict = self._convert_messages(messages)
         tools_dict = self._convert_tools(tools)
+        effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
+        self._log_json_mode_status(effective_config)
 
-        # Handle tools + JSON mode compatibility
-        self._handle_tools_with_json_mode(llm_kwargs, effective_config, tools_dict)
-        self._log_json_mode_status(llm_kwargs, effective_config.model)
+        provider = get_provider(effective_config)
+        logger.debug(f"Sync completion: model={effective_config.model}")
 
-        if tools_dict:
-            llm_kwargs["tools"] = tools_dict
-        if tool_choice:
-            llm_kwargs["tool_choice"] = tool_choice
-
-        # Build tracing metadata (uses contextvars from @observe)
-        metadata = self._build_metadata(
-            tools=tools_dict,
-            trace_metadata=trace_metadata,
-        )
-        if metadata:
-            llm_kwargs["metadata"] = metadata
-
-        try:
-            logger.debug(f"Attempting sync completion with model: {effective_config.model}")
-            response = litellm.completion(messages=messages_dict, **llm_kwargs)
-            llm_response = LLMResponse.from_litellm_response(response)
-
-            self._validate_json_response(llm_response.content, llm_kwargs, effective_config.model)
-
-            return llm_response
-        except Exception as e:
-            # LiteLLM handles fallbacks automatically if configured
-            # If all fallbacks exhausted, it will raise an exception
-            logger.warning(f"Completion failed: {e}")
-            self._handle_exception(e, effective_config.model)
-            # Should not reach here, but just in case
-            raise
+        response = provider.complete(messages_dict, effective_config, tools_dict, tool_choice)
+        self._validate_json_response(response.content, effective_config)
+        return response
 
     @observe(name="llm_chat_stream_sync", capture_output=False)
     def chat_stream_sync(
@@ -547,68 +229,16 @@ class LLMClient:
         trace_metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Iterator[StreamChunk]:
-        """
-        Synchronous streaming chat completion.
-
-        All calls are automatically traced via @observe decorator.
-        Trace context is automatically captured from contextvars.
-
-        Args:
-            messages: List of chat messages.
-            config: Optional config overrides.
-            tools: Optional list of tool definitions.
-            tool_choice: Optional tool choice specification.
-            trace_metadata: Additional metadata for tracing (merged with contextvars).
-            **kwargs: Additional arguments passed to LiteLLM.
-
-        Yields:
-            StreamChunk objects as they arrive.
-
-        Example:
-            ```python
-            for chunk in client.chat_stream_sync([
-                ChatMessage(role="user", content="Tell me a story")
-            ]):
-                if chunk.content:
-                    print(chunk.content, end="", flush=True)
-            ```
-        """
+        """Synchronous streaming chat completion. Auto-traced via @observe."""
         effective_config = config or self.default_config
-        llm_kwargs = effective_config.to_litellm_kwargs()
-        llm_kwargs.update(kwargs)
-        llm_kwargs["stream"] = True
-
         messages_dict = self._convert_messages(messages)
         tools_dict = self._convert_tools(tools)
+        effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
 
-        # Handle tools + JSON mode compatibility
-        self._handle_tools_with_json_mode(llm_kwargs, effective_config, tools_dict)
+        provider = get_provider(effective_config)
+        logger.debug(f"Sync stream: model={effective_config.model}")
 
-        if tools_dict:
-            llm_kwargs["tools"] = tools_dict
-        if tool_choice:
-            llm_kwargs["tool_choice"] = tool_choice
-
-        # Build tracing metadata (uses contextvars from @observe)
-        metadata = self._build_metadata(
-            tools=tools_dict,
-            trace_metadata=trace_metadata,
-        )
-        if metadata:
-            llm_kwargs["metadata"] = metadata
-
-        try:
-            logger.debug(f"Starting sync stream with model: {effective_config.model}")
-            response = litellm.completion(messages=messages_dict, **llm_kwargs)
-
-            for chunk in response:
-                yield StreamChunk.from_litellm_chunk(chunk)
-
-        except Exception as e:
-            logger.warning(f"Streaming failed: {e}")
-            self._handle_exception(e, effective_config.model)
-            # Should not reach here, but just in case
-            raise
+        yield from provider.stream(messages_dict, effective_config, tools_dict, tool_choice)
 
     # =========================================================================
     # Asynchronous Methods
@@ -624,91 +254,31 @@ class LLMClient:
         *,
         session_id: str | None = None,
         trace_metadata: dict[str, Any] | None = None,
-        # Session management
         auto_session: bool = True,
         **kwargs: Any,
     ) -> LLMResponse:
         """
-        Asynchronous chat completion.
-
-        This is the primary method for making LLM calls in async contexts.
-        All calls are automatically traced via @observe decorator.
-        Trace context is automatically captured from contextvars.
-
-        Args:
-            messages: List of chat messages.
-            config: Optional config overrides.
-            tools: Optional list of tool definitions for function calling.
-            tool_choice: Optional tool choice specification.
-            session_id: Session ID for conversation grouping (also from contextvars if not provided).
-            trace_metadata: Additional metadata for tracing (merged with contextvars).
-            auto_session: Whether to automatically load/save from session.
-                         Set to False when caller manages the message loop
-                         (e.g., AgentRunner). Defaults to True.
-            **kwargs: Additional arguments passed to LiteLLM.
-
-        Returns:
-            LLMResponse with the completion result.
-
-        Example:
-            ```python
-            # Basic usage (auto-traced)
-            response = await client.chat([
-                ChatMessage(role="system", content="You are a helpful assistant."),
-                ChatMessage(role="user", content="What is Python?"),
-            ])
-            print(response.content)
-
-            # Function calling
-            response = await client.chat(
-                messages,
-                tools=[weather_tool],
-                trace_metadata={"task": "tool-use"}
-            )
-            if response.tool_calls:
-                for call in response.tool_calls:
-                    print(f"Tool: {call.function.name}")
-                    print(f"Args: {call.function.arguments}")
-
-            # When caller manages message loop (disable auto-session)
-            response = await client.chat(
-                messages,
-                session_id="session-123",
-                auto_session=False,  # Don't auto-load/save
-            )
-            ```
+        Asynchronous chat completion. Primary method for async contexts.
+        Auto-traced via @observe. Session history loaded/saved automatically.
         """
         effective_config = config or self.default_config
-        llm_kwargs = effective_config.to_litellm_kwargs()
-        llm_kwargs.update(kwargs)
-
-        # Use provided session_id or get from contextvars
-        # Trace context is automatically available via contextvars (set by @observe decorator)
         effective_session_id = session_id or get_current_session_id()
 
-        # Auto-load conversation history from session if session_id is provided and auto_session is enabled
-        # NOTE: When auto_session=False, the caller is managing the message loop (e.g., AgentRunner)
-        # and will handle session loading/saving separately.
+        # Load conversation history from session
         if effective_session_id and auto_session:
             try:
                 from orchestrator.core.container import get_container
 
                 session_client = get_container().session_client
                 if session_client.is_enabled:
-                    # Get conversation history from session
-                    # Session client will get trace_id/span_id from contextvars via @observe
                     history_messages = await session_client.get_conversation_history(
                         session_id=effective_session_id,
                     )
-
                     if history_messages:
-                        # Prepend history to provided messages
-                        # Convert history to dict format if needed
                         history_dicts = [
                             msg.to_dict() if hasattr(msg, "to_dict") else msg
                             for msg in history_messages
                         ]
-                        # Combine: history + new messages
                         messages_dict = history_dicts + self._convert_messages(messages)
                         logger.debug(
                             f"Loaded {len(history_messages)} messages from session: {effective_session_id}",
@@ -719,28 +289,21 @@ class LLMClient:
                 else:
                     messages_dict = self._convert_messages(messages)
             except Exception as e:
-                # If session loading fails, continue with provided messages
-                logger.warning(
-                    f"Failed to load session history: {e}, continuing with provided messages"
-                )
+                logger.warning(f"Failed to load session history: {e}, continuing with provided messages")
                 messages_dict = self._convert_messages(messages)
         else:
             messages_dict = self._convert_messages(messages)
 
-        # Apply context management (compression/summarization) if enabled
+        # Context compression
         try:
-            from orchestrator.llm.context_management import (
-                get_progressive_context_manager,
-            )
+            from orchestrator.llm.context_management import get_progressive_context_manager
 
             context_manager = get_progressive_context_manager()
             if context_manager.config.enabled:
-                # Context manager will get trace_id/span_id from contextvars automatically
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
                 )
-
                 if compression_result.was_compressed:
                     logger.info(
                         f"Context compressed: {compression_result.original_token_count} → "
@@ -748,105 +311,62 @@ class LLMClient:
                         f"({compression_result.compression_ratio:.1%} ratio)"
                     )
         except Exception as e:
-            # Context management failure should not break the request
             logger.warning(f"Context management failed, continuing without compression: {e}")
 
         tools_dict = self._convert_tools(tools)
+        effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
+        self._log_json_mode_status(effective_config)
 
-        # Handle tools + JSON mode compatibility
-        self._handle_tools_with_json_mode(llm_kwargs, effective_config, tools_dict)
-        self._log_json_mode_status(llm_kwargs, effective_config.model)
+        if self._rate_limiter:
+            await self._rate_limiter.acquire()
 
-        if tools_dict:
-            llm_kwargs["tools"] = tools_dict
-        if tool_choice:
-            llm_kwargs["tool_choice"] = tool_choice
+        provider = get_provider(effective_config)
+        logger.debug(f"Async completion: model={effective_config.model}")
 
-        # Build tracing metadata (uses contextvars from @observe)
-        metadata = self._build_metadata(
-            tools=tools_dict,
-            trace_metadata=trace_metadata,
-        )
-        if metadata:
-            llm_kwargs["metadata"] = metadata
+        llm_response = await provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice)
+        self._validate_json_response(llm_response.content, effective_config)
 
-        try:
-            if self._rate_limiter:
-                await self._rate_limiter.acquire()
+        # Save messages to session
+        if effective_session_id and auto_session:
+            try:
+                from orchestrator.core.container import get_container
 
-            logger.debug(f"Attempting async completion with model: {effective_config.model}")
-            response = await litellm.acompletion(messages=messages_dict, **llm_kwargs)
-            llm_response = LLMResponse.from_litellm_response(response)
+                session_client = get_container().session_client
+                if session_client.is_enabled:
+                    new_messages = self._convert_messages(messages)
+                    for msg_dict in new_messages:
+                        if isinstance(msg_dict, dict):
+                            msg_role = msg_dict.get("role")
+                            msg_content = msg_dict.get("content")
+                            if msg_role == "user" and msg_content:
+                                user_msg = ChatMessage(**msg_dict)
+                                await session_client.add_message(
+                                    session_id=effective_session_id,
+                                    message=user_msg,
+                                    store_in_memory=True,
+                                )
 
-            self._validate_json_response(llm_response.content, llm_kwargs, effective_config.model)
+                    assistant_message = ChatMessage(
+                        role="assistant",
+                        content=llm_response.content,
+                        tool_calls=llm_response.tool_calls,
+                        function_call=llm_response.function_call,
+                    )
+                    should_store_in_memory = (
+                        llm_response.content is not None
+                        and llm_response.content.strip()
+                        and not llm_response.tool_calls
+                    )
+                    await session_client.add_message(
+                        session_id=effective_session_id,
+                        message=assistant_message,
+                        store_in_memory=should_store_in_memory,
+                    )
+                    logger.debug(f"Saved messages to session: {effective_session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save messages to session: {e}")
 
-            # Auto-save messages to session if session_id is provided and auto_session is enabled
-            # NOTE: When auto_session=False, the caller is managing the message loop
-            if effective_session_id and auto_session:
-                try:
-                    from orchestrator.core.container import get_container
-
-                    session_client = get_container().session_client
-                    if session_client.is_enabled:
-                        # Save new user messages (those not in history)
-                        # Convert provided messages to ChatMessage if needed
-                        new_messages = self._convert_messages(messages)
-                        for msg_dict in new_messages:
-                            if isinstance(msg_dict, dict):
-                                msg_role = msg_dict.get("role")
-                                msg_content = msg_dict.get("content")
-                                # Only save user messages with content (assistant will be saved after)
-                                # Skip tool messages and messages without content for memory
-                                if msg_role == "user" and msg_content:
-                                    from orchestrator.llm.types import ChatMessage
-
-                                    user_msg = ChatMessage(**msg_dict)
-                                    # Session client will get trace_id/span_id from contextvars
-                                    await session_client.add_message(
-                                        session_id=effective_session_id,
-                                        message=user_msg,
-                                        store_in_memory=True,  # Also store in long-term memory
-                                    )
-
-                        # Create assistant message from response
-                        from orchestrator.llm.types import ChatMessage
-
-                        assistant_message = ChatMessage(
-                            role="assistant",
-                            content=llm_response.content,
-                            tool_calls=llm_response.tool_calls,
-                            function_call=llm_response.function_call,
-                        )
-
-                        # Add to session - only store in memory if it has content and no tool_calls
-                        # Tool call responses are intermediate and not useful for long-term memory
-                        should_store_in_memory = (
-                            llm_response.content is not None
-                            and llm_response.content.strip()
-                            and not llm_response.tool_calls
-                        )
-
-                        # Session client will get trace_id/span_id from contextvars
-                        await session_client.add_message(
-                            session_id=effective_session_id,
-                            message=assistant_message,
-                            store_in_memory=should_store_in_memory,
-                        )
-
-                        logger.debug(f"Saved messages to session: {effective_session_id}")
-                except Exception as e:
-                    # If session saving fails, log but don't fail the request
-                    logger.warning(f"Failed to save messages to session: {e}")
-
-            return llm_response
-
-        except Exception as e:
-            # LiteLLM handles fallbacks automatically if configured
-            # If all fallbacks exhausted, it will raise an exception
-            logger.warning(f"Completion failed: {e}")
-            self._handle_exception(e, effective_config.model)
-            # Should not reach here, but just in case
-            raise
+        return llm_response
 
     @observe(name="llm_chat_stream", capture_output=False)
     async def chat_stream(
@@ -859,93 +379,36 @@ class LLMClient:
         trace_metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
-        """
-        Asynchronous streaming chat completion.
-
-        All calls are automatically traced via @observe decorator.
-        Trace context is automatically captured from contextvars.
-
-        Args:
-            messages: List of chat messages.
-            config: Optional config overrides.
-            tools: Optional list of tool definitions.
-            tool_choice: Optional tool choice specification.
-            trace_metadata: Additional metadata for tracing (merged with contextvars).
-            **kwargs: Additional arguments passed to LiteLLM.
-
-        Yields:
-            StreamChunk objects as they arrive.
-
-        Example:
-            ```python
-            async for chunk in client.chat_stream([
-                ChatMessage(role="user", content="Tell me a story")
-            ]):
-                if chunk.content:
-                    print(chunk.content, end="", flush=True)
-            ```
-        """
+        """Asynchronous streaming chat completion. Auto-traced via @observe."""
         effective_config = config or self.default_config
-        llm_kwargs = effective_config.to_litellm_kwargs()
-        llm_kwargs.update(kwargs)
-        llm_kwargs["stream"] = True
-
         messages_dict = self._convert_messages(messages)
 
-        # Apply context management (compression/summarization) if enabled
-        # Compress before streaming starts
+        # Context compression before streaming
         try:
-            from orchestrator.llm.context_management import (
-                get_progressive_context_manager,
-            )
+            from orchestrator.llm.context_management import get_progressive_context_manager
 
             context_manager = get_progressive_context_manager()
             if context_manager.config.enabled:
-                # Context manager will get trace_id/span_id from contextvars
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
                 )
-
                 if compression_result.was_compressed:
                     logger.info(
                         f"Context compressed before streaming: {compression_result.original_token_count} → "
                         f"{compression_result.compressed_token_count} tokens"
                     )
         except Exception as e:
-            # Context management failure should not break the request
             logger.warning(f"Context management failed, continuing without compression: {e}")
 
         tools_dict = self._convert_tools(tools)
+        effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
 
-        # Handle tools + JSON mode compatibility
-        self._handle_tools_with_json_mode(llm_kwargs, effective_config, tools_dict)
+        provider = get_provider(effective_config)
+        logger.debug(f"Async stream: model={effective_config.model}")
 
-        if tools_dict:
-            llm_kwargs["tools"] = tools_dict
-        if tool_choice:
-            llm_kwargs["tool_choice"] = tool_choice
-
-        # Build tracing metadata (uses contextvars from @observe)
-        metadata = self._build_metadata(
-            tools=tools_dict,
-            trace_metadata=trace_metadata,
-        )
-        if metadata:
-            llm_kwargs["metadata"] = metadata
-
-        try:
-            logger.debug(f"Starting async stream with model: {effective_config.model}")
-            response = await litellm.acompletion(messages=messages_dict, **llm_kwargs)
-
-            async for chunk in response:
-                yield StreamChunk.from_litellm_chunk(chunk)
-
-        except Exception as e:
-            logger.warning(f"Streaming failed: {e}")
-            self._handle_exception(e, effective_config.model)
-            # Should not reach here, but just in case
-            raise
+        async for chunk in provider.astream(messages_dict, effective_config, tools_dict, tool_choice):
+            yield chunk
 
     # =========================================================================
     # Utility Methods
@@ -953,30 +416,27 @@ class LLMClient:
 
     @observe(name="llm_get_model_info", capture_output=True)
     def get_model_info(self, model: str | None = None) -> dict[str, Any]:
-        """
-        Get information about a model.
+        """Get context window information for a model."""
+        from orchestrator.llm.context_window import get_context_window_manager
 
-        Args:
-            model: Model name. If not provided, uses the default model.
-
-        Returns:
-            Dictionary with model information including max tokens, cost, etc.
-        """
         model = model or self.default_config.model
         try:
-            return litellm.get_model_info(model)
+            limits = get_context_window_manager().get_model_limits(model)
+            return limits.to_dict()
         except Exception as e:
             logger.warning(f"Could not get model info for {model}: {e}")
             return {}
 
     def get_supported_models(self) -> list[str]:
-        """
-        Get list of all supported models.
-
-        Returns:
-            List of model names supported by LiteLLM.
-        """
-        return list(litellm.model_list)
+        """Return the list of known supported models."""
+        return [
+            # OpenAI
+            "gpt-4o", "gpt-4o-mini", "gpt-4o-turbo", "gpt-3.5-turbo",
+            # Anthropic
+            "claude-haiku-4.5", "claude-sonnet-4.5", "claude-opus-4.5",
+            # Gemini
+            "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash", "gemini/gemini-2.5-flash-lite",
+        ]
 
     @observe(name="llm_count_tokens", capture_output=True)
     def count_tokens(
@@ -984,119 +444,40 @@ class LLMClient:
         messages: list[ChatMessage] | list[dict[str, Any]],
         model: str | None = None,
     ) -> int:
-        """
-        Count tokens for a list of messages.
+        """Count tokens for a list of messages."""
+        from orchestrator.llm.context_window import get_context_window_manager
 
-        Args:
-            messages: List of chat messages.
-            model: Model to count tokens for. Uses default if not provided.
-
-        Returns:
-            Number of tokens.
-        """
         model = model or self.default_config.model
         messages_dict = self._convert_messages(messages)
         try:
-            return litellm.token_counter(model=model, messages=messages_dict)
+            return get_context_window_manager().count_tokens(messages_dict, model)
         except Exception as e:
-            logger.warning(f"Could not count tokens: {e}")
+            logger.warning(f"Token counting failed: {e}")
             return 0
 
-    def get_max_tokens(self, model: str | None = None) -> int | None:
-        """
-        Get maximum context length for a model.
+    def complete(
+        self,
+        messages: list[ChatMessage] | list[dict[str, Any]],
+        config: LLMConfig | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Alias for chat_sync."""
+        return self.chat_sync(messages, config, **kwargs)
 
-        Args:
-            model: Model name. Uses default if not provided.
+    async def acomplete(
+        self,
+        messages: list[ChatMessage] | list[dict[str, Any]],
+        config: LLMConfig | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Alias for chat."""
+        return await self.chat(messages, config, **kwargs)
 
-        Returns:
-            Maximum number of tokens, or None if unknown.
-        """
-        model = model or self.default_config.model
-        try:
-            return litellm.get_max_tokens(model)
-        except Exception:
-            return None
-
-    @observe(name="llm_check_health", capture_output=True)
-    async def check_health(self, model: str | None = None) -> bool:
-        """
-        Check if a model is accessible and responding.
-
-        Args:
-            model: Model to check. Uses default if not provided.
-
-        Returns:
-            True if the model is healthy, False otherwise.
-        """
-        model = model or self.default_config.model
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": "Hi"}],
-                max_tokens=5,
-                timeout=10,
-            )
-            return response.choices[0].message.content is not None
-        except Exception as e:
-            logger.warning(f"Health check failed for {model}: {e}")
-            return False
-
-    async def cleanup(self) -> None:
-        """
-        Cleanup LiteLLM async clients.
-
-        Call this method when shutting down to properly close async HTTP clients
-        and prevent RuntimeWarnings about unawaited coroutines.
-
-        Example:
-            ```python
-            client = LLMClient()
-            # ... use client ...
-            await client.cleanup()
-            ```
-        """
-        try:
-            if hasattr(litellm, "close_litellm_async_clients"):
-                await litellm.close_litellm_async_clients()
-
-            # close_litellm_async_clients iterates the cache but may miss aiohttp
-            # sessions that are nested inside httpx transports.  Walk the cache
-            # ourselves and close any remaining aiohttp ClientSessions directly.
-            await self._close_remaining_aiohttp_sessions()
-
-            # Yield once so any pending close() coroutines (e.g. scheduled via
-            # asyncio.create_task inside LiteLLMAiohttpTransport) get a chance
-            # to complete before the loop shuts down.
-            await asyncio.sleep(0)
-
-            logger.debug("LiteLLM async clients closed")
-        except Exception as e:
-            logger.warning(f"Error cleaning up LiteLLM async clients: {e}")
-
-    @staticmethod
-    async def _close_remaining_aiohttp_sessions() -> None:
-        """Walk the LiteLLM client cache and close aiohttp sessions that the
-        default cleanup may have missed (e.g. sessions buried inside httpx
-        transports or created lazily by LiteLLMAiohttpTransport)."""
-        try:
-            import aiohttp
-
-            cache = getattr(litellm, "in_memory_llm_clients_cache", None)
-            if cache is None:
-                return
-            cache_dict: dict = getattr(cache, "cache_dict", {})
-            for handler in cache_dict.values():
-                # AsyncHTTPHandler wraps an httpx.AsyncClient whose _transport
-                # may be a LiteLLMAiohttpTransport holding an aiohttp session.
-                httpx_client = getattr(handler, "client", None)
-                if httpx_client is None:
-                    continue
-                transport = getattr(httpx_client, "_transport", None)
-                if transport is None:
-                    continue
-                session = getattr(transport, "client", None)
-                if isinstance(session, aiohttp.ClientSession) and not session.closed:
-                    await session.close()
-        except Exception:
-            pass
+    def stream(
+        self,
+        messages: list[ChatMessage] | list[dict[str, Any]],
+        config: LLMConfig | None = None,
+        **kwargs: Any,
+    ) -> Iterator[StreamChunk]:
+        """Alias for chat_stream_sync."""
+        yield from self.chat_stream_sync(messages, config, **kwargs)

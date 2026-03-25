@@ -19,10 +19,10 @@ class TestLLMConfig:
         assert c.max_retries == 3
         assert c.json_mode is False
 
-    def test_config_to_litellm_kwargs(self):
+    def test_config_to_kwargs(self):
         logger.info("LLMConfig: config to litellm kwargs")
         c = LLMConfig(model="gpt-4", temperature=0.5, max_tokens=100)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["model"] == "gpt-4"
         assert kw["temperature"] == 0.5
         assert kw["max_tokens"] == 100
@@ -30,20 +30,20 @@ class TestLLMConfig:
     def test_config_with_fallbacks(self):
         logger.info("LLMConfig: config with fallbacks")
         c = LLMConfig(fallback_models=["gpt-3.5-turbo"], enable_fallback=True)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["fallbacks"] == ["gpt-3.5-turbo"]
 
     def test_config_json_mode(self):
         logger.info("LLMConfig: config json mode")
         c = LLMConfig(json_mode=True)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["response_format"] == {"type": "json_object"}
 
     def test_config_response_format_dict(self):
         logger.info("LLMConfig: config response format dict")
         rf = {"type": "json_schema", "json_schema": {"name": "test"}}
         c = LLMConfig(response_format=rf)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["response_format"] == rf
 
     def test_config_response_format_pydantic(self):
@@ -51,7 +51,7 @@ class TestLLMConfig:
         class MyModel(BaseModel):
             name: str
         c = LLMConfig(response_format=MyModel)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["response_format"] is MyModel
 
     def test_config_with_overrides(self):
@@ -65,7 +65,7 @@ class TestLLMConfig:
     def test_config_optional_params(self):
         logger.info("LLMConfig: config optional params")
         c = LLMConfig(top_p=0.9, frequency_penalty=0.5, presence_penalty=0.3, stop=["END"], seed=42, user="u1")
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["top_p"] == 0.9
         assert kw["frequency_penalty"] == 0.5
         assert kw["stop"] == ["END"]
@@ -75,7 +75,7 @@ class TestLLMConfig:
     def test_config_custom_provider(self):
         logger.info("LLMConfig: config custom provider")
         c = LLMConfig(api_base="http://localhost", api_key="key", api_version="v1", custom_llm_provider="azure")
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["api_base"] == "http://localhost"
         assert kw["api_key"] == "key"
         assert kw["custom_llm_provider"] == "azure"
@@ -83,7 +83,7 @@ class TestLLMConfig:
     def test_config_cache_settings(self):
         logger.info("LLMConfig: config cache settings")
         c = LLMConfig(cache=True, cache_ttl=3600)
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["cache"]["type"] == "local"
         assert kw["cache"]["ttl"] == 3600
 
@@ -138,5 +138,5 @@ class TestLLMConfig:
     def test_config_metadata(self):
         logger.info("LLMConfig: config metadata")
         c = LLMConfig(metadata={"task": "test"})
-        kw = c.to_litellm_kwargs()
+        kw = c.to_kwargs()
         assert kw["metadata"]["task"] == "test"

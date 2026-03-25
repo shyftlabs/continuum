@@ -82,35 +82,52 @@ def _make_mock_response(content="Hello!", has_tool_calls=False):
 
 class TestLLMClientChat:
     @pytest.mark.asyncio
-    @patch("orchestrator.llm.client.litellm.acompletion")
-    async def test_chat_basic(self, mock_completion):
+    @patch("orchestrator.llm.client.setup_langfuse")
+    @patch("orchestrator.llm.client.get_provider")
+    async def test_chat_basic(self, mock_get_provider, mock_setup):
         logger.info("LLMClientChat: chat basic")
-        mock_completion.return_value = _make_mock_response("Hello!")
+        from orchestrator.llm.types import Usage
+        mock_provider = MagicMock()
+        mock_provider.acomplete = AsyncMock(return_value=LLMResponse(
+            model="gpt-4o", content="Hello!",
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ))
+        mock_get_provider.return_value = mock_provider
 
-        client = LLMClient()
+        client = LLMClient(enable_langfuse=False)
         messages = [ChatMessage(role="user", content="Hi")]
         result = await client.chat(messages, auto_session=False)
         assert isinstance(result, LLMResponse)
         assert result.content == "Hello!"
 
     @pytest.mark.asyncio
-    @patch("orchestrator.llm.client.litellm.acompletion")
-    async def test_chat_with_model_override(self, mock_completion):
+    @patch("orchestrator.llm.client.setup_langfuse")
+    @patch("orchestrator.llm.client.get_provider")
+    async def test_chat_with_model_override(self, mock_get_provider, mock_setup):
         logger.info("LLMClientChat: chat with model override")
-        mock_completion.return_value = _make_mock_response("response")
+        from orchestrator.llm.types import Usage
+        mock_provider = MagicMock()
+        mock_provider.acomplete = AsyncMock(return_value=LLMResponse(
+            model="gpt-4", content="response",
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ))
+        mock_get_provider.return_value = mock_provider
 
-        client = LLMClient()
+        client = LLMClient(enable_langfuse=False)
         messages = [ChatMessage(role="user", content="Hi")]
         result = await client.chat(messages, model="gpt-4", auto_session=False)
         assert result.content == "response"
 
     @pytest.mark.asyncio
-    @patch("orchestrator.llm.client.litellm.acompletion")
-    async def test_chat_exception(self, mock_completion):
+    @patch("orchestrator.llm.client.setup_langfuse")
+    @patch("orchestrator.llm.client.get_provider")
+    async def test_chat_exception(self, mock_get_provider, mock_setup):
         logger.info("LLMClientChat: chat exception")
-        mock_completion.side_effect = Exception("API Error")
+        mock_provider = MagicMock()
+        mock_provider.acomplete = AsyncMock(side_effect=Exception("API Error"))
+        mock_get_provider.return_value = mock_provider
 
-        client = LLMClient()
+        client = LLMClient(enable_langfuse=False)
         messages = [ChatMessage(role="user", content="Hi")]
         with pytest.raises(Exception):
             await client.chat(messages, auto_session=False)

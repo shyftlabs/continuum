@@ -140,6 +140,7 @@ poetry.lock
 # Project specific
 *.db
 *.sqlite
+smoke_test.py
 gap-analysis/
 run-related/
 iteration-docs/

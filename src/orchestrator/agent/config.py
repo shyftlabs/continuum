@@ -354,6 +354,22 @@ class LoopConfig:
 
 
 @dataclass
+class PlanningConfig:
+    """Configuration for planner agent."""
+
+    max_steps: int = 10
+    enable_replanning: bool = False
+    replan_on_failure: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_steps": self.max_steps,
+            "enable_replanning": self.enable_replanning,
+            "replan_on_failure": self.replan_on_failure,
+        }
+
+
+@dataclass
 class RouterConfig:
     """Configuration for router agent."""
 

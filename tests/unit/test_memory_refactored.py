@@ -238,7 +238,7 @@ class TestMemoryConfig:
         mem0_config = config.to_mem0_config()
         
         assert mem0_config["version"] == "v1.1"
-        assert mem0_config["llm"]["provider"] == "litellm"
+        assert mem0_config["llm"]["provider"] == "openai"
         assert mem0_config["llm"]["config"]["model"] == "gpt-4o-mini"
         assert mem0_config["embedder"]["provider"] == "openai"
         assert mem0_config["embedder"]["config"]["model"] == "text-embedding-3-small"

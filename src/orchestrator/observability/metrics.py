@@ -18,8 +18,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-import litellm
-
 from orchestrator.logging import get_logger
 
 if TYPE_CHECKING:
@@ -63,35 +61,36 @@ class TokenUsageMetric:
     @property
     def cost_estimate(self) -> float | None:
         """
-        Estimate cost based on model using LiteLLM pricing from YAML config.
-
-        Uses LiteLLM's cost calculation which reads pricing from litellm_config.yaml.
+        Estimate cost based on model using hardcoded pricing table.
+        Pricing is per token in USD.
         """
         if not self.model:
             return None
 
+        # Pricing per token (input, output) in USD
+        PRICING: dict[str, tuple[float, float]] = {
+            "gpt-4o": (0.0000025, 0.00001),
+            "gpt-4o-mini": (0.00000015, 0.0000006),
+            "gpt-4o-turbo": (0.0000025, 0.00001),
+            "gpt-3.5-turbo": (0.0000005, 0.0000015),
+            "gemini-2.5-pro": (0.00000125, 0.000005),
+            "gemini-2.5-flash": (0.0000001, 0.0000004),
+            "gemini-2.5-flash-lite": (0.0000001, 0.0000004),
+            "claude-haiku-4.5": (0.000001, 0.000005),
+            "claude-sonnet-4.5": (0.000003, 0.000015),
+            "claude-opus-4.5": (0.000015, 0.000075),
+        }
+
         try:
-            # LiteLLM's completion_cost expects a response object or uses model_info
-            # We'll use model_info to get pricing and calculate manually
-            model_info = litellm.get_model_info(self.model)
-
-            if not model_info:
+            model_lower = self.model.lower().split("/")[-1]
+            pricing = next(
+                (v for k, v in PRICING.items() if k in model_lower), None
+            )
+            if not pricing:
                 return None
-
-            # Get pricing from model info (already per token)
-            input_cost_per_token = model_info.get("input_cost_per_token")
-            output_cost_per_token = model_info.get("output_cost_per_token")
-
-            if input_cost_per_token is None or output_cost_per_token is None:
-                return None
-
-            # Calculate cost (costs are already per token)
-            input_cost = self.prompt_tokens * input_cost_per_token
-            output_cost = self.completion_tokens * output_cost_per_token
-
-            total_cost = input_cost + output_cost
-            return total_cost if total_cost > 0 else None
-
+            input_cost_per_token, output_cost_per_token = pricing
+            total = (self.prompt_tokens * input_cost_per_token) + (self.completion_tokens * output_cost_per_token)
+            return total if total > 0 else None
         except Exception as e:
             logger.warning(f"Could not calculate cost for model {self.model}: {e}")
             return None

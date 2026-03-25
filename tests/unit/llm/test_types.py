@@ -105,8 +105,8 @@ class TestUsage:
 
 
 class TestLLMResponse:
-    def test_from_litellm_response(self):
-        logger.info("LLMResponse: from litellm response")
+    def test_from_openai_response(self):
+        logger.info("LLMResponse: from openai response")
         mock_resp = MagicMock()
         mock_resp.id = "resp-1"
         mock_resp.model = "gpt-4"
@@ -122,12 +122,12 @@ class TestLLMResponse:
         mock_resp.usage.total_tokens = 15
         mock_resp.model_dump.return_value = {}
 
-        resp = LLMResponse.from_litellm_response(mock_resp)
+        resp = LLMResponse.from_openai_response(mock_resp)
         assert resp.content == "Hello"
         assert resp.model == "gpt-4"
         assert resp.usage.total_tokens == 15
 
-    def test_from_litellm_response_with_tool_calls(self):
+    def test_from_openai_response_with_tool_calls(self):
         logger.info("LLMResponse: from litellm response with tool calls")
         mock_resp = MagicMock()
         mock_resp.id = "resp-2"
@@ -147,11 +147,11 @@ class TestLLMResponse:
         mock_resp.usage = None
         mock_resp.model_dump.return_value = {}
 
-        resp = LLMResponse.from_litellm_response(mock_resp)
+        resp = LLMResponse.from_openai_response(mock_resp)
         assert len(resp.tool_calls) == 1
         assert resp.tool_calls[0].function.name == "fn"
 
-    def test_from_litellm_response_no_choices(self):
+    def test_from_openai_response_no_choices(self):
         logger.info("LLMResponse: from litellm response no choices")
         mock_resp = MagicMock()
         mock_resp.id = "resp-3"
@@ -160,13 +160,13 @@ class TestLLMResponse:
         mock_resp.usage = None
         mock_resp.model_dump.return_value = {}
 
-        resp = LLMResponse.from_litellm_response(mock_resp)
+        resp = LLMResponse.from_openai_response(mock_resp)
         assert resp.content is None
 
 
 class TestStreamChunk:
-    def test_from_litellm_chunk(self):
-        logger.info("StreamChunk: from litellm chunk")
+    def test_from_openai_chunk(self):
+        logger.info("StreamChunk: from openai chunk")
         mock_chunk = MagicMock()
         mock_chunk.id = "chunk-1"
         mock_chunk.model = "gpt-4"
@@ -179,12 +179,12 @@ class TestStreamChunk:
         mock_choice.finish_reason = None
         mock_chunk.choices = [mock_choice]
 
-        chunk = StreamChunk.from_litellm_chunk(mock_chunk)
+        chunk = StreamChunk.from_openai_chunk(mock_chunk)
         assert chunk.content == "Hello"
         assert chunk.is_finished is False
 
-    def test_from_litellm_chunk_finished(self):
-        logger.info("StreamChunk: from litellm chunk finished")
+    def test_from_openai_chunk_finished(self):
+        logger.info("StreamChunk: from openai chunk finished")
         mock_chunk = MagicMock()
         mock_chunk.id = "chunk-2"
         mock_chunk.model = "gpt-4"
@@ -197,6 +197,6 @@ class TestStreamChunk:
         mock_choice.finish_reason = "stop"
         mock_chunk.choices = [mock_choice]
 
-        chunk = StreamChunk.from_litellm_chunk(mock_chunk)
+        chunk = StreamChunk.from_openai_chunk(mock_chunk)
         assert chunk.is_finished is True
         assert chunk.finish_reason == "stop"

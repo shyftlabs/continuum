@@ -54,43 +54,21 @@ class TestTokenUsageMetric:
         m = TokenUsageMetric(name="llm", prompt_tokens=100, completion_tokens=50, total_tokens=150, model="gpt-4")
         assert m.total_tokens == 150
 
-    @patch("orchestrator.observability.metrics.litellm")
-    def test_cost_estimate_no_model(self, mock_litellm):
+    def test_cost_estimate_no_model(self):
         logger.info("TokenUsageMetric: cost estimate no model")
         m = TokenUsageMetric(name="llm", prompt_tokens=100, completion_tokens=50)
         assert m.cost_estimate is None
 
-    @patch("orchestrator.observability.metrics.litellm")
-    def test_cost_estimate_with_model(self, mock_litellm):
+    def test_cost_estimate_with_model(self):
         logger.info("TokenUsageMetric: cost estimate with model")
-        mock_litellm.get_model_info.return_value = {
-            "input_cost_per_token": 0.00001,
-            "output_cost_per_token": 0.00003,
-        }
-        m = TokenUsageMetric(name="llm", prompt_tokens=100, completion_tokens=50, model="gpt-4")
+        m = TokenUsageMetric(name="llm", prompt_tokens=100, completion_tokens=50, model="gpt-4o")
         cost = m.cost_estimate
         assert cost is not None
         assert cost > 0
 
-    @patch("orchestrator.observability.metrics.litellm")
-    def test_cost_estimate_no_model_info(self, mock_litellm):
-        logger.info("TokenUsageMetric: cost estimate no model info")
-        mock_litellm.get_model_info.return_value = None
-        m = TokenUsageMetric(name="llm", prompt_tokens=100, model="unknown-model")
-        assert m.cost_estimate is None
-
-    @patch("orchestrator.observability.metrics.litellm")
-    def test_cost_estimate_missing_pricing(self, mock_litellm):
-        logger.info("TokenUsageMetric: cost estimate missing pricing")
-        mock_litellm.get_model_info.return_value = {"input_cost_per_token": None}
-        m = TokenUsageMetric(name="llm", prompt_tokens=100, model="gpt-4")
-        assert m.cost_estimate is None
-
-    @patch("orchestrator.observability.metrics.litellm")
-    def test_cost_estimate_exception(self, mock_litellm):
-        logger.info("TokenUsageMetric: cost estimate exception")
-        mock_litellm.get_model_info.side_effect = Exception("fail")
-        m = TokenUsageMetric(name="llm", prompt_tokens=100, model="gpt-4")
+    def test_cost_estimate_unknown_model(self):
+        logger.info("TokenUsageMetric: cost estimate unknown model")
+        m = TokenUsageMetric(name="llm", prompt_tokens=100, model="unknown-model-xyz")
         assert m.cost_estimate is None
 
 

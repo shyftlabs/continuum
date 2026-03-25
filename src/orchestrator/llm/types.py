@@ -126,8 +126,8 @@ class LLMResponse(BaseModel):
     raw_response: dict[str, Any] | None = None
 
     @classmethod
-    def from_litellm_response(cls, response: Any) -> "LLMResponse":
-        """Create LLMResponse from LiteLLM response object."""
+    def from_openai_response(cls, response: Any) -> "LLMResponse":
+        """Create LLMResponse from an OpenAI SDK response (also used for Gemini compat)."""
         choice = response.choices[0] if response.choices else None
         message = choice.message if choice else None
 
@@ -172,6 +172,59 @@ class LLMResponse(BaseModel):
             raw_response=response.model_dump() if hasattr(response, "model_dump") else None,
         )
 
+    @classmethod
+    def from_anthropic_response(cls, response: Any, model: str) -> "LLMResponse":
+        """Create LLMResponse from an Anthropic SDK response."""
+        import json as _json
+
+        text_content: str | None = None
+        tool_calls: list[ToolCall] | None = None
+
+        for block in response.content:
+            if block.type == "text":
+                text_content = block.text
+            elif block.type == "tool_use":
+                if tool_calls is None:
+                    tool_calls = []
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        type="function",
+                        function=FunctionCall(
+                            name=block.name,
+                            arguments=_json.dumps(block.input),
+                        ),
+                    )
+                )
+
+        usage = None
+        if response.usage:
+            prompt_tokens = response.usage.input_tokens
+            completion_tokens = response.usage.output_tokens
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+
+        finish_reason_map = {
+            "end_turn": "stop",
+            "tool_use": "tool_calls",
+            "max_tokens": "length",
+            "stop_sequence": "stop",
+        }
+        finish_reason = finish_reason_map.get(response.stop_reason or "", response.stop_reason)
+
+        return cls(
+            id=response.id,
+            model=model,
+            content=text_content,
+            role="assistant",
+            tool_calls=tool_calls,
+            usage=usage,
+            finish_reason=finish_reason,
+        )
+
 
 class StreamChunk(BaseModel):
     """Represents a single chunk from a streaming response."""
@@ -185,8 +238,8 @@ class StreamChunk(BaseModel):
     is_finished: bool = False
 
     @classmethod
-    def from_litellm_chunk(cls, chunk: Any) -> "StreamChunk":
-        """Create StreamChunk from LiteLLM streaming chunk."""
+    def from_openai_chunk(cls, chunk: Any) -> "StreamChunk":
+        """Create StreamChunk from an OpenAI SDK streaming chunk (also used for Gemini compat)."""
         choice = chunk.choices[0] if chunk.choices else None
         delta = choice.delta if choice else None
 
@@ -213,4 +266,40 @@ class StreamChunk(BaseModel):
             tool_calls=tool_calls if tool_calls else None,
             finish_reason=choice.finish_reason if choice else None,
             is_finished=choice.finish_reason is not None if choice else False,
+        )
+
+    @classmethod
+    def from_anthropic_response(cls, response: Any, model: str) -> "StreamChunk":
+        """Create a final StreamChunk from a completed Anthropic message (end of stream)."""
+        import json as _json
+
+        tool_calls: list[ToolCall] | None = None
+        for block in response.content:
+            if block.type == "tool_use":
+                if tool_calls is None:
+                    tool_calls = []
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        type="function",
+                        function=FunctionCall(
+                            name=block.name,
+                            arguments=_json.dumps(block.input),
+                        ),
+                    )
+                )
+
+        finish_reason_map = {
+            "end_turn": "stop",
+            "tool_use": "tool_calls",
+            "max_tokens": "length",
+        }
+        finish_reason = finish_reason_map.get(response.stop_reason or "", response.stop_reason)
+
+        return cls(
+            model=model,
+            content=None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            is_finished=True,
         )

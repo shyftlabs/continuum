@@ -46,7 +46,7 @@ class LLMConfig(BaseModel):
     user: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    # Advanced LiteLLM options
+    # Advanced provider options
     api_base: str | None = None
     api_key: str | None = None
     api_version: str | None = None
@@ -59,8 +59,8 @@ class LLMConfig(BaseModel):
     cache: bool = False
     cache_ttl: int | None = None
 
-    def to_litellm_kwargs(self) -> dict[str, Any]:
-        """Convert config to kwargs for LiteLLM completion call."""
+    def to_kwargs(self) -> dict[str, Any]:
+        """Convert config to kwargs for LLM completion call."""
         kwargs: dict[str, Any] = {
             "model": self.model,
             "temperature": self.temperature,
@@ -68,10 +68,7 @@ class LLMConfig(BaseModel):
             "num_retries": self.max_retries,
         }
 
-        # Use LiteLLM's built-in fallbacks if enabled
         if self.enable_fallback and self.fallback_models:
-            # LiteLLM supports fallbacks as a list in the model parameter
-            # Format: "model" or ["model1", "model2", ...]
             kwargs["fallbacks"] = self.fallback_models
 
         # Add optional parameters
@@ -94,7 +91,7 @@ class LLMConfig(BaseModel):
         if self.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         elif self.response_format is not None:
-            # Handle Pydantic models - LiteLLM accepts them directly
+            # Handle Pydantic models
             if isinstance(self.response_format, type) and issubclass(self.response_format, BaseModel):
                 kwargs["response_format"] = self.response_format
             elif isinstance(self.response_format, dict):
@@ -155,10 +152,8 @@ class LLMConfig(BaseModel):
             if agent.json_schema is not None:
                 # Check if json_schema is a Pydantic model
                 if isinstance(agent.json_schema, type) and issubclass(agent.json_schema, BaseModel):
-                    # Pydantic model - LiteLLM handles this directly
                     config.response_format = agent.json_schema
                 elif isinstance(agent.json_schema, dict):
-                    # JSON schema dict - format for LiteLLM
                     config.response_format = {
                         "type": "json_schema",
                         "json_schema": agent.json_schema,

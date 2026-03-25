@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import litellm
-
 from orchestrator.logging import get_logger
 
 logger = get_logger(__name__)
@@ -122,17 +120,27 @@ class ContextWindowManager:
         ```
     """
 
-    # Default limits for common models (fallback if LiteLLM doesn't have info)
+    # Context window limits per model (tokens)
     DEFAULT_LIMITS: dict[str, int] = {
+        # OpenAI
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
+        "gpt-4o-turbo": 128000,
         "gpt-4-turbo": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
-        "claude-3-5-sonnet-20241022": 200000,
-        "claude-3-opus-20240229": 200000,
-        "claude-3-sonnet-20240229": 200000,
-        "claude-3-haiku-20240307": 200000,
+        # Anthropic
+        "claude-haiku-4.5": 200000,
+        "claude-sonnet-4.5": 200000,
+        "claude-opus-4.5": 200000,
+        "claude-3-5-sonnet": 200000,
+        "claude-3-opus": 200000,
+        "claude-3-sonnet": 200000,
+        "claude-3-haiku": 200000,
+        # Google Gemini
+        "gemini-2.5-pro": 1000000,
+        "gemini-2.5-flash": 1000000,
+        "gemini-2.5-flash-lite": 1000000,
         "gemini-1.5-pro": 1000000,
         "gemini-1.5-flash": 1000000,
         "gemini-pro": 32000,
@@ -193,41 +201,39 @@ class ContextWindowManager:
         model: str,
         buffer_percent: float,
     ) -> ModelLimits:
-        """Fetch model limits from LiteLLM or use defaults."""
-        max_tokens = None
-        max_input_tokens = None
-        max_output_tokens = None
+        """
+        Look up model limits.
 
-        try:
-            # Try to get from LiteLLM
-            model_info = litellm.get_model_info(model)
+        Order:
+        1. Hardcoded table (fast, covers all known models)
+        2. Gemini API (for unknown Gemini models — API returns inputTokenLimit)
+        3. Conservative fallback: 4096
+        """
+        max_tokens: int | None = None
+        max_input_tokens: int | None = None
+        max_output_tokens: int | None = None
+        model_lower = model.lower()
 
-            if model_info:
-                max_tokens = model_info.get("max_tokens")
-                max_input_tokens = model_info.get("max_input_tokens")
-                max_output_tokens = model_info.get("max_output_tokens")
+        # 1. Hardcoded table
+        for key, default_max in self.DEFAULT_LIMITS.items():
+            if key in model_lower:
+                max_tokens = default_max
+                logger.debug(f"Using hardcoded limit for {model}: {max_tokens}")
+                break
 
-                logger.debug(
-                    f"Got model limits from LiteLLM for {model}: "
-                    f"max_tokens={max_tokens}, max_input={max_input_tokens}, max_output={max_output_tokens}"
-                )
-        except Exception as e:
-            logger.debug(f"Could not get model info from LiteLLM for {model}: {e}")
+        # 2. Gemini API for unknown Gemini models
+        if max_tokens is None and any(p in model_lower for p in ("gemini", "google")):
+            limits = self._fetch_gemini_limits(model)
+            if limits:
+                max_input_tokens, max_output_tokens = limits
+                max_tokens = max_input_tokens  # total context = input limit
+                logger.info(f"Fetched Gemini limits for {model}: input={max_input_tokens}, output={max_output_tokens}")
 
-        # Fallback to defaults
+        # 3. Conservative fallback
         if max_tokens is None:
-            # Check our defaults
-            for key, default_max in self.DEFAULT_LIMITS.items():
-                if key in model.lower() or model.lower() in key:
-                    max_tokens = default_max
-                    logger.debug(f"Using default limit for {model}: {max_tokens}")
-                    break
-
-        # Ultimate fallback
-        if max_tokens is None:
-            max_tokens = 4096  # Conservative default
+            max_tokens = 4096
             logger.warning(
-                f"Could not determine context limit for {model}, using conservative default: {max_tokens}"
+                f"Unknown context limit for {model}, using conservative default: {max_tokens}"
             )
 
         return ModelLimits(
@@ -238,26 +244,78 @@ class ContextWindowManager:
             response_buffer_percent=buffer_percent,
         )
 
+    def _fetch_gemini_limits(self, model: str) -> tuple[int, int] | None:
+        """
+        Fetch token limits from Gemini model info API.
+
+        Returns (input_token_limit, output_token_limit) or None on failure.
+        """
+        import json
+        import urllib.error
+        import urllib.request
+
+        from orchestrator.config import settings
+
+        api_key = settings.gemini_api_key
+        if not api_key:
+            return None
+
+        # Strip provider prefix to get bare model name
+        bare = model.lower()
+        for prefix in ("gemini/", "google/"):
+            if bare.startswith(prefix):
+                bare = bare[len(prefix):]
+                break
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{bare}?key={api_key}"
+        )
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+                data = json.loads(resp.read())
+            input_limit = data.get("inputTokenLimit")
+            output_limit = data.get("outputTokenLimit")
+            if input_limit and output_limit:
+                return int(input_limit), int(output_limit)
+        except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
+            logger.debug(f"Gemini model info API failed for {model}: {e}")
+        return None
+
     def count_tokens(
         self,
         messages: list[dict[str, Any]],
         model: str,
     ) -> int:
         """
-        Count tokens in messages for a specific model.
+        Count tokens in messages using tiktoken.
 
-        Args:
-            messages: List of messages
-            model: Model name for tokenizer
-
-        Returns:
-            Token count
+        Uses cl100k_base encoding (GPT-4/Claude/Gemini all use similar tokenization).
+        Falls back to character estimate if tiktoken is unavailable.
         """
         try:
-            return litellm.token_counter(model=model, messages=messages)
+            import tiktoken
+
+            # Use model-specific encoding for OpenAI models, cl100k_base for others
+            try:
+                enc = tiktoken.encoding_for_model(model.split("/")[-1])
+            except KeyError:
+                enc = tiktoken.get_encoding("cl100k_base")
+
+            total = 0
+            for msg in messages:
+                total += 4  # per-message overhead
+                content = msg.get("content") or ""
+                if isinstance(content, str):
+                    total += len(enc.encode(content))
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            total += len(enc.encode(str(block.get("text") or block.get("content") or "")))
+                total += len(enc.encode(msg.get("role", "")))
+            total += 2  # priming tokens
+            return total
         except Exception as e:
             logger.warning(f"Token counting failed, using estimate: {e}")
-            # Rough estimate: ~4 characters per token
             total_chars = sum(
                 len(str(msg.get("content", ""))) + len(str(msg.get("role", ""))) for msg in messages
             )

@@ -453,12 +453,10 @@ class HealthCheck:
             )
 
         try:
-            import litellm
+            from orchestrator.llm.context_window import get_context_window_manager
 
-            # Try to get model info for default model (doesn't make API call)
             model = settings.default_llm_model
-            model_info = litellm.get_model_info(model)
-
+            limits = get_context_window_manager().get_model_limits(model)
             latency = (time.time() - start_time) * 1000
 
             return HealthCheckResult(
@@ -472,16 +470,10 @@ class HealthCheck:
                     "anthropic": has_anthropic,
                     "gemini": has_gemini,
                     "azure": has_azure,
-                    "max_tokens": model_info.get("max_tokens") if model_info else None,
+                    "max_tokens": limits.max_tokens,
                 },
             )
 
-        except ImportError:
-            return HealthCheckResult(
-                name="llm",
-                status=HealthStatus.UNHEALTHY,
-                message="litellm package not installed",
-            )
         except Exception as e:
             latency = (time.time() - start_time) * 1000
             return HealthCheckResult(

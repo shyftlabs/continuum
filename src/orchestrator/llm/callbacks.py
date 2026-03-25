@@ -17,8 +17,6 @@ from contextlib import contextmanager
 from datetime import UTC
 from typing import TYPE_CHECKING, Any
 
-import litellm
-
 from orchestrator.config import settings
 from orchestrator.logging import clear_log_context, get_log_context, get_logger, set_log_context
 
@@ -46,21 +44,16 @@ logger = get_logger(__name__)
 
 def setup_langfuse() -> bool:
     """
-    Initialize Langfuse callback for LiteLLM.
+    Initialize Langfuse observability.
 
-    This sets up the Langfuse callback handler that will automatically
-    log all LLM calls made through LiteLLM. Uses the global Langfuse
-    client from the observability module.
-
-    Returns:
-        bool: True if Langfuse was successfully initialized, False otherwise.
+    Traces are captured via the @observe decorator on LLMClient methods.
+    No LiteLLM callback registration needed.
     """
     from orchestrator.observability import (
         ObservabilityConfig,
         initialize_observability,
     )
 
-    # Initialize observability providers
     config = ObservabilityConfig()
     if not config.is_configured():
         logger.info("Observability not configured or disabled")
@@ -71,7 +64,6 @@ def setup_langfuse() -> bool:
         logger.info("Observability is disabled")
         return False
 
-    # Get Langfuse provider for LiteLLM callbacks
     from orchestrator.observability.providers.registry import get_provider
 
     langfuse_provider = get_provider("langfuse")
@@ -84,34 +76,8 @@ def setup_langfuse() -> bool:
         logger.info("Langfuse client is disabled")
         return False
 
-    try:
-        # Set the callback for LiteLLM
-        # LiteLLM supports 'langfuse' as a built-in callback
-        # Ensure both success and failure callbacks are set for complete observability
-        if "langfuse" not in litellm.success_callback:
-            litellm.success_callback = ["langfuse"]
-        if "langfuse" not in litellm.failure_callback:
-            litellm.failure_callback = ["langfuse"]
-
-        # Enable verbose logging for LiteLLM if debug is enabled
-        if settings.langfuse_debug:
-            litellm.set_verbose = True
-
-        # Ensure all metadata is passed through
-        logger.info(
-            f"LiteLLM callbacks configured: "
-            f"success={litellm.success_callback}, "
-            f"failure={litellm.failure_callback}"
-        )
-
-        logger.info(
-            "Langfuse callbacks configured for LiteLLM", extra={"host": settings.langfuse_host}
-        )
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to setup Langfuse callbacks: {e}")
-        return False
+    logger.info("Langfuse observability initialized", extra={"host": settings.langfuse_host})
+    return True
 
 
 def get_langfuse_callback() -> Langfuse | None:
@@ -256,34 +222,6 @@ def get_langfuse_metadata(
 
     return metadata
 
-
-def add_custom_callback(callback: Any) -> None:
-    """
-    Add a custom callback to LiteLLM's success callbacks.
-
-    This allows adding custom logging, monitoring, or other callbacks
-    in addition to Langfuse.
-
-    Args:
-        callback: A callback object that follows LiteLLM's callback interface.
-    """
-    if callback not in litellm.success_callback:
-        litellm.success_callback.append(callback)
-    if callback not in litellm.failure_callback:
-        litellm.failure_callback.append(callback)
-
-
-def remove_callback(callback: Any) -> None:
-    """
-    Remove a callback from LiteLLM's callbacks.
-
-    Args:
-        callback: The callback to remove.
-    """
-    if callback in litellm.success_callback:
-        litellm.success_callback.remove(callback)
-    if callback in litellm.failure_callback:
-        litellm.failure_callback.remove(callback)
 
 
 def flush_langfuse() -> None:

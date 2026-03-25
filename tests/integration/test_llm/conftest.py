@@ -18,31 +18,9 @@ from orchestrator.config import settings
 # This ensures all tests use the same event loop, preventing cleanup issues
 @pytest.fixture(scope="session")
 def event_loop():
-    """
-    Create a session-scoped event loop for all async tests.
-    
-    This ensures LiteLLM's async clients are properly cleaned up
-    before the event loop closes, preventing RuntimeWarnings.
-    """
+    """Create a session-scoped event loop for all async tests."""
     loop = asyncio.new_event_loop()
     yield loop
-    
-    # Cleanup LiteLLM async clients BEFORE closing the event loop
-    # This prevents the RuntimeWarning about unawaited coroutines
-    try:
-        import litellm
-        if hasattr(litellm, "close_litellm_async_clients"):
-            # Run cleanup synchronously before loop closes
-            if not loop.is_closed():
-                try:
-                    loop.run_until_complete(litellm.close_litellm_async_clients())
-                except Exception:
-                    # Ignore cleanup errors - resources will be freed on process exit
-                    pass
-    except Exception:
-        pass
-    
-    # Close the event loop
     loop.close()
 
 

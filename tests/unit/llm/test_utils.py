@@ -1,6 +1,6 @@
 """Unit tests for LLM utils."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch  # patch used in TestValidateJsonSchemaConfig
 
 import pytest
 
@@ -18,35 +18,25 @@ logger = logging.getLogger(__name__)
 class TestCheckResponseFormatSupport:
     def test_supported_model(self):
         logger.info("CheckResponseFormatSupport: supported model")
-        with patch("orchestrator.llm.utils.litellm") as mock_ll:
-            mock_ll.get_supported_openai_params.return_value = ["response_format", "temperature"]
-            assert check_response_format_support("gpt-4o") is True
+        assert check_response_format_support("gpt-4o") is True
 
     def test_unsupported_model(self):
         logger.info("CheckResponseFormatSupport: unsupported model")
-        with patch("orchestrator.llm.utils.litellm") as mock_ll:
-            mock_ll.get_supported_openai_params.return_value = ["temperature"]
-            assert check_response_format_support("old-model") is False
+        assert check_response_format_support("old-model") is False
 
-    def test_exception_returns_false(self):
-        logger.info("CheckResponseFormatSupport: exception returns false")
-        with patch("orchestrator.llm.utils.litellm") as mock_ll:
-            mock_ll.get_supported_openai_params.side_effect = Exception("err")
-            assert check_response_format_support("gpt-4") is False
+    def test_anthropic_unsupported(self):
+        logger.info("CheckResponseFormatSupport: anthropic unsupported")
+        assert check_response_format_support("claude-3-opus") is False
 
 
 class TestCheckJsonSchemaSupport:
     def test_supported(self):
         logger.info("CheckJsonSchemaSupport: supported")
-        with patch("orchestrator.llm.utils.litellm") as mock_ll:
-            mock_ll.supports_response_schema.return_value = True
-            assert check_json_schema_support("gpt-4o") is True
+        assert check_json_schema_support("gpt-4o") is True
 
-    def test_exception_returns_false(self):
-        logger.info("CheckJsonSchemaSupport: exception returns false")
-        with patch("orchestrator.llm.utils.litellm") as mock_ll:
-            mock_ll.supports_response_schema.side_effect = Exception("err")
-            assert check_json_schema_support("gpt-4") is False
+    def test_unsupported_model(self):
+        logger.info("CheckJsonSchemaSupport: unsupported model")
+        assert check_json_schema_support("old-model") is False
 
 
 class TestSupportsToolsWithJsonMode:

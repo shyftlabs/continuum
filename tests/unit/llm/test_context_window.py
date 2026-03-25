@@ -1,7 +1,5 @@
 """Unit tests for LLM context window management."""
 
-from unittest.mock import patch
-
 import pytest
 
 from orchestrator.llm.context_window import (
@@ -66,22 +64,14 @@ class TestContextWindowManager:
         cwm = ContextWindowManager()
         assert cwm is not None
 
-    @patch("orchestrator.llm.context_window.litellm")
-    def test_get_model_limits(self, mock_ll):
+    def test_get_model_limits(self):
         logger.info("ContextWindowManager: get model limits")
-        mock_ll.get_model_info.return_value = {
-            "max_tokens": 8192,
-            "max_input_tokens": 6000,
-            "max_output_tokens": 2192,
-        }
         cwm = ContextWindowManager()
         limits = cwm.get_model_limits("gpt-4")
         assert limits.max_tokens == 8192
 
-    @patch("orchestrator.llm.context_window.litellm")
-    def test_get_model_limits_fallback(self, mock_ll):
+    def test_get_model_limits_fallback(self):
         logger.info("ContextWindowManager: get model limits fallback")
-        mock_ll.get_model_info.side_effect = Exception("not found")
         cwm = ContextWindowManager()
-        limits = cwm.get_model_limits("unknown-model")
+        limits = cwm.get_model_limits("unknown-model-xyz")
         assert limits.max_tokens > 0

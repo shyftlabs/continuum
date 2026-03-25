@@ -193,6 +193,38 @@ class MemoryConfig(BaseModel):
 
         return None
 
+    def _build_llm_config(self) -> dict[str, Any]:
+        """Detect LLM provider from model name and build mem0 llm config block."""
+        model = self.memory_llm_model
+
+        if model.startswith("gemini/"):
+            return {
+                "provider": "gemini",
+                "config": {
+                    "model": model.removeprefix("gemini/"),
+                    "temperature": self.memory_llm_temperature,
+                    "api_key": os.environ.get("GEMINI_API_KEY", ""),
+                },
+            }
+        if model.startswith("claude"):
+            return {
+                "provider": "anthropic",
+                "config": {
+                    "model": model,
+                    "temperature": self.memory_llm_temperature,
+                    "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+                },
+            }
+        # Default: OpenAI (gpt-* or any unrecognized model)
+        return {
+            "provider": "openai",
+            "config": {
+                "model": model,
+                "temperature": self.memory_llm_temperature,
+                "api_key": os.environ.get("OPENAI_API_KEY", ""),
+            },
+        }
+
     def _build_embedder_config(self) -> tuple[str, dict[str, Any]]:
         """
         Build the embedder configuration for mem0.
@@ -291,6 +323,10 @@ class MemoryConfig(BaseModel):
         """
         # Expand history path (mem0 doesn't do this automatically)
         history_path = os.path.expanduser(self.history_db_path)
+        # Container environments (e.g. Docker appuser) often have HOME=/nonexistent;
+        # avoid [Errno 13] Permission denied by using /tmp when path is under /nonexistent
+        if history_path.startswith("/nonexistent"):
+            history_path = "/tmp/orchestrator_memory_history.db"
 
         # Ensure parent directory exists
         from pathlib import Path
@@ -302,13 +338,7 @@ class MemoryConfig(BaseModel):
 
         config: dict[str, Any] = {
             "version": "v1.1",
-            "llm": {
-                "provider": "litellm",
-                "config": {
-                    "model": self.memory_llm_model,
-                    "temperature": self.memory_llm_temperature,
-                },
-            },
+            "llm": self._build_llm_config(),
             "embedder": {
                 "provider": embedder_provider,
                 "config": embedder_config,
