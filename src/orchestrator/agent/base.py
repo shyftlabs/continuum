@@ -6,6 +6,7 @@ Defines the fundamental agent abstraction that all agents inherit from.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from orchestrator.agent.config import AgentConfig, AgentMemoryConfig
 from orchestrator.agent.exceptions import AgentConfigurationError
+from orchestrator.logging import get_logger
 from orchestrator.agent.types import (
     Handoff,
     MemoryScope,
@@ -24,6 +26,8 @@ if TYPE_CHECKING:
     from orchestrator.agent.types import RunContext
     from orchestrator.llm.types import ToolDefinition
     from orchestrator.tools import MCPServer, ToolExecutor
+
+_logger = get_logger(__name__)
 
 
 class _SafeFormatMap(dict):
@@ -266,8 +270,12 @@ class BaseAgent:
             vars_map.update(self.template_vars)
             try:
                 prompt = prompt.format_map(_SafeFormatMap(vars_map))
-            except Exception:
-                pass  # never raise on template errors
+            except Exception as e:
+                _logger.warning(
+                    f"Template rendering failed for agent '{self.name}': {e}. "
+                    f"Using unrendered instructions.",
+                    exc_info=True,
+                )
 
         # ------------------------------------------------------------------
         # 2. Few-shot examples
@@ -286,8 +294,12 @@ class BaseAgent:
         for modifier in self.instruction_modifiers:
             try:
                 prompt = modifier(prompt, context)
-            except Exception:
-                pass  # never raise on modifier errors
+            except Exception as e:
+                _logger.warning(
+                    f"Instruction modifier '{getattr(modifier, '__name__', repr(modifier))}' "
+                    f"failed for agent '{self.name}': {e}. Skipping modifier.",
+                    exc_info=True,
+                )
 
         return prompt
 
@@ -377,7 +389,7 @@ class BaseAgent:
         Returns:
             New agent instance
         """
-        # Get current values
+        # Deep copy mutable nested structures to prevent shared-state mutations
         current = {
             "name": self.name,
             "instructions": self.instructions,
@@ -385,15 +397,15 @@ class BaseAgent:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "tools": list(self.tools),
+            "tools": copy.deepcopy(self.tools),
             "tool_executor": self.tool_executor,
-            "mcp_servers": list(self.mcp_servers),
-            "handoffs": list(self.handoffs),
-            "memory_config": self.memory_config,
-            "config": self.config,
+            "mcp_servers": list(self.mcp_servers),  # shallow OK — server instances are shared
+            "handoffs": copy.deepcopy(self.handoffs),
+            "memory_config": copy.deepcopy(self.memory_config),
+            "config": copy.deepcopy(self.config),
             "output_schema": self.output_schema,
             "enable_json_mode": self.enable_json_mode,
-            "json_schema": self.json_schema,
+            "json_schema": copy.deepcopy(self.json_schema) if isinstance(self.json_schema, dict) else self.json_schema,
             "json_strict": self.json_strict,
             "input_schema": self.input_schema,
             "on_start": self.on_start,
@@ -401,10 +413,10 @@ class BaseAgent:
             "on_error": self.on_error,
             "on_tool_call": self.on_tool_call,
             "on_handoff": self.on_handoff,
-            "metadata": dict(self.metadata),
+            "metadata": copy.deepcopy(self.metadata),
             "tags": list(self.tags),
-            "template_vars": dict(self.template_vars),
-            "examples": list(self.examples),
+            "template_vars": copy.deepcopy(self.template_vars),
+            "examples": copy.deepcopy(self.examples),
             "instruction_modifiers": list(self.instruction_modifiers),
         }
 

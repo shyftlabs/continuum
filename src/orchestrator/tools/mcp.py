@@ -9,6 +9,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import inspect
+import json
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import timedelta
@@ -369,18 +370,25 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         try:
             return await self._run_with_retries(lambda: session.call_tool(tool_name, arguments))
         except Exception as e:
-            # Catch JSON parsing errors from MCP client library
-            error_msg = str(e)
-            is_json_error = (
-                "JSON" in error_msg
-                or "json" in error_msg.lower()
-                or "Expecting value" in error_msg
-                or "Unterminated string" in error_msg
-                or "Expecting property name" in error_msg
-                or "JSONDecodeError" in type(e).__name__
-            )
+            # Detect JSON parsing errors via exception type first, then string fallback
+            is_json_error = isinstance(e, (json.JSONDecodeError,))
+            if not is_json_error:
+                # Fallback: check exception class name and message for JSON errors
+                # from third-party libraries that may wrap json errors
+                error_msg = str(e)
+                error_type_name = type(e).__name__
+                is_json_error = (
+                    "JSONDecodeError" in error_type_name
+                    or "JsonDecodeError" in error_type_name
+                    or isinstance(e, ValueError) and (
+                        "Expecting value" in error_msg
+                        or "Unterminated string" in error_msg
+                        or "Expecting property name" in error_msg
+                    )
+                )
 
             if is_json_error:
+                error_msg = str(e)
                 logger.error(
                     f"❌ MCP server '{self.name}' returned invalid JSON response for tool '{tool_name}': {error_msg}",
                     extra={

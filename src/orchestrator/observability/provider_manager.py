@@ -108,7 +108,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create trace: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         # Return first successful result (typically from first provider in registry)
@@ -150,7 +150,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create span: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -197,7 +197,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create generation: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -238,7 +238,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create event: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -277,7 +277,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create score: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -291,7 +291,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to flush: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
     def shutdown(self) -> None:
@@ -303,7 +303,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to shutdown: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
     def create_prompt(
@@ -338,7 +338,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create prompt: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -373,7 +373,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to get prompt: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return None
@@ -406,7 +406,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create dataset: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None
@@ -428,7 +428,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to get dataset: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return None
@@ -463,7 +463,7 @@ class ProviderManager:
             except Exception as e:
                 logger.warning(
                     f"Provider {provider_name} failed to create dataset item: {e}",
-                    exc_info=False,
+                    exc_info=True,
                 )
 
         return results[0] if results else None

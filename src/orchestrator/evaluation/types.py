@@ -42,6 +42,15 @@ class EvalCase:
     metadata: dict[str, Any] = field(default_factory=dict)
     case_id: str = field(default_factory=lambda: f"case_{uuid.uuid4().hex[:12]}")
 
+    def __post_init__(self) -> None:
+        # Coerce context to list[str] if a single string is passed
+        if isinstance(self.context, str):
+            object.__setattr__(self, "context", [self.context])
+        elif not isinstance(self.context, list):
+            raise TypeError(
+                f"EvalCase.context must be a list of strings, got {type(self.context).__name__}"
+            )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "case_id": self.case_id,

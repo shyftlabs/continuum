@@ -116,7 +116,13 @@ class SessionClient:
         if not self._memory_client:
             from orchestrator.core.container import get_container
 
-            self._memory_client = get_container().memory_client
+            client = get_container().memory_client
+            if client is None:
+                raise RuntimeError(
+                    "MemoryClient is not available. Ensure memory is enabled "
+                    "and properly configured (MEMORY_ENABLED=true)."
+                )
+            self._memory_client = client
         return self._memory_client
 
     @property

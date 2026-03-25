@@ -6,6 +6,7 @@ Defines all type definitions for the agent orchestration module.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,8 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from orchestrator.logging import get_logger
+
 if TYPE_CHECKING:
     from orchestrator.llm.types import ChatMessage, ToolCall
+
+_logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -160,24 +165,24 @@ class TokenUsage:
     model_usage: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def add(self, other: TokenUsage) -> TokenUsage:
-        """Add token usage from another instance."""
+        """Add token usage from another instance. Coerces values to int for safety."""
         all_models = set(self.model_usage.keys()) | set(other.model_usage.keys())
         merged_usage: dict[str, dict[str, int]] = {}
         for model in all_models:
             self_usage = self.model_usage.get(model, {})
             other_usage = other.model_usage.get(model, {})
             merged_usage[model] = {
-                "prompt_tokens": self_usage.get("prompt_tokens", 0)
-                + other_usage.get("prompt_tokens", 0),
-                "completion_tokens": self_usage.get("completion_tokens", 0)
-                + other_usage.get("completion_tokens", 0),
-                "total_tokens": self_usage.get("total_tokens", 0)
-                + other_usage.get("total_tokens", 0),
+                "prompt_tokens": int(self_usage.get("prompt_tokens", 0) or 0)
+                + int(other_usage.get("prompt_tokens", 0) or 0),
+                "completion_tokens": int(self_usage.get("completion_tokens", 0) or 0)
+                + int(other_usage.get("completion_tokens", 0) or 0),
+                "total_tokens": int(self_usage.get("total_tokens", 0) or 0)
+                + int(other_usage.get("total_tokens", 0) or 0),
             }
         return TokenUsage(
-            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
-            completion_tokens=self.completion_tokens + other.completion_tokens,
-            total_tokens=self.total_tokens + other.total_tokens,
+            prompt_tokens=int(self.prompt_tokens or 0) + int(other.prompt_tokens or 0),
+            completion_tokens=int(self.completion_tokens or 0) + int(other.completion_tokens or 0),
+            total_tokens=int(self.total_tokens or 0) + int(other.total_tokens or 0),
             model_usage=merged_usage,
         )
 
@@ -249,6 +254,15 @@ class Handoff:
         }
 
 
+def _log_missing_timestamp(handoff_id: str) -> datetime:
+    """Log a warning and return current time when HandoffData timestamp is missing."""
+    _logger.warning(
+        f"HandoffData '{handoff_id}' missing timestamp field during deserialization. "
+        f"Using current time as fallback — this may indicate data loss."
+    )
+    return datetime.now(UTC)
+
+
 @dataclass
 class HandoffData:
     """Data passed during a handoff."""
@@ -291,7 +305,7 @@ class HandoffData:
             metadata=data.get("metadata", {}),
             timestamp=datetime.fromisoformat(data["timestamp"])
             if isinstance(data.get("timestamp"), str)
-            else datetime.now(UTC),
+            else _log_missing_timestamp(data.get("handoff_id", "unknown")),
         )
 
 
@@ -375,6 +389,24 @@ class RunState:
 
     # Token tracking
     usage: TokenUsage = field(default_factory=TokenUsage)
+
+    # Thread-safety lock for mutable state (agent_stack, handoff_chain)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def push_agent(self, agent_name: str) -> None:
+        """Thread-safe push to agent_stack."""
+        with self._lock:
+            self.agent_stack.append(agent_name)
+
+    def pop_agent(self) -> str | None:
+        """Thread-safe pop from agent_stack."""
+        with self._lock:
+            return self.agent_stack.pop() if self.agent_stack else None
+
+    def get_agent_stack_snapshot(self) -> list[str]:
+        """Thread-safe snapshot of agent_stack."""
+        with self._lock:
+            return list(self.agent_stack)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for Redis storage."""
@@ -513,6 +545,37 @@ class AgentResponse:
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
+
+    @classmethod
+    def error_response(
+        cls,
+        error: str | Exception,
+        *,
+        agent_name: str = "",
+        run_id: str = "",
+        trace_id: str | None = None,
+        error_type: str | None = None,
+    ) -> AgentResponse:
+        """
+        Factory for consistent error responses across the codebase.
+
+        Args:
+            error: Error message or exception
+            agent_name: Agent that produced the error
+            run_id: Run ID for tracing
+            trace_id: Trace ID for observability
+            error_type: Error classification (defaults to exception class name)
+        """
+        error_str = str(error)
+        return cls(
+            content=f"An error occurred: {error_str}",
+            agent_name=agent_name,
+            run_id=run_id,
+            status=ResponseStatus.ERROR,
+            error=error_str,
+            error_type=error_type or (type(error).__name__ if isinstance(error, Exception) else "Error"),
+            trace_id=trace_id,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage/logging."""

@@ -114,10 +114,19 @@ class HumanInLoopManager:
 
         if self._notification_config.escalation_handler:
             pending = await self.get_pending_approvals(workflow_id)
+            matched = False
             for req_dict in pending:
                 if req_dict.get("request_id") == request_id:
                     req = ApprovalRequest.model_validate(req_dict)
                     await self._notification_config.escalation_handler(req)
+                    matched = True
                     break
+            if not matched:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Escalation: request_id '{request_id}' not found in pending "
+                    f"approvals for workflow '{workflow_id}'. "
+                    f"Available request_ids: {[r.get('request_id') for r in pending]}"
+                )
 
         await self.submit_decision(workflow_id, decision)

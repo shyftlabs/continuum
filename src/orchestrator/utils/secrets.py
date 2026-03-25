@@ -30,10 +30,29 @@ def is_sensitive_key(key: str) -> bool:
     return any(pattern.search(key) for pattern in SENSITIVE_KEY_PATTERNS)
 
 
-def redact_dict(data: dict[str, Any], depth: int = 0, max_depth: int = 5) -> dict[str, Any]:
-    """Recursively redact sensitive values from a dictionary."""
+def redact_dict(
+    data: dict[str, Any],
+    depth: int = 0,
+    max_depth: int = 5,
+    _seen: set[int] | None = None,
+) -> dict[str, Any]:
+    """Recursively redact sensitive values from a dictionary.
+
+    Handles circular references via identity tracking and returns
+    "[REDACTED - max depth]" at depth limit instead of raw data.
+    """
+    # Track seen object ids to prevent infinite recursion on circular refs
+    if _seen is None:
+        _seen = set()
+
+    obj_id = id(data)
+    if obj_id in _seen:
+        return {"_redacted": "[CIRCULAR REFERENCE]"}
+    _seen.add(obj_id)
+
     if depth > max_depth:
-        return data
+        # Return redacted placeholder instead of raw unredacted data
+        return {"_redacted": "[REDACTED - max depth exceeded]"}
 
     result = {}
     for key, value in data.items():
@@ -43,16 +62,18 @@ def redact_dict(data: dict[str, Any], depth: int = 0, max_depth: int = 5) -> dic
             else:
                 result[key] = "[REDACTED]"
         elif isinstance(value, dict):
-            result[key] = redact_dict(value, depth + 1, max_depth)
+            result[key] = redact_dict(value, depth + 1, max_depth, _seen)
         elif isinstance(value, list):
             result[key] = [
-                redact_dict(item, depth + 1, max_depth) if isinstance(item, dict) else item
+                redact_dict(item, depth + 1, max_depth, _seen) if isinstance(item, dict) else item
                 for item in value
             ]
         elif isinstance(value, str):
             result[key] = redact_sensitive_values(value)
         else:
             result[key] = value
+
+    _seen.discard(obj_id)
     return result
 
 

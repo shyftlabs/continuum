@@ -99,6 +99,29 @@ class AgentWorkflow:
         self._last_output = input.initial_input
         self._total_steps = len(input.steps)
 
+        # Validate ALL steps upfront before executing any of them
+        # This prevents partially-executed workflows from bad step definitions
+        try:
+            for i, step_dict in enumerate(input.steps):
+                try:
+                    parse_step(step_dict)
+                except (ValueError, Exception) as e:
+                    self._status = "failed"
+                    return WorkflowResult(
+                        status="failed",
+                        content=None,
+                        step_results=[],
+                        error=f"Step {i} validation failed: {e}",
+                    )
+        except Exception as e:
+            self._status = "failed"
+            return WorkflowResult(
+                status="failed",
+                content=None,
+                step_results=[],
+                error=f"Workflow step validation error: {e}",
+            )
+
         try:
             for idx, step_dict in enumerate(input.steps):
                 if self._cancelled:
@@ -118,9 +141,12 @@ class AgentWorkflow:
                 elif isinstance(step, ApprovalStep):
                     approved = await self._run_approval_step(step, idx, input)
                     if not approved:
-                        self._status = "rejected"
+                        # Use self._status which is already set to "timed_out"
+                        # or "rejected" by _run_approval_step
+                        final_status = self._status if self._status in ("timed_out", "cancelled") else "rejected"
+                        self._status = final_status
                         return WorkflowResult(
-                            status="rejected",
+                            status=final_status,
                             content=self._last_output or None,
                             step_results=self._step_results,
                             approval_decisions=self._approval_decisions,
@@ -171,6 +197,9 @@ class AgentWorkflow:
             start_to_close_timeout=timedelta(seconds=step.timeout),
             retry_policy=RetryPolicy(
                 maximum_attempts=step.retries,
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=60),
             ),
             heartbeat_timeout=timedelta(seconds=60),
             result_type=AgentActivityResult,
@@ -200,7 +229,7 @@ class AgentWorkflow:
         }
         self._pending_approvals.append(approval_info)
 
-        # Send notification
+        # Send notification (failure shouldn't block the workflow, but should be logged)
         try:
             await workflow.execute_activity(
                 "send_notification_activity",
@@ -210,8 +239,11 @@ class AgentWorkflow:
                 ),
                 start_to_close_timeout=timedelta(seconds=30),
             )
-        except Exception:
-            pass  # Notification failure shouldn't block the workflow
+        except Exception as e:
+            workflow.logger.warning(
+                f"Notification activity failed for approval {request_id}: {e}. "
+                "Workflow continues without notification."
+            )
 
         self._status = "waiting_for_approval"
         self._pending_decision = None
@@ -239,6 +271,14 @@ class AgentWorkflow:
         ]
 
         if decision:
+            # Validate that the decision's request_id matches the current approval
+            if decision.request_id != request_id:
+                workflow.logger.warning(
+                    f"Approval decision request_id mismatch: "
+                    f"expected '{request_id}', got '{decision.request_id}'. "
+                    f"Ignoring mismatched decision."
+                )
+                return False
             self._approval_decisions.append(decision)
             self._status = "running"
             return decision.decision == "approved"
@@ -264,6 +304,9 @@ class AgentWorkflow:
                 start_to_close_timeout=timedelta(seconds=agent_step.timeout),
                 retry_policy=RetryPolicy(
                     maximum_attempts=agent_step.retries,
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=60),
                 ),
                 heartbeat_timeout=timedelta(seconds=60),
                 result_type=AgentActivityResult,
@@ -284,18 +327,33 @@ class AgentWorkflow:
                     self._last_output = r.content
                     break
         elif step.merge_strategy == "structured":
-            parts = {
-                r.agents_used[0] if r.agents_used else f"agent-{i}": r.content
-                for i, r in enumerate(results)
-            }
-            self._last_output = str(parts)
+            import json as _json
+            # Use indexed keys to prevent collision when agents share a name
+            parts = {}
+            for i, r in enumerate(results):
+                agent_key = r.agents_used[0] if r.agents_used else f"agent-{i}"
+                # Append index suffix if key already exists (collision prevention)
+                unique_key = agent_key
+                suffix = 1
+                while unique_key in parts:
+                    unique_key = f"{agent_key}_{suffix}"
+                    suffix += 1
+                parts[unique_key] = r.content
+            # Use JSON serialization instead of str() to preserve structure
+            self._last_output = _json.dumps(parts)
         else:
             self._last_output = "\n\n".join(r.content for r in results if r.content)
 
     async def _run_conditional_step(
         self, step: ConditionalStep, wf_input: WorkflowInput
     ) -> None:
-        """Run condition agent and branch."""
+        """Run condition agent and branch.
+
+        The condition agent must return exactly "true" or "false" (case-insensitive).
+        The raw result is stored as a side-effect to preserve Temporal determinism:
+        on replay the same activity result is replayed, so the branch decision
+        is consistent across replays.
+        """
         raw_cond = await workflow.execute_activity(
             "run_agent_activity",
             AgentActivityParams(
@@ -303,21 +361,45 @@ class AgentWorkflow:
                 input=self._last_output,
                 session_id=wf_input.session_id,
                 user_id=wf_input.user_id,
+                metadata=step.metadata,
             ),
-            start_to_close_timeout=timedelta(seconds=300),
-            retry_policy=RetryPolicy(maximum_attempts=3),
+            start_to_close_timeout=timedelta(seconds=step.timeout),
+            retry_policy=RetryPolicy(
+                maximum_attempts=step.retries,
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=60),
+            ),
             heartbeat_timeout=timedelta(seconds=60),
             result_type=AgentActivityResult,
         )
         condition_result = raw_cond if isinstance(raw_cond, AgentActivityResult) else AgentActivityResult.model_validate(raw_cond)
         self._step_results.append(condition_result)
 
-        is_true = condition_result.content.strip().lower() in (
-            "true", "yes", "1", "approved", "continue",
-        )
+        # Deterministic evaluation: only accept explicit true/false values
+        # to keep Temporal replay deterministic (LLM output is already fixed
+        # in the event history on replay, so the same branch is always taken)
+        condition_value = (condition_result.content or "").strip().lower()
+        is_true = condition_value in ("true", "yes", "1", "approved", "continue")
 
         branch_steps = step.if_true if is_true else step.if_false
         for step_dict in branch_steps:
+            if self._cancelled:
+                return
             parsed = parse_step(step_dict)
+            # Handle ALL step types in branches, not just AgentStep
             if isinstance(parsed, AgentStep):
                 await self._run_agent_step(parsed, wf_input)
+            elif isinstance(parsed, ApprovalStep):
+                approved = await self._run_approval_step(
+                    parsed, self._current_step_index, wf_input
+                )
+                if not approved:
+                    self._status = "rejected"
+                    return
+            elif isinstance(parsed, ParallelStep):
+                await self._run_parallel_step(parsed, wf_input)
+            elif isinstance(parsed, WaitStep):
+                await workflow.sleep(parsed.duration_seconds)
+            elif isinstance(parsed, ConditionalStep):
+                await self._run_conditional_step(parsed, wf_input)

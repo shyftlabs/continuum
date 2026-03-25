@@ -134,11 +134,30 @@ class MessageBuilder(IMessageBuilder):
 
         # Inject tool context into system prompt for LLM awareness
         if tool_context_state and not tool_context_state.is_empty():
-            context_prompt = self._inject_tool_context_to_prompt(tool_context_state)
-            if context_prompt:
-                messages.append({"role": "system", "content": context_prompt})
-                logger.info(
-                    "📋 Injected tool context into system prompt (existing session_id found)"
+            # Validate tool context state before injection
+            try:
+                if not hasattr(tool_context_state, "to_prompt_context") or not hasattr(tool_context_state, "get_all_namespaces"):
+                    logger.warning(
+                        "Tool context state missing required methods (to_prompt_context, get_all_namespaces). "
+                        "Skipping injection."
+                    )
+                else:
+                    namespaces = tool_context_state.get_all_namespaces()
+                    if not isinstance(namespaces, (list, set, tuple)):
+                        logger.warning(
+                            f"Tool context state returned invalid namespaces type: {type(namespaces)}. "
+                            f"Skipping injection."
+                        )
+                    else:
+                        context_prompt = self._inject_tool_context_to_prompt(tool_context_state)
+                        if context_prompt:
+                            messages.append({"role": "system", "content": context_prompt})
+                            logger.info(
+                                "📋 Injected tool context into system prompt (existing session_id found)"
+                            )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to validate/inject tool context state: {e}. Continuing without it."
                 )
 
         # Inject memory facts early (user profile/background — stable context like instructions)

@@ -65,7 +65,12 @@ class ParallelAgentWorkflow:
                     user_id=input.user_id,
                 ),
                 start_to_close_timeout=timedelta(seconds=input.timeout_per_agent),
-                retry_policy=RetryPolicy(maximum_attempts=3),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=60),
+                ),
                 heartbeat_timeout=timedelta(seconds=60),
                 result_type=AgentActivityResult,
             )

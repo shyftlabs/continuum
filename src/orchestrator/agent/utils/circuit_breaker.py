@@ -54,10 +54,17 @@ class CircuitBreaker:
 
     def check(self) -> None:
         """Check if a call is allowed. Raises CircuitBreakerOpen if not."""
-        state = self.state
-        if state == CircuitState.OPEN:
-            remaining = self._cooldown - (time.monotonic() - (self._opened_at or 0))
-            raise CircuitBreakerOpen(max(0, remaining))
+        with self._lock:
+            if self._state == CircuitState.OPEN and self._opened_at is not None:
+                elapsed = time.monotonic() - self._opened_at
+                if elapsed >= self._cooldown:
+                    self._state = CircuitState.HALF_OPEN
+                else:
+                    remaining = self._cooldown - elapsed
+                    raise CircuitBreakerOpen(max(0, remaining))
+            elif self._state == CircuitState.OPEN:
+                # opened_at is None but state is OPEN — should not happen; reset
+                self._state = CircuitState.HALF_OPEN
 
     def record_success(self) -> None:
         """Record a successful call, resetting the breaker to closed."""

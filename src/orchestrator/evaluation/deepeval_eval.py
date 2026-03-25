@@ -130,14 +130,23 @@ class DeepEvalEvaluator:
                 metadata={"error": str(exc)},
             )
 
-        # Scores are on the test result's metrics_data in the same order as self.metrics
+        # Build a lookup of metrics_data by name for robust matching
+        # (avoids relying on positional index which breaks if DeepEval reorders results)
         raw_metrics_data = []
         if eval_result and eval_result.test_results:
             raw_metrics_data = eval_result.test_results[0].metrics_data or []
 
+        # Index by metric name for reliable lookup
+        metrics_by_name: dict[str, Any] = {}
+        for md in raw_metrics_data:
+            if md and hasattr(md, "name") and md.name:
+                metrics_by_name[md.name] = md
+
         scores: list[CriterionScore] = []
-        for i, metric in enumerate(self.metrics):
-            md = raw_metrics_data[i] if i < len(raw_metrics_data) else None
+        for metric in self.metrics:
+            metric_name = getattr(metric, "name", type(metric).__name__)
+            # Look up by name first, fall back to None
+            md = metrics_by_name.get(metric_name)
             if md is not None:
                 score_val = float(md.score or 0.0)
                 passed = bool(md.success)
@@ -147,7 +156,7 @@ class DeepEvalEvaluator:
                 score_val = 0.0
                 passed = False
                 reasoning = ""
-                criterion = getattr(metric, "name", type(metric).__name__)
+                criterion = metric_name
             threshold = getattr(metric, "threshold", None)
 
             scores.append(

@@ -386,7 +386,18 @@ class RedisSessionProvider(BaseSessionProvider):
                 )
 
             # Update session metadata
-            session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
+            try:
+                session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
+            except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
+                logger.error(
+                    f"Corrupt session metadata for {session_id}: {parse_err}. "
+                    f"Raw preview: {str(metadata_json)[:200]}"
+                )
+                raise SessionConnectionError(
+                    f"Corrupt session metadata for session: {session_id}",
+                    session_id=session_id,
+                    original_error=parse_err,
+                ) from parse_err
             session_metadata.last_accessed_at = datetime.now()
 
             messages_key = self._get_session_key(session_id)
@@ -505,10 +516,16 @@ class RedisSessionProvider(BaseSessionProvider):
             if not message_jsons:
                 return []
 
-            # Parse messages
-            session_messages = [
-                SessionMessage.from_dict(json.loads(msg_json)) for msg_json in message_jsons
-            ]
+            # Parse messages (skip malformed JSON entries gracefully)
+            session_messages = []
+            for msg_json in message_jsons:
+                try:
+                    session_messages.append(SessionMessage.from_dict(json.loads(msg_json)))
+                except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
+                    logger.warning(
+                        f"Skipping malformed session message in {session_id}: {parse_err}. "
+                        f"Raw preview: {str(msg_json)[:200]}"
+                    )
 
             # Convert to ChatMessage list
             messages = [sm.message for sm in session_messages]

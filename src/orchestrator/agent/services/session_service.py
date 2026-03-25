@@ -82,16 +82,28 @@ class SessionService(ISessionService):
         try:
             from orchestrator.llm.types import ChatMessage
 
-            # Get new messages (everything added during execution)
-            # We save from initial_count-1 to include the last user message from prepare_messages
-            # which is the actual user input for this run
+            # Get new messages (everything added during execution).
+            # Offset by -1 so we include the final user message appended by
+            # prepare_messages() — that message IS part of this run's conversation
+            # and must be persisted.  max(0, ...) prevents negative index when
+            # initial_count is 0 (i.e., no messages were prepared).
             start_index = max(0, initial_count - 1)
             new_messages = messages[start_index:]
 
             saved_count = 0
             skipped_count = 0
 
-            for msg_dict in new_messages:
+            # Pre-filter: find the LAST final assistant message index to avoid
+            # saving duplicate assistant messages when consecutive responses occur
+            last_final_assistant_idx = None
+            for idx, msg_dict in enumerate(new_messages):
+                if not isinstance(msg_dict, dict):
+                    continue
+                role = msg_dict.get("role")
+                if role == "assistant" and not msg_dict.get("tool_calls") and msg_dict.get("content"):
+                    last_final_assistant_idx = idx
+
+            for idx, msg_dict in enumerate(new_messages):
                 if not isinstance(msg_dict, dict):
                     continue
 
@@ -116,6 +128,13 @@ class SessionService(ISessionService):
                 if role == "assistant" and msg_dict.get("tool_calls"):
                     skipped_count += 1
                     logger.debug("Skipping intermediate assistant message with tool_calls")
+                    continue
+
+                # Skip non-final assistant messages (only save the last one to
+                # prevent duplicates when consecutive assistant responses occur)
+                if role == "assistant" and last_final_assistant_idx is not None and idx != last_final_assistant_idx:
+                    skipped_count += 1
+                    logger.debug("Skipping non-final assistant message (keeping only last)")
                     continue
 
                 # Skip empty messages

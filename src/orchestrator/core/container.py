@@ -481,10 +481,11 @@ class Container:
         # Memory client (Qdrant) is typically not shared, so we close it
         if self._memory_initialized and self._memory_client is not None:
             try:
-                await asyncio.wait_for(self._memory_client.close(), timeout=3.0)
+                await asyncio.wait_for(self._memory_client.close(), timeout=5.0)
                 logger.debug("Memory client closed")
             except TimeoutError:
-                logger.warning("Memory client close timed out after 3s, continuing...")
+                logger.warning("Memory client close timed out after 5s — force-releasing reference")
+                self._memory_client = None
             except Exception as e:
                 logger.warning(f"Error closing memory client: {e}")
 
@@ -496,12 +497,14 @@ class Container:
             else:
                 try:
                     if hasattr(provider, "close"):
-                        await asyncio.wait_for(provider.close(), timeout=3.0)
+                        await asyncio.wait_for(provider.close(), timeout=5.0)
                         logger.debug("Session provider closed")
                     else:
                         logger.debug("Session provider doesn't have close() method")
                 except TimeoutError:
-                    logger.warning("Session manager close timed out after 3s, continuing...")
+                    logger.warning(
+                        "Session provider close timed out after 5s — force-releasing reference"
+                    )
                 except Exception as e:
                     logger.warning(f"Error closing session manager: {e}")
 
@@ -509,10 +512,11 @@ class Container:
         if self._llm_initialized and self._llm_client is not None:
             try:
                 if hasattr(self._llm_client, "cleanup"):
-                    await asyncio.wait_for(self._llm_client.cleanup(), timeout=3.0)
+                    await asyncio.wait_for(self._llm_client.cleanup(), timeout=5.0)
                     logger.debug("LLM client cleanup complete")
             except TimeoutError:
-                logger.warning("LLM client cleanup timed out after 3s, continuing...")
+                logger.warning("LLM client cleanup timed out after 5s — force-releasing reference")
+                self._llm_client = None
             except Exception as e:
                 logger.warning(f"Error during LLM client cleanup: {e}")
 

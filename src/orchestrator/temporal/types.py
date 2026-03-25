@@ -55,11 +55,14 @@ class ConditionalStep(BaseModel):
     condition_agent: str
     if_true: list[dict[str, Any]] = Field(default_factory=list)
     if_false: list[dict[str, Any]] = Field(default_factory=list)
+    timeout: int = 300
+    retries: int = 3
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class WaitStep(BaseModel):
     type: Literal["wait"] = "wait"
-    duration_seconds: int
+    duration_seconds: int = Field(ge=1, le=86400 * 7)  # Min 1s, max 7 days
 
 
 WorkflowStep = AgentStep | ApprovalStep | ParallelStep | ConditionalStep | WaitStep
@@ -107,6 +110,15 @@ class AgentActivityResult(BaseModel):
     @classmethod
     def from_agent_response(cls, resp: Any) -> AgentActivityResult:
         """Create from an AgentResponse dataclass."""
+        # Build usage dict with explicit None checks upfront
+        usage: dict[str, int] = {}
+        if resp.usage is not None:
+            usage = {
+                "prompt_tokens": int(resp.usage.prompt_tokens or 0),
+                "completion_tokens": int(resp.usage.completion_tokens or 0),
+                "total_tokens": int(resp.usage.total_tokens or 0),
+            }
+
         return cls(
             content=resp.content or "",
             status=resp.status.value if hasattr(resp.status, "value") else str(resp.status),
@@ -115,13 +127,7 @@ class AgentActivityResult(BaseModel):
                 if resp.structured_output
                 else None
             ),
-            usage={
-                "prompt_tokens": resp.usage.prompt_tokens,
-                "completion_tokens": resp.usage.completion_tokens,
-                "total_tokens": resp.usage.total_tokens,
-            }
-            if resp.usage
-            else {},
+            usage=usage,
             agents_used=list(resp.agents_used) if resp.agents_used else [],
             error=resp.error,
         )
@@ -163,7 +169,7 @@ class ApprovalDecision(BaseModel):
 
 class WorkflowInput(BaseModel):
     steps: list[dict[str, Any]]
-    initial_input: str
+    initial_input: str = Field(max_length=2_000_000)  # 2MB max to stay within Temporal gRPC limits
     session_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -91,8 +91,10 @@ class Executor(IExecutor):
         total_usage = TokenUsage()
         metrics = get_metrics_collector()
 
-        # Collect tool execution summaries for session storage
+        # Collect tool execution summaries for session storage.
+        # Capped to max_turns to prevent unbounded growth in long-running agents.
         all_tool_summaries: list[ToolExecutionSummary] = []
+        _MAX_TOOL_SUMMARIES = context.max_turns
 
         # Two-pass reasoning: silent think-first call before the main loop
         if agent.config and agent.config.reasoning_mode:
@@ -318,8 +320,13 @@ class Executor(IExecutor):
                         )
                         messages.extend(tool_results)
 
-                        # Store the summary if tools were executed
+                        # Store the summary if tools were executed (capped to prevent leak)
                         if not turn_tool_summary.is_empty():
+                            if len(all_tool_summaries) >= _MAX_TOOL_SUMMARIES:
+                                # Merge oldest into the second-oldest to keep the list bounded
+                                all_tool_summaries[0] = self._merge_tool_summaries(
+                                    [all_tool_summaries[0], all_tool_summaries.pop(1)]
+                                ) or all_tool_summaries[0]
                             all_tool_summaries.append(turn_tool_summary)
 
                     # Execute handoffs sequentially (they may return early)

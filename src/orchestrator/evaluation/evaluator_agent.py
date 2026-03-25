@@ -246,7 +246,25 @@ class EvaluatorAgent(BaseAgent):
                     total_tokens=llm_response.usage.total_tokens or 0,
                 )
 
-            raw = _parse_json_response(llm_response.content or "")
+            try:
+                raw = _parse_json_response(llm_response.content or "")
+            except _ParseError as parse_exc:
+                # Distinguish parse failure from genuine zero score
+                logger.warning(
+                    f"EvaluatorAgent '{self.name}': criterion '{criterion}' "
+                    f"JSON parse failed: {parse_exc}"
+                )
+                return (
+                    CriterionScore(
+                        criterion=criterion,
+                        score=0.0,
+                        passed=False,
+                        reasoning=f"JSON parse error: {parse_exc}",
+                        metadata={"error": "json_parse_failure", "raw_response": (llm_response.content or "")[:500]},
+                    ),
+                    usage,
+                )
+
             score_val = max(0.0, min(1.0, float(raw.get("score", 0.0))))
             passed = bool(raw.get("passed", score_val >= self.pass_threshold))
 
@@ -261,7 +279,10 @@ class EvaluatorAgent(BaseAgent):
             )
 
         except Exception as exc:
-            logger.warning(f"EvaluatorAgent '{self.name}': criterion '{criterion}' failed: {exc}")
+            logger.warning(
+                f"EvaluatorAgent '{self.name}': criterion '{criterion}' failed: {exc}",
+                exc_info=True,
+            )
             return (
                 CriterionScore(
                     criterion=criterion,
@@ -290,16 +311,26 @@ class EvaluatorAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 
 
+class _ParseError(Exception):
+    """Raised when LLM response cannot be parsed as valid evaluation JSON."""
+    pass
+
+
 def _parse_json_response(text: str) -> dict[str, Any]:
     """
     Parse a JSON object from an LLM response.
 
     Tries strict JSON first; falls back to extracting the first {...} block
     from free-text responses (for models that ignore json_mode).
+
+    Raises _ParseError if no valid JSON can be extracted, so callers can
+    distinguish "parse failure" from "genuine score of 0".
     """
     text = text.strip()
     try:
-        return json.loads(text)
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
     except json.JSONDecodeError:
         pass
 
@@ -308,11 +339,16 @@ def _parse_json_response(text: str) -> dict[str, Any]:
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(text[start : end + 1])
+            result = json.loads(text[start : end + 1])
+            if isinstance(result, dict):
+                return result
         except json.JSONDecodeError:
             pass
 
-    return {}
+    raise _ParseError(
+        f"Could not extract valid JSON from LLM response (length={len(text)}). "
+        f"Preview: {text[:200]}"
+    )
 
 
 # ---------------------------------------------------------------------------

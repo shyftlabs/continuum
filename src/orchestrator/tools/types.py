@@ -2,6 +2,7 @@
 Type definitions for MCP tools.
 """
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -396,9 +397,13 @@ class ToolContextState:
     # Track variable metadata (scope, etc.)
     _metadata: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
+    # Lock for atomic updates to _variables and _metadata together
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
     def get(self, namespace: str, name: str, default: Any = None) -> Any:
         """Get a variable value."""
-        return self._variables.get(namespace, {}).get(name, default)
+        with self._lock:
+            return self._variables.get(namespace, {}).get(name, default)
 
     def set(
         self,
@@ -408,27 +413,31 @@ class ToolContextState:
         scope: Literal["session", "run"] = "session",
         sensitive: bool = False,
     ) -> None:
-        """Set a variable value."""
-        if namespace not in self._variables:
-            self._variables[namespace] = {}
-        self._variables[namespace][name] = value
+        """Set a variable value atomically with its metadata."""
+        with self._lock:
+            if namespace not in self._variables:
+                self._variables[namespace] = {}
+            self._variables[namespace][name] = value
 
-        # Store metadata
-        if namespace not in self._metadata:
-            self._metadata[namespace] = {}
-        self._metadata[namespace][name] = {"scope": scope, "sensitive": sensitive}
+            # Store metadata atomically with the value
+            if namespace not in self._metadata:
+                self._metadata[namespace] = {}
+            self._metadata[namespace][name] = {"scope": scope, "sensitive": sensitive}
 
     def get_all(self, namespace: str) -> dict[str, Any]:
         """Get all variables for a namespace."""
-        return self._variables.get(namespace, {}).copy()
+        with self._lock:
+            return self._variables.get(namespace, {}).copy()
 
     def get_all_namespaces(self) -> list[str]:
         """Get all namespaces with stored variables."""
-        return list(self._variables.keys())
+        with self._lock:
+            return list(self._variables.keys())
 
     def has(self, namespace: str, name: str) -> bool:
         """Check if a variable exists."""
-        return name in self._variables.get(namespace, {})
+        with self._lock:
+            return name in self._variables.get(namespace, {})
 
     def clear_namespace(self, namespace: str) -> None:
         """Clear all variables for a namespace."""

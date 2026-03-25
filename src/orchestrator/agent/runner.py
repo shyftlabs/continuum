@@ -7,6 +7,7 @@ handoffs, and conversation loops.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
@@ -145,6 +146,9 @@ class AgentRunner:
         for agent_obj in self._agent_registry.values():
             self._handoff_executor.register_agent(agent_obj)
 
+        # Lock for clearing run artifacts safely across concurrent runs
+        self._artifact_lock = threading.Lock()
+
         self._stream_executor = StreamExecutor(llm_client=self._llm_client)
         self._message_builder = MessageBuilder(
             memory_service=self._memory_service,
@@ -247,10 +251,12 @@ class AgentRunner:
             if self._tool_executor and hasattr(self._tool_executor, "context_state"):
                 self._tool_executor.context_state = tool_context_state
 
-        if agent.tool_executor and hasattr(agent.tool_executor, "clear_run_artifacts"):
-            agent.tool_executor.clear_run_artifacts(run_id=context.run_id)
-        if self._tool_executor and hasattr(self._tool_executor, "clear_run_artifacts"):
-            self._tool_executor.clear_run_artifacts(run_id=context.run_id)
+        # Synchronize artifact clearing to prevent races between concurrent runs
+        with self._artifact_lock:
+            if agent.tool_executor and hasattr(agent.tool_executor, "clear_run_artifacts"):
+                agent.tool_executor.clear_run_artifacts(run_id=context.run_id)
+            if self._tool_executor and hasattr(self._tool_executor, "clear_run_artifacts"):
+                self._tool_executor.clear_run_artifacts(run_id=context.run_id)
 
         if agent.on_start:
             agent.on_start(agent, {"context": context, "input": input})

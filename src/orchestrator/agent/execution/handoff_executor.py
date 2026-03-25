@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from orchestrator.agent.exceptions import HandoffError
 from orchestrator.agent.handoff.manager import HandoffManager
 from orchestrator.agent.interfaces.handler_interface import IHandoffExecutor
-from orchestrator.agent.types import HandoffResult
+from orchestrator.agent.types import HandoffResult, generate_handoff_id
 from orchestrator.logging import get_logger
 from orchestrator.observability.decorators import observe
 
@@ -84,39 +85,79 @@ class HandoffExecutor(IHandoffExecutor):
             HandoffResult with execution outcome
         """
         if not self._handoff_manager:
+            error_msg = (
+                f"HandoffManager not initialized. Cannot execute handoff "
+                f"from '{agent.name}' to '{target_name}'."
+            )
+            logger.error(error_msg)
             return HandoffResult(
-                handoff_id="",
+                handoff_id=generate_handoff_id(),
                 from_agent=agent.name,
                 to_agent=target_name,
                 success=False,
-                error="HandoffManager not provided",
+                error=error_msg,
+            )
+
+        # Fix #6: Validate executor is set before proceeding
+        if not self._executor:
+            error_msg = (
+                f"Executor not set on HandoffExecutor. Call set_executor() before "
+                f"executing handoffs. Handoff from '{agent.name}' to '{target_name}' aborted."
+            )
+            logger.error(error_msg)
+            return HandoffResult(
+                handoff_id=generate_handoff_id(),
+                from_agent=agent.name,
+                to_agent=target_name,
+                success=False,
+                error=error_msg,
+            )
+
+        # Fix #12: Check handoff depth BEFORE cycle check
+        current_depth = len(run_state.agent_stack)
+        max_depth = self._handoff_manager._max_depth
+        if current_depth >= max_depth:
+            error_msg = (
+                f"Handoff depth limit reached ({current_depth}/{max_depth}). "
+                f"Cannot hand off from '{agent.name}' to '{target_name}'."
+            )
+            logger.warning(error_msg)
+            return HandoffResult(
+                handoff_id=generate_handoff_id(),
+                from_agent=agent.name,
+                to_agent=target_name,
+                success=False,
+                error=error_msg,
             )
 
         # Get target agent - try to get from registry first
         target_agent = self.get_agent(target_name)
 
         # If not found, try to get from agent's handoff definition
-        # (agents might reference other agents that aren't in the registry)
         if target_agent is None:
-            # Try to find agent from handoff definition
             handoff_def = agent.get_handoff(target_name)
             if handoff_def:
-                # Agent exists but not in registry - this is okay for now
-                # The caller should ensure agents are registered
-                logger.warning(
-                    f"Target agent '{target_name}' not found in registry. "
-                    f"Handoff may fail if agent is not available."
+                # Fix #13: Log clearly that agent is defined but not registered
+                logger.error(
+                    f"Handoff target '{target_name}' is defined in agent '{agent.name}' handoffs "
+                    f"but not registered in the agent registry. Register the agent via "
+                    f"runner.register_agent() or pass it in agent_registry."
                 )
                 return HandoffResult(
-                    handoff_id="",
+                    handoff_id=generate_handoff_id(),
                     from_agent=agent.name,
                     to_agent=target_name,
                     success=False,
-                    error=f"Target agent '{target_name}' not found in registry",
+                    error=f"Target agent '{target_name}' defined but not registered. "
+                    f"Use runner.register_agent() to register it.",
                 )
             else:
+                logger.error(
+                    f"Handoff target '{target_name}' not found: no handoff definition "
+                    f"on agent '{agent.name}' and not in registry."
+                )
                 return HandoffResult(
-                    handoff_id="",
+                    handoff_id=generate_handoff_id(),
                     from_agent=agent.name,
                     to_agent=target_name,
                     success=False,
@@ -131,7 +172,7 @@ class HandoffExecutor(IHandoffExecutor):
                 f"Agent '{target_name}' already in chain: {cycle_path}"
             )
             return HandoffResult(
-                handoff_id="",
+                handoff_id=generate_handoff_id(),
                 from_agent=agent.name,
                 to_agent=target_name,
                 success=False,
@@ -167,8 +208,8 @@ class HandoffExecutor(IHandoffExecutor):
                 run_context=context,
             )
 
-            # Update run state
-            run_state.agent_stack.append(target_name)
+            # Update run state (thread-safe)
+            run_state.push_agent(target_name)
             run_state.handoff_chain.append(handoff_data.to_dict())
             run_state.current_agent = target_name
 
@@ -192,40 +233,26 @@ class HandoffExecutor(IHandoffExecutor):
                 max_turns=context.max_turns - run_state.turn_count,
             )
 
-            # Execute target agent if executor is available
+            # Execute target agent (executor guaranteed to be set by early validation)
             response = None
-            if self._executor:
-                try:
-                    response = await self._executor.execute_loop(
-                        agent=target_agent,
-                        messages=target_messages,
-                        context=target_context,
-                        run_state=run_state,
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to execute target agent {target_name}: {e}")
-                    result = HandoffResult(
-                        handoff_id=handoff_data.handoff_id,
-                        from_agent=agent.name,
-                        to_agent=target_name,
-                        success=False,
-                        error=str(e),
-                    )
-                    await self._handoff_manager.trace_handoff("end", handoff_data, context, result)
-                    return result
-            else:
-                # No executor - return handoff data for caller to execute
-                logger.warning(
-                    "HandoffExecutor has no executor - handoff will need to be executed by caller"
+            try:
+                response = await self._executor.execute_loop(
+                    agent=target_agent,
+                    messages=target_messages,
+                    context=target_context,
+                    run_state=run_state,
                 )
-                return HandoffResult(
+            except Exception as e:
+                logger.error(f"Failed to execute target agent '{target_name}': {e}", exc_info=True)
+                result = HandoffResult(
                     handoff_id=handoff_data.handoff_id,
                     from_agent=agent.name,
                     to_agent=target_name,
-                    success=True,
-                    response=None,  # Caller will execute
-                    returned_to_parent=False,
+                    success=False,
+                    error=str(e),
                 )
+                await self._handoff_manager.trace_handoff("end", handoff_data, context, result)
+                return result
 
             # Trace handoff end
             result = HandoffResult(
@@ -241,9 +268,12 @@ class HandoffExecutor(IHandoffExecutor):
             return result
 
         except Exception as e:
-            logger.error(f"Handoff failed: {e}")
+            logger.error(
+                f"Handoff from '{agent.name}' to '{target_name}' failed: {e}",
+                exc_info=True,
+            )
             return HandoffResult(
-                handoff_id="",
+                handoff_id=generate_handoff_id(),
                 from_agent=agent.name,
                 to_agent=target_name,
                 success=False,

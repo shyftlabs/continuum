@@ -402,10 +402,13 @@ class OrchestratorLifecycle:
                 warnings=warnings,
             )
 
+        except (KeyboardInterrupt, SystemExit):
+            # Let these propagate — they should not be caught as init failures
+            raise
         except Exception as e:
             self._state = LifecycleState.FAILED
             errors.append(f"Initialization error: {str(e)}")
-            logger.error(f"SDK initialization failed: {e}")
+            logger.error(f"SDK initialization failed: {e}", exc_info=True)
             return InitializationResult(
                 success=False,
                 state=self._state,

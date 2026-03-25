@@ -106,6 +106,8 @@ class RateLimiter:
         if self.rate_per_second <= 0:
             return
 
+        # Calculate wait time inside lock, sleep outside to avoid lock contention
+        wait_time = 0.0
         async with self._lock:
             loop = asyncio.get_running_loop()
             now = loop.time()
@@ -125,10 +127,12 @@ class RateLimiter:
 
             if self.tokens < 1:
                 wait_time = (1 - self.tokens) / self.rate_per_second
-                await asyncio.sleep(wait_time)
                 self.tokens = 0
             else:
                 self.tokens -= 1
+
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
 
 class ToolExecutor:
@@ -241,6 +245,23 @@ class ToolExecutor:
             return server.context_config.namespace
         return server.name
 
+    @staticmethod
+    def _validate_injection_type(value: Any, expected_type: str) -> bool:
+        """Validate that a value matches the expected JSON schema type."""
+        type_map: dict[str, tuple[type, ...]] = {
+            "string": (str,),
+            "integer": (int,),
+            "number": (int, float),
+            "boolean": (bool,),
+            "array": (list,),
+            "object": (dict,),
+        }
+        allowed_types = type_map.get(expected_type)
+        if allowed_types is None:
+            # Unknown schema type — allow injection (don't block on exotic types)
+            return True
+        return isinstance(value, allowed_types)
+
     def _inject_context_variables(
         self,
         server: "MCPServer",
@@ -288,6 +309,16 @@ class ToolExecutor:
             # Check if we have a stored value
             stored_value = self._context_state.get(namespace, param_name)
             if stored_value is None:
+                continue
+
+            # Validate stored value type against schema before injection
+            param_schema = properties.get(param_name, {})
+            expected_type = param_schema.get("type")
+            if expected_type and not self._validate_injection_type(stored_value, expected_type):
+                logger.warning(
+                    f"Skipping injection of {param_name}: stored value type "
+                    f"{type(stored_value).__name__} does not match schema type '{expected_type}'"
+                )
                 continue
 
             # Check if LLM already provided a value
@@ -598,18 +629,51 @@ class ToolExecutor:
         """
         import asyncio
 
-        # Execute all tool calls concurrently
+        # Execute all tool calls concurrently with return_exceptions=True
+        # to prevent one tool failure from cancelling all other in-flight calls
         tasks = [
             self.execute_tool_call(tc, trace_id=trace_id, span_id=span_id, metadata=metadata)
             for tc in tool_calls
         ]
-        return await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Convert exceptions to error ChatMessages so they can be reported to LLM
+        processed: list[ChatMessage] = []
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                tc = tool_calls[i]
+                logger.error(
+                    f"Tool call '{tc.function.name}' failed: {result}",
+                    exc_info=result,
+                )
+                processed.append(
+                    ChatMessage(
+                        role="tool",
+                        content=f"Error executing tool '{tc.function.name}': {result}",
+                        tool_call_id=tc.id,
+                    )
+                )
+            else:
+                processed.append(result)
+        return processed
 
     def get_available_tools(self) -> list[str]:
         """Get list of available tool names."""
         return list(self.tool_registry.keys())
 
     async def refresh_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
-        """Refresh the tool registry from MCP servers."""
-        self.tool_registry.clear()
-        await self._build_registry(tool_registry)
+        """Refresh the tool registry from MCP servers.
+
+        Builds a new registry first, then atomically swaps it in to avoid
+        serving an empty registry during the rebuild.
+        """
+        # Build into a temporary dict, then swap
+        old_registry = self.tool_registry
+        new_registry: dict[str, Any] = {}
+        self.tool_registry = new_registry
+        try:
+            await self._build_registry(tool_registry)
+        except Exception:
+            # Restore old registry on failure so tools remain available
+            self.tool_registry = old_registry
+            raise

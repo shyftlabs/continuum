@@ -1,72 +1,135 @@
 """
-Root conftest.py - Shared fixtures for all tests.
+Root conftest.py — shared fixtures for all test levels.
+
+All fixtures use REAL services (Redis, Qdrant, LLM APIs) configured via .env.
+No mocking.
 """
 
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from dotenv import load_dotenv
+
+# Load .env before any orchestrator imports
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+
+# ---------------------------------------------------------------------------
+# Event loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Single event loop for the whole test session."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Unique IDs for test isolation
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def mock_llm_client():
-    """Create a mock LLM client that returns predictable responses."""
-    from orchestrator.llm.types import LLMResponse, Usage
+def test_id() -> str:
+    """Unique ID to isolate test data."""
+    return f"test-{uuid.uuid4().hex[:12]}"
 
-    client = AsyncMock()
-    client.chat = AsyncMock(
-        return_value=LLMResponse(
-            id="test-id",
-            model="test-model",
-            content="Test response",
-            role="assistant",
-            usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
-            finish_reason="stop",
-        )
+
+@pytest.fixture
+def session_id(test_id: str) -> str:
+    return f"sess-{test_id}"
+
+
+@pytest.fixture
+def user_id(test_id: str) -> str:
+    return f"user-{test_id}"
+
+
+# ---------------------------------------------------------------------------
+# Real Redis client (requires redis-sdk on port 6380)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def real_redis():
+    """Real async Redis client connected to the SDK Redis container."""
+    import redis.asyncio as aioredis
+
+    host = os.getenv("SESSION_REDIS_HOST", "localhost")
+    port = int(os.getenv("SESSION_REDIS_PORT", "6380"))
+    password = os.getenv("SESSION_REDIS_PASSWORD", "sdk123456789")
+
+    client = aioredis.Redis(host=host, port=port, password=password or None, decode_responses=True)
+    try:
+        await client.ping()
+    except Exception:
+        pytest.skip("Redis not available on port 6380")
+
+    yield client
+
+    await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Real Qdrant client (requires qdrant on port 6333)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_qdrant():
+    """Real Qdrant client connected to the local container."""
+    from qdrant_client import QdrantClient
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = int(os.getenv("QDRANT_PORT", "6333"))
+
+    client = QdrantClient(host=host, port=port)
+    try:
+        client.get_collections()
+    except Exception:
+        pytest.skip("Qdrant not available on port 6333")
+
+    yield client
+    client.close()
+
+
+# ---------------------------------------------------------------------------
+# Real LLM client
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_llm_client():
+    """Real LLMClient configured from .env."""
+    from orchestrator.llm.client import LLMClient
+    from orchestrator.llm.config import LLMConfig
+
+    model = os.getenv("DEFAULT_LLM_MODEL", "gemini/gemini-2.5-flash")
+    client = LLMClient(
+        config=LLMConfig(model=model, temperature=0.0, max_tokens=256),
+        enable_langfuse=False,
     )
-    client.chat_stream = AsyncMock()
-    client.count_tokens = MagicMock(return_value=100)
-    client.get_max_tokens = MagicMock(return_value=4096)
-    client.default_config = MagicMock()
-    client.default_config.model = "test-model"
     return client
 
 
-@pytest.fixture
-def mock_memory_client():
-    """Create a mock memory client."""
-    client = AsyncMock()
-    client.is_enabled = False
-    client.search = AsyncMock(return_value=MagicMock(results=[]))
-    client.add = AsyncMock()
-    return client
+# ---------------------------------------------------------------------------
+# Container (DI) fixture
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def mock_session_client():
-    """Create a mock session client."""
-    client = AsyncMock()
-    client.is_enabled = False
-    client.get_conversation_history = AsyncMock(return_value=[])
-    client.add_message = AsyncMock()
-    return client
+def container():
+    """Get a fresh container instance."""
+    from orchestrator.core.container import get_container, reset_container
 
-
-@pytest.fixture
-def mock_container(mock_llm_client, mock_memory_client, mock_session_client):
-    """Create a mock container with all clients."""
-    from orchestrator.core.container import Container, ContainerConfig
-
-    config = ContainerConfig(auto_initialize=False)
-    container = Container(config=config)
-    container.set_llm_client(mock_llm_client)
-    container.set_memory_client(mock_memory_client)
-    container.set_session_client(mock_session_client)
-    return container
-
-
-@pytest.fixture(autouse=True)
-def reset_global_state():
-    """Reset global state before each test."""
-    yield
-    from orchestrator.core.container import reset_container
-
+    reset_container()
+    c = get_container()
+    yield c
     reset_container()

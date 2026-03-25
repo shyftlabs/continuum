@@ -130,6 +130,8 @@ class RagasEvaluator:
 
     metric_names: list[str] = field(default_factory=lambda: list(_ALL_METRIC_NAMES))
     name: str = "ragas-evaluator"
+    pass_threshold: float = 0.7
+    metric_thresholds: dict[str, float] = field(default_factory=dict)
     ragas_llm: Any | None = None
     ragas_embeddings: Any | None = None
 
@@ -223,13 +225,15 @@ class RagasEvaluator:
             metric_name = getattr(metric, "name", type(metric).__name__)
             raw = result_row.get(metric_name, 0.0)
             raw_score = 0.0 if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else float(raw)
+            # Use per-metric threshold if configured, otherwise fall back to global
+            threshold = self.metric_thresholds.get(metric_name, self.pass_threshold)
             scores.append(
                 CriterionScore(
                     criterion=metric_name,
                     score=raw_score,
-                    passed=raw_score >= 0.7,
+                    passed=raw_score >= threshold,
                     reasoning="",
-                    metadata={"ragas_metric": metric_name},
+                    metadata={"ragas_metric": metric_name, "threshold": threshold},
                 )
             )
 
@@ -241,5 +245,5 @@ class RagasEvaluator:
             latency_ms=int((time.monotonic() - t0) * 1000),
             status=EvalStatus.PASSED,
         )
-        result.compute_overall()
+        result.compute_overall(self.pass_threshold)
         return result

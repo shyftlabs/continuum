@@ -45,18 +45,22 @@ class AgentRegistry:
 
     def get(self, name: str) -> BaseAgent:
         """Get agent by name. Raises AgentNotRegisteredError if missing."""
-        agent = self._agents.get(name)
+        with self._lock:
+            agent = self._agents.get(name)
+            if agent is None:
+                available = list(self._agents.keys())
         if agent is None:
             raise AgentNotRegisteredError(
                 f"Agent '{name}' is not registered",
                 agent_name=name,
-                available_agents=list(self._agents.keys()),
+                available_agents=available,
             )
         return agent
 
     def list_agents(self) -> list[str]:
         """List all registered agent names."""
-        return list(self._agents.keys())
+        with self._lock:
+            return list(self._agents.keys())
 
     def set_runner_factory(self, factory: Callable[[], AgentRunner]) -> None:
         """Set factory for creating AgentRunner instances."""

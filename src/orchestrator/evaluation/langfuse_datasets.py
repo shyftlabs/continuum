@@ -205,9 +205,13 @@ class LangfuseDatasetClient:
         if client is None:
             return
 
-        raw_lf = getattr(client, "_client", None)
+        # Try public API first, then fall back to private attribute
+        raw_lf = getattr(client, "client", None) or getattr(client, "_client", None)
         if raw_lf is None:
-            logger.debug("LangfuseDatasetClient.link_run: raw Langfuse client not available")
+            logger.debug(
+                "LangfuseDatasetClient.link_run: raw Langfuse client not available. "
+                "Tried 'client' and '_client' attributes."
+            )
             return
 
         try:

@@ -77,8 +77,11 @@ async def validate_input(
             extra={"errors": e.errors()},
         )
 
-        # Return graceful error response
-        error_details = [f"- {err['loc']}: {err['msg']}" for err in e.errors()]
+        # Return graceful error response (safe access to avoid KeyError if Pydantic structure changes)
+        error_details = [
+            f"- {err.get('loc', '?')}: {err.get('msg', 'unknown error')}"
+            for err in e.errors()
+        ]
 
         return AgentResponse(
             content="I couldn't process your request due to invalid input:\n"

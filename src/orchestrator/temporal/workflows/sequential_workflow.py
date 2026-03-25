@@ -104,7 +104,12 @@ class SequentialAgentWorkflow:
                     user_id=input.user_id,
                 ),
                 start_to_close_timeout=timedelta(seconds=300),
-                retry_policy=RetryPolicy(maximum_attempts=3),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=60),
+                ),
                 heartbeat_timeout=timedelta(seconds=60),
                 result_type=AgentActivityResult,
             )
@@ -146,8 +151,11 @@ class SequentialAgentWorkflow:
                 NotificationParams(type="approval_required", payload=info),
                 start_to_close_timeout=timedelta(seconds=30),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            workflow.logger.warning(
+                f"Notification activity failed for approval {request_id}: {e}. "
+                "Workflow continues without notification."
+            )
 
         try:
             await workflow.wait_condition(

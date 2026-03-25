@@ -85,7 +85,11 @@ class ToolService(IToolService):
             tool_args = (
                 json.loads(tool_args_str) if isinstance(tool_args_str, str) else tool_args_str
             )
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Malformed JSON in tool arguments for '{tool_name}': {e}. "
+                f"Raw args: {str(tool_args_str)[:200]}. Proceeding with empty args.",
+            )
             tool_args = {}
 
         start_time = time.time()

@@ -129,12 +129,16 @@ class CompressionResult:
 
 
 class SummaryCache:
-    """Simple in-memory cache for summaries."""
+    """Simple in-memory LRU cache for summaries with bounded size."""
 
-    def __init__(self, ttl_seconds: int = 3600):
+    # Default max cache entries to prevent unbounded memory growth
+    DEFAULT_MAX_SIZE = 128
+
+    def __init__(self, ttl_seconds: int = 3600, max_size: int = DEFAULT_MAX_SIZE):
         self._cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
         self._lock = threading.Lock()
         self._ttl = ttl_seconds
+        self._max_size = max_size
 
     def _generate_key(self, messages: list[dict[str, Any]]) -> str:
         """Generate cache key from messages."""
@@ -145,6 +149,21 @@ class SummaryCache:
         content_str = "|".join(content)
         return hashlib.md5(content_str.encode()).hexdigest()
 
+    def _evict_expired_and_lru(self) -> None:
+        """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
+        now = time.time()
+        # Remove expired entries first
+        expired_keys = [
+            k for k, (_, ts) in self._cache.items() if now - ts >= self._ttl
+        ]
+        for k in expired_keys:
+            del self._cache[k]
+
+        # If still over limit, evict oldest entries (LRU by timestamp)
+        while len(self._cache) > self._max_size:
+            oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
+            del self._cache[oldest_key]
+
     def get(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
         """Get cached summary if available and not expired."""
         key = self._generate_key(messages)
@@ -152,6 +171,8 @@ class SummaryCache:
             if key in self._cache:
                 cached_messages, timestamp = self._cache[key]
                 if time.time() - timestamp < self._ttl:
+                    # Refresh timestamp for LRU behavior
+                    self._cache[key] = (cached_messages, time.time())
                     logger.debug(f"Cache hit for summary key: {key[:8]}")
                     return cached_messages
                 else:
@@ -164,7 +185,8 @@ class SummaryCache:
         key = self._generate_key(messages)
         with self._lock:
             self._cache[key] = (summary, time.time())
-            logger.debug(f"Cached summary key: {key[:8]}")
+            self._evict_expired_and_lru()
+            logger.debug(f"Cached summary key: {key[:8]} (cache size: {len(self._cache)})")
 
     def clear(self) -> None:
         """Clear all cached summaries."""
@@ -490,6 +512,18 @@ class ProgressiveContextManager:
         config: ContextManagementConfig,
     ) -> tuple[list[dict[str, Any]], CompressionResult]:
         """Compress by summarizing older messages."""
+        if not messages:
+            return [], CompressionResult(
+                original_token_count=0,
+                compressed_token_count=0,
+                messages_before=0,
+                messages_after=0,
+                was_compressed=False,
+                strategy_used="summarize_old",
+                compression_ratio=1.0,
+                latency_ms=0.0,
+            )
+
         # Separate system messages, older messages, and recent messages
         system_messages = [m for m in messages if m.get("role") == "system"]
         conversation_messages = [m for m in messages if m.get("role") != "system"]

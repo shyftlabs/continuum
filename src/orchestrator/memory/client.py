@@ -131,9 +131,13 @@ class MemoryClient:
             logger.info(f"Memory provider initialized: {provider_name}")
 
         except ImportError as e:
-            logger.error(f"Failed to import memory provider: {e}")
+            logger.error(
+                f"Failed to import memory provider '{provider_name}': {e}. "
+                "Install the required package (e.g., pip install mem0ai).",
+                exc_info=True,
+            )
         except Exception as e:
-            logger.error(f"Failed to initialize memory provider: {e}")
+            logger.error(f"Failed to initialize memory provider: {e}", exc_info=True)
 
     @property
     def config(self) -> MemoryConfig:
