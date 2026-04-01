@@ -44,7 +44,7 @@ class ObservabilityConfig(BaseModel):
     )
     flush_interval: int = Field(
         default_factory=lambda: settings.langfuse_flush_interval,
-        description="Flush interval in seconds (must be int for LiteLLM compatibility)",
+        description="Flush interval in seconds",
     )
     flush_at: int = Field(
         default_factory=lambda: settings.langfuse_flush_at,

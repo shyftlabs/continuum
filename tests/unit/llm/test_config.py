@@ -20,7 +20,7 @@ class TestLLMConfig:
         assert c.json_mode is False
 
     def test_config_to_kwargs(self):
-        logger.info("LLMConfig: config to litellm kwargs")
+        logger.info("LLMConfig: config to provider kwargs")
         c = LLMConfig(model="gpt-4", temperature=0.5, max_tokens=100)
         kw = c.to_kwargs()
         assert kw["model"] == "gpt-4"

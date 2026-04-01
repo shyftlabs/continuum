@@ -508,7 +508,7 @@ class Container:
                 except Exception as e:
                     logger.warning(f"Error closing session manager: {e}")
 
-        # Close LLM client async resources (LiteLLM aiohttp sessions)
+        # Close LLM client async resources
         if self._llm_initialized and self._llm_client is not None:
             try:
                 if hasattr(self._llm_client, "cleanup"):

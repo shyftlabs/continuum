@@ -128,7 +128,7 @@ class TestLLMResponse:
         assert resp.usage.total_tokens == 15
 
     def test_from_openai_response_with_tool_calls(self):
-        logger.info("LLMResponse: from litellm response with tool calls")
+        logger.info("LLMResponse: from openai response with tool calls")
         mock_resp = MagicMock()
         mock_resp.id = "resp-2"
         mock_resp.model = "gpt-4"
@@ -152,7 +152,7 @@ class TestLLMResponse:
         assert resp.tool_calls[0].function.name == "fn"
 
     def test_from_openai_response_no_choices(self):
-        logger.info("LLMResponse: from litellm response no choices")
+        logger.info("LLMResponse: from openai response no choices")
         mock_resp = MagicMock()
         mock_resp.id = "resp-3"
         mock_resp.model = "gpt-4"

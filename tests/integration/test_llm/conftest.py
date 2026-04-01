@@ -41,7 +41,7 @@ def llm_client(test_model: str, test_max_tokens: int) -> LLMClient:
     """
     Create an LLMClient for testing.
     
-    Note: Cleanup of LiteLLM async clients is handled by the session-scoped
+    Note: Cleanup of async clients is handled by the session-scoped
     event_loop fixture, so no per-test cleanup is needed here.
     """
     return LLMClient(
@@ -59,7 +59,7 @@ def llm_client_with_langfuse(test_model: str, test_max_tokens: int) -> LLMClient
     """
     Create an LLMClient with Langfuse enabled for testing.
     
-    Note: Cleanup of LiteLLM async clients is handled by the session-scoped
+    Note: Cleanup of async clients is handled by the session-scoped
     event_loop fixture, so no per-test cleanup is needed here.
     """
     return LLMClient(

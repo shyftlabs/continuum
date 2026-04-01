@@ -4,7 +4,7 @@ Global configuration for the Orchestrator SDK.
 Loads configuration from environment variables using pydantic-settings.
 Environment variables are loaded from .env file into os.environ first,
 then pydantic-settings reads them. This ensures both our SDK and
-external libraries (like LiteLLM) can access the same variables.
+external libraries can access the same variables.
 """
 
 from functools import lru_cache
@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file into os.environ BEFORE creating Settings
-# This ensures LiteLLM and other libraries can read env vars via os.getenv()
+# This ensures all libraries can read env vars via os.getenv()
 load_dotenv()
 
 
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
 
     # Tracing Configuration
     langfuse_sample_rate: float = 1.0  # 1.0 = trace everything
-    langfuse_flush_interval: int = 1  # Flush interval in seconds (must be int for LiteLLM)
+    langfuse_flush_interval: int = 1  # Flush interval in seconds
     langfuse_flush_at: int = 15  # Flush when this many events are queued
     langfuse_debug: bool = False  # Enable debug logging for Langfuse
     langfuse_release: str | None = None  # Release/version identifier
@@ -94,12 +94,6 @@ class Settings(BaseSettings):
     # Logging Configuration
     # -------------------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    litellm_verbose: bool = False
-
-    # -------------------------------------------------------------------------
-    # LiteLLM Configuration
-    # -------------------------------------------------------------------------
-    litellm_config_path: str | None = None  # Path to LiteLLM YAML config file
 
     # -------------------------------------------------------------------------
     # Memory Configuration (mem0 with Qdrant)
@@ -119,7 +113,7 @@ class Settings(BaseSettings):
     # Embedder Configuration
     # Provider options supported by mem0: "openai", "azure_openai", "huggingface", "ollama",
     #                                     "gemini", "vertexai", "cohere"
-    # Note: mem0 does NOT support "litellm" as embedder provider (only as LLM provider)
+    # Supported by mem0: "openai", "azure_openai", "huggingface", "ollama", "gemini", "vertexai", "cohere"
     embedder_provider: str = "openai"  # Embedding provider
     embedder_model: str = "text-embedding-3-small"  # Embedding model name
     embedding_dims: int = 1536  # Embedding dimensions (must match model output)

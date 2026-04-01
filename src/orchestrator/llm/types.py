@@ -61,7 +61,7 @@ class ChatMessage(BaseModel):
     function_call: FunctionCall | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary format expected by LiteLLM."""
+        """Convert to dictionary format for LLM provider APIs."""
         result: dict[str, Any] = {"role": self.role}
         if self.content is not None:
             result["content"] = self.content

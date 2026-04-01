@@ -1,5 +1,5 @@
 """
-OpenAI provider — direct openai SDK, no LiteLLM.
+OpenAI provider — direct openai SDK.
 
 Handles: gpt-4o, gpt-4o-mini, gpt-3.5-turbo, gpt-4o-turbo, and Azure OpenAI.
 """

@@ -155,8 +155,8 @@ class MCPUtil:
         """
         from orchestrator.llm.types import FunctionDefinition
 
-        # Note: We don't attach invoke_func to ToolDefinition because LiteLLM
-        # expects tools in OpenAI format (schema only). Tool execution is handled
+        # Note: We don't attach invoke_func to ToolDefinition because LLM providers
+        # expect tools in OpenAI format (schema only). Tool execution is handled
         # separately via ToolExecutor.
         schema = tool.inputSchema or {}
 

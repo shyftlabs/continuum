@@ -1,7 +1,7 @@
 """
 LLM Client - Unified interface for multi-LLM provider support.
 
-Calls provider SDKs directly (openai, anthropic) — no LiteLLM dependency.
+Calls provider SDKs directly (OpenAI, Anthropic, Gemini).
 Supports synchronous, asynchronous, and streaming modes.
 Includes full observability integration with Langfuse via @observe decorator.
 """

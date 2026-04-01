@@ -2,7 +2,7 @@
 Context Window Manager - Per-model context window management.
 
 Provides automatic context window management with:
-- Auto-detection of model limits from LiteLLM
+- Hardcoded model limits per provider
 - Automatic truncation when approaching limits
 - Buffer reservation for response tokens
 - Configurable truncation strategies
@@ -94,7 +94,7 @@ class ContextWindowManager:
     Manages context window limits for LLM models.
 
     Features:
-        - Auto-detects model limits from LiteLLM
+        - Auto-detects model limits from hardcoded provider tables
         - Caches model info for performance
         - Provides token counting
         - Automatic message truncation when needed
@@ -171,7 +171,7 @@ class ContextWindowManager:
         """
         Get context window limits for a model.
 
-        Auto-detects limits from LiteLLM, with fallback to defaults.
+        Auto-detects limits from hardcoded provider tables, with fallback to defaults.
 
         Args:
             model: Model name (e.g., "gpt-4o", "claude-3-sonnet")

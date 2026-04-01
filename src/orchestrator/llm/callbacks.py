@@ -47,7 +47,7 @@ def setup_langfuse() -> bool:
     Initialize Langfuse observability.
 
     Traces are captured via the @observe decorator on LLMClient methods.
-    No LiteLLM callback registration needed.
+    Traces are captured via the @observe decorator on LLMClient methods.
     """
     from orchestrator.observability import (
         ObservabilityConfig,
@@ -149,10 +149,10 @@ def get_langfuse_metadata(
     custom_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Build metadata dict for LiteLLM to pass to Langfuse.
+    Build metadata dict for Langfuse observability.
 
-    This metadata is used by LiteLLM's Langfuse callback to properly
-    associate LLM calls with traces, sessions, and users.
+    This metadata is used to properly associate LLM calls with
+    traces, sessions, and users.
 
     NOTE: Now uses async-safe contextvars for context propagation.
 
@@ -165,7 +165,7 @@ def get_langfuse_metadata(
         custom_metadata: Additional custom metadata.
 
     Returns:
-        Metadata dictionary for LiteLLM.
+        Metadata dictionary for Langfuse.
     """
     # CRITICAL: Always prioritize contextvars for trace context
     # This ensures LLM calls are always linked to the current trace
@@ -190,7 +190,7 @@ def get_langfuse_metadata(
 
     metadata: dict[str, Any] = {}
 
-    # Langfuse-specific metadata keys that LiteLLM recognizes
+    # Langfuse-specific metadata keys
     if effective_trace_id:
         metadata["trace_id"] = effective_trace_id
     if effective_span_id:

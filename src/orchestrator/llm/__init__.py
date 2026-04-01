@@ -1,8 +1,8 @@
 """
 LLM Provider Support Module.
 
-Provides a unified interface for multi-LLM provider support using LiteLLM.
-Supports OpenAI, Google Gemini, Anthropic, Azure OpenAI, and 100+ other models.
+Provides a unified interface for multi-LLM provider support via direct provider SDKs.
+Supports OpenAI, Google Gemini, Anthropic, and Azure OpenAI.
 """
 
 from orchestrator.llm.callbacks import (

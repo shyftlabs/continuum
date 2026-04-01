@@ -5,7 +5,7 @@ Provides health checks for all SDK dependencies:
 - Redis (Session storage)
 - Qdrant (Vector storage for memory)
 - Langfuse (Observability)
-- LLM Providers (via LiteLLM)
+- LLM Providers (OpenAI, Anthropic, Gemini)
 """
 
 from __future__ import annotations

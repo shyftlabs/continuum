@@ -5,7 +5,7 @@ This SDK provides a unified interface for multi-LLM provider support,
 memory management, monitoring, guardrails, and multi-agent workflows.
 
 Features:
-- Multi-LLM support via LiteLLM (100+ providers)
+- Multi-LLM support via direct provider SDKs (OpenAI, Anthropic, Gemini)
 - Long-term memory with mem0 and Qdrant
 - Short-term memory with Redis sessions
 - Full observability with Langfuse integration

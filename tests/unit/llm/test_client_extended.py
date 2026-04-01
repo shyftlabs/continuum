@@ -19,8 +19,8 @@ def _make_llm_response(**kwargs) -> LLMResponse:
 
 class TestLLMClientSetup:
     @patch("orchestrator.llm.client.setup_langfuse")
-    def test_client_initializes_without_litellm(self, mock_setup):
-        logger.info("LLMClientSetup: client initializes without litellm")
+    def test_client_initializes_with_providers(self, mock_setup):
+        logger.info("LLMClientSetup: client initializes with provider layer")
         from orchestrator.llm.client import LLMClient
         client = LLMClient(enable_langfuse=False)
         assert client.default_config is not None

@@ -1,7 +1,7 @@
 """
 LLM utility functions for model support checking and validation.
 
-Uses hardcoded capability sets per provider — no LiteLLM dependency.
+Uses hardcoded capability sets per provider.
 """
 
 from typing import TYPE_CHECKING

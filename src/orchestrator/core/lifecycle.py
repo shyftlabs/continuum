@@ -690,7 +690,7 @@ class OrchestratorLifecycle:
             except Exception as e:
                 logger.warning(f"Error disconnecting Temporal client: {e}")
 
-        # Container shutdown: memory, session, LLM (LiteLLM aiohttp), etc.
+        # Container shutdown: memory, session, LLM, etc.
         try:
             from orchestrator.core.container import get_container
 

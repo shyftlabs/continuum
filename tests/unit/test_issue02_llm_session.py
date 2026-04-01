@@ -43,7 +43,7 @@ class TestCountTokensFallback:
         content = "a" * 300  # 300 chars
         messages = [{"role": "user", "content": content}]
         count = client.count_tokens(messages, model="nonexistent-model-xyz")
-        # LiteLLM uses a default tokenizer — result should be positive and reasonable
+        # tiktoken tokenizer — result should be positive and reasonable
         assert count > 0
         assert count < 500  # Shouldn't be absurdly high
 
@@ -141,7 +141,7 @@ class TestStreamChunkNullSafety:
             id = "ch-1"
             model = "test"
 
-        result = StreamChunk.from_litellm_chunk(FakeChunk())
+        result = StreamChunk.from_openai_chunk(FakeChunk())
         assert result.content is None
         assert result.finish_reason is None
         assert result.is_finished is False
@@ -163,7 +163,7 @@ class TestStreamChunkNullSafety:
             id = "ch-2"
             model = "test"
 
-        result = StreamChunk.from_litellm_chunk(FakeChunk())
+        result = StreamChunk.from_openai_chunk(FakeChunk())
         assert result.content is None
         assert result.role == "assistant"
 
@@ -184,7 +184,7 @@ class TestStreamChunkNullSafety:
             id = "ch-3"
             model = "gpt-4"
 
-        result = StreamChunk.from_litellm_chunk(FakeChunk())
+        result = StreamChunk.from_openai_chunk(FakeChunk())
         assert result.content == "done"
         assert result.finish_reason == "stop"
         assert result.is_finished is True
@@ -223,6 +223,6 @@ class TestContextWindowTokenFallback:
         mgr = ContextWindowManager()
         messages = [{"role": "user", "content": "a" * 300}]
         count = mgr.count_tokens(messages, "totally-fake-model")
-        # LiteLLM uses a default tokenizer — should return a positive count
+        # tiktoken tokenizer — should return a positive count
         assert count > 0
         assert count < 500  # Shouldn't be absurdly high

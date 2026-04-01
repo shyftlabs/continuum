@@ -1,5 +1,5 @@
 """
-Anthropic provider — direct anthropic SDK, no LiteLLM.
+Anthropic provider — direct anthropic SDK.
 
 Handles message format conversion between the OpenAI-style format used
 throughout the codebase and Anthropic's native API format.
