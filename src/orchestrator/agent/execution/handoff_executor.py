@@ -218,7 +218,7 @@ class HandoffExecutor(IHandoffExecutor):
 
             # Build messages for target agent
             target_messages = self._handoff_manager.build_handoff_messages(
-                handoff_data, target_agent
+                handoff_data, target_agent, session_id=context.session_id
             )
 
             # Create new context for target
@@ -228,9 +228,29 @@ class HandoffExecutor(IHandoffExecutor):
                 run_id=context.run_id,
                 session_id=context.session_id,
                 user_id=context.user_id,
+                conversation_id=context.conversation_id,
                 trace_id=context.trace_id,
                 agent_stack=run_state.agent_stack.copy(),
                 max_turns=context.max_turns - run_state.turn_count,
+                is_handoff=True,
+            )
+
+            # Log target agent details (mirrors message_builder output for top-level runs)
+            mem_cfg = getattr(target_agent, "memory_config", None)
+            if mem_cfg:
+                logger.info(
+                    f"🔍 HANDOFF TARGET MEMORY CONFIG [{target_agent.name}]: "
+                    f"search_memories={mem_cfg.search_memories}, store_memories={mem_cfg.store_memories}, "
+                    f"search_scope={getattr(mem_cfg, 'search_scope', 'N/A')}, "
+                    f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
+                )
+            logger.info(
+                f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
+                + "\n".join(
+                    f"[{m.get('role','?')}] {str(m.get('content',''))[:300]}"
+                    for m in target_messages
+                )
+                + "\n" + "=" * 30
             )
 
             # Execute target agent (executor guaranteed to be set by early validation)

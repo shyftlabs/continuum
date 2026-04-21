@@ -96,15 +96,24 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # -------------------------------------------------------------------------
-    # Memory Configuration (mem0 with Qdrant)
+    # Memory Configuration (mem0 with pluggable vector store)
     # -------------------------------------------------------------------------
     memory_enabled: bool = True  # Enable/disable long-term memory
+
+    # Vector Store Provider Selection
+    vector_store_provider: str = "qdrant"  # "qdrant" | "milvus"
 
     # Qdrant Vector Store Configuration
     qdrant_host: str = "localhost"  # Qdrant host (use 'localhost' for local Docker)
     qdrant_port: int = 6333  # Qdrant port
     qdrant_api_key: str | None = None  # Qdrant API key (for cloud deployment)
     qdrant_collection: str = "orchestrator_memories"  # Collection name for memories
+
+    # Milvus Vector Store Configuration
+    milvus_host: str = "localhost"         # Milvus host
+    milvus_port: int = 19530               # Milvus port
+    milvus_token: str | None = None        # Milvus token (for Zilliz Cloud)
+    milvus_collection: str = "orchestrator_memories"  # Collection name for memories
 
     # Memory LLM Configuration (use cheap models for memory operations)
     memory_llm_model: str = "gpt-4o-mini"  # LLM for fact extraction
@@ -133,7 +142,7 @@ class Settings(BaseSettings):
 
     # Memory Behavior
     memory_history_db_path: str = "~/.orchestrator/memory_history.db"  # SQLite history DB
-    memory_isolation: Literal["shared", "user", "agent", "run"] = "user"  # Isolation level
+    memory_isolation: Literal["shared", "user", "agent", "conversation"] = "user"  # Isolation level
     memory_search_limit: int = 5  # Default number of memories to retrieve
 
     # -------------------------------------------------------------------------

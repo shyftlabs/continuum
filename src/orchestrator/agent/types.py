@@ -92,10 +92,10 @@ class EventType(str, Enum):
 class MemoryScope(str, Enum):
     """Scope for memory operations."""
 
-    SHARED = "shared"  # Shared across all users/agents
-    USER = "user"  # Scoped to user
-    AGENT = "agent"  # Scoped to agent
-    RUN = "run"  # Scoped to current run/session
+    SHARED = "shared"        # Shared across all users/agents
+    USER = "user"            # Scoped to user
+    AGENT = "agent"          # Scoped to agent
+    CONVERSATION = "conversation"  # Scoped to conversation (replaces RUN)
 
 
 class MergeStrategy(str, Enum):
@@ -415,7 +415,7 @@ class RunState:
             "session_id": self.session_id,
             "user_id": self.user_id,
             "current_agent": self.current_agent,
-            "agent_stack": self.agent_stack,
+            "agent_stack": self.get_agent_stack_snapshot(),
             "entry_agent": self.entry_agent,
             "messages": self.messages,
             "pending_tool_calls": self.pending_tool_calls,
@@ -888,6 +888,7 @@ class RunContext:
 
     run_id: str
     session_id: str | None = None
+    conversation_id: str | None = None
     user_id: str | None = None
 
     # Trace context
@@ -909,11 +910,16 @@ class RunContext:
     # State
     usage: TokenUsage = field(default_factory=TokenUsage)
 
+    # Set by HandoffExecutor only — skips Redis history load in MessageBuilder
+    # because the handoff messages already carry the summarized context.
+    is_handoff: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "run_id": self.run_id,
             "session_id": self.session_id,
+            "conversation_id": self.conversation_id,
             "user_id": self.user_id,
             "trace_id": self.trace_id,
             "parent_span_id": self.parent_span_id,
@@ -934,6 +940,6 @@ class PrepareRunResult:
     success: bool
     context: RunContext | None = None
     run_state: RunState | None = None
-    initial_message_count: int = 0
+    user_message_index: int = 0
     tool_context_state: Any = None
     error_response: AgentResponse | None = None

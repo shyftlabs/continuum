@@ -142,6 +142,31 @@ class DebateAgent(BaseAgent):
             The raw arguments are stored in context.metadata under
             "debate_pro" and "debate_con" keys.
         """
+        # Disable sub-agent Redis saves; one clean pair is saved at the end.
+        _all_agents = [self.pro_agent, self.con_agent, self.judge_agent]
+        _orig_log = {a.name: a.config.log_to_session for a in _all_agents}
+        for a in _all_agents:
+            a.config.log_to_session = False
+        try:
+            result = await self._execute_inner(input_text, runner, context)
+            if context.session_id:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=result.content or "",
+                    agent=None,
+                )
+            return result
+        finally:
+            for a in _all_agents:
+                a.config.log_to_session = _orig_log[a.name]
+
+    async def _execute_inner(
+        self,
+        input_text: str,
+        runner: AgentRunner,
+        context: RunContext,
+    ) -> AgentResponse:
         total_usage = TokenUsage()
 
         async with SpanScope(

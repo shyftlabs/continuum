@@ -92,7 +92,9 @@ async def run_health_check(
         # Check specific service
         check_methods = {
             "redis": checker.check_redis,
+            "vector_store": checker.check_vector_store,
             "qdrant": checker.check_qdrant,
+            "milvus": checker.check_milvus,
             "langfuse": checker.check_langfuse,
             "llm": checker.check_llm,
         }
@@ -134,8 +136,8 @@ Examples:
     
     parser.add_argument(
         "-s", "--service",
-        choices=["redis", "qdrant", "langfuse", "llm"],
-        help="Check specific service only",
+        choices=["redis", "vector_store", "qdrant", "milvus", "langfuse", "llm"],
+        help="Check specific service only (vector_store dispatches to configured provider)",
     )
     parser.add_argument(
         "-t", "--timeout",

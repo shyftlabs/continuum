@@ -122,7 +122,7 @@ class IntelligentMemoryClient(MemoryClient):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
     ) -> MemoryAddResult:
@@ -148,7 +148,7 @@ class IntelligentMemoryClient(MemoryClient):
             messages,
             user_id=user_id,
             agent_id=agent_id,
-            run_id=run_id,
+            conversation_id=conversation_id,
             metadata=enriched_meta,
             custom_prompt=custom_prompt,
         )
@@ -173,7 +173,7 @@ class IntelligentMemoryClient(MemoryClient):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -187,7 +187,7 @@ class IntelligentMemoryClient(MemoryClient):
             query,
             user_id=user_id,
             agent_id=agent_id,
-            run_id=run_id,
+            conversation_id=conversation_id,
             limit=limit,
             filters=filters,
         )

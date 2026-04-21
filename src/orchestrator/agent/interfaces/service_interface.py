@@ -76,7 +76,7 @@ class ISessionService(ABC):
         self,
         agent: BaseAgent,
         messages: list[dict[str, Any]],
-        initial_count: int,
+        user_message_index: int,
         session_id: str,
         trace_id: str | None = None,
         tool_execution_summary: dict[str, Any] | None = None,

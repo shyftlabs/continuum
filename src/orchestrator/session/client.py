@@ -53,7 +53,7 @@ class SessionClient:
         # Create or get session
         session_id = await client.get_or_create_session(
             user_id="user-123",
-            agent_id="agent-456"
+            conversation_id="conv-456"
         )
 
         # Add user message
@@ -103,7 +103,12 @@ class SessionClient:
         """Get the session provider."""
         if not self._provider:
             self._initialize_provider()
-        return self._provider  # type: ignore
+        if self._provider is None:
+            raise SessionNotEnabledError(
+                "Session provider is not available. "
+                "Check SESSION_ENABLED=true and provider configuration (SESSION_REDIS_HOST, SESSION_REDIS_PORT)."
+            )
+        return self._provider
 
     @property
     def config(self) -> SessionConfig:
@@ -208,17 +213,19 @@ class SessionClient:
         self,
         session_id: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         """
         Get existing session or create a new one.
 
-        Uses standardized IDs: session_id maps to run_id in mem0 for alignment.
+        Creates or retrieves a session using deterministic session IDs.
 
         Args:
             session_id: Optional session ID. If not provided, generates a new UUID.
-            user_id: Optional user identifier (used for mem0 isolation).
-            agent_id: Optional agent identifier (used for mem0 isolation).
+            user_id: Optional user identifier.
+            conversation_id: Optional conversation identifier (e.g. chat window ID from caller).
+                             When provided, scopes the session per conversation so history
+                             is not shared across different chat windows.
 
         Returns:
             Session ID (existing or newly created).
@@ -233,11 +240,12 @@ class SessionClient:
             session_id = await self.provider.get_or_create_session(
                 session_id=session_id,
                 user_id=user_id,
-                agent_id=agent_id,
+                conversation_id=conversation_id,
             )
 
             logger.info(
-                f"Session ready: {session_id}", extra={"user_id": user_id, "agent_id": agent_id}
+                f"Session ready: {session_id}",
+                extra={"user_id": user_id, "conversation_id": conversation_id},
             )
 
             return session_id
@@ -258,6 +266,7 @@ class SessionClient:
         session_id: str,
         message: ChatMessage,
         *,
+        agent_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         store_in_memory: bool = True,
         extraction_prompt: str | None = None,
@@ -291,25 +300,20 @@ class SessionClient:
 
             # Optionally add to long-term memory (mem0)
             # Memory storage is best-effort - failures should not break session operations
-            if store_in_memory and self.memory_client.is_enabled:
+            if store_in_memory and self._memory_client and self._memory_client.is_enabled:
                 try:
                     # Get session metadata to extract user_id and agent_id
                     session_metadata = await self.provider.get_session_metadata(session_id)
 
                     if session_metadata:
-                        # Build memory metadata for proper scoping
+                        # Build memory metadata for observability
                         memory_metadata = dict(metadata) if metadata else {}
-
-                        # Include session_id and run_id for RUN-scoped filtering
                         if session_id:
                             memory_metadata["session_id"] = session_id
-                            memory_metadata["run_id"] = session_id
-
-                        # Include user_id and agent_id for additional filtering
                         if session_metadata.user_id:
                             memory_metadata["_user_id"] = session_metadata.user_id
-                        if session_metadata.agent_id:
-                            memory_metadata["_agent_id"] = session_metadata.agent_id
+                        if agent_id:
+                            memory_metadata["_agent_id"] = agent_id
 
                         logger.debug(
                             f"🧠 Extracting memory: role={message.role} "
@@ -320,8 +324,8 @@ class SessionClient:
                         result = await self.memory_client.add(
                             messages=[message.to_dict()],
                             user_id=session_metadata.user_id,
-                            agent_id=session_metadata.agent_id,
-                            run_id=session_id,
+                            agent_id=agent_id,
+                            conversation_id=session_metadata.conversation_id,
                             metadata=memory_metadata,
                             custom_prompt=extraction_prompt,
                         )
@@ -382,9 +386,9 @@ class SessionClient:
                         )
                 except Exception as mem_error:
                     # Memory storage failures should not break session operations
-                    logger.error(f"❌ Memory storage failed: {mem_error}", exc_info=True)
-                    logger.warning(
-                        f"Failed to store message in long-term memory: {mem_error}",
+                    logger.error(
+                        f"❌ Memory storage failed: {mem_error}",
+                        exc_info=True,
                         extra={"session_id": session_id, "role": message.role},
                     )
                     report_error(
@@ -424,7 +428,7 @@ class SessionClient:
 
         Args:
             session_id: Session ID.
-            limit: Optional limit on number of messages to retrieve.
+            limit: Number of complete turns (request+response pairs) to retrieve.
 
         Returns:
             List of ChatMessage objects in chronological order.
@@ -462,15 +466,15 @@ class SessionClient:
         self,
         session_id: str,
         query: str,
+        *,
+        agent_id: str | None = None,
         limit: int | None = None,
     ) -> list[Any]:
         """
         Get relevant long-term memories from mem0.
 
-        Uses standardized IDs: session_id maps to run_id in mem0.
-
         Args:
-            session_id: Session ID (maps to run_id in mem0).
+            session_id: Session ID.
             query: Search query for semantic search.
             limit: Maximum number of memories to retrieve.
 
@@ -483,7 +487,7 @@ class SessionClient:
         """
         self._ensure_enabled()
 
-        if not self.memory_client.is_enabled:
+        if not self._memory_client or not self._memory_client.is_enabled:
             logger.warning("Memory client not enabled, returning empty list")
             return []
 
@@ -495,12 +499,11 @@ class SessionClient:
                 logger.warning(f"Session metadata not found: {session_id}")
                 return []
 
-            # Use standardized IDs: session_id maps to run_id in mem0
             search_result = await self.memory_client.search(
                 query=query,
                 user_id=session_metadata.user_id,
-                agent_id=session_metadata.agent_id,
-                run_id=session_id,
+                agent_id=agent_id,
+                conversation_id=session_metadata.conversation_id,
                 limit=limit,
             )
 
@@ -644,26 +647,10 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            # For Redis provider, we need to update metadata directly
-            # This is provider-specific, but we'll handle it here for now
-            # Future: Add update_metadata method to BaseSessionProvider
-            if hasattr(self.provider, "_get_metadata_key") and hasattr(self.provider, "_redis"):
-                import json
-
-                metadata_key = self.provider._get_metadata_key(session_id)  # type: ignore
-                await self.provider._redis.setex(  # type: ignore
-                    metadata_key,
-                    self._session_config.ttl_seconds,
-                    json.dumps(metadata.to_dict()),
-                )
-                logger.debug(f"Updated session metadata: {session_id}")
-                return True
-            else:
-                # For other providers, we may need a different approach
-                logger.warning(
-                    f"update_session_metadata not fully supported for provider: {self.provider.provider_name}"
-                )
-                return False
+            result = await self.provider.update_session_metadata(session_id, metadata)
+            if not result:
+                logger.warning(f"Session not found when updating metadata: {session_id}")
+            return result
 
         except Exception as e:
             logger.error(f"Failed to update session metadata: {e}")

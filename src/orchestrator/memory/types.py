@@ -53,7 +53,7 @@ class MemoryEntry(BaseModel):
     hash: str | None = None
     user_id: str | None = None
     agent_id: str | None = None
-    run_id: str | None = None
+    conversation_id: str | None = None  # maps to mem0's run_id internally
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -72,8 +72,8 @@ class MemoryEntry(BaseModel):
             data["user_id"] = self.user_id
         if self.agent_id:
             data["agent_id"] = self.agent_id
-        if self.run_id:
-            data["run_id"] = self.run_id
+        if self.conversation_id:
+            data["conversation_id"] = self.conversation_id
         if self.metadata:
             data["metadata"] = self.metadata
         if self.created_at:
@@ -109,7 +109,7 @@ class MemoryEntry(BaseModel):
             hash=result.get("hash"),
             user_id=result.get("user_id"),
             agent_id=result.get("agent_id"),
-            run_id=result.get("run_id"),
+            conversation_id=result.get("run_id"),  # mem0 stores conversation_id as run_id
             metadata=metadata,
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
@@ -177,7 +177,7 @@ class MemoryFilter(BaseModel):
 
     user_id: str | None = None
     agent_id: str | None = None
-    run_id: str | None = None
+    conversation_id: str | None = None
     category: str | None = None
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -186,21 +186,16 @@ class MemoryFilter(BaseModel):
         """Convert to mem0 filter format."""
         filter_dict: dict[str, Any] = {}
 
-        # Add identifiers
         if self.user_id:
             filter_dict["user_id"] = self.user_id
         if self.agent_id:
             filter_dict["agent_id"] = self.agent_id
-        if self.run_id:
-            filter_dict["run_id"] = self.run_id
-
-        # Add metadata filters
+        if self.conversation_id:
+            filter_dict["run_id"] = self.conversation_id  # mem0 uses run_id internally
         if self.category:
             filter_dict["category"] = self.category
         if self.tags:
             filter_dict["tags"] = self.tags
-
-        # Merge additional metadata
         if self.metadata:
             filter_dict.update(self.metadata)
 

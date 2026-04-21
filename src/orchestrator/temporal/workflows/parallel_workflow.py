@@ -10,8 +10,14 @@ import asyncio
 from datetime import timedelta
 from typing import Any
 
-from temporalio import workflow
-from temporalio.common import RetryPolicy
+try:
+    from temporalio import workflow
+    from temporalio.common import RetryPolicy
+except ImportError as _err:
+    raise ImportError(
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
+    ) from _err
 
 with workflow.unsafe.imports_passed_through():
     from orchestrator.temporal.types import (

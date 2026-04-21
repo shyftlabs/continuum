@@ -49,7 +49,7 @@ class SessionService(ISessionService):
         self,
         agent: BaseAgent,
         messages: list[dict[str, Any]],
-        initial_count: int,
+        user_message_index: int,
         session_id: str,
         trace_id: str | None = None,
         tool_execution_summary: dict[str, Any] | None = None,
@@ -58,23 +58,9 @@ class SessionService(ISessionService):
         """
         Save new messages to session after run completion.
 
-        IMPORTANT: This method filters out tool-related messages to:
-        1. Eliminate cross-model tool_call_id compatibility issues (Gemini vs OpenAI)
-        2. Reduce token usage in session history
-        3. Keep conversation history clean (only user questions and final answers)
-
-        Tool execution details are preserved in:
-        - Langfuse spans (full debugging)
-        - tool_execution_summary metadata on final assistant message
-
-        Messages that ARE saved:
-        - User messages with content
-        - Final assistant messages (without tool_calls)
-
-        Messages that are SKIPPED:
-        - System messages (not conversation history)
-        - Assistant messages with tool_calls (intermediate)
-        - Tool result messages (role="tool")
+        Filters out tool-related messages to keep session history clean:
+        - Saves: user messages, final assistant messages (without tool_calls)
+        - Skips: system messages, assistant messages with tool_calls, tool result messages
         """
         if not self._session_client or not self._session_client.is_enabled:
             return
@@ -82,128 +68,55 @@ class SessionService(ISessionService):
         try:
             from orchestrator.llm.types import ChatMessage
 
-            # Get new messages (everything added during execution).
-            # Offset by -1 so we include the final user message appended by
-            # prepare_messages() — that message IS part of this run's conversation
-            # and must be persisted.  max(0, ...) prevents negative index when
-            # initial_count is 0 (i.e., no messages were prepared).
-            start_index = max(0, initial_count - 1)
-            new_messages = messages[start_index:]
-
+            new_messages = messages[user_message_index:]
             saved_count = 0
             skipped_count = 0
 
-            # Pre-filter: find the LAST final assistant message index to avoid
-            # saving duplicate assistant messages when consecutive responses occur
-            last_final_assistant_idx = None
-            for idx, msg_dict in enumerate(new_messages):
-                if not isinstance(msg_dict, dict):
-                    continue
-                role = msg_dict.get("role")
-                if role == "assistant" and not msg_dict.get("tool_calls") and msg_dict.get("content"):
-                    last_final_assistant_idx = idx
-
-            for idx, msg_dict in enumerate(new_messages):
+            for msg_dict in new_messages:
                 if not isinstance(msg_dict, dict):
                     continue
 
                 role = msg_dict.get("role")
                 content = msg_dict.get("content")
 
-                # Skip system messages - they're not conversation history
                 if role == "system":
                     skipped_count += 1
                     continue
 
-                # Skip tool result messages - they have long tool_call_ids that cause
-                # cross-model compatibility issues (Gemini IDs are 800+ chars, OpenAI limit is 40)
-                # Tool execution details are in Langfuse and tool_execution_summary metadata
                 if role == "tool":
                     skipped_count += 1
                     logger.debug("Skipping tool message (tool_call_id compatibility)")
                     continue
 
-                # Skip assistant messages with tool_calls - these are intermediate messages
-                # The final response (without tool_calls) will be saved
                 if role == "assistant" and msg_dict.get("tool_calls"):
                     skipped_count += 1
                     logger.debug("Skipping intermediate assistant message with tool_calls")
                     continue
 
-                # Skip non-final assistant messages (only save the last one to
-                # prevent duplicates when consecutive assistant responses occur)
-                if role == "assistant" and last_final_assistant_idx is not None and idx != last_final_assistant_idx:
-                    skipped_count += 1
-                    logger.debug("Skipping non-final assistant message (keeping only last)")
-                    continue
-
-                # Skip empty messages
                 if not content and role != "assistant":
                     skipped_count += 1
                     continue
 
-                # Create ChatMessage for session storage (without tool_calls/tool_call_id)
-                # This ensures clean messages that work with any LLM provider
-                msg = ChatMessage(
-                    role=role,
-                    content=content,
-                    # Intentionally NOT including:
-                    # - tool_calls (would require tool_call_ids which vary by provider)
-                    # - tool_call_id (provider-specific, causes compatibility issues)
-                )
+                msg = ChatMessage(role=role, content=content)
 
-                # Prepare metadata for the message
-                msg_metadata: dict[str, Any] | None = None
+                msg_metadata: dict[str, Any] = {}
 
-                # For the final assistant message, attach tool execution summary
                 if role == "assistant" and content and tool_execution_summary:
-                    msg_metadata = {"tool_execution_summary": tool_execution_summary}
-                    logger.debug(
-                        f"Attaching tool summary to assistant message: "
-                        f"{tool_execution_summary.get('tool_count', 0)} tools used"
-                    )
+                    msg_metadata["tool_execution_summary"] = tool_execution_summary
 
-                # Include session_id/run_id in metadata for RUN-scoped memory isolation
-                # This allows filtering memories by session_id when agent scope is RUN
-                # IMPORTANT: Use session_id (not run_id) because session_id is persistent
-                # across multiple requests, while run_id is generated fresh each time
-                if not msg_metadata:
-                    msg_metadata = {}
-                # Use session_id for RUN-scoped filtering (persistent across requests)
-                # Fall back to run_id if session_id is not available
                 filter_id = session_id or run_id
                 if filter_id:
-                    # Store in metadata for RUN-scoped memory filtering
-                    # When agent scope is RUN, memories will be filtered by this identifier
                     msg_metadata["run_id"] = filter_id
                     if session_id:
                         msg_metadata["session_id"] = session_id
 
-                # Save to session
-                # Store in long-term memory for meaningful messages
-                should_store_in_memory = bool(content)
-
-                # Check if agent has memory storage enabled
-                agent_store_enabled = (
-                    hasattr(agent, "memory_config")
+                should_store = bool(
+                    content
+                    and hasattr(agent, "memory_config")
                     and agent.memory_config
                     and agent.memory_config.store_memories
                 )
-                session_client_available = self._session_client and self._session_client.is_enabled
 
-                if should_store_in_memory and not agent_store_enabled:
-                    logger.debug(
-                        f"💾 Memory storage disabled in agent config: store_memories={agent_store_enabled}"
-                    )
-                if should_store_in_memory and not session_client_available:
-                    logger.debug(
-                        f"💾 Session client not available for memory storage: session_client={'available' if self._session_client else 'not available'}"
-                    )
-
-                if not should_store_in_memory:
-                    logger.debug("Skipping memory storage (empty content)")
-
-                # Extract memory hooks from agent config (product-level customization)
                 _mem_cfg = getattr(agent, "memory_config", None)
                 _extraction_prompt = getattr(_mem_cfg, "extraction_prompt", None)
                 _pre_store_filter = getattr(_mem_cfg, "pre_store_filter", None)
@@ -212,7 +125,8 @@ class SessionService(ISessionService):
                 await self._session_client.add_message(
                     session_id=session_id,
                     message=msg,
-                    store_in_memory=should_store_in_memory,
+                    agent_id=agent.name,
+                    store_in_memory=should_store,
                     metadata=msg_metadata,
                     extraction_prompt=_extraction_prompt,
                     pre_store_filter=_pre_store_filter,
@@ -314,14 +228,14 @@ class SessionService(ISessionService):
     async def get_conversation_history(
         self,
         session_id: str,
-        limit: int = 50,
+        limit: int = 20,
     ) -> list[dict[str, Any]]:
         """
         Get conversation history from session.
 
         Args:
             session_id: Session ID
-            limit: Maximum number of messages to retrieve
+            limit: Number of complete turns (request+response pairs) to retrieve
 
         Returns:
             List of message dictionaries

@@ -85,62 +85,83 @@ class ReflectionAgent(BaseAgent):
         Returns:
             Final AgentResponse (either passing or last attempt)
         """
-        total_usage = TokenUsage()
+        # Disable inner agent Redis saves; one clean pair is saved at the end.
+        _orig_log = self.agent.config.log_to_session
+        _orig_hist = self.agent.config.session_history_turns
+        self.agent.config.log_to_session = False
+        try:
+            total_usage = TokenUsage()
 
-        # Resolve LLM client for critique calls
-        if llm_client is None:
-            from orchestrator.core.container import get_container
+            # Resolve LLM client for critique calls
+            if llm_client is None:
+                from orchestrator.core.container import get_container
+                llm_client = get_container().llm_client
 
-            llm_client = get_container().llm_client
+            current_input = input_text
+            response: AgentResponse | None = None
 
-        current_input = input_text
-        response: AgentResponse | None = None
+            for attempt in range(self.reflection_config.max_reflections + 1):
+                logger.info(
+                    f"ReflectionAgent '{self.name}': attempt {attempt + 1} / "
+                    f"{self.reflection_config.max_reflections + 1}"
+                )
 
-        for attempt in range(self.reflection_config.max_reflections + 1):
-            logger.info(
-                f"ReflectionAgent '{self.name}': attempt {attempt + 1} / "
-                f"{self.reflection_config.max_reflections + 1}"
+                response = await runner.run(
+                    agent=self.agent,
+                    input=current_input,
+                    context=context,
+                )
+                total_usage = total_usage.add(response.usage)
+
+                # History only needed on attempt 1 — it doesn't change between
+                # retries (writes are blocked), so skip it from attempt 2 onwards.
+                if attempt == 0:
+                    self.agent.config.session_history_turns = 0
+
+                # On the last allowed attempt, skip the critique and return
+                if attempt == self.reflection_config.max_reflections:
+                    break
+
+                critique = await self._critique(
+                    response_content=response.content,
+                    llm_client=llm_client,
+                )
+                total_usage = total_usage.add(critique["usage"])
+
+                if critique["verdict"].startswith("PASS"):
+                    logger.info(f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}")
+                    break
+
+                logger.info(
+                    f"ReflectionAgent '{self.name}': critique says NEEDS IMPROVEMENT — retrying. "
+                    f"Reason: {critique['verdict']}"
+                )
+                current_input = (
+                    f"{input_text}\n\nPrevious attempt:\n{response.content}\n\n"
+                    f"Feedback: {critique['verdict']}"
+                )
+
+            assert response is not None  # at least one iteration always runs
+
+            if context.session_id:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=response.content or "",
+                    agent=None,
+                )
+
+            return AgentResponse(
+                content=response.content,
+                structured_output=response.structured_output,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS,
+                usage=total_usage,
+                turn_count=response.turn_count,
             )
-
-            response = await runner.run(
-                agent=self.agent,
-                input=current_input,
-                context=context,
-            )
-            total_usage = total_usage.add(response.usage)
-
-            # On the last allowed attempt, skip the critique and return
-            if attempt == self.reflection_config.max_reflections:
-                break
-
-            critique = await self._critique(
-                response_content=response.content,
-                llm_client=llm_client,
-            )
-            total_usage = total_usage.add(critique["usage"])
-
-            if critique["verdict"].startswith("PASS"):
-                logger.info(f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}")
-                break
-
-            logger.info(
-                f"ReflectionAgent '{self.name}': critique says NEEDS IMPROVEMENT — retrying. "
-                f"Reason: {critique['verdict']}"
-            )
-            current_input = (
-                f"{input_text}\n\nPrevious attempt:\n{response.content}\n\n"
-                f"Feedback: {critique['verdict']}"
-            )
-
-        assert response is not None  # at least one iteration always runs
-        return AgentResponse(
-            content=response.content,
-            structured_output=response.structured_output,
-            agent_name=self.name,
-            status=ResponseStatus.SUCCESS,
-            usage=total_usage,
-            turn_count=response.turn_count,
-        )
+        finally:
+            self.agent.config.log_to_session = _orig_log
+            self.agent.config.session_history_turns = _orig_hist
 
     async def _critique(
         self,

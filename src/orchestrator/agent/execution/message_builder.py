@@ -96,7 +96,7 @@ class MessageBuilder(IMessageBuilder):
         input: str | list[dict[str, Any]] | list[Any],
         context: RunContext,
         tool_context_state: ToolContextState | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         Prepare messages for agent execution.
 
@@ -178,17 +178,27 @@ class MessageBuilder(IMessageBuilder):
             except Exception as e:
                 logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
 
-        # Load session history if available
-        if context.session_id and self._session_service:
+        # Inject pipeline context from sequential/supervised/planner workflows
+        # so sub-agents can see prior steps' outputs without loading Redis.
+        pipeline_ctx = context.metadata.get("pipeline_context") if context.metadata else None
+        if pipeline_ctx:
+            messages.append({"role": "system", "content": pipeline_ctx})
+
+        # Load session history if available.
+        # Skip on handoff turns — the handoff messages passed as input already
+        # carry the summarized context; loading Redis history would duplicate it.
+        if context.session_id and self._session_service and not context.is_handoff:
             try:
-                history_limit = (
-                    agent.config.session_history_limit
-                    if agent.config and agent.config.session_history_limit is not None
-                    else 50
+                history_turns = (
+                    agent.config.session_history_turns
+                    if agent.config and agent.config.session_history_turns is not None
+                    else 20
                 )
                 history = await self._session_service.get_conversation_history(
-                    context.session_id, limit=history_limit
+                    context.session_id, limit=history_turns
                 )
+                if history:
+                    logger.debug(f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}")
                 messages.extend(history)
             except Exception as e:
                 logger.warning(f"Failed to load session history: {e}")
@@ -245,6 +255,10 @@ class MessageBuilder(IMessageBuilder):
                         getattr(scanner, "__name__", repr(scanner)), e,
                     )
 
+        # Record the index where user input begins — used by save_messages to know
+        # exactly which messages are new (avoids fragile initial_count - 1 arithmetic).
+        user_message_index = len(messages)
+
         # Add user input
         if isinstance(input, str):
             messages.append({"role": "user", "content": input})
@@ -284,6 +298,11 @@ class MessageBuilder(IMessageBuilder):
                         f"{compression_result.original_token_count} → {compression_result.compressed_token_count} tokens "
                         f"({compression_result.compression_ratio:.1%} ratio, strategy: {compression_result.strategy_used})"
                     )
+                    # Compression may have shortened the list, so find the user message
+                    # by scanning backward from the end (it was the last message appended).
+                    user_message_index = len(messages) - 1
+                    while user_message_index > 0 and messages[user_message_index].get("role") != "user":
+                        user_message_index -= 1
         except Exception as e:
             logger.warning(
                 f"Context management failed for agent {agent.name}, continuing without compression: {e}"
@@ -298,7 +317,7 @@ class MessageBuilder(IMessageBuilder):
         )
         logger.info("===== FINAL PROMPT =====\n%s\n========================", formatted)
 
-        return messages
+        return messages, user_message_index
 
     def _inject_tool_context_to_prompt(
         self,

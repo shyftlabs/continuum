@@ -125,8 +125,13 @@ class SessionConfig(BaseModel):
         # elif self.provider == "dynamodb":
         #     return bool(self.dynamodb_table_name)
 
-        # Default: assume configured if enabled
-        return True
+        # Unknown provider — fail explicitly rather than silently proceeding
+        # and crashing later with a confusing error.
+        raise ValueError(
+            f"Unknown session provider: '{self.provider}'. "
+            f"Supported providers: 'redis'. "
+            f"Check the SESSION_PROVIDER environment variable."
+        )
 
     def get_redis_url(self) -> str:
         """Get Redis connection URL."""

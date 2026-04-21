@@ -143,180 +143,210 @@ class PlannerAgent(BaseAgent):
         total_usage = TokenUsage()
         completed: list[dict[str, Any]] = []
 
-        async with SpanScope(
-            f"workflow.planner.{self.name}",
-            input={"goal": input_text[:500], "mode": self._mode},
-            metadata={"workflow_type": "planner", "mode": self._mode},
-        ) as workflow_span:
+        # Disable sub-agent Redis saves; one clean pair is saved at the end.
+        _all_agents = [self.agent] if self.agent else list(self.agents)
+        _orig_log = {a.name: a.config.log_to_session for a in _all_agents}
+        for a in _all_agents:
+            a.config.log_to_session = False
+        try:
+            async with SpanScope(
+                f"workflow.planner.{self.name}",
+                input={"goal": input_text[:500], "mode": self._mode},
+                metadata={"workflow_type": "planner", "mode": self._mode},
+            ) as workflow_span:
 
-            # Step 1: Generate plan
-            plan_steps, plan_usage = await self._generate_plan(input_text, llm_client)
-            total_usage = total_usage.add(plan_usage)
-            logger.info(
-                f"PlannerAgent '{self.name}' [{self._mode} mode]: "
-                f"generated {len(plan_steps)} steps"
-            )
-
-            # Step 2: Execute steps
-            current_input = input_text
-            step_outputs: list[dict[str, str]] = []  # accumulated outputs for assembly
-            i = 0          # index into plan_steps
-            executed = 0   # actual agent executions (max_steps cap applies here only)
-
-            while i < len(plan_steps) and executed < self.planning_config.max_steps:
-                step = plan_steps[i]
-                instruction = step.get("instruction", "")
-                step_id = step.get("step_id", str(i + 1))
-
-                # Resolve which agent runs this step
-                if self._mode == "single":
-                    agent = self.agent
-                    agent_name = agent.name  # type: ignore[union-attr]
-                else:
-                    agent_name = step.get("agent_name", "")
-                    agent = self._find_agent(agent_name)
-                    if not agent:
-                        if self.planning_config.strict_agent_pool:
-                            workflow_span.set_error(f"Unknown agent '{agent_name}' at step {step_id}")
-                            raise PlannerWorkflowError(
-                                f"Step {step_id} references unknown agent '{agent_name}'. "
-                                f"Declare it in the agents list or disable strict_agent_pool.",
-                                failed_agent=agent_name,
-                                step=i + 1,
-                                run_id=context.run_id,
-                            )
-                        logger.warning(
-                            f"PlannerAgent: step {step_id} references unknown agent "
-                            f"'{agent_name}' — skipping. "
-                            f"Add it to the agents list to fix this."
-                        )
-                        i += 1
-                        continue
-
-                # For the last step, pass full accumulated history so assembly works correctly
-                is_last_step = (i == len(plan_steps) - 1)
-                if is_last_step and len(step_outputs) > 1:
-                    history = "\n\n".join(
-                        f"[Step {s['step_id']} output]\n{s['output']}"
-                        for s in step_outputs
-                    )
-                    step_input = (
-                        f"{instruction}\n\nAll previous step outputs:\n{history}"
-                        if instruction
-                        else history
-                    )
-                else:
-                    step_input = (
-                        f"{instruction}\n\nInput:\n{current_input}"
-                        if instruction
-                        else current_input
-                    )
-
+                # Step 1: Generate plan
+                plan_steps, plan_usage = await self._generate_plan(input_text, llm_client)
+                total_usage = total_usage.add(plan_usage)
                 logger.info(
-                    f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}"
+                    f"PlannerAgent '{self.name}' [{self._mode} mode]: "
+                    f"generated {len(plan_steps)} steps"
                 )
 
-                async with SpanScope(
-                    f"workflow.planner.step.{step_id}",
-                    input={"agent_name": agent_name, "instruction": instruction},
-                ) as step_span:
-                    try:
-                        response = await runner.run(
-                            agent=agent,
-                            input=step_input,
-                            context=context,
-                        )
-                        total_usage = total_usage.add(response.usage)
-                        completed.append({
-                            "step": step,
-                            "output": response.content or "",
-                            "success": True,
-                        })
-                        current_input = response.content or current_input
-                        step_outputs.append({"step_id": step_id, "output": current_input})
+                # Step 2: Execute steps
+                current_input = input_text
+                step_outputs: list[dict[str, str]] = []  # accumulated outputs for assembly
+                pipeline_history: list[str] = []
+                i = 0          # index into plan_steps
+                executed = 0   # actual agent executions (max_steps cap applies here only)
 
-                        step_span.set_output({
-                            "success": True,
-                            "output_preview": (response.content or "")[:200],
-                        })
+                while i < len(plan_steps) and executed < self.planning_config.max_steps:
+                    step = plan_steps[i]
+                    instruction = step.get("instruction", "")
+                    step_id = step.get("step_id", str(i + 1))
 
-                        # Optional: replan after successful step.
-                        # Uses a separate counter so replan checks do not consume max_steps.
-                        remaining = plan_steps[i + 1:]
-                        if self.planning_config.enable_replanning and remaining:
-                            new_remaining, replan_usage = await self._maybe_replan(
-                                goal=input_text,
-                                completed=completed,
-                                remaining=remaining,
-                                last_output=current_input,
-                                llm_client=llm_client,
+                    # Resolve which agent runs this step
+                    if self._mode == "single":
+                        agent = self.agent
+                        agent_name = agent.name  # type: ignore[union-attr]
+                    else:
+                        agent_name = step.get("agent_name", "")
+                        agent = self._find_agent(agent_name)
+                        if not agent:
+                            if self.planning_config.strict_agent_pool:
+                                workflow_span.set_error(f"Unknown agent '{agent_name}' at step {step_id}")
+                                raise PlannerWorkflowError(
+                                    f"Step {step_id} references unknown agent '{agent_name}'. "
+                                    f"Declare it in the agents list or disable strict_agent_pool.",
+                                    failed_agent=agent_name,
+                                    step=i + 1,
+                                    run_id=context.run_id,
+                                )
+                            logger.warning(
+                                f"PlannerAgent: step {step_id} references unknown agent "
+                                f"'{agent_name}' — skipping. "
+                                f"Add it to the agents list to fix this."
                             )
-                            total_usage = total_usage.add(replan_usage)
-                            if new_remaining is not None:
-                                plan_steps = plan_steps[: i + 1] + new_remaining
-                                logger.info(
-                                    f"PlannerAgent: replanned after step {step_id} — "
-                                    f"{len(new_remaining)} remaining steps"
+                            i += 1
+                            continue
+
+                    # For the last step, pass full accumulated history so assembly works correctly
+                    is_last_step = (i == len(plan_steps) - 1)
+                    if is_last_step and len(step_outputs) > 1:
+                        history = "\n\n".join(
+                            f"[Step {s['step_id']} output]\n{s['output']}"
+                            for s in step_outputs
+                        )
+                        step_input = (
+                            f"{instruction}\n\nAll previous step outputs:\n{history}"
+                            if instruction
+                            else history
+                        )
+                    else:
+                        step_input = (
+                            f"{instruction}\n\nInput:\n{current_input}"
+                            if instruction
+                            else current_input
+                        )
+
+                    logger.info(
+                        f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}"
+                    )
+
+                    async with SpanScope(
+                        f"workflow.planner.step.{step_id}",
+                        input={"agent_name": agent_name, "instruction": instruction},
+                    ) as step_span:
+                        try:
+                            # Inject prior steps so this agent sees what earlier agents produced.
+                            if pipeline_history:
+                                context.metadata["pipeline_context"] = (
+                                    "Prior pipeline steps in this request:\n"
+                                    + "\n".join(pipeline_history)
                                 )
 
-                        i += 1
-                        executed += 1
+                            response = await runner.run(
+                                agent=agent,
+                                input=step_input,
+                                context=context,
+                            )
+                            total_usage = total_usage.add(response.usage)
+                            completed.append({
+                                "step": step,
+                                "output": response.content or "",
+                                "success": True,
+                            })
+                            current_input = response.content or current_input
+                            step_outputs.append({"step_id": step_id, "output": current_input})
+                            pipeline_history.append(f"{agent_name}: {current_input[:300]}")
 
-                    except Exception as e:
-                        logger.error(
-                            f"PlannerAgent step {step_id} ({agent_name}) failed: {e}"
-                        )
-                        step_span.set_error(str(e))
-                        completed.append({
-                            "step": step,
-                            "output": str(e),
-                            "success": False,
-                        })
+                            step_span.set_output({
+                                "success": True,
+                                "output_preview": (response.content or "")[:200],
+                            })
 
-                        if self.planning_config.replan_on_failure:
+                            # Optional: replan after successful step.
+                            # Uses a separate counter so replan checks do not consume max_steps.
                             remaining = plan_steps[i + 1:]
-                            new_plan, replan_usage = await self._replan_on_failure(
-                                goal=input_text,
-                                completed=completed,
-                                failed_step=step,
-                                remaining=remaining,
-                                error=str(e),
-                                llm_client=llm_client,
-                            )
-                            total_usage = total_usage.add(replan_usage)
-                            if new_plan is not None:
-                                plan_steps = plan_steps[:i] + new_plan
-                                logger.info(
-                                    f"PlannerAgent: replanned after failure at step {step_id} — "
-                                    f"{len(new_plan)} new steps"
+                            if self.planning_config.enable_replanning and remaining:
+                                new_remaining, replan_usage = await self._maybe_replan(
+                                    goal=input_text,
+                                    completed=completed,
+                                    remaining=remaining,
+                                    last_output=current_input,
+                                    llm_client=llm_client,
                                 )
-                                continue
+                                total_usage = total_usage.add(replan_usage)
+                                if new_remaining is not None:
+                                    plan_steps = plan_steps[: i + 1] + new_remaining
+                                    logger.info(
+                                        f"PlannerAgent: replanned after step {step_id} — "
+                                        f"{len(new_remaining)} remaining steps"
+                                    )
 
-                        if self.planning_config.fail_strategy == FailStrategy.FAIL_FAST:
-                            workflow_span.set_error(f"Step {step_id} failed: {e}")
-                            raise PlannerWorkflowError(
-                                f"Step {step_id} ({agent_name}) failed: {e}",
-                                failed_agent=agent_name,
-                                step=i + 1,
-                                run_id=context.run_id,
-                            ) from e
+                            i += 1
+                            executed += 1
 
-                        i += 1
-                        executed += 1
+                        except Exception as e:
+                            logger.error(
+                                f"PlannerAgent step {step_id} ({agent_name}) failed: {e}"
+                            )
+                            step_span.set_error(str(e))
+                            completed.append({
+                                "step": step,
+                                "output": str(e),
+                                "success": False,
+                            })
 
-            workflow_span.set_output({
-                "steps_executed": len(completed),
-                "total_tokens": total_usage.total_tokens,
-            })
+                            if self.planning_config.replan_on_failure:
+                                remaining = plan_steps[i + 1:]
+                                new_plan, replan_usage = await self._replan_on_failure(
+                                    goal=input_text,
+                                    completed=completed,
+                                    failed_step=step,
+                                    remaining=remaining,
+                                    error=str(e),
+                                    llm_client=llm_client,
+                                )
+                                total_usage = total_usage.add(replan_usage)
+                                if new_plan is not None:
+                                    plan_steps = plan_steps[:i] + new_plan
+                                    logger.info(
+                                        f"PlannerAgent: replanned after failure at step {step_id} — "
+                                        f"{len(new_plan)} new steps"
+                                    )
+                                    continue
 
-        return AgentResponse(
-            content=current_input,
-            agent_name=self.name,
-            status=ResponseStatus.SUCCESS,
-            usage=total_usage,
-            turn_count=len(completed),
-            agents_used=[c["step"].get("agent_name", self.agent.name if self.agent else "") for c in completed if c["success"]],
-        )
+                            if self.planning_config.fail_strategy == FailStrategy.FAIL_FAST:
+                                workflow_span.set_error(f"Step {step_id} failed: {e}")
+                                raise PlannerWorkflowError(
+                                    f"Step {step_id} ({agent_name}) failed: {e}",
+                                    failed_agent=agent_name,
+                                    step=i + 1,
+                                    run_id=context.run_id,
+                                ) from e
+
+                            i += 1
+                            executed += 1
+
+                workflow_span.set_output({
+                    "steps_executed": len(completed),
+                    "total_tokens": total_usage.total_tokens,
+                })
+
+            final_content = current_input
+            result = AgentResponse(
+                content=final_content,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS,
+                usage=total_usage,
+                turn_count=len(completed),
+                agents_used=[c["step"].get("agent_name", self.agent.name if self.agent else "") for c in completed if c["success"]],
+            )
+
+            if context.session_id and completed:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=final_content or "",
+                    agent=None,
+                )
+
+            return result
+        finally:
+            for a in _all_agents:
+                a.config.log_to_session = _orig_log[a.name]
+            context.metadata.pop("pipeline_context", None)
 
     # -------------------------------------------------------------------------
     # Plan generation

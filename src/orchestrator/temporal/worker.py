@@ -11,7 +11,13 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from temporalio.worker import Worker
+try:
+    from temporalio.worker import Worker
+except ImportError as _err:
+    raise ImportError(
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
+    ) from _err
 
 from orchestrator.logging import get_logger
 from orchestrator.temporal.activities import run_agent_activity, send_notification_activity

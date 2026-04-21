@@ -32,6 +32,7 @@ def print_help():
 Commands:
   /tools    - List available MCP tools
   /session  - Show session info
+  /memories - Show stored memories
   /clear    - Clear screen
   /help     - Show this help
   /quit     - Exit
@@ -85,6 +86,15 @@ async def main():
                     elif command == "/session":
                         print(f"\nUser ID:    {agent.user_id}")
                         print(f"Session ID: {agent.session_id or 'N/A'}\n")
+                    elif command == "/memories":
+                        memories = await agent.get_memories()
+                        if not memories:
+                            print("\nNo memories stored (memory may be disabled or empty).\n")
+                        else:
+                            print(f"\nStored Memories ({len(memories)}):")
+                            for i, m in enumerate(memories, 1):
+                                print(f"  {i}. {m.get('memory', m)}")
+                            print()
                     elif command == "/clear":
                         os.system("clear")
                         print_banner()

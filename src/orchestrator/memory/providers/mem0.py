@@ -131,6 +131,7 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory = Memory.from_config(self._mem0_config)
 
             self._initialized = True
+            self._patch_milvus_strong_consistency()
             logger.info(
                 "Mem0Provider initialized successfully",
                 extra={
@@ -150,6 +151,60 @@ class Mem0Provider(BaseMemoryProvider):
                 config_key="mem0",
             ) from e
 
+    def _patch_milvus_strong_consistency(self) -> None:
+        """Patch MilvusDB.list() to use Strong consistency so filter queries see all writes.
+
+        Milvus inserts land in growing (unsealed) segments. JSON-field filter queries
+        (used by mem0's list/get_all) cannot see growing segments without an explicit
+        consistency level. Patching list() to pass consistency_level="Strong" tells
+        Milvus to wait until the latest write is visible before executing the query —
+        the correct production approach vs. forcing an expensive flush after every write.
+        """
+        if self._config.vector_store_provider != "milvus":
+            return
+        try:
+            vs = getattr(self._sync_memory, "vector_store", None)
+            if vs is None or not hasattr(vs, "client") or not hasattr(vs, "collection_name"):
+                return
+
+            def _list_strong(self_vs, filters=None, limit=100):
+                from mem0.vector_stores.milvus import OutputData
+
+                query_filter = self_vs._create_filter(filters) if filters else None
+                result = self_vs.client.query(
+                    collection_name=self_vs.collection_name,
+                    filter=query_filter,
+                    limit=limit,
+                    consistency_level="Strong",
+                )
+                memories = [
+                    OutputData(id=d.get("id"), score=None, payload=d.get("metadata"))
+                    for d in result
+                ]
+                return [memories]
+
+            import types
+
+            vs.list = types.MethodType(_list_strong, vs)
+            logger.debug("Patched MilvusDB.list() with consistency_level=Strong")
+        except Exception as e:
+            logger.debug(f"Milvus consistency patch skipped: {e}")
+
+    def _flush_milvus(self) -> None:
+        """Flush Milvus before delete_all so mem0's list() sees all growing segments.
+
+        Used only in delete_all (a rare, expensive operation where correctness beats
+        throughput). Do NOT call after add() — use the Strong consistency patch instead.
+        """
+        if self._config.vector_store_provider != "milvus":
+            return
+        try:
+            vs = getattr(self._sync_memory, "vector_store", None)
+            if vs is not None and hasattr(vs, "client") and hasattr(vs, "collection_name"):
+                vs.client.flush(vs.collection_name)
+        except Exception as e:
+            logger.debug(f"Milvus flush skipped: {e}")
+
     def _ensure_initialized(self) -> None:
         """Ensure provider is initialized and ready."""
         if not self._initialized:
@@ -161,16 +216,16 @@ class Mem0Provider(BaseMemoryProvider):
         self,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> dict[str, str]:
-        """Build identifier dict from provided values."""
+        """Build identifier dict for mem0. Maps conversation_id → run_id (mem0 has no native conversation_id)."""
         identifiers: dict[str, str] = {}
         if user_id:
             identifiers["user_id"] = user_id
         if agent_id:
             identifiers["agent_id"] = agent_id
-        if run_id:
-            identifiers["run_id"] = run_id
+        if conversation_id:
+            identifiers["run_id"] = conversation_id  # mem0 uses run_id for conversation-level scoping
         return identifiers
 
     # =========================================================================
@@ -198,7 +253,7 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
         infer: bool = True,
@@ -219,7 +274,7 @@ class Mem0Provider(BaseMemoryProvider):
         # Build kwargs for mem0.add()
         kwargs: dict[str, Any] = {
             "messages": messages,
-            **self._build_identifiers(user_id, agent_id, run_id),
+            **self._build_identifiers(user_id, agent_id, conversation_id),
         }
 
         if metadata:
@@ -231,11 +286,11 @@ class Mem0Provider(BaseMemoryProvider):
         # Custom fact extraction prompt
         # See: https://docs.mem0.ai/open-source/features/custom-fact-extraction-prompt
         if custom_prompt:
-            kwargs["prompts"] = custom_prompt
+            kwargs["prompt"] = custom_prompt
 
         try:
             logger.debug(
-                f"mem0.add() with: user_id={user_id}, agent_id={agent_id}, run_id={run_id}"
+                f"mem0.add() with: user_id={user_id}, agent_id={agent_id}, conversation_id={conversation_id}"
             )
 
             # Run sync memory.add() in thread pool
@@ -257,7 +312,7 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -277,7 +332,7 @@ class Mem0Provider(BaseMemoryProvider):
         kwargs: dict[str, Any] = {
             "query": query,
             "limit": limit,
-            **self._build_identifiers(user_id, agent_id, run_id),
+            **self._build_identifiers(user_id, agent_id, conversation_id),
         }
 
         # Native Qdrant filters passed directly to mem0
@@ -325,7 +380,7 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """
@@ -334,7 +389,7 @@ class Mem0Provider(BaseMemoryProvider):
         self._ensure_initialized()
 
         # Build kwargs for mem0.get_all()
-        kwargs: dict[str, Any] = self._build_identifiers(user_id, agent_id, run_id)
+        kwargs: dict[str, Any] = self._build_identifiers(user_id, agent_id, conversation_id)
         if limit:
             kwargs["limit"] = limit
 
@@ -378,18 +433,20 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """
         Delete all memories for a scope using mem0's Memory.delete_all() via asyncio.to_thread().
         """
         self._ensure_initialized()
 
-        kwargs = self._build_identifiers(user_id, agent_id, run_id)
+        kwargs = self._build_identifiers(user_id, agent_id, conversation_id)
 
         try:
             logger.debug(f"mem0.delete_all() with: {kwargs}")
 
+            # Flush so mem0's internal list() sees all growing segments before deleting
+            await asyncio.to_thread(self._flush_milvus)
             # Run sync memory.delete_all() in thread pool
             await asyncio.to_thread(self._sync_memory.delete_all, **kwargs)
 
@@ -422,7 +479,7 @@ class Mem0Provider(BaseMemoryProvider):
 
         # Custom update prompt
         if custom_prompt:
-            kwargs["prompts"] = custom_prompt
+            kwargs["prompt"] = custom_prompt
 
         try:
             logger.debug(f"mem0.update() memory_id={memory_id}")
@@ -492,10 +549,7 @@ class Mem0Provider(BaseMemoryProvider):
         except Exception as e:
             logger.error(f"mem0.reset() failed: {e}")
             report_error(e, context="memory_reset")
-            raise MemoryError(
-                f"Failed to reset memory store: {e}",
-                original_error=e,
-            ) from e
+            return False
 
     async def close(self) -> None:
         """Close the provider and release resources."""
@@ -514,22 +568,25 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
+        infer: bool = True,
     ) -> MemoryAddResult:
         """Add memories using mem0's Memory.add()."""
         self._ensure_initialized()
 
         kwargs: dict[str, Any] = {
             "messages": messages,
-            **self._build_identifiers(user_id, agent_id, run_id),
+            **self._build_identifiers(user_id, agent_id, conversation_id),
         }
 
         if metadata:
             kwargs["metadata"] = metadata
         if custom_prompt:
-            kwargs["prompts"] = custom_prompt
+            kwargs["prompt"] = custom_prompt
+        if not infer:
+            kwargs["infer"] = False
 
         try:
             response = self._sync_memory.add(**kwargs)
@@ -544,7 +601,7 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -554,7 +611,7 @@ class Mem0Provider(BaseMemoryProvider):
         kwargs: dict[str, Any] = {
             "query": query,
             "limit": limit,
-            **self._build_identifiers(user_id, agent_id, run_id),
+            **self._build_identifiers(user_id, agent_id, conversation_id),
         }
 
         if filters:
@@ -585,13 +642,13 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """Get all memories using mem0's Memory.get_all()."""
         self._ensure_initialized()
 
-        kwargs: dict[str, Any] = self._build_identifiers(user_id, agent_id, run_id)
+        kwargs: dict[str, Any] = self._build_identifiers(user_id, agent_id, conversation_id)
         if limit:
             kwargs["limit"] = limit
 
@@ -618,12 +675,12 @@ class Mem0Provider(BaseMemoryProvider):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """Delete all memories using mem0's Memory.delete_all()."""
         self._ensure_initialized()
 
-        kwargs = self._build_identifiers(user_id, agent_id, run_id)
+        kwargs = self._build_identifiers(user_id, agent_id, conversation_id)
 
         try:
             self._sync_memory.delete_all(**kwargs)
@@ -648,7 +705,7 @@ class Mem0Provider(BaseMemoryProvider):
         }
 
         if custom_prompt:
-            kwargs["prompts"] = custom_prompt
+            kwargs["prompt"] = custom_prompt
 
         try:
             response = self._sync_memory.update(**kwargs)
@@ -688,7 +745,4 @@ class Mem0Provider(BaseMemoryProvider):
             return True
         except Exception as e:
             logger.error(f"mem0.reset() sync failed: {e}")
-            raise MemoryError(
-                f"Failed to reset memory store: {e}",
-                original_error=e,
-            ) from e
+            return False

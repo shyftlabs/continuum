@@ -455,20 +455,24 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 # Try to close exit_stack, but handle the cancel scope error gracefully
                 await self.exit_stack.aclose()
             except asyncio.CancelledError:
-                # FastAPI is cancelling tasks during shutdown - this is expected
-                # The exit_stack will be cleaned up when the process exits
                 logger.debug("MCP cleanup cancelled during shutdown, continuing...")
             except RuntimeError as e:
-                # Handle "Attempted to exit cancel scope in a different task" error
-                if "cancel scope" in str(e).lower() or "different task" in str(e).lower():
-                    logger.debug(
-                        "Cannot exit cancel scope in different task (expected during FastAPI shutdown)"
-                    )
+                msg = str(e).lower()
+                if (
+                    "cancel scope" in msg
+                    or "different task" in msg
+                    or "already running" in msg
+                ):
+                    logger.debug(f"MCP cleanup cross-task error (expected during shutdown): {e}")
                 else:
                     logger.error(f"Error cleaning up server: {e}")
             except Exception as e:
-                # Log other errors
-                logger.error(f"Error cleaning up server: {e}")
+                # anyio.WouldBlock and similar errors during cross-task shutdown
+                type_name = type(e).__name__
+                if "WouldBlock" in type_name or "Busy" in type_name:
+                    logger.debug(f"MCP cleanup blocked (expected during shutdown): {e}")
+                else:
+                    logger.error(f"Error cleaning up server: {e}")
             finally:
                 # Always clear session reference
                 self.session = None

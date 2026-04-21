@@ -208,7 +208,7 @@ async def run_full_pipeline(
         try:
             effective_session_id = await session_client.get_or_create_session(
                 user_id=user_id,
-                agent_id="sdk-feature-test-pipeline",
+                conversation_id="sdk-feature-test-pipeline",
             )
             logger.info(f"Session: {effective_session_id[:12]}...")
         except Exception as e:

@@ -342,7 +342,14 @@ class Executor(IExecutor):
                             )
 
                             if handoff_result.success and handoff_result.response:
-                                # Handoff was executed and has response
+                                # Handoff was executed and has response.
+                                # Append sub-agent response to messages so save_messages()
+                                # can persist it to Redis session history.
+                                if handoff_result.response.content:
+                                    messages.append({
+                                        "role": "assistant",
+                                        "content": handoff_result.response.content,
+                                    })
                                 turn_span.set_output({"handoff_to": target, "success": True})
                                 return AgentResponse(
                                     content=handoff_result.response.content,

@@ -12,7 +12,13 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from temporalio.client import Client, WorkflowHandle
+try:
+    from temporalio.client import Client, WorkflowHandle
+except ImportError as _err:
+    raise ImportError(
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
+    ) from _err
 
 try:
     from temporalio.contrib.pydantic import pydantic_data_converter

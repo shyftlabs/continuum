@@ -10,7 +10,7 @@ Uses Redis for efficient session storage with:
 
 import json
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
@@ -128,17 +128,23 @@ class RedisSessionProvider(BaseSessionProvider):
                 return False
 
             try:
+                # Prepare connection arguments
+                conn_kwargs = {
+                    "host": self._config.redis_host,
+                    "port": self._config.redis_port,
+                    "password": self._config.redis_password,
+                    "db": self._config.redis_db,
+                    "max_connections": self._config.redis_max_connections,
+                    "decode_responses": True,
+                    "socket_connect_timeout": 5,
+                    "socket_timeout": 5,
+                }
+                
+                if self._config.redis_ssl:
+                    conn_kwargs["ssl"] = True
+
                 # Create connection pool for better performance
-                self._pool = redis.ConnectionPool(
-                    host=self._config.redis_host,
-                    port=self._config.redis_port,
-                    password=self._config.redis_password,
-                    db=self._config.redis_db,
-                    max_connections=self._config.redis_max_connections,
-                    decode_responses=True,
-                    socket_connect_timeout=5,
-                    socket_timeout=5,
-                )
+                self._pool = redis.ConnectionPool(**conn_kwargs)
 
                 # Create async Redis connection using pool
                 self._redis = redis.Redis(
@@ -185,31 +191,52 @@ class RedisSessionProvider(BaseSessionProvider):
         """Get Redis key for session metadata."""
         return f"{self._config.key_prefix}:{session_id}:metadata"
 
-    def _get_user_agent_session_key(self, user_id: str, agent_id: str) -> str:
-        """Get Redis key for user+agent to session_id mapping."""
-        # Normalize user_id and agent_id to avoid issues with special characters
-        # Use a simple format that's safe for Redis keys
-        return f"{self._config.key_prefix}:user:{user_id}:agent:{agent_id}:session"
+    def _compute_session_id(
+        self,
+        session_id: str | None,
+        user_id: str | None,
+        conversation_id: str | None,
+    ) -> str:
+        """Compute deterministic session ID.
+
+        Priority:
+        - explicit session_id → use as-is (internal handoff calls)
+        - conversation_id + user_id → "c:{conversation_id}:u:{user_id}"
+        - user_id only             → "u:{user_id}"
+        - fallback                 → generate UUID
+
+        Namespace prefixes ("c:" / "u:") prevent collision between a bare
+        user_id like "foo:bar" and a conversation_id="foo" + user_id="bar"
+        pair, which would otherwise both produce the same key "foo:bar".
+        """
+        if session_id:
+            return session_id
+        if conversation_id and user_id:
+            return f"c:{conversation_id}:u:{user_id}"
+        if user_id:
+            return f"u:{user_id}"
+        return generate_session_id()
 
     @observe(name="session_provider_get_or_create", capture_output=True)
     async def get_or_create_session(
         self,
         session_id: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         """
         Get existing session or create a new one.
 
-        If session_id is not provided but user_id and agent_id are, this will:
-        1. Look up existing session for the user_id + agent_id combination
-        2. If found, return that session_id
-        3. If not found, create a new session and store the mapping
+        Session ID is deterministic:
+        - explicit session_id       → used as-is (for internal handoff calls)
+        - conversation_id + user_id → "c:{conversation_id}:u:{user_id}"
+        - user_id only              → "u:{user_id}"
+        - neither                   → generate UUID
 
         Args:
-            session_id: Optional session ID. If not provided, will look up by user_id+agent_id or generate new.
-            user_id: Optional user identifier.
-            agent_id: Optional agent identifier.
+            session_id: Optional explicit session ID (overrides computed key).
+            user_id: User identifier.
+            conversation_id: Conversation identifier from caller (e.g. chat window ID).
 
         Returns:
             Session ID (existing or newly created).
@@ -220,133 +247,71 @@ class RedisSessionProvider(BaseSessionProvider):
         """
         self._ensure_enabled()
 
+        resolved_session_id = self._compute_session_id(session_id, user_id, conversation_id)
+
         try:
-            # If session_id is provided, check if it exists
-            if session_id:
-                metadata_key = self._get_metadata_key(session_id)
-                metadata_json = await self._redis.get(metadata_key)
+            metadata_key = self._get_metadata_key(resolved_session_id)
+            metadata_json = await self._redis.get(metadata_key)
 
-                if metadata_json:
-                    # Session exists, update last_accessed_at
-                    metadata = SessionMetadata.from_dict(json.loads(metadata_json))
-                    metadata.last_accessed_at = datetime.now()
-                    await self._redis.setex(
-                        metadata_key,
-                        self._config.ttl_seconds,
-                        json.dumps(metadata.to_dict()),
-                    )
-                    logger.debug(f"Retrieved existing session: {session_id}")
-                    return session_id
-                else:
-                    # Session ID provided but doesn't exist - create it
-                    metadata = SessionMetadata(
-                        session_id=session_id,
-                        user_id=user_id,
-                        agent_id=agent_id,
-                        created_at=datetime.now(),
-                        last_accessed_at=datetime.now(),
-                        message_count=0,
-                    )
-                    await self._redis.setex(
-                        metadata_key,
-                        self._config.ttl_seconds,
-                        json.dumps(metadata.to_dict()),
-                    )
+            if metadata_json:
+                # Session exists — refresh TTLs and return
+                metadata = SessionMetadata.from_dict(json.loads(metadata_json))
+                metadata.last_accessed_at = datetime.now(UTC)
+                messages_key = self._get_session_key(resolved_session_id)
+                async with self._redis.pipeline(transaction=True) as pipe:
+                    pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(metadata.to_dict()))
+                    pipe.expire(messages_key, self._config.ttl_seconds)
+                    await pipe.execute()
+                logger.debug(f"Retrieved existing session: {resolved_session_id}")
+                return resolved_session_id
 
-                    # Store mapping if user_id and agent_id are provided
-                    if user_id and agent_id:
-                        mapping_key = self._get_user_agent_session_key(user_id, agent_id)
-                        await self._redis.setex(
-                            mapping_key,
-                            self._config.ttl_seconds,
-                            session_id,
-                        )
-
-                    logger.info(
-                        f"Created new session: {session_id}",
-                        extra={"user_id": user_id, "agent_id": agent_id},
-                    )
-                    return session_id
-
-            # No session_id provided - look up by user_id + agent_id if available
-            if user_id and agent_id:
-                mapping_key = self._get_user_agent_session_key(user_id, agent_id)
-                existing_session_id = await self._redis.get(mapping_key)
-
-                if existing_session_id:
-                    # Found existing session - verify it still exists and update it
-                    metadata_key = self._get_metadata_key(existing_session_id)
-                    metadata_json = await self._redis.get(metadata_key)
-
-                    if metadata_json:
-                        # Session exists, update last_accessed_at
-                        metadata = SessionMetadata.from_dict(json.loads(metadata_json))
-                        metadata.last_accessed_at = datetime.now()
-                        await self._redis.setex(
-                            metadata_key,
-                            self._config.ttl_seconds,
-                            json.dumps(metadata.to_dict()),
-                        )
-                        # Refresh mapping TTL
-                        await self._redis.setex(
-                            mapping_key,
-                            self._config.ttl_seconds,
-                            existing_session_id,
-                        )
-                        logger.debug(
-                            f"Retrieved existing session by user+agent: {existing_session_id}",
-                            extra={"user_id": user_id, "agent_id": agent_id},
-                        )
-                        return existing_session_id
-                    else:
-                        # Mapping exists but session doesn't - clean up stale mapping
-                        await self._redis.delete(mapping_key)
-                        logger.debug(
-                            f"Cleaned up stale session mapping for user_id={user_id}, agent_id={agent_id}"
-                        )
-
-            # No existing session found - create a new one
-            session_id = generate_session_id()
+            # Session doesn't exist — create it atomically with SET NX so that
+            # concurrent requests with the same deterministic key don't both
+            # write and have the second silently overwrite the first.
             metadata = SessionMetadata(
-                session_id=session_id,
+                session_id=resolved_session_id,
                 user_id=user_id,
-                agent_id=agent_id,
-                created_at=datetime.now(),
-                last_accessed_at=datetime.now(),
+                conversation_id=conversation_id,
+                created_at=datetime.now(UTC),
+                last_accessed_at=datetime.now(UTC),
                 message_count=0,
             )
-            metadata_key = self._get_metadata_key(session_id)
-            await self._redis.setex(
+            nx_ok = await self._redis.set(
                 metadata_key,
-                self._config.ttl_seconds,
                 json.dumps(metadata.to_dict()),
+                ex=self._config.ttl_seconds,
+                nx=True,
             )
-
-            # Store mapping if user_id and agent_id are provided
-            if user_id and agent_id:
-                mapping_key = self._get_user_agent_session_key(user_id, agent_id)
-                await self._redis.setex(
-                    mapping_key,
-                    self._config.ttl_seconds,
-                    session_id,
+            if not nx_ok:
+                # Lost the race — another request created the session first.
+                # Refresh TTLs on the winner's keys and return.
+                messages_key = self._get_session_key(resolved_session_id)
+                async with self._redis.pipeline(transaction=True) as pipe:
+                    pipe.expire(metadata_key, self._config.ttl_seconds)
+                    pipe.expire(messages_key, self._config.ttl_seconds)
+                    await pipe.execute()
+                logger.debug(
+                    f"Race resolved: session already created by concurrent request: {resolved_session_id}"
                 )
+            else:
+                logger.info(
+                    f"Created new session: {resolved_session_id}",
+                    extra={"user_id": user_id, "conversation_id": conversation_id},
+                )
+            return resolved_session_id
 
-            logger.info(
-                f"Created new session: {session_id}",
-                extra={"user_id": user_id, "agent_id": agent_id},
-            )
-            return session_id
-
+        except (SessionNotEnabledError, SessionConnectionError):
+            raise
         except Exception as e:
             logger.error(f"Failed to get or create session: {e}")
             report_error(
                 e,
                 context="session_provider_get_or_create",
-                metadata={"session_id": session_id, "user_id": user_id, "agent_id": agent_id},
+                metadata={"session_id": resolved_session_id, "user_id": user_id},
             )
             raise SessionConnectionError(
                 f"Failed to get or create session: {str(e)}",
-                session_id=session_id,
+                session_id=resolved_session_id,
                 original_error=e,
             ) from e
 
@@ -398,7 +363,7 @@ class RedisSessionProvider(BaseSessionProvider):
                     session_id=session_id,
                     original_error=parse_err,
                 ) from parse_err
-            session_metadata.last_accessed_at = datetime.now()
+            session_metadata.last_accessed_at = datetime.now(UTC)
 
             messages_key = self._get_session_key(session_id)
 
@@ -437,23 +402,20 @@ class RedisSessionProvider(BaseSessionProvider):
             # Create session message with metadata (no trace_id/span_id - handled by @observe)
             session_message = SessionMessage(
                 message=message,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
                 metadata=metadata or {},
             )
 
-            # Store message in Redis List (append to end)
+            # Atomically write message, update metadata, and refresh both TTLs.
+            # Using a pipeline prevents a crash mid-sequence from leaving the
+            # messages list and metadata in an inconsistent state.
             message_json = json.dumps(session_message.to_dict())
-            await self._redis.rpush(messages_key, message_json)
-
-            # Update session metadata
-            await self._redis.setex(
-                metadata_key,
-                self._config.ttl_seconds,
-                json.dumps(session_metadata.to_dict()),
-            )
-
-            # Set TTL on messages list (same as session TTL)
-            await self._redis.expire(messages_key, self._config.ttl_seconds)
+            metadata_json_updated = json.dumps(session_metadata.to_dict())
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.rpush(messages_key, message_json)
+                pipe.setex(metadata_key, self._config.ttl_seconds, metadata_json_updated)
+                pipe.expire(messages_key, self._config.ttl_seconds)
+                await pipe.execute()
 
             logger.debug(
                 f"Added message to session: {session_id}",
@@ -486,7 +448,8 @@ class RedisSessionProvider(BaseSessionProvider):
 
         Args:
             session_id: Session ID.
-            limit: Optional limit on number of messages to retrieve.
+            limit: Number of complete turns (request+response pairs) to retrieve.
+                   Fetches limit*2 raw messages then trims to a clean turn boundary.
 
         Returns:
             List of ChatMessage objects in chronological order.
@@ -513,15 +476,12 @@ class RedisSessionProvider(BaseSessionProvider):
             messages_key = self._get_session_key(session_id)
             message_jsons = await self._redis.lrange(messages_key, 0, -1)
 
-            if not message_jsons:
-                return []
-
             # Parse messages (skip malformed JSON entries gracefully)
             session_messages = []
             for msg_json in message_jsons:
                 try:
                     session_messages.append(SessionMessage.from_dict(json.loads(msg_json)))
-                except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
+                except (json.JSONDecodeError, TypeError, KeyError, ValueError) as parse_err:
                     logger.warning(
                         f"Skipping malformed session message in {session_id}: {parse_err}. "
                         f"Raw preview: {str(msg_json)[:200]}"
@@ -530,18 +490,28 @@ class RedisSessionProvider(BaseSessionProvider):
             # Convert to ChatMessage list
             messages = [sm.message for sm in session_messages]
 
-            # Apply limit if specified
+            # Apply limit if specified. limit is measured in complete turns
+            # (request+response pairs), so fetch limit*2 raw messages.
+            # Then trim to the first user message as a safety net against
+            # any orphaned assistant message from a prior partial save.
             if limit and limit > 0:
-                messages = messages[-limit:]  # Get last N messages
+                sliced = messages[-(limit * 2):]
+                first_user = next(
+                    (i for i, m in enumerate(sliced) if m.role == "user"),
+                    len(sliced),
+                )
+                messages = sliced[first_user:]
 
-            # Update last_accessed_at
+            # Update last_accessed_at and refresh TTL on both keys.
+            # Always done — even when the messages list is empty — so that a
+            # read-heavy session doesn't let the messages list expire while the
+            # metadata key stays alive.
             session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
-            session_metadata.last_accessed_at = datetime.now()
-            await self._redis.setex(
-                metadata_key,
-                self._config.ttl_seconds,
-                json.dumps(session_metadata.to_dict()),
-            )
+            session_metadata.last_accessed_at = datetime.now(UTC)
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(session_metadata.to_dict()))
+                pipe.expire(messages_key, self._config.ttl_seconds)
+                await pipe.execute()
 
             logger.debug(
                 f"Retrieved {len(messages)} messages from session: {session_id}",
@@ -604,6 +574,53 @@ class RedisSessionProvider(BaseSessionProvider):
                 original_error=e,
             ) from e
 
+    @observe(name="session_provider_update_metadata", capture_output=True)
+    async def update_session_metadata(self, session_id: str, metadata: SessionMetadata) -> bool:
+        """
+        Persist updated session metadata and refresh TTLs on both keys.
+
+        Args:
+            session_id: Session ID.
+            metadata: Updated SessionMetadata to persist.
+
+        Returns:
+            True if updated successfully, False if the session does not exist.
+
+        Raises:
+            SessionNotEnabledError: If sessions are disabled.
+            SessionConnectionError: If Redis operation fails.
+        """
+        self._ensure_enabled()
+
+        try:
+            metadata_key = self._get_metadata_key(session_id)
+            messages_key = self._get_session_key(session_id)
+
+            # Only update if the session actually exists
+            if not await self._redis.exists(metadata_key):
+                return False
+
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(metadata.to_dict()))
+                pipe.expire(messages_key, self._config.ttl_seconds)
+                await pipe.execute()
+
+            logger.debug(f"Updated session metadata: {session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update session metadata: {e}")
+            report_error(
+                e,
+                context="session_provider_update_metadata",
+                metadata={"session_id": session_id},
+            )
+            raise SessionConnectionError(
+                f"Failed to update session metadata: {str(e)}",
+                session_id=session_id,
+                original_error=e,
+            ) from e
+
     @observe(name="session_provider_clear", capture_output=True)
     async def clear_session(self, session_id: str) -> bool:
         """
@@ -623,20 +640,21 @@ class RedisSessionProvider(BaseSessionProvider):
 
         try:
             messages_key = self._get_session_key(session_id)
-            await self._redis.delete(messages_key)
-
-            # Reset message count in metadata
             metadata_key = self._get_metadata_key(session_id)
             metadata_json = await self._redis.get(metadata_key)
+
             if metadata_json:
                 session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
                 session_metadata.message_count = 0
-                session_metadata.last_accessed_at = datetime.now()
-                await self._redis.setex(
-                    metadata_key,
-                    self._config.ttl_seconds,
-                    json.dumps(session_metadata.to_dict()),
-                )
+                session_metadata.last_accessed_at = datetime.now(UTC)
+                # Delete messages and update metadata atomically so a concurrent
+                # add_message cannot slip in and leave the count permanently wrong.
+                async with self._redis.pipeline(transaction=True) as pipe:
+                    pipe.delete(messages_key)
+                    pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(session_metadata.to_dict()))
+                    await pipe.execute()
+            else:
+                await self._redis.delete(messages_key)
 
             logger.info(f"Cleared session: {session_id}")
             return True
@@ -674,31 +692,11 @@ class RedisSessionProvider(BaseSessionProvider):
         self._ensure_enabled()
 
         try:
-            # Get session metadata to find user_id and agent_id for mapping cleanup
-            metadata_key = self._get_metadata_key(session_id)
-            metadata_json = await self._redis.get(metadata_key)
-
             messages_key = self._get_session_key(session_id)
+            metadata_key = self._get_metadata_key(session_id)
 
             # Delete session data
             await self._redis.delete(messages_key, metadata_key)
-
-            # Clean up user+agent mapping if metadata exists
-            if metadata_json:
-                try:
-                    metadata = SessionMetadata.from_dict(json.loads(metadata_json))
-                    if metadata.user_id and metadata.agent_id:
-                        mapping_key = self._get_user_agent_session_key(
-                            metadata.user_id, metadata.agent_id
-                        )
-                        # Only delete if it points to this session_id
-                        existing_session_id = await self._redis.get(mapping_key)
-                        if existing_session_id == session_id:
-                            await self._redis.delete(mapping_key)
-                            logger.debug(f"Cleaned up user+agent mapping for session: {session_id}")
-                except Exception as e:
-                    # Don't fail if mapping cleanup fails
-                    logger.debug(f"Could not clean up mapping for session {session_id}: {e}")
 
             logger.info(f"Deleted session: {session_id}")
             return True

@@ -13,6 +13,7 @@ python-dotenv>=1.0.1
 # Memory dependencies
 mem0ai>=1.0.0
 qdrant-client>=1.16.0
+pymilvus>=2.4.0
 
 # Session dependencies
 redis>=5.0.0

@@ -200,7 +200,7 @@ class AgentConfig:
     react_mode: bool = False  # ReAct: appends Thought/Action/Observation template to system prompt
 
     # Session history
-    session_history_limit: int | None = None  # None = use default (50); set to limit turns loaded
+    session_history_turns: int | None = None  # None = use default (20 turns); number of complete request/response pairs to load
 
     # Context requirement
     require_context: bool = False  # if True, skip LLM and return no-knowledge message when no RAG context found
@@ -311,11 +311,13 @@ class SequentialConfig:
 
     pass_full_history: bool = False  # Pass full history vs just output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
+    pipeline_context_max_chars: int | None = 300  # None = no truncation
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "pass_full_history": self.pass_full_history,
             "fail_strategy": self.fail_strategy.value,
+            "pipeline_context_max_chars": self.pipeline_context_max_chars,
         }
 
 

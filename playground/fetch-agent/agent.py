@@ -87,7 +87,7 @@ class FetchAgent:
             try:
                 self._current_session_id = await session_client.get_or_create_session(
                     user_id=self._current_user_id,
-                    agent_id=self.config.agent_name,
+                    conversation_id=self.config.agent_name,
                 )
                 logger.info(f"✓ Session initialized: {self._current_session_id}")
             except Exception as e:
@@ -171,8 +171,8 @@ class FetchAgent:
             store_memories=self.config.enable_memory
             and memory_client is not None
             and memory_client.is_enabled,
-            search_scope=AgentMemoryScope.RUN,
-            store_scope=AgentMemoryScope.RUN,
+            search_scope=AgentMemoryScope.CONVERSATION,
+            store_scope=AgentMemoryScope.CONVERSATION,
         )
 
         self._agent = BaseAgent(
@@ -207,7 +207,30 @@ class FetchAgent:
             logger.error(f"Error processing message: {e}")
             return f"Error: {str(e)}"
 
+    async def get_memories(self, limit: int = 20) -> list[dict]:
+        memory_client = self._container.memory_client if self._container else None
+        if not memory_client or not memory_client.is_enabled:
+            return []
+        try:
+            memories = await memory_client.get_all(
+                user_id=self._current_user_id,
+                conversation_id=self._current_session_id,
+                limit=limit,
+            )
+            return [m.to_dict() for m in memories]
+        except Exception as e:
+            logger.error(f"Failed to get memories: {e}")
+            return []
+
     async def close(self) -> None:
+        # Clean up MCP resources in the current task before lifecycle shutdown,
+        # because lifecycle.shutdown() wraps callbacks in asyncio.gather (new tasks),
+        # which causes anyio's cancel scope to throw a cross-task RuntimeError.
+        if self._mcp_server:
+            try:
+                await self._mcp_server.cleanup()
+            except Exception:
+                pass
         if self._lifecycle:
             await self._lifecycle.shutdown()
             logger.info("✓ Cleanup complete")

@@ -42,7 +42,7 @@ class RunFinalizer:
         context: RunContext,
         run_state: RunState,
         response: AgentResponse,
-        initial_message_count: int,
+        user_message_index: int,
         tool_context_state: Any,
         start_time: float,
         messages: list[dict[str, Any]] | None = None,
@@ -85,7 +85,7 @@ class RunFinalizer:
         _, updated_context_state = self.track_mcp_session(agent, context)
 
         await self.save_session_data(
-            agent, context, initial_message_count,
+            agent, context, user_message_index,
             tool_context_state, updated_context_state, messages,
         )
 
@@ -191,7 +191,7 @@ class RunFinalizer:
         self,
         agent: BaseAgent,
         context: RunContext,
-        initial_message_count: int,
+        user_message_index: int,
         tool_context_state: Any,
         updated_context_state: Any,
         messages: list[dict[str, Any]] | None = None,
@@ -205,7 +205,7 @@ class RunFinalizer:
             await self._session_service.save_messages(
                 agent=agent,
                 messages=messages or [],
-                initial_count=initial_message_count,
+                user_message_index=user_message_index,
                 session_id=original_session_id,
                 trace_id=context.trace_id,
                 tool_execution_summary=context.metadata.get("tool_execution_summary"),

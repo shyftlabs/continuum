@@ -294,8 +294,8 @@ Remember: If the user wants to VIEW the cart, they don't want to ADD anything!
     memory_config = AgentMemoryConfig(
         search_memories=enable_memory and memory_client is not None and memory_client.is_enabled,
         store_memories=enable_memory and memory_client is not None and memory_client.is_enabled,
-        search_scope=AgentMemoryScope.RUN,
-        store_scope=AgentMemoryScope.RUN,
+        search_scope=AgentMemoryScope.CONVERSATION,
+        store_scope=AgentMemoryScope.CONVERSATION,
         search_limit=memory_search_limit,
     )
 

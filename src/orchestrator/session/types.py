@@ -5,7 +5,7 @@ Provides Pydantic models for session management and conversation history.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ class SessionMetadata(BaseModel):
     session_id: str  # UUID string
     user_id: str | None = None
     agent_id: str | None = None
+    conversation_id: str | None = None
     created_at: datetime
     last_accessed_at: datetime
     message_count: int = 0
@@ -30,6 +31,7 @@ class SessionMetadata(BaseModel):
             "session_id": self.session_id,
             "user_id": self.user_id,
             "agent_id": self.agent_id,
+            "conversation_id": self.conversation_id,
             "created_at": self.created_at.isoformat(),
             "last_accessed_at": self.last_accessed_at.isoformat(),
             "message_count": self.message_count,
@@ -43,6 +45,7 @@ class SessionMetadata(BaseModel):
             session_id=data["session_id"],
             user_id=data.get("user_id"),
             agent_id=data.get("agent_id"),
+            conversation_id=data.get("conversation_id"),
             created_at=datetime.fromisoformat(data["created_at"]),
             last_accessed_at=datetime.fromisoformat(data["last_accessed_at"]),
             message_count=data.get("message_count", 0),
@@ -107,10 +110,11 @@ class SessionMessage(BaseModel):
             message = message_data
 
         timestamp_str = data.get("timestamp")
-        if isinstance(timestamp_str, str):
-            timestamp = datetime.fromisoformat(timestamp_str)
-        else:
-            timestamp = datetime.now()
+        if not isinstance(timestamp_str, str):
+            raise ValueError(
+                f"SessionMessage is missing a valid 'timestamp' field: got {timestamp_str!r}"
+            )
+        timestamp = datetime.fromisoformat(timestamp_str)
 
         return cls(
             message=message,

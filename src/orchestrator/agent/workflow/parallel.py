@@ -112,96 +112,114 @@ class ParallelAgent(BaseAgent):
         Returns:
             Merged AgentResponse
         """
-        # Create tasks for all agents
-        tasks = []
-        for agent in self.agents:
-            task = asyncio.create_task(self._run_agent_safe(agent, input_text, runner, context))
-            tasks.append((agent.name, task))
-
-        # Wait for all tasks with timeout
-        results: dict[str, AgentResponse | Exception] = {}
-
+        # Disable sub-agent Redis saves; one clean pair is saved at the end.
+        _orig_log = {a.name: a.config.log_to_session for a in self.agents}
+        for a in self.agents:
+            a.config.log_to_session = False
         try:
-            done, pending = await asyncio.wait(
-                [t for _, t in tasks],
-                timeout=self.parallel_config.timeout,
-                return_when=asyncio.ALL_COMPLETED,
-            )
+            # Create tasks for all agents
+            tasks = []
+            for agent in self.agents:
+                task = asyncio.create_task(self._run_agent_safe(agent, input_text, runner, context))
+                tasks.append((agent.name, task))
 
-            # Cancel pending tasks
-            for task in pending:
-                task.cancel()
+            # Wait for all tasks with timeout
+            results: dict[str, AgentResponse | Exception] = {}
 
-            # Collect results
-            for agent_name, task in tasks:
-                if task.done():
-                    try:
-                        results[agent_name] = task.result()
-                    except Exception as e:
-                        results[agent_name] = e
+            try:
+                done, pending = await asyncio.wait(
+                    [t for _, t in tasks],
+                    timeout=self.parallel_config.timeout,
+                    return_when=asyncio.ALL_COMPLETED,
+                )
+
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+
+                # Collect results
+                for agent_name, task in tasks:
+                    if task.done():
+                        try:
+                            results[agent_name] = task.result()
+                        except Exception as e:
+                            results[agent_name] = e
+                    else:
+                        results[agent_name] = TimeoutError("Task timed out")
+
+            except Exception as e:
+                logger.error(f"Parallel execution failed: {e}")
+                raise ParallelWorkflowError(
+                    f"Parallel execution failed: {e}",
+                    run_id=context.run_id,
+                    original_error=e,
+                ) from e
+
+            # Process results
+            successful: dict[str, AgentResponse] = {}
+            failed: dict[str, str] = {}
+
+            for agent_name, result in results.items():
+                if isinstance(result, AgentResponse):
+                    successful[agent_name] = result
                 else:
-                    results[agent_name] = TimeoutError("Task timed out")
+                    failed[agent_name] = str(result)
 
-        except Exception as e:
-            logger.error(f"Parallel execution failed: {e}")
-            raise ParallelWorkflowError(
-                f"Parallel execution failed: {e}",
-                run_id=context.run_id,
-                original_error=e,
-            ) from e
+            # Handle failures based on strategy
+            if failed:
+                if self.parallel_config.fail_strategy == FailStrategy.REQUIRE_ALL:
+                    raise ParallelWorkflowError(
+                        f"Some agents failed: {list(failed.keys())}",
+                        failed_agents=list(failed.keys()),
+                        run_id=context.run_id,
+                    )
+                elif self.parallel_config.fail_strategy == FailStrategy.FAIL_FAST and not successful:
+                    raise ParallelWorkflowError(
+                        "All agents failed",
+                        failed_agents=list(failed.keys()),
+                        run_id=context.run_id,
+                    )
 
-        # Process results
-        successful: dict[str, AgentResponse] = {}
-        failed: dict[str, str] = {}
-
-        for agent_name, result in results.items():
-            if isinstance(result, AgentResponse):
-                successful[agent_name] = result
-            else:
-                failed[agent_name] = str(result)
-
-        # Handle failures based on strategy
-        if failed:
-            if self.parallel_config.fail_strategy == FailStrategy.REQUIRE_ALL:
-                raise ParallelWorkflowError(
-                    f"Some agents failed: {list(failed.keys())}",
-                    failed_agents=list(failed.keys()),
-                    run_id=context.run_id,
-                )
-            elif self.parallel_config.fail_strategy == FailStrategy.FAIL_FAST and not successful:
-                raise ParallelWorkflowError(
-                    "All agents failed",
-                    failed_agents=list(failed.keys()),
-                    run_id=context.run_id,
+            if not successful:
+                return AgentResponse(
+                    content="All parallel agents failed",
+                    agent_name=self.name,
+                    status=ResponseStatus.ERROR,
+                    error="; ".join(f"{k}: {v}" for k, v in failed.items()),
                 )
 
-        if not successful:
-            return AgentResponse(
-                content="All parallel agents failed",
-                agent_name=self.name,
-                status=ResponseStatus.ERROR,
-                error="; ".join(f"{k}: {v}" for k, v in failed.items()),
+            # Merge results
+            merged = await self._merge_results(
+                successful,
+                input_text,
+                llm_client,
             )
 
-        # Merge results
-        merged = await self._merge_results(
-            successful,
-            input_text,
-            llm_client,
-        )
+            # Calculate totals
+            total_usage = TokenUsage()
+            for resp in successful.values():
+                total_usage = total_usage.add(resp.usage)
 
-        # Calculate totals
-        total_usage = TokenUsage()
-        for resp in successful.values():
-            total_usage = total_usage.add(resp.usage)
+            result = AgentResponse(
+                content=merged,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS,
+                usage=total_usage,
+                agents_used=list(successful.keys()),
+            )
 
-        return AgentResponse(
-            content=merged,
-            agent_name=self.name,
-            status=ResponseStatus.SUCCESS,
-            usage=total_usage,
-            agents_used=list(successful.keys()),
-        )
+            if context.session_id:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=merged,
+                    agent=None,
+                )
+
+            return result
+        finally:
+            for a in self.agents:
+                a.config.log_to_session = _orig_log[a.name]
 
     async def _run_agent_safe(
         self,

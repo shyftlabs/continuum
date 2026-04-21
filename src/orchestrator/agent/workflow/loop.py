@@ -112,96 +112,114 @@ class LoopAgent(BaseAgent):
         Returns:
             Final AgentResponse
         """
-        current_input = input_text
-        iteration = 0
-        all_responses: list[AgentResponse] = []
-        total_usage = TokenUsage()
-        iteration_history: list[dict[str, Any]] = []
+        # Disable inner agent Redis saves; one clean pair is saved at the end.
+        _orig_log = self.agent.config.log_to_session
+        _orig_hist = self.agent.config.session_history_turns
+        self.agent.config.log_to_session = False
+        try:
+            current_input = input_text
+            iteration = 0
+            all_responses: list[AgentResponse] = []
+            total_usage = TokenUsage()
+            iteration_history: list[dict[str, Any]] = []
 
-        while iteration < self.termination.max_iterations:
-            iteration += 1
+            while iteration < self.termination.max_iterations:
+                iteration += 1
 
-            logger.info(
-                f"Loop iteration {iteration}/{self.termination.max_iterations}",
-                extra={"run_id": context.run_id, "iteration": iteration},
+                logger.info(
+                    f"Loop iteration {iteration}/{self.termination.max_iterations}",
+                    extra={"run_id": context.run_id, "iteration": iteration},
+                )
+
+                try:
+                    # Execute agent
+                    response = await runner.run(
+                        agent=self.agent,
+                        input=current_input,
+                        context=context,
+                    )
+
+                    all_responses.append(response)
+                    total_usage = total_usage.add(response.usage)
+
+                    # History only needed on iteration 1 — it doesn't change between
+                    # iterations (writes are blocked), so skip it from iteration 2 onwards.
+                    if iteration == 1:
+                        self.agent.config.session_history_turns = 0
+
+                    # Track iteration
+                    iteration_history.append(
+                        {
+                            "iteration": iteration,
+                            "input": current_input[:500],
+                            "output": (response.content or "")[:500],
+                        }
+                    )
+
+                    # Check termination
+                    should_terminate = await self._check_termination(
+                        response=response,
+                        iteration=iteration,
+                        history=iteration_history,
+                        llm_client=llm_client,
+                    )
+
+                    if should_terminate:
+                        logger.info(f"Loop terminated at iteration {iteration}")
+                        break
+
+                    # Prepare next iteration input
+                    current_input = self._build_next_input(
+                        original_input=input_text,
+                        last_output=response.content,
+                        iteration=iteration,
+                    )
+
+                except Exception as e:
+                    logger.error(f"Loop iteration {iteration} failed: {e}")
+                    raise LoopWorkflowError(
+                        f"Iteration {iteration} failed: {e}",
+                        iteration=iteration,
+                        run_id=context.run_id,
+                        original_error=e,
+                    ) from e
+
+            else:
+                # Max iterations reached without termination
+                if iteration >= self.termination.max_iterations:
+                    logger.warning(f"Loop reached max iterations ({self.termination.max_iterations})")
+
+            # Return final response
+            final_response = (
+                all_responses[-1]
+                if all_responses
+                else AgentResponse(
+                    content="No iterations completed",
+                    status=ResponseStatus.ERROR,
+                )
             )
 
-            try:
-                # Execute agent
-                response = await runner.run(
-                    agent=self.agent,
-                    input=current_input,
-                    context=context,
-                )
-
-                all_responses.append(response)
-                total_usage = total_usage.add(response.usage)
-
-                # Track iteration
-                iteration_history.append(
-                    {
-                        "iteration": iteration,
-                        "input": current_input[:500],
-                        "output": response.content[:500],
-                    }
-                )
-
-                # Check termination
-                should_terminate = await self._check_termination(
-                    response=response,
-                    iteration=iteration,
-                    history=iteration_history,
-                    llm_client=llm_client,
-                )
-
-                if should_terminate:
-                    logger.info(f"Loop terminated at iteration {iteration}")
-                    break
-
-                # Prepare next iteration input
-                current_input = self._build_next_input(
-                    original_input=input_text,
-                    last_output=response.content,
-                    iteration=iteration,
-                )
-
-            except Exception as e:
-                logger.error(f"Loop iteration {iteration} failed: {e}")
-                raise LoopWorkflowError(
-                    f"Iteration {iteration} failed: {e}",
-                    iteration=iteration,
-                    run_id=context.run_id,
-                    original_error=e,
-                ) from e
-
-        else:
-            # Max iterations reached without termination
-            if iteration >= self.termination.max_iterations:
-                logger.warning(f"Loop reached max iterations ({self.termination.max_iterations})")
-
-        # Return final response
-        final_response = (
-            all_responses[-1]
-            if all_responses
-            else AgentResponse(
-                content="No iterations completed",
-                status=ResponseStatus.ERROR,
+            result = AgentResponse(
+                content=final_response.content,
+                structured_output=final_response.structured_output,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS if all_responses else ResponseStatus.ERROR,
+                usage=total_usage,
+                turn_count=iteration,
             )
-        )
 
-        return AgentResponse(
-            content=final_response.content,
-            structured_output=final_response.structured_output,
-            agent_name=self.name,
-            status=ResponseStatus.SUCCESS if all_responses else ResponseStatus.ERROR,
-            usage=total_usage,
-            turn_count=iteration,
-            metadata={
-                "iterations": iteration,
-                "max_iterations": self.termination.max_iterations,
-                "iteration_history": iteration_history,
-            },
-        )
+            if context.session_id and all_responses:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=final_response.content or "",
+                    agent=None,
+                )
+
+            return result
+        finally:
+            self.agent.config.log_to_session = _orig_log
+            self.agent.config.session_history_turns = _orig_hist
 
     async def _check_termination(
         self,

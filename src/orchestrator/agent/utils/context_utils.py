@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 def create_run_context(
     run_id: str | None = None,
     session_id: str | None = None,
+    conversation_id: str | None = None,
     user_id: str | None = None,
     trace_id: str | None = None,
     max_turns: int = 25,
@@ -26,6 +27,7 @@ def create_run_context(
     Args:
         run_id: Optional run ID (generated if not provided)
         session_id: Optional session ID
+        conversation_id: Optional conversation ID (chat window ID from caller)
         user_id: Optional user ID
         trace_id: Optional trace ID
         max_turns: Maximum conversation turns
@@ -40,6 +42,7 @@ def create_run_context(
     return RunContext(
         run_id=run_id or generate_run_id(),
         session_id=session_id,
+        conversation_id=conversation_id,
         user_id=user_id,
         trace_id=trace_id,
         max_turns=max_turns,

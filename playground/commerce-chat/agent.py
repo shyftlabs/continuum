@@ -132,7 +132,7 @@ class PetcoRetailAgent:
             try:
                 self._current_session_id = await session_client.get_or_create_session(
                     user_id=self._current_user_id,
-                    agent_id=self.config.agent_name,
+                    conversation_id=self.config.agent_name,
                 )
                 logger.info(f"✓ Session initialized: {self._current_session_id}")
             except Exception as e:
@@ -266,8 +266,8 @@ class PetcoRetailAgent:
             store_memories=self.config.enable_memory
             and memory_client is not None
             and memory_client.is_enabled,
-            search_scope=AgentMemoryScope.RUN,  # Session-level isolation (per chat)
-            store_scope=AgentMemoryScope.RUN,  # Session-level isolation (per chat)
+            search_scope=AgentMemoryScope.CONVERSATION,  # Session-level isolation (per chat)
+            store_scope=AgentMemoryScope.CONVERSATION,  # Session-level isolation (per chat)
             search_limit=self.config.memory_search_limit,
         )
 

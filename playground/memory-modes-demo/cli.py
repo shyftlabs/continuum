@@ -66,6 +66,7 @@ def print_memory_info(info: dict[str, Any]) -> None:
     print(f"  Isolation Mode: {info.get('isolation_mode', 'unknown')}")
     print(f"  Enabled: {info.get('is_enabled', False)}")
     print(f"  Provider: {info.get('provider', 'unknown')}")
+    print(f"  Vector Store: {info.get('vector_store_provider', 'unknown')}")
     print(
         f"  Embedder: {info.get('embedder_provider', 'unknown')}/{info.get('embedder_model', 'unknown')}"
     )
@@ -109,6 +110,7 @@ def print_help() -> None:
     print("  /search <query>     - Search memories")
     print("  /list               - List all memories for current scope")
     print("  /delete-all         - Delete all memories for current scope")
+    print("  /history            - Show session chat history (Redis)")
     print()
 
     print("Context Commands:")
@@ -223,6 +225,19 @@ async def main():
                 elif cmd == "/list":
                     memories = await agent.get_all_memories()
                     print_memories(memories)
+
+                # Session history
+                elif cmd == "/history":
+                    messages = await agent.get_session_history()
+                    if not messages:
+                        print_info("No session history (session may be disabled or empty).")
+                    else:
+                        print_section(f"Session History ({len(messages)} messages)")
+                        for m in messages:
+                            role = m["role"].upper()
+                            content = m["content"][:120] + "..." if len(m["content"]) > 120 else m["content"]
+                            print(f"  [{role}] {content}")
+                        print()
 
                 # Delete all memories
                 elif cmd == "/delete-all":

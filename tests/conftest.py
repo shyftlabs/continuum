@@ -101,6 +101,32 @@ def real_qdrant():
 
 
 # ---------------------------------------------------------------------------
+# Real Milvus client (requires Milvus on port 19530)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_milvus():
+    """Real Milvus client connected to the local container."""
+    try:
+        from pymilvus import MilvusClient
+    except ImportError:
+        pytest.skip("pymilvus not installed")
+
+    uri = os.getenv("MILVUS_URI", "http://localhost:19530")
+    token = os.getenv("MILVUS_TOKEN", "")
+
+    try:
+        client = MilvusClient(uri=uri, token=token)
+        client.list_collections()
+    except Exception:
+        pytest.skip("Milvus not available at " + uri)
+
+    yield client
+    client.close()
+
+
+# ---------------------------------------------------------------------------
 # Real LLM client
 # ---------------------------------------------------------------------------
 

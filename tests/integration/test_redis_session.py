@@ -41,7 +41,6 @@ class TestRedisSessionIntegration:
         sid = await session_provider.get_or_create_session(
             session_id=f"test-sess-{test_id}",
             user_id="user-1",
-            agent_id="agent-1",
         )
         assert sid == f"test-sess-{test_id}"
 
@@ -70,7 +69,6 @@ class TestRedisSessionIntegration:
         sid = await session_provider.get_or_create_session(
             session_id=f"meta-sess-{test_id}",
             user_id="user-meta",
-            agent_id="agent-meta",
         )
         metadata = await session_provider.get_session_metadata(sid)
         assert metadata is not None

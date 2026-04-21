@@ -193,7 +193,7 @@ class MemoryClient:
         self,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> MemoryScope:
         """
         Build a MemoryScope from identifiers based on isolation mode.
@@ -201,7 +201,7 @@ class MemoryClient:
         Args:
             user_id: User identifier
             agent_id: Agent identifier
-            run_id: Run/session identifier
+            conversation_id: Conversation identifier
 
         Returns:
             MemoryScope configured for the current isolation mode.
@@ -213,7 +213,7 @@ class MemoryClient:
                 mode=mode,
                 user_id=user_id,
                 agent_id=agent_id,
-                run_id=run_id,
+                conversation_id=conversation_id,
             )
         except ValueError as e:
             raise MemoryIdentifierError(
@@ -232,7 +232,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: MemoryMetadata | dict[str, Any] | None = None,
         custom_prompt: str | None = None,
         infer: bool = True,
@@ -244,7 +244,7 @@ class MemoryClient:
             messages: Message(s) to extract memories from
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             metadata: Additional metadata for the memories
             custom_prompt: Custom prompt for fact extraction
 
@@ -254,7 +254,7 @@ class MemoryClient:
         self._ensure_enabled()
 
         # Build scope from identifiers
-        scope = self._build_scope(user_id, agent_id, run_id)
+        scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
 
         # Convert metadata if needed
@@ -277,7 +277,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -288,7 +288,7 @@ class MemoryClient:
             query: Search query text
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             limit: Maximum results to return
             filters: Additional metadata filters (provider-specific)
 
@@ -297,7 +297,7 @@ class MemoryClient:
         """
         self._ensure_enabled()
 
-        scope = self._build_scope(user_id, agent_id, run_id)
+        scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
         search_limit = limit or self._config.search_limit
 
@@ -342,7 +342,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """
@@ -351,7 +351,7 @@ class MemoryClient:
         Args:
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             limit: Maximum memories to return
 
         Returns:
@@ -359,7 +359,7 @@ class MemoryClient:
         """
         self._ensure_enabled()
 
-        scope = self._build_scope(user_id, agent_id, run_id)
+        scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
 
         return await self._provider.get_all(**identifiers, limit=limit)
@@ -382,7 +382,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """
         Delete all memories for the specified scope.
@@ -390,14 +390,14 @@ class MemoryClient:
         Args:
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
 
         Returns:
             True if deleted successfully.
         """
         self._ensure_enabled()
 
-        scope = self._build_scope(user_id, agent_id, run_id)
+        scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
 
         return await self._provider.delete_all(**identifiers)
@@ -476,9 +476,10 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: MemoryMetadata | dict[str, Any] | None = None,
         custom_prompt: str | None = None,
+        infer: bool = True,
     ) -> MemoryAddResult:
         """Synchronous version of add()."""
         return self._run_sync(
@@ -486,9 +487,10 @@ class MemoryClient:
                 messages,
                 user_id=user_id,
                 agent_id=agent_id,
-                run_id=run_id,
+                conversation_id=conversation_id,
                 metadata=metadata,
                 custom_prompt=custom_prompt,
+                infer=infer,
             )
         )
 
@@ -498,7 +500,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -508,7 +510,7 @@ class MemoryClient:
                 query,
                 user_id=user_id,
                 agent_id=agent_id,
-                run_id=run_id,
+                conversation_id=conversation_id,
                 limit=limit,
                 filters=filters,
             )
@@ -523,7 +525,7 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """Synchronous version of get_all()."""
@@ -531,7 +533,7 @@ class MemoryClient:
             self.get_all(
                 user_id=user_id,
                 agent_id=agent_id,
-                run_id=run_id,
+                conversation_id=conversation_id,
                 limit=limit,
             )
         )
@@ -545,14 +547,14 @@ class MemoryClient:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """Synchronous version of delete_all()."""
         return self._run_sync(
             self.delete_all(
                 user_id=user_id,
                 agent_id=agent_id,
-                run_id=run_id,
+                conversation_id=conversation_id,
             )
         )
 

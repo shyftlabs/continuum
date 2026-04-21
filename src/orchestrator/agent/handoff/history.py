@@ -131,11 +131,13 @@ class HistorySummarizer:
             # Use LLM for summarization
             summary_prompt = self._build_summary_prompt(messages)
 
+            from orchestrator.llm.config import LLMConfig
             from orchestrator.llm.types import ChatMessage
 
+            llm_config = LLMConfig(model=model) if model else None
             response = await llm_client.chat(
                 messages=[ChatMessage(role="user", content=summary_prompt)],
-                config={"model": model} if model else None,
+                config=llm_config,
             )
 
             return [

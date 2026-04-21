@@ -145,7 +145,7 @@ class MemoryModesDemoAgent:
             try:
                 self._current_session_id = await session_client.get_or_create_session(
                     user_id=self._current_user_id,
-                    agent_id=self._current_agent_id,
+                    conversation_id=self._current_agent_id,
                 )
                 logger.info(f"✓ Session: {self._current_session_id[:8]}...")
             except Exception as e:
@@ -170,9 +170,15 @@ class MemoryModesDemoAgent:
             store_memories=self.config.enable_memory
             and memory_client is not None
             and memory_client.is_enabled,
-            search_scope=AgentMemoryScope.RUN,
-            store_scope=AgentMemoryScope.RUN,
+            search_scope=AgentMemoryScope.CONVERSATION,
+            store_scope=AgentMemoryScope.CONVERSATION,
             search_limit=self.config.memory_search_limit,
+            extraction_prompt=(
+                "Extract ONLY facts that the USER explicitly stated about themselves: "
+                "preferences, personal details, goals, or opinions they expressed. "
+                "Do NOT extract anything the assistant said, and do NOT extract meta-questions "
+                "about how the system works. Return an empty list if there are no user facts."
+            ),
         )
 
         # Create agent
@@ -215,6 +221,7 @@ class MemoryModesDemoAgent:
                 input=message,
                 session_id=self._current_session_id,
                 user_id=self._current_user_id,
+                conversation_id=self._current_agent_id,
             )
             return response.content or ""
         except Exception as e:
@@ -251,7 +258,7 @@ class MemoryModesDemoAgent:
                 content,
                 user_id=self._current_user_id,
                 agent_id=self._current_agent_id,
-                run_id=self._current_session_id,
+                conversation_id=self._current_agent_id,
                 metadata=metadata,
                 custom_prompt=custom_prompt,
             )
@@ -285,7 +292,7 @@ class MemoryModesDemoAgent:
                 query,
                 user_id=self._current_user_id,
                 agent_id=self._current_agent_id,
-                run_id=self._current_session_id,
+                conversation_id=self._current_agent_id,
                 limit=limit,
             )
             logger.info(f"Search found {result.total_results} memories")
@@ -311,7 +318,7 @@ class MemoryModesDemoAgent:
             memories = await self.memory_client.get_all(
                 user_id=self._current_user_id,
                 agent_id=self._current_agent_id,
-                run_id=self._current_session_id,
+                conversation_id=self._current_agent_id,
                 limit=limit,
             )
             return [m.to_dict() for m in memories]
@@ -328,11 +335,22 @@ class MemoryModesDemoAgent:
             return await self.memory_client.delete_all(
                 user_id=self._current_user_id,
                 agent_id=self._current_agent_id,
-                run_id=self._current_session_id,
+                conversation_id=self._current_agent_id,
             )
         except Exception as e:
             logger.error(f"Failed to delete memories: {e}")
             return False
+
+    async def get_session_history(self) -> list[dict]:
+        session_client = self._container.session_client if self._container else None
+        if not session_client or not session_client.is_enabled or not self._current_session_id:
+            return []
+        try:
+            messages = await session_client.get_conversation_history(self._current_session_id)
+            return [{"role": m.role, "content": m.content} for m in messages]
+        except Exception as e:
+            logger.error(f"Failed to get session history: {e}")
+            return []
 
     # =========================================================================
     # User/Agent/Session Management
@@ -356,7 +374,7 @@ class MemoryModesDemoAgent:
                 self._current_session_id = (
                     await self._container.session_client.get_or_create_session(
                         user_id=self._current_user_id,
-                        agent_id=self._current_agent_id,
+                        conversation_id=self._current_agent_id,
                     )
                 )
                 logger.info(f"Switched user: {old_user} -> {self._current_user_id}")
@@ -383,7 +401,7 @@ class MemoryModesDemoAgent:
                 self._current_session_id = (
                     await self._container.session_client.get_or_create_session(
                         user_id=self._current_user_id,
-                        agent_id=self._current_agent_id,
+                        conversation_id=self._current_agent_id,
                     )
                 )
                 logger.info(f"Switched agent: {old_agent} -> {self._current_agent_id}")
@@ -405,12 +423,10 @@ class MemoryModesDemoAgent:
             and self._container.session_client.is_enabled
         ):
             try:
-                # Force new session
-                self._current_session_id = f"session-{generate_run_id()}"
                 self._current_session_id = (
                     await self._container.session_client.get_or_create_session(
                         user_id=self._current_user_id,
-                        agent_id=self._current_agent_id,
+                        conversation_id=self._current_agent_id,
                     )
                 )
                 logger.info(
@@ -436,7 +452,8 @@ class MemoryModesDemoAgent:
         return {
             "isolation_mode": config.memory_isolation,
             "is_enabled": self.memory_client.is_enabled,
-            "provider": config.provider,  # Now from config
+            "provider": config.provider,
+            "vector_store_provider": config.vector_store_provider,
             "embedder_provider": config.embedder_provider,
             "embedder_model": config.embedder_model,
             "embedding_dims": config.embedding_dims,

@@ -43,7 +43,7 @@ class BaseSessionProvider(ABC):
         self,
         session_id: str | None = None,
         user_id: str | None = None,
-        agent_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         """
         Get existing session or create a new one.
@@ -51,7 +51,7 @@ class BaseSessionProvider(ABC):
         Args:
             session_id: Optional session ID. If not provided, generates a new UUID.
             user_id: Optional user identifier.
-            agent_id: Optional agent identifier.
+            conversation_id: Optional conversation identifier (chat window ID from caller).
 
         Returns:
             Session ID (existing or newly created).
@@ -130,6 +130,23 @@ class BaseSessionProvider(ABC):
 
         Returns:
             True if deleted successfully.
+        """
+        ...
+
+    @abstractmethod
+    async def update_session_metadata(self, session_id: str, metadata: SessionMetadata) -> bool:
+        """
+        Persist updated session metadata.
+
+        Implementations must refresh the TTL on both the metadata key and the
+        messages list key so they stay in sync.
+
+        Args:
+            session_id: Session ID.
+            metadata: Updated SessionMetadata to persist.
+
+        Returns:
+            True if updated successfully, False if the session does not exist.
         """
         ...
 

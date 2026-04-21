@@ -68,7 +68,7 @@ async def get_or_create_user_session(user_id: str) -> str:
     if session_client and session_client.is_enabled:
         session_id = await session_client.get_or_create_session(
             user_id=user_id,
-            agent_id="petco-multi-agent",
+            conversation_id="petco-multi-agent",
         )
         logger.info(f"✓ Session: {session_id[:8]}... for user {user_id}")
         return session_id
@@ -342,7 +342,7 @@ async def chat_stream(request: ChatRequest):
                 try:
                     effective_session_id = await session_client.get_or_create_session(
                         user_id=user_id,
-                        agent_id="petco-multi-agent",
+                        conversation_id="petco-multi-agent",
                     )
                     logger.info(
                         f"✓ Using session for user {user_id}: {effective_session_id[:8]}..."

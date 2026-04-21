@@ -104,9 +104,13 @@ class HealthCheck:
         self._register_default_checks()
 
     def _register_default_checks(self) -> None:
-        """Register default health checks."""
+        """Register default health checks based on configuration."""
         self._checks["redis"] = self._check_redis
-        self._checks["qdrant"] = self._check_qdrant
+        # Use configured vector store provider instead of always Qdrant
+        if settings.vector_store_provider == "milvus":
+            self._checks["milvus"] = self._check_milvus
+        else:
+            self._checks["qdrant"] = self._check_qdrant
         self._checks["langfuse"] = self._check_langfuse
         self._checks["llm"] = self._check_llm
         self._checks["temporal"] = self._check_temporal
@@ -272,8 +276,15 @@ class HealthCheck:
                 },
             )
 
+    async def check_vector_store(self) -> HealthCheckResult:
+        """Check vector store connectivity (dispatches to configured provider)."""
+        if settings.vector_store_provider == "milvus":
+            return await self._check_milvus()
+        return await self._check_qdrant()
+
+    # Keep old name as alias so existing callers don't break
     async def check_qdrant(self) -> HealthCheckResult:
-        """Check Qdrant connectivity."""
+        """Check Qdrant connectivity (legacy alias — use check_vector_store)."""
         return await self._check_qdrant()
 
     async def _check_qdrant(self) -> HealthCheckResult:
@@ -291,7 +302,6 @@ class HealthCheck:
         try:
             from qdrant_client import QdrantClient
 
-            # Run sync client in thread to not block
             def _check():
                 client = QdrantClient(
                     host=settings.qdrant_host,
@@ -299,12 +309,10 @@ class HealthCheck:
                     api_key=settings.qdrant_api_key or None,
                     timeout=5,
                 )
-                # Get collections to verify connection
                 collections = client.get_collections()
                 return len(collections.collections)
 
             collection_count = await asyncio.to_thread(_check)
-
             latency = (time.time() - start_time) * 1000
 
             return HealthCheckResult(
@@ -336,6 +344,69 @@ class HealthCheck:
                 details={
                     "host": settings.qdrant_host,
                     "port": settings.qdrant_port,
+                    "error": str(e),
+                },
+            )
+
+    async def check_milvus(self) -> HealthCheckResult:
+        """Check Milvus connectivity."""
+        return await self._check_milvus()
+
+    async def _check_milvus(self) -> HealthCheckResult:
+        """Internal Milvus health check."""
+        start_time = time.time()
+
+        if not settings.memory_enabled:
+            return HealthCheckResult(
+                name="milvus",
+                status=HealthStatus.HEALTHY,
+                message="Milvus disabled (MEMORY_ENABLED=false)",
+                details={"enabled": False},
+            )
+
+        try:
+            from pymilvus import MilvusClient
+
+            uri = f"http://{settings.milvus_host}:{settings.milvus_port}"
+
+            def _check():
+                client = MilvusClient(uri=uri, token=settings.milvus_token or "")
+                collections = client.list_collections()
+                client.close()
+                return len(collections)
+
+            collection_count = await asyncio.to_thread(_check)
+            latency = (time.time() - start_time) * 1000
+
+            return HealthCheckResult(
+                name="milvus",
+                status=HealthStatus.HEALTHY,
+                message="Milvus connection successful",
+                latency_ms=latency,
+                details={
+                    "enabled": True,
+                    "host": settings.milvus_host,
+                    "port": settings.milvus_port,
+                    "collection_count": collection_count,
+                },
+            )
+
+        except ImportError:
+            return HealthCheckResult(
+                name="milvus",
+                status=HealthStatus.UNHEALTHY,
+                message="pymilvus package not installed. Run: pip install pymilvus",
+            )
+        except Exception as e:
+            latency = (time.time() - start_time) * 1000
+            return HealthCheckResult(
+                name="milvus",
+                status=HealthStatus.UNHEALTHY,
+                message=f"Milvus connection failed: {str(e)}",
+                latency_ms=latency,
+                details={
+                    "host": settings.milvus_host,
+                    "port": settings.milvus_port,
                     "error": str(e),
                 },
             )

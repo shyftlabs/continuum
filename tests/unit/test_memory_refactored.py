@@ -51,7 +51,7 @@ class TestMemoryScope:
         scope = MemoryScope.shared()
         assert scope.agent_id == "shared"
         assert scope.user_id is None
-        assert scope.run_id is None
+        assert scope.conversation_id is None
         assert scope.to_identifiers() == {"agent_id": "shared"}
     
     def test_user_scope(self):
@@ -60,7 +60,7 @@ class TestMemoryScope:
         scope = MemoryScope.user("user-123")
         assert scope.user_id == "user-123"
         assert scope.agent_id is None
-        assert scope.run_id is None
+        assert scope.conversation_id is None
         assert scope.to_identifiers() == {"user_id": "user-123"}
     
     def test_agent_scope(self):
@@ -69,17 +69,17 @@ class TestMemoryScope:
         scope = MemoryScope.agent("agent-456")
         assert scope.agent_id == "agent-456"
         assert scope.user_id is None
-        assert scope.run_id is None
+        assert scope.conversation_id is None
         assert scope.to_identifiers() == {"agent_id": "agent-456"}
     
-    def test_run_scope(self):
-        """Test creating run scope."""
-        logger.info("Test creating run scope")
-        scope = MemoryScope.run("run-789")
-        assert scope.run_id == "run-789"
+    def test_conversation_scope(self):
+        """Test creating conversation scope."""
+        logger.info("Test creating conversation scope")
+        scope = MemoryScope.conversation("conv-789")
+        assert scope.conversation_id == "conv-789"
         assert scope.user_id is None
         assert scope.agent_id is None
-        assert scope.to_identifiers() == {"run_id": "run-789"}
+        assert scope.to_identifiers() == {"conversation_id": "conv-789"}
     
     def test_from_isolation_mode_shared(self):
         """Test creating scope from shared isolation mode."""
@@ -94,12 +94,12 @@ class TestMemoryScope:
             "user",
             user_id="user-123",
             agent_id="agent-456",
-            run_id="run-789",
+            conversation_id="conv-789",
         )
         assert scope.user_id == "user-123"
         # Other identifiers are not set in the scope
         assert scope.agent_id is None
-        assert scope.run_id is None
+        assert scope.conversation_id is None
     
     def test_from_isolation_mode_missing_identifier(self):
         """Test error when required identifier is missing."""
@@ -110,8 +110,8 @@ class TestMemoryScope:
         with pytest.raises(ValueError, match="agent_id.*required"):
             MemoryScope.from_isolation_mode("agent")
         
-        with pytest.raises(ValueError, match="run_id.*required"):
-            MemoryScope.from_isolation_mode("run")
+        with pytest.raises(ValueError, match="conversation_id.*required"):
+            MemoryScope.from_isolation_mode("conversation")
     
     def test_from_identifiers(self):
         """Test creating scope from explicit identifiers."""
@@ -119,15 +119,15 @@ class TestMemoryScope:
         scope = MemoryScope.from_identifiers(
             user_id="user-123",
             agent_id="agent-456",
-            run_id="run-789",
+            conversation_id="conv-789",
         )
         assert scope.user_id == "user-123"
         assert scope.agent_id == "agent-456"
-        assert scope.run_id == "run-789"
+        assert scope.conversation_id == "conv-789"
         assert scope.to_identifiers() == {
             "user_id": "user-123",
             "agent_id": "agent-456",
-            "run_id": "run-789",
+            "conversation_id": "conv-789",
         }
     
     def test_to_metadata(self):
@@ -186,8 +186,10 @@ class TestMemoryConfig:
         """Test default configuration."""
         logger.info("Test default configuration")
         config = MemoryConfig(enabled=False)
-        assert config.vector_store_provider == "qdrant"
-        assert config.memory_isolation in ["shared", "user", "agent", "run"]
+        # vector_store_provider defaults from settings (environment-dependent),
+        # so just verify it's one of the valid options
+        assert config.vector_store_provider in ("qdrant", "milvus")
+        assert config.memory_isolation in ["shared", "user", "agent", "conversation"]
     
     def test_is_configured_disabled(self):
         """Test is_configured when disabled."""
@@ -200,6 +202,7 @@ class TestMemoryConfig:
         logger.info("Test is_configured with missing fields")
         config = MemoryConfig(
             enabled=True,
+            vector_store_provider="qdrant",
             qdrant_host="",
             memory_llm_model="gpt-4o-mini",
             embedder_model="text-embedding-3-small",
@@ -224,6 +227,7 @@ class TestMemoryConfig:
         logger.info("Test conversion to mem0 config format")
         config = MemoryConfig(
             enabled=True,
+            vector_store_provider="qdrant",
             qdrant_host="localhost",
             qdrant_port=6333,
             qdrant_collection="test_collection",
@@ -246,6 +250,84 @@ class TestMemoryConfig:
         assert mem0_config["vector_store"]["provider"] == "qdrant"
         assert mem0_config["vector_store"]["config"]["host"] == "localhost"
         assert mem0_config["vector_store"]["config"]["port"] == 6333
+    
+    def test_is_configured_missing_fields_milvus(self):
+        """Test is_configured with missing milvus fields."""
+        logger.info("Test is_configured with missing milvus fields")
+        config = MemoryConfig(
+            enabled=True,
+            vector_store_provider="milvus",
+            milvus_host="",
+            memory_llm_model="gpt-4o-mini",
+            embedder_model="text-embedding-3-small",
+            embedding_dims=1536,
+        )
+        assert not config.is_configured()
+    
+    def test_is_configured_complete_milvus(self):
+        """Test is_configured with complete milvus config."""
+        logger.info("Test is_configured with complete milvus config")
+        config = MemoryConfig(
+            enabled=True,
+            vector_store_provider="milvus",
+            milvus_host="localhost",
+            milvus_port=19530,
+            memory_llm_model="gpt-4o-mini",
+            embedder_model="text-embedding-3-small",
+            embedding_dims=1536,
+        )
+        assert config.is_configured()
+    
+    def test_to_mem0_config_milvus(self):
+        """Test conversion to mem0 config format with milvus."""
+        logger.info("Test conversion to mem0 config format with milvus")
+        config = MemoryConfig(
+            enabled=True,
+            vector_store_provider="milvus",
+            milvus_host="localhost",
+            milvus_port=19530,
+            milvus_collection="test_collection",
+            memory_llm_model="gpt-4o-mini",
+            memory_llm_temperature=0.1,
+            embedder_provider="openai",
+            embedder_model="text-embedding-3-small",
+            embedding_dims=1536,
+            history_db_path="/tmp/test_history.db",
+        )
+        
+        mem0_config = config.to_mem0_config()
+        
+        assert mem0_config["version"] == "v1.1"
+        assert mem0_config["llm"]["provider"] == "openai"
+        assert mem0_config["llm"]["config"]["model"] == "gpt-4o-mini"
+        assert mem0_config["embedder"]["provider"] == "openai"
+        assert mem0_config["embedder"]["config"]["model"] == "text-embedding-3-small"
+        assert mem0_config["embedder"]["config"]["embedding_dims"] == 1536
+        assert mem0_config["vector_store"]["provider"] == "milvus"
+        assert mem0_config["vector_store"]["config"]["collection_name"] == "test_collection"
+        assert mem0_config["vector_store"]["config"]["embedding_model_dims"] == 1536
+        assert mem0_config["vector_store"]["config"]["url"] == "http://localhost:19530"
+    
+    def test_to_mem0_config_milvus_with_token(self):
+        """Test milvus config includes token when provided (e.g. Zilliz Cloud)."""
+        logger.info("Test milvus config includes token when provided")
+        config = MemoryConfig(
+            enabled=True,
+            vector_store_provider="milvus",
+            milvus_host="my-instance.zillizcloud.com",
+            milvus_port=19530,
+            milvus_token="my-zilliz-token",
+            milvus_collection="test_collection",
+            memory_llm_model="gpt-4o-mini",
+            embedder_model="text-embedding-3-small",
+            embedding_dims=1536,
+            history_db_path="/tmp/test_history.db",
+        )
+        
+        mem0_config = config.to_mem0_config()
+        
+        assert mem0_config["vector_store"]["provider"] == "milvus"
+        assert mem0_config["vector_store"]["config"]["token"] == "my-zilliz-token"
 
 
 # =============================================================================
@@ -269,8 +351,8 @@ class MockProvider(BaseMemoryProvider):
     def is_initialized(self) -> bool:
         return self._initialized
     
-    async def add(self, messages, *, user_id=None, agent_id=None, run_id=None, 
-                  metadata=None, custom_prompt=None):
+    async def add(self, messages, *, user_id=None, agent_id=None, run_id=None,
+                  metadata=None, custom_prompt=None, infer=True):
         return MemoryAddResult(message="Added", results=[{"id": "test-1"}])
     
     async def search(self, query, *, user_id=None, agent_id=None, run_id=None,
@@ -749,7 +831,7 @@ class TestIntegration:
     def test_isolation_modes(self):
         """Test different isolation modes."""
         logger.info("Test different isolation modes")
-        for mode in ["shared", "user", "agent", "run"]:
+        for mode in ["shared", "user", "agent", "conversation"]:
             config = MemoryConfig(enabled=True, memory_isolation=mode)
             provider = MockProvider(config)
             client = MemoryClient(config=config, provider=provider)
@@ -760,8 +842,8 @@ class TestIntegration:
                 kwargs["user_id"] = "user-123"
             elif mode == "agent":
                 kwargs["agent_id"] = "agent-456"
-            elif mode == "run":
-                kwargs["run_id"] = "run-789"
+            elif mode == "conversation":
+                kwargs["conversation_id"] = "conv-789"
             
             scope = client._build_scope(**kwargs)
             identifiers = scope.to_identifiers()
@@ -773,5 +855,5 @@ class TestIntegration:
                 assert "user_id" in identifiers
             elif mode == "agent":
                 assert "agent_id" in identifiers
-            elif mode == "run":
-                assert "run_id" in identifiers
+            elif mode == "conversation":
+                assert "conversation_id" in identifiers

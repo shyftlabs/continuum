@@ -46,9 +46,10 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
+        infer: bool = True,
     ) -> MemoryAddResult:
         """
         Add memories from messages or text.
@@ -60,7 +61,7 @@ class BaseMemoryProvider(ABC):
                 - List[dict]: Chat messages with 'role' and 'content'
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             metadata: Additional metadata for the memories
             custom_prompt: Custom prompt for fact extraction
 
@@ -76,7 +77,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -87,7 +88,7 @@ class BaseMemoryProvider(ABC):
             query: Search query text
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             limit: Maximum number of results to return
             filters: Additional metadata filters (provider-specific)
 
@@ -115,7 +116,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """
@@ -124,7 +125,7 @@ class BaseMemoryProvider(ABC):
         Args:
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
             limit: Maximum number of memories to return
 
         Returns:
@@ -151,7 +152,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """
         Delete all memories for the specified scope.
@@ -159,7 +160,7 @@ class BaseMemoryProvider(ABC):
         Args:
             user_id: User identifier for scoping
             agent_id: Agent identifier for scoping
-            run_id: Run/session identifier for scoping
+            conversation_id: Conversation identifier for scoping
 
         Returns:
             True if deleted successfully.
@@ -228,9 +229,10 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
+        infer: bool = True,
     ) -> MemoryAddResult:
         """Synchronous version of add()."""
         ...
@@ -242,7 +244,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int = 5,
         filters: dict[str, Any] | None = None,
     ) -> MemorySearchResult:
@@ -260,7 +262,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         limit: int | None = None,
     ) -> list[MemoryEntry]:
         """Synchronous version of get_all()."""
@@ -277,7 +279,7 @@ class BaseMemoryProvider(ABC):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> bool:
         """Synchronous version of delete_all()."""
         ...

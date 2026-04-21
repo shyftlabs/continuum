@@ -94,11 +94,11 @@ class MemoryService(IMemoryService):
                             agent_id_for_memory = session_metadata.agent_id
                             logger.debug(
                                 f"🔍 Using agent_id from session metadata: {agent_id_for_memory} "
-                                f"(session_id={context.session_id[:8]}...)"
+                                f"(session_id={context.session_id}...)"
                             )
                         else:
                             logger.warning(
-                                f"⚠️ Session {context.session_id[:8]}... exists but has no agent_id in metadata. "
+                                f"⚠️ Session {context.session_id}... exists but has no agent_id in metadata. "
                                 f"Falling back to agent.name={agent.name}. This may cause memory isolation issues."
                             )
                             agent_id_for_memory = agent.name
@@ -116,51 +116,34 @@ class MemoryService(IMemoryService):
                         f"(agent.name={agent.name}, may differ when switching agents)"
                     )
 
-            run_id_for_memory = context.run_id if memory_isolation == "run" else None
-
-            # CRITICAL: Filter by session_id/run_id in metadata when agent scope is RUN
-            filters = None
-            if search_scope == "run":
-                # Only filter by session_id when memory isolation is "run"
-                if memory_isolation == "run":
-                    # Use session_id for filtering (stored in metadata as run_id during storage)
-                    filter_run_id = context.session_id or context.run_id
-                    if filter_run_id:
-                        # Use dict for native Qdrant metadata filtering
-                        filters = {"run_id": filter_run_id}
-                        logger.debug(
-                            f"🔍 Applying RUN-scope filter: session_id={filter_run_id[:8]}... "
-                            f"(memory_isolation={memory_isolation}, session-level isolation enabled)"
-                        )
-                else:
-                    # USER/AGENT/SHARED modes: No session filter - memories shared across sessions
-                    logger.debug(
-                        f"🔍 RUN scope with {memory_isolation} mode: No session filter "
-                        f"(memories shared across sessions for {memory_isolation} isolation)"
+            conversation_id_for_memory = None
+            if memory_isolation == "conversation":
+                conversation_id_for_memory = context.conversation_id
+                if not conversation_id_for_memory:
+                    logger.warning(
+                        "memory_isolation='conversation' but context.conversation_id is None — "
+                        "memory search will be unscoped. Pass conversation_id when calling runner.run()."
                     )
 
-            # Log memory search parameters at INFO level
-            logger.info(
+            # Log memory search parameters at DEBUG level
+            logger.debug(
                 f"🔍 MEMORY SEARCH: query='{query[:100]}...', "
                 f"scope={search_scope}, isolation={memory_isolation}, "
-                f"user_id={user_id_for_memory[:8] if user_id_for_memory else 'none'}, "
-                f"agent_id={agent_id_for_memory[:8] if agent_id_for_memory else 'none'}, "
-                f"run_id={run_id_for_memory[:8] if run_id_for_memory else 'none'}, "
-                f"session_id={context.session_id[:8] if context.session_id else 'none'}, "
-                f"filters={filters}"
+                f"user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
+                f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
+                f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}"
             )
 
             memories = await self._memory_client.search(
                 query=query,
                 user_id=user_id_for_memory,
                 agent_id=agent_id_for_memory,
-                run_id=run_id_for_memory,
+                conversation_id=conversation_id_for_memory,
                 limit=agent.memory_config.search_limit,
-                filters=filters,  # Native Qdrant metadata filters
             )
 
-            # Log search results at INFO level
-            logger.info(
+            # Log search results at DEBUG level
+            logger.debug(
                 f"💾 MEMORY SEARCH RESULT: found {len(memories.results)} memories "
                 f"(total_results={memories.total_results if hasattr(memories, 'total_results') else 'N/A'})"
             )
@@ -168,55 +151,31 @@ class MemoryService(IMemoryService):
             if not memories.results:
                 logger.warning(
                     f"⚠️ NO MEMORIES FOUND for query='{query[:100]}...' "
-                    f"(isolation={memory_isolation}, user_id={user_id_for_memory[:8] if user_id_for_memory else 'none'}, "
-                    f"agent_id={agent_id_for_memory[:8] if agent_id_for_memory else 'none'}, "
-                    f"run_id={run_id_for_memory[:8] if run_id_for_memory else 'none'}, "
-                    f"filters={filters})"
+                    f"(isolation={memory_isolation}, user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
+                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
+                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'})"
                 )
 
             if memories.results:
                 context.retrieved_memories = [m.to_dict() for m in memories.results]
 
-                # Log memory search summary at INFO level
-                logger.info(
+                # Log memory search summary at DEBUG level
+                logger.debug(
                     f"💾 Memory search: scope={search_scope}, isolation={memory_isolation}, "
-                    f"user_id={context.user_id[:8] if context.user_id else 'none'}, "
-                    f"agent_id={agent_id_for_memory[:8] if agent_id_for_memory else 'N/A'}, "
-                    f"run_id={context.run_id[:8] if context.run_id else 'none'}, "
-                    f"session_id={context.session_id[:8] if context.session_id else 'none'}, "
-                    f"found={len(memories.results)} memories, filter_applied={filters is not None}"
+                    f"user_id={context.user_id if context.user_id else 'none'}, "
+                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'N/A'}, "
+                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}, "
+                    f"found={len(memories.results)} memories"
                 )
 
                 # Log each memory with its metadata to verify isolation (INFO level)
                 for idx, m in enumerate(memories.results, 1):
                     memory_metadata = getattr(m, "metadata", {}) or {}
-                    memory_run_id = (
-                        m.run_id
-                        or memory_metadata.get("run_id")
-                        or memory_metadata.get("session_id")
-                        or "unknown"
-                    )
-                    memory_session_id = memory_metadata.get("session_id") or "unknown"
                     memory_user_id = m.user_id or memory_metadata.get("_user_id") or "unknown"
-
-                    # Verify session_id/run_id match for RUN scope
-                    expected_id = context.session_id or context.run_id
-                    run_id_match = (
-                        "✓"
-                        if (
-                            expected_id
-                            and memory_run_id != "unknown"
-                            and (memory_run_id == expected_id or memory_session_id == expected_id)
-                        )
-                        else "✗"
-                    )
-
+                    score_str = f"{m.score:.3f}" if m.score is not None else "N/A"
                     logger.info(
                         f"📝 Memory #{idx}: '{m.memory[:100]}...' "
-                        f"(score={m.score:.3f}, run_id={run_id_match} {memory_run_id[:8] if memory_run_id != 'unknown' else 'unknown'}, "
-                        f"session_id={memory_session_id[:8] if memory_session_id != 'unknown' else 'unknown'}, "
-                        f"user_id={memory_user_id[:8] if memory_user_id != 'unknown' else 'unknown'}, "
-                        f"expected_id={expected_id[:8] if expected_id else 'none'})"
+                        f"(score={score_str}, user_id={memory_user_id if memory_user_id != 'unknown' else 'unknown'})"
                     )
 
                 return context.retrieved_memories

@@ -7,7 +7,13 @@ They are agent-agnostic: any registered BaseAgent can be executed.
 
 from __future__ import annotations
 
-from temporalio import activity
+try:
+    from temporalio import activity
+except ImportError as _err:
+    raise ImportError(
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
+    ) from _err
 
 from orchestrator.temporal.registry import get_agent_registry
 from orchestrator.temporal.types import (

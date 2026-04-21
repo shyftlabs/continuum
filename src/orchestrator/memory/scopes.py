@@ -136,11 +136,11 @@ register_scope(
     description="Memories isolated per agent",
 )
 
-# Run/Session - isolated per session
+# Conversation - isolated per conversation
 register_scope(
-    name="run",
-    required_field="run_id",
-    description="Memories isolated per session/run",
+    name="conversation",
+    required_field="conversation_id",
+    description="Memories isolated per conversation",
 )
 
 
@@ -160,7 +160,7 @@ class MemoryIsolationLevel(str, Enum):
     SHARED = "shared"
     USER = "user"
     AGENT = "agent"
-    RUN = "run"
+    CONVERSATION = "conversation"
 
 
 # =============================================================================
@@ -179,7 +179,7 @@ class MemoryScope:
     Built-in identifiers:
         - user_id: User identifier
         - agent_id: Agent identifier
-        - run_id: Run/session identifier
+        - conversation_id: Conversation identifier
 
     Custom identifiers can be stored in `custom_identifiers` for new scope types.
 
@@ -193,7 +193,7 @@ class MemoryScope:
             mode="user",
             user_id="user-123",
             agent_id="my-agent",
-            run_id="run-456",
+            conversation_id="conv-456",
         )
 
         # Get identifiers for provider
@@ -202,10 +202,10 @@ class MemoryScope:
         ```
     """
 
-    # Built-in identifiers (for backward compatibility)
+    # Built-in identifiers
     user_id: str | None = None
     agent_id: str | None = None
-    run_id: str | None = None
+    conversation_id: str | None = None
 
     # Custom identifiers for extensible scopes (e.g., team_id, org_id)
     custom_identifiers: dict[str, str] = field(default_factory=dict)
@@ -255,19 +255,19 @@ class MemoryScope:
         return cls(agent_id=agent_id)
 
     @classmethod
-    def run(cls, run_id: str) -> "MemoryScope":
+    def conversation(cls, conversation_id: str) -> "MemoryScope":
         """
-        Create a run/session scope.
+        Create a conversation scope.
 
         Args:
-            run_id: Run/session identifier
+            conversation_id: Conversation identifier
 
         Returns:
-            MemoryScope with run isolation.
+            MemoryScope with conversation isolation.
         """
-        if not run_id:
-            raise ValueError("run_id is required for run scope")
-        return cls(run_id=run_id)
+        if not conversation_id:
+            raise ValueError("conversation_id is required for conversation scope")
+        return cls(conversation_id=conversation_id)
 
     # =========================================================================
     # Generic Factory - Uses scope registry
@@ -280,7 +280,7 @@ class MemoryScope:
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         **custom_ids: str,
     ) -> "MemoryScope":
         """
@@ -293,7 +293,7 @@ class MemoryScope:
             mode: Isolation level name (e.g., "user", "agent", "team")
             user_id: User identifier (for "user" mode)
             agent_id: Agent identifier (for "agent" mode)
-            run_id: Run/session identifier (for "run" mode)
+            conversation_id: Conversation identifier (for "conversation" mode)
             **custom_ids: Custom identifiers (e.g., team_id="team-123")
 
         Returns:
@@ -321,7 +321,7 @@ class MemoryScope:
         all_identifiers = {
             "user_id": user_id,
             "agent_id": agent_id,
-            "run_id": run_id,
+            "conversation_id": conversation_id,
             **custom_ids,
         }
 
@@ -330,11 +330,11 @@ class MemoryScope:
             return cls(
                 user_id=scope_def.default_identifier.get("user_id"),
                 agent_id=scope_def.default_identifier.get("agent_id"),
-                run_id=scope_def.default_identifier.get("run_id"),
+                conversation_id=scope_def.default_identifier.get("conversation_id"),
                 custom_identifiers={
                     k: v
                     for k, v in scope_def.default_identifier.items()
-                    if k not in ("user_id", "agent_id", "run_id")
+                    if k not in ("user_id", "agent_id", "conversation_id")
                 },
             )
 
@@ -354,13 +354,13 @@ class MemoryScope:
             return cls.user(user_id)
         elif mode == "agent" and agent_id:
             return cls.agent(agent_id)
-        elif mode == "run" and run_id:
-            return cls.run(run_id)
+        elif mode == "conversation" and conversation_id:
+            return cls.conversation(conversation_id)
         else:
             # Custom scope - use the required field
             if scope_def.required_field:
                 value = all_identifiers.get(scope_def.required_field)
-                if scope_def.required_field in ("user_id", "agent_id", "run_id"):
+                if scope_def.required_field in ("user_id", "agent_id", "conversation_id"):
                     # Built-in identifier
                     return cls(**{scope_def.required_field: value})
                 else:
@@ -374,7 +374,7 @@ class MemoryScope:
         cls,
         user_id: str | None = None,
         agent_id: str | None = None,
-        run_id: str | None = None,
+        conversation_id: str | None = None,
         **custom_ids: str,
     ) -> "MemoryScope":
         """
@@ -383,7 +383,7 @@ class MemoryScope:
         Args:
             user_id: User identifier
             agent_id: Agent identifier
-            run_id: Run/session identifier
+            conversation_id: Conversation identifier
             **custom_ids: Custom identifiers
 
         Returns:
@@ -392,7 +392,7 @@ class MemoryScope:
         return cls(
             user_id=user_id,
             agent_id=agent_id,
-            run_id=run_id,
+            conversation_id=conversation_id,
             custom_identifiers=custom_ids,
         )
 
@@ -415,8 +415,8 @@ class MemoryScope:
             identifiers["user_id"] = self.user_id
         if self.agent_id:
             identifiers["agent_id"] = self.agent_id
-        if self.run_id:
-            identifiers["run_id"] = self.run_id
+        if self.conversation_id:
+            identifiers["conversation_id"] = self.conversation_id
 
         # Add custom identifiers
         identifiers.update(self.custom_identifiers)
@@ -433,7 +433,7 @@ class MemoryScope:
         return {
             "user_id": self.user_id,
             "agent_id": self.agent_id,
-            "run_id": self.run_id,
+            "conversation_id": self.conversation_id,
             "custom_identifiers": self.custom_identifiers,
         }
 
@@ -488,8 +488,8 @@ class MemoryScope:
             metadata["_user_id"] = self.user_id
         if self.agent_id:
             metadata["_agent_id"] = self.agent_id
-        if self.run_id:
-            metadata["_run_id"] = self.run_id
+        if self.conversation_id:
+            metadata["_conversation_id"] = self.conversation_id
 
         # Add custom identifiers with prefix
         for key, value in self.custom_identifiers.items():
@@ -538,7 +538,7 @@ class MemoryScope:
         return (
             not self.user_id
             and not self.agent_id
-            and not self.run_id
+            and not self.conversation_id
             and not self.custom_identifiers
         )
 
@@ -553,8 +553,8 @@ class MemoryScope:
             parts.append(f"user_id={self.user_id!r}")
         if self.agent_id:
             parts.append(f"agent_id={self.agent_id!r}")
-        if self.run_id:
-            parts.append(f"run_id={self.run_id!r}")
+        if self.conversation_id:
+            parts.append(f"conversation_id={self.conversation_id!r}")
         for key, value in self.custom_identifiers.items():
             parts.append(f"{key}={value!r}")
 

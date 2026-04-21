@@ -61,11 +61,13 @@ class MemoryConfig(BaseModel):
         description="Enable/disable memory system",
     )
 
-    # Vector Store Configuration (Qdrant)
-    vector_store_provider: Literal["qdrant"] = Field(
-        default="qdrant",
-        description="Vector store provider (currently only Qdrant supported)",
+    # Vector Store Provider Selection
+    vector_store_provider: Literal["qdrant", "milvus"] = Field(
+        default_factory=lambda: settings.vector_store_provider,  # type: ignore[return-value]
+        description="Vector store provider: 'qdrant' or 'milvus'",
     )
+
+    # Qdrant Vector Store Configuration
     qdrant_host: str = Field(
         default_factory=lambda: settings.qdrant_host,
         description="Qdrant host URL",
@@ -81,6 +83,24 @@ class MemoryConfig(BaseModel):
     qdrant_collection: str = Field(
         default_factory=lambda: settings.qdrant_collection,
         description="Qdrant collection name for storing memories",
+    )
+
+    # Milvus Vector Store Configuration
+    milvus_host: str = Field(
+        default_factory=lambda: settings.milvus_host,
+        description="Milvus host",
+    )
+    milvus_port: int = Field(
+        default_factory=lambda: settings.milvus_port,
+        description="Milvus port",
+    )
+    milvus_token: str | None = Field(
+        default_factory=lambda: settings.milvus_token,
+        description="Milvus token (for Zilliz Cloud)",
+    )
+    milvus_collection: str = Field(
+        default_factory=lambda: settings.milvus_collection,
+        description="Milvus collection name for storing memories",
     )
 
     # LLM Configuration for Memory Operations
@@ -125,9 +145,9 @@ class MemoryConfig(BaseModel):
     )
 
     # Memory Behavior
-    memory_isolation: Literal["shared", "user", "agent", "run"] = Field(
+    memory_isolation: Literal["shared", "user", "agent", "conversation"] = Field(
         default_factory=lambda: settings.memory_isolation,
-        description="Memory isolation level: shared (all), user, agent, or run (session)",
+        description="Memory isolation level: shared (all), user, agent, or conversation",
     )
 
     # Search Configuration
@@ -150,13 +170,12 @@ class MemoryConfig(BaseModel):
 
     def is_configured(self) -> bool:
         """Check if memory is properly configured with basic requirements."""
-        return bool(
-            self.enabled
-            and self.qdrant_host
-            and self.memory_llm_model
-            and self.embedder_model
-            and self.embedding_dims > 0
-        )
+        if not (self.enabled and self.memory_llm_model and self.embedder_model and self.embedding_dims > 0):
+            return False
+        if self.vector_store_provider == "milvus":
+            return bool(self.milvus_host)
+        # qdrant
+        return bool(self.qdrant_host)
 
     def _get_embedder_api_key(self) -> str | None:
         """
@@ -197,11 +216,12 @@ class MemoryConfig(BaseModel):
         """Detect LLM provider from model name and build mem0 llm config block."""
         model = self.memory_llm_model
 
-        if model.startswith("gemini/"):
+        if model.startswith("gemini/") or model.startswith("gemini-"):
+            model_name = model.removeprefix("gemini/") if model.startswith("gemini/") else model
             return {
                 "provider": "gemini",
                 "config": {
-                    "model": model.removeprefix("gemini/"),
+                    "model": model_name,
                     "temperature": self.memory_llm_temperature,
                     "api_key": os.environ.get("GEMINI_API_KEY", ""),
                 },
@@ -336,6 +356,33 @@ class MemoryConfig(BaseModel):
         # Build embedder configuration
         embedder_provider, embedder_config = self._build_embedder_config()
 
+        # Build vector store config based on selected provider
+        if self.vector_store_provider == "milvus":
+            milvus_vs_config: dict[str, Any] = {
+                "collection_name": self.milvus_collection,
+                "embedding_model_dims": self.embedding_dims,
+                "url": f"http://{self.milvus_host}:{self.milvus_port}",
+            }
+            if self.milvus_token:
+                milvus_vs_config["token"] = self.milvus_token
+            vector_store_block: dict[str, Any] = {
+                "provider": "milvus",
+                "config": milvus_vs_config,
+            }
+        else:
+            qdrant_vs_config: dict[str, Any] = {
+                "host": self.qdrant_host,
+                "port": self.qdrant_port,
+                "collection_name": self.qdrant_collection,
+                "embedding_model_dims": self.embedding_dims,
+            }
+            if self.qdrant_api_key:
+                qdrant_vs_config["api_key"] = self.qdrant_api_key
+            vector_store_block = {
+                "provider": "qdrant",
+                "config": qdrant_vs_config,
+            }
+
         config: dict[str, Any] = {
             "version": "v1.1",
             "llm": self._build_llm_config(),
@@ -343,23 +390,11 @@ class MemoryConfig(BaseModel):
                 "provider": embedder_provider,
                 "config": embedder_config,
             },
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "host": self.qdrant_host,
-                    "port": self.qdrant_port,
-                    "collection_name": self.qdrant_collection,
-                    "embedding_model_dims": self.embedding_dims,
-                },
-            },
+            "vector_store": vector_store_block,
             "history_db_path": history_path,
         }
 
-        # Add Qdrant API key if provided (for cloud)
-        if self.qdrant_api_key:
-            config["vector_store"]["config"]["api_key"] = self.qdrant_api_key
-
-        # Add reranker if enabled
+        # Reranker
         if self.reranker_enabled:
             config["reranker"] = {
                 "provider": "cohere",

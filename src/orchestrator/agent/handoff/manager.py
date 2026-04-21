@@ -265,6 +265,7 @@ class HandoffManager:
         self,
         handoff_data: HandoffData,
         target_agent: BaseAgent,
+        session_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the message list for the target agent.
@@ -291,6 +292,13 @@ class HandoffManager:
         if handoff_data.history:
             # Flatten any nested histories first
             flattened = flatten_nested_history(handoff_data.history)
+            # Strip system messages (source agent's instructions) and empty assistant
+            # messages (in-progress turns) — target agent has its own system prompt
+            flattened = [
+                m for m in flattened
+                if m.get("role") != "system"
+                and not (m.get("role") == "assistant" and not m.get("content"))
+            ]
             messages.extend(flattened)
 
         # Add handoff context as a system message
@@ -299,7 +307,10 @@ class HandoffManager:
             f"Reason: {handoff_data.reason}",
         ]
         if handoff_data.context:
-            context_parts.append(f"Additional context: {handoff_data.context}")
+            context_parts.append(f"Context: {handoff_data.context}")
+        # Always surface the session_id so the target agent can use it for tool calls
+        if session_id:
+            context_parts.append(f"session_id: {session_id}")
 
         messages.append(
             {

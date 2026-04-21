@@ -116,7 +116,7 @@ class PetcoMultiAgent:
             try:
                 self._current_session_id = await session_client.get_or_create_session(
                     user_id=self._current_user_id,
-                    agent_id="petco-multi-agent",
+                    conversation_id="petco-multi-agent",
                 )
                 logger.info(f"✓ Session initialized: {self._current_session_id}")
             except Exception as e:
@@ -264,7 +264,7 @@ class PetcoMultiAgent:
                 try:
                     effective_session_id = await session_client.get_or_create_session(
                         user_id=user_id,
-                        agent_id="petco-multi-agent",
+                        conversation_id="petco-multi-agent",
                     )
                     logger.info(
                         f"✓ Using session for user {user_id}: {effective_session_id[:8]}..."

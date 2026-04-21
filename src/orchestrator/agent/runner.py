@@ -7,7 +7,7 @@ handoffs, and conversation loops.
 
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
@@ -147,7 +147,7 @@ class AgentRunner:
             self._handoff_executor.register_agent(agent_obj)
 
         # Lock for clearing run artifacts safely across concurrent runs
-        self._artifact_lock = threading.Lock()
+        self._artifact_lock = asyncio.Lock()
 
         self._stream_executor = StreamExecutor(llm_client=self._llm_client)
         self._message_builder = MessageBuilder(
@@ -164,6 +164,56 @@ class AgentRunner:
     def get_agent(self, name: str) -> BaseAgent | None:
         """Get a registered agent by name."""
         return self._agent_registry.get(name)
+
+    async def save_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_message: str,
+        *,
+        agent: BaseAgent | None = None,
+    ) -> None:
+        """
+        Save exactly one conversation turn (user query + final response) to session.
+
+        Use this in sequential multi-agent pipelines where intermediate agents
+        run without a session_id (or with log_to_session=False), then call this
+        once after the pipeline completes to write only what the user sees to Redis.
+
+        Example:
+            response_a = await runner.run(agent_a, user_query)
+            response_b = await runner.run(agent_b, response_a.content)
+            await runner.save_turn(session_id, user_query, response_b.content, agent=agent_b)
+
+        Args:
+            session_id: Session to write to.
+            user_message: Original user query shown in the chat window.
+            assistant_message: Final response shown in the chat window.
+            agent: Agent whose memory config governs fact extraction.
+                   If None, memory storage is skipped.
+        """
+        if not self._session_client or not self._session_client.is_enabled:
+            return
+
+        from orchestrator.llm.types import ChatMessage
+
+        memory_config = getattr(agent, "memory_config", None)
+        agent_id = agent.name if agent else None
+        should_store = bool(memory_config and memory_config.store_memories)
+        extraction_prompt = getattr(memory_config, "extraction_prompt", None)
+        pre_store_filter = getattr(memory_config, "pre_store_filter", None)
+        on_stored = getattr(memory_config, "on_stored", None)
+
+        for role, content in (("user", user_message), ("assistant", assistant_message)):
+            await self._session_client.add_message(
+                session_id=session_id,
+                message=ChatMessage(role=role, content=content),
+                agent_id=agent_id,
+                store_in_memory=should_store,
+                extraction_prompt=extraction_prompt,
+                pre_store_filter=pre_store_filter,
+                on_stored=on_stored,
+            )
 
     @property
     def llm_client(self) -> LLMClient:
@@ -190,6 +240,7 @@ class AgentRunner:
         agent: BaseAgent,
         input: str | list[dict[str, Any]] | list[ChatMessage],
         session_id: str | None = None,
+        conversation_id: str | None = None,
         user_id: str | None = None,
         context: RunContext | None = None,
         max_turns: int | None = None,
@@ -204,6 +255,7 @@ class AgentRunner:
         if context is None:
             context = create_run_context(
                 session_id=session_id,
+                conversation_id=conversation_id,
                 user_id=user_id,
                 trace_id=trace_id,
                 max_turns=max_turns or agent.config.max_turns,
@@ -252,7 +304,7 @@ class AgentRunner:
                 self._tool_executor.context_state = tool_context_state
 
         # Synchronize artifact clearing to prevent races between concurrent runs
-        with self._artifact_lock:
+        async with self._artifact_lock:
             if agent.tool_executor and hasattr(agent.tool_executor, "clear_run_artifacts"):
                 agent.tool_executor.clear_run_artifacts(run_id=context.run_id)
             if self._tool_executor and hasattr(self._tool_executor, "clear_run_artifacts"):
@@ -261,7 +313,7 @@ class AgentRunner:
         if agent.on_start:
             agent.on_start(agent, {"context": context, "input": input})
 
-        messages = await self._message_builder.prepare_messages(
+        messages, user_message_index = await self._message_builder.prepare_messages(
             agent, input, context, tool_context_state=tool_context_state,
         )
         run_state.messages = [message_to_dict(m) for m in messages]
@@ -270,7 +322,7 @@ class AgentRunner:
             success=True,
             context=context,
             run_state=run_state,
-            initial_message_count=len(messages),
+            user_message_index=user_message_index,
             tool_context_state=tool_context_state,
         )
 
@@ -284,6 +336,7 @@ class AgentRunner:
         input: str | list[dict[str, Any]] | list[ChatMessage],
         *,
         session_id: str | None = None,
+        conversation_id: str | None = None,
         user_id: str | None = None,
         context: RunContext | None = None,
         max_turns: int | None = None,
@@ -295,7 +348,7 @@ class AgentRunner:
         start_time = time.time()
 
         result = await self._prepare_run(
-            agent, input, session_id, user_id, context, max_turns, trace_id, metadata, tags
+            agent, input, session_id, conversation_id, user_id, context, max_turns, trace_id, metadata, tags
         )
         if not result.success:
             return result.error_response
@@ -325,7 +378,7 @@ class AgentRunner:
 
             await self._finalizer.finalize(
                 agent, ctx, run_state, response,
-                result.initial_message_count, result.tool_context_state,
+                result.user_message_index, result.tool_context_state,
                 start_time, response.messages,
             )
 
@@ -356,6 +409,7 @@ class AgentRunner:
         input: str | list[dict[str, Any]],
         *,
         session_id: str | None = None,
+        conversation_id: str | None = None,
         user_id: str | None = None,
         max_turns: int | None = None,
         trace_id: str | None = None,
@@ -365,7 +419,7 @@ class AgentRunner:
         start_time = time.time()
 
         result = await self._prepare_run(
-            agent, input, session_id, user_id, None, max_turns, trace_id, metadata, None
+            agent, input, session_id, conversation_id, user_id, None, max_turns, trace_id, metadata, None
         )
         if not result.success:
             yield AgentEvent(
@@ -394,6 +448,7 @@ class AgentRunner:
                 run_id=ctx.run_id, trace_id=ctx.trace_id,
             )
 
+            content = ""
             turn = 0
             while turn < ctx.max_turns:
                 turn += 1
@@ -467,7 +522,7 @@ class AgentRunner:
 
             await self._finalizer.finalize(
                 agent, ctx, run_state, response,
-                result.initial_message_count, result.tool_context_state,
+                result.user_message_index, result.tool_context_state,
                 start_time, messages,
             )
 
