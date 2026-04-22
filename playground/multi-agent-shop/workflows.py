@@ -22,6 +22,7 @@ from agents import (
     make_cart_agent,
     make_recommend_agent,
     make_search_agent,
+    make_summary_agent,
     make_support_agent,
     make_writer_agent,
 )
@@ -72,6 +73,11 @@ logger = get_logger(__name__)
 # =============================================================================
 
 class _BaseWorkflow:
+    # Workflow agents must be invoked via .execute() directly; runner.run() only
+    # drives the single-agent LLM loop and never calls the workflow execute() method.
+    # Set to False in subclasses whose _agent is a plain BaseAgent (e.g. HandoffShop).
+    _use_direct_execute: bool = True
+
     def __init__(self, config: WorkflowShopConfig | None = None):
         self.config = config or default_config
         self._lifecycle = None
@@ -151,13 +157,22 @@ class _BaseWorkflow:
                     logger.warning(f"Session init failed: {e}")
 
         try:
-            response = await self._runner.run(
-                agent=self._agent,
-                input=message,
-                session_id=session_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-            )
+            if self._use_direct_execute:
+                from orchestrator.agent.utils.context_utils import create_run_context
+                ctx = create_run_context(
+                    session_id=session_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
+                response = await self._agent.execute(message, self._runner, ctx)
+            else:
+                response = await self._runner.run(
+                    agent=self._agent,
+                    input=message,
+                    session_id=session_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
             return response.content or ""
         except Exception as e:
             logger.error(f"Chat error: {e}")
@@ -187,6 +202,7 @@ class SequentialShop(_BaseWorkflow):
     Step 1 (search-agent):     searches for matching products
     Step 2 (recommend-agent):  picks the best one
     Step 3 (cart-agent):       adds it to the cart
+    Step 4 (summary-agent):    synthesises all steps into a clean user-facing reply
     """
 
     def _build_workflow(self) -> None:
@@ -197,6 +213,7 @@ class SequentialShop(_BaseWorkflow):
                 make_search_agent(self._tools, self._tool_executor, m),
                 make_recommend_agent(m),
                 make_cart_agent(self._tools, self._tool_executor, m),
+                make_summary_agent(m),
             ],
             sequential_config=SequentialConfig(
                 pass_full_history=True,
@@ -228,7 +245,7 @@ class ParallelShop(_BaseWorkflow):
             tools=self._tools,
             tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True),
+            config=AgentConfig(log_to_session=True, session_history_turns=2),
         )
         cat_searcher = BaseAgent(
             name="cat-search-agent",
@@ -241,7 +258,7 @@ class ParallelShop(_BaseWorkflow):
             tools=self._tools,
             tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True),
+            config=AgentConfig(log_to_session=True, session_history_turns=2),
         )
         self._agent = ParallelAgent(
             name="parallel-shop",
@@ -249,8 +266,9 @@ class ParallelShop(_BaseWorkflow):
             parallel_config=ParallelConfig(
                 merge_strategy=MergeStrategy.LLM_SUMMARIZE,
                 summary_prompt=(
-                    "Combine the dog and cat product results into one clear, "
-                    "organised response for the user. Group by animal type."
+                    "Combine the dog and cat product results into one short response. "
+                    "List only real products with their IDs and prices. "
+                    "Group by animal type. Maximum 6 bullet points total."
                 ),
             ),
         )
@@ -319,11 +337,11 @@ class ScatterShop(_BaseWorkflow):
         self._agent = ScatterAgent(
             name="scatter-shop",
             agents=analysts,
-            input_slices=[
-                "Analyse product p1 (Dog Food Dry 5kg, $29.99). Is it good value?",
-                "Analyse product p2 (Cat Food Wet 12-pack, $18.99). Is it good value?",
-                "Analyse product p5 (Dog Toy Tennis Ball 3-pack, $6.99). Is it good value?",
-            ],
+            # input_slices=[
+            #     "Analyse product p1 (Dog Food Dry 5kg, $29.99). Is it good value?",
+            #     "Analyse product p2 (Cat Food Wet 12-pack, $18.99). Is it good value?",
+            #     "Analyse product p5 (Dog Toy Tennis Ball 3-pack, $6.99). Is it good value?",
+            # ],
         )
 
 
@@ -559,6 +577,10 @@ class HandoffShop(_BaseWorkflow):
     Key difference from Router: routing is decided by the LLM at runtime
     (by calling the handoff tool), not by a pre-configured dispatch table.
     """
+
+    # _agent is a plain BaseAgent; handoff tool calls are handled by runner's
+    # executor loop, not by a workflow execute() method.
+    _use_direct_execute = False
 
     def _build_workflow(self) -> None:
         m = self.config.model

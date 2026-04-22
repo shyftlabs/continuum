@@ -395,15 +395,17 @@ class ScatterAgent(BaseAgent):
         outputs = "\n\n".join(
             f"### {name}\n{resp.content}" for name, resp in results.items()
         )
-        prompt = (
-            self.scatter_config.summary_prompt
-            or (
+        if self.scatter_config.summary_prompt:
+            prompt = f"{outputs}\n\n{self.scatter_config.summary_prompt}"
+        else:
+            prompt = (
                 f"Multiple specialist agents worked on different aspects of this task:\n\n"
                 f"Original task: {original_input}\n\n"
                 f"Specialist outputs:\n{outputs}\n\n"
                 f"Synthesise these into a single coherent response that integrates all perspectives."
             )
-        )
+
+        logger.info("===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================", self.name, prompt)
 
         from orchestrator.llm.config import LLMConfig
 

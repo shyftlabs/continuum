@@ -24,7 +24,7 @@ def make_search_agent(tools: list[dict[str, Any]], tool_executor: Any, model: st
         tools=tools,
         tool_executor=tool_executor,
         memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-        config=AgentConfig(log_to_session=True),
+        config=AgentConfig(log_to_session=False),
     )
 
 
@@ -38,7 +38,7 @@ def make_recommend_agent(model: str) -> BaseAgent:
         ),
         model=model,
         memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-        config=AgentConfig(log_to_session=True),
+        config=AgentConfig(log_to_session=False),
     )
 
 
@@ -54,8 +54,24 @@ def make_cart_agent(tools: list[dict[str, Any]], tool_executor: Any, model: str)
         tools=tools,
         tool_executor=tool_executor,
         memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-        config=AgentConfig(log_to_session=True),
+        config=AgentConfig(log_to_session=False),
     )
+
+
+def make_summary_agent(model: str) -> BaseAgent:
+    return BaseAgent(
+        name="summary-agent",
+        instructions=(
+            "You are a friendly pet shop assistant. "
+            "Read the prior pipeline steps from context and write a single, clear summary "
+            "for the user: what was found, what was recommended, and what was done. "
+            "Keep it less than 3-4 sentences."
+        ),
+        model=model,
+        memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
+        config=AgentConfig(log_to_session=False),
+    )
+
 
 
 def make_analyst_agent(model: str) -> BaseAgent:

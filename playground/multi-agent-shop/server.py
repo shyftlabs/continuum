@@ -7,6 +7,7 @@ Tools: search_products, get_product, add_to_cart, view_cart, checkout
 
 import os
 import sys
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -29,16 +30,16 @@ PRODUCTS = [
 
 
 @mcp.tool()
-def search_products(query: str = "", animal: str = "", category: str = "") -> list[dict]:
+def search_products(query: Optional[str] = None, animal: Optional[str] = None, category: Optional[str] = None) -> list[dict]:
     """Search for pet products. Filter by animal (dog/cat/all) or category."""
     results = PRODUCTS
-    q = query.lower()
+    q = (query or "").lower()
     if q:
         results = [p for p in results if q in p["name"].lower() or q in p["category"]]
     if animal:
-        results = [p for p in results if p["animal"] in (animal.lower(), "all")]
+        results = [p for p in results if p["animal"] in ((animal or "").lower(), "all")]
     if category:
-        results = [p for p in results if p["category"] == category.lower()]
+        results = [p for p in results if p["category"] == (category or "").lower()]
     return results[:5]
 
 

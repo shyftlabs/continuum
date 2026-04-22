@@ -93,7 +93,7 @@ class LLMClient:
             try:
                 setup_langfuse()
             except Exception:
-                logger.debug("Langfuse setup skipped (not configured or unavailable)")
+                logger.warning("Langfuse setup skipped (not configured or unavailable)")
 
     # =========================================================================
     # Internal helpers

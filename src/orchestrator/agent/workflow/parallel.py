@@ -271,9 +271,10 @@ class ParallelAgent(BaseAgent):
             # Build prompt
             outputs = "\n\n".join(f"### {name}\n{resp.content}" for name, resp in results.items())
 
-            prompt = (
-                self.parallel_config.summary_prompt
-                or f"""Multiple agents were asked to address the following request:
+            if self.parallel_config.summary_prompt:
+                prompt = f"{outputs}\n\n{self.parallel_config.summary_prompt}"
+            else:
+                prompt = f"""Multiple agents were asked to address the following request:
 
 Request: {input_text}
 
@@ -282,15 +283,16 @@ Here are their responses:
 {outputs}
 
 Please synthesize these responses into a single coherent answer that captures the key information from all sources."""
-            )
 
+            logger.info("===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================", self.name, prompt)
             try:
+                from orchestrator.llm.config import LLMConfig
                 response = await llm_client.chat(
                     messages=[{"role": "user", "content": prompt}],
-                    config={
-                        "model": self.parallel_config.summary_model or self.model,
-                        "temperature": 0.3,
-                    },
+                    config=LLMConfig(
+                        model=self.parallel_config.summary_model or self.model,
+                        temperature=0.3,
+                    ),
                 )
                 return response.content
             except Exception as e:

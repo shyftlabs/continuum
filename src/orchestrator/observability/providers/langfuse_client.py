@@ -98,11 +98,11 @@ class LangfuseClient:
 
             except ImportError:
                 logger.error("Langfuse package not installed. Run: pip install langfuse")
-                self._initialized = True
+                self._initialized = True  # package missing won't change, no point retrying
                 return False
             except Exception as e:
                 logger.error(f"Failed to initialize Langfuse: {e}")
-                self._initialized = True
+                # Leave _initialized = False so transient failures (network, bad creds) can be retried
                 return False
 
     def should_sample(self) -> bool:

@@ -194,12 +194,15 @@ class MessageBuilder(IMessageBuilder):
                     if agent.config and agent.config.session_history_turns is not None
                     else 20
                 )
-                history = await self._session_service.get_conversation_history(
-                    context.session_id, limit=history_turns
-                )
-                if history:
-                    logger.debug(f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}")
-                messages.extend(history)
+                if history_turns == 0:
+                    pass  # explicitly disabled — skip Redis call
+                else:
+                    history = await self._session_service.get_conversation_history(
+                        context.session_id, limit=history_turns
+                    )
+                    if history:
+                        logger.debug(f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}")
+                    messages.extend(history)
             except Exception as e:
                 logger.warning(f"Failed to load session history: {e}")
 
@@ -315,7 +318,7 @@ class MessageBuilder(IMessageBuilder):
             f"[{m.get('role','?')}] {str(m.get('content', ''))[:_limit]}"
             for m in messages
         )
-        logger.info("===== FINAL PROMPT =====\n%s\n========================", formatted)
+        logger.info("===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted)
 
         return messages, user_message_index
 
