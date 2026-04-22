@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     memory_enabled: bool = True  # Enable/disable long-term memory
 
     # Vector Store Provider Selection
-    vector_store_provider: str = "qdrant"  # "qdrant" | "milvus"
+    vector_store_provider: str = "milvus"  # "qdrant" | "milvus"
 
     # Qdrant Vector Store Configuration
     qdrant_host: str = "localhost"  # Qdrant host (use 'localhost' for local Docker)
