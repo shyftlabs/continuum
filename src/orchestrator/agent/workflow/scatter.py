@@ -298,28 +298,25 @@ class ScatterAgent(BaseAgent):
         model = self.scatter_config.split_model or settings.default_llm_model
 
         prompt = (
-            f"You are a task coordinator. Split the following task into exactly {n} "
-            f"focused sub-tasks — one for each specialist agent listed below.\n\n"
+            f"Split this task into exactly {n} short sub-tasks, one per agent.\n\n"
             f"Task: {input_text}\n\n"
-            f"Agents (in order):\n"
-            + "\n".join(f"{i + 1}. {name}" for i, name in enumerate(agent_names))
-            + "\n\n"
+            f"Agents: {', '.join(agent_names)}\n\n"
             f"Rules:\n"
-            f"- Each sub-task should be a focused, self-contained instruction\n"
-            f"- Match the sub-task to the agent's name/specialty\n"
-            f"- Do NOT overlap sub-tasks — each covers a different aspect\n"
-            f"- Return ONLY a JSON array of {n} strings, one per agent, in order\n\n"
-            f'Example for 3 agents: ["Sub-task for agent 1", "Sub-task for agent 2", "Sub-task for agent 3"]'
+            f"- Each sub-task is a single sentence\n"
+            f"- No overlap — each covers a distinct item or aspect\n"
+            f"- Return ONLY a JSON array of {n} strings\n\n"
+            f'Example: ["Sub-task 1", "Sub-task 2", "Sub-task 3"]'
         )
 
         try:
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=600),
+                config=LLMConfig(model=model, temperature=0.2, max_tokens=1200),
                 auto_session=False,
             )
 
             content = (response.content or "").strip()
+            logger.info(f"ScatterAgent: raw split response: {content[:500]}")
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -339,7 +336,7 @@ class ScatterAgent(BaseAgent):
 
         except Exception as e:
             logger.warning(
-                f"ScatterAgent: LLM splitting failed ({e}) — using same input for all branches"
+                f"ScatterAgent: LLM splitting failed ({type(e).__name__}: {e}) — using same input for all branches"
             )
             return [input_text] * len(self.agents)
 

@@ -84,7 +84,7 @@ def make_analyst_agent(model: str) -> BaseAgent:
         ),
         model=model,
         memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-        config=AgentConfig(log_to_session=True),
+        config=AgentConfig(log_to_session=True, session_history_turns=0),
     )
 
 

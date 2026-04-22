@@ -10,7 +10,9 @@ Each class follows the same pattern as local-shop/agent.py:
 from __future__ import annotations
 
 import os
+from re import M
 import sys
+from dataclasses import dataclass, field
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -39,6 +41,7 @@ from orchestrator import (
     ToolExecutor,
     get_logger,
 )
+from orchestrator.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from orchestrator.agent.config import (
     ParallelConfig,
     PlanningConfig,
@@ -223,17 +226,80 @@ class SequentialShop(_BaseWorkflow):
 
 
 # =============================================================================
-# 2. Parallel — search dogs + cats simultaneously
+# 2. Parallel — coordinator wraps parallel searchers
 # =============================================================================
+
+@dataclass
+class ParallelCoordinatorAgent(BaseAgent):
+    """
+    Wrapper that gives parallel mode memory + session history at coordinator level.
+    Flow per request:
+      1. parallel searchers (stateless, no Redis) → simultaneous search
+      2. synthesiser (loads memory + history, no auto-save) → user-facing reply
+    One clean session turn saved at the end.
+    """
+    synthesiser: BaseAgent | None = None
+    parallel: ParallelAgent | None = None
+
+    async def execute(self, input_text: str, runner: Any, context: Any, llm_client: Any = None) -> AgentResponse:
+        from orchestrator.agent.utils.context_utils import create_run_context
+
+        _orig_synth_log = self.synthesiser.config.log_to_session
+        self.synthesiser.config.log_to_session = False
+        try:
+            # Step 1: parallel workers get the raw user query (stateless — no history, no save)
+            parallel_ctx = create_run_context(
+                user_id=context.user_id,
+                conversation_id=context.conversation_id,
+            )
+            parallel_result = await self.parallel.execute(input_text, runner, parallel_ctx)
+
+            # Step 2: synthesiser builds the user-facing reply
+            # log_to_session=False prevents auto-save; context carries session_id so
+            # message_builder loads history and memory normally.
+            # The explicit save_turn() below is the only Redis write for this turn.
+            synthesis_input = (
+                f"User asked: {input_text}\n\n"
+                f"Search results:\n{parallel_result.content}\n\n"
+                f"Write a clear, concise response grouped by animal type."
+            )
+            final = await runner.run(
+                agent=self.synthesiser,
+                input=synthesis_input,
+                context=context,
+            )
+
+            if context.session_id:
+                await runner.save_turn(
+                    session_id=context.session_id,
+                    user_message=input_text,
+                    assistant_message=final.content or "",
+                    agent=None,
+                )
+
+            total_usage = parallel_result.usage.add(final.usage)
+            return AgentResponse(
+                content=final.content,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS,
+                usage=total_usage,
+            )
+        finally:
+            self.synthesiser.config.log_to_session = _orig_synth_log
+
 
 class ParallelShop(_BaseWorkflow):
     """
     Use case: "What's available for dogs AND cats?"
-    Two search-agents run at the same time, results merged by LLM.
+    coordinator-agent (with memory) understands the query, dog and cat
+    search-agents run simultaneously, coordinator synthesises the result.
     """
 
     def _build_workflow(self) -> None:
         m = self.config.model
+        memory_client = self._container.memory_client if self._container else None
+        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+
         dog_searcher = BaseAgent(
             name="dog-search-agent",
             instructions=(
@@ -245,7 +311,7 @@ class ParallelShop(_BaseWorkflow):
             tools=self._tools,
             tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True, session_history_turns=2),
+            config=AgentConfig(log_to_session=False, session_history_turns=0),
         )
         cat_searcher = BaseAgent(
             name="cat-search-agent",
@@ -258,10 +324,10 @@ class ParallelShop(_BaseWorkflow):
             tools=self._tools,
             tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True, session_history_turns=2),
+            config=AgentConfig(log_to_session=False, session_history_turns=0),
         )
-        self._agent = ParallelAgent(
-            name="parallel-shop",
+        parallel = ParallelAgent(
+            name="parallel-inner",
             agents=[dog_searcher, cat_searcher],
             parallel_config=ParallelConfig(
                 merge_strategy=MergeStrategy.LLM_SUMMARIZE,
@@ -271,6 +337,30 @@ class ParallelShop(_BaseWorkflow):
                     "Group by animal type. Maximum 6 bullet points total."
                 ),
             ),
+        )
+
+        synthesiser = BaseAgent(
+            name="parallel-synthesiser",
+            instructions=(
+                "You are a pet shop assistant. "
+                "Given search results and the user's request, write a clear, concise response "
+                "grouped by animal type. Use product IDs and prices."
+            ),
+            model=m,
+            memory_config=AgentMemoryConfig(
+                search_memories=memory_enabled,
+                store_memories=memory_enabled,
+                search_scope=AgentMemoryScope.USER,
+                store_scope=AgentMemoryScope.USER,
+                search_limit=5,
+            ),
+            config=AgentConfig(log_to_session=False),
+        )
+
+        self._agent = ParallelCoordinatorAgent(
+            name="parallel-shop",
+            synthesiser=synthesiser,
+            parallel=parallel,
         )
 
 
@@ -313,35 +403,180 @@ class LoopShop(_BaseWorkflow):
 
 
 # =============================================================================
-# 4. Scatter — analyse p1, p2, p3 in parallel
+# 4. Scatter — coordinator wraps scatter analysts
 # =============================================================================
+
+@dataclass
+class ScatterCoordinatorAgent(BaseAgent):
+    """
+    Wrapper that gives scatter mode memory + session history at coordinator level.
+    Flow per request:
+      1. Direct LLM call (not a conversational agent) resolves the user's request
+         into ONE explicit task sentence using session history.
+      2. scatter analysts (stateless) receive the resolved task → parallel analysis.
+      3. scatter-inner/merge synthesises the final response.
+    One clean session turn saved at the end.
+    """
+    coordinator: BaseAgent | None = None
+    scatter: ScatterAgent | None = None
+
+    async def execute(self, input_text: str, runner: Any, context: Any, llm_client: Any = None) -> AgentResponse:
+        from orchestrator.agent.utils.context_utils import create_run_context
+        from orchestrator.llm.config import LLMConfig
+        from orchestrator.config import settings
+
+        if llm_client is None:
+            try:
+                from orchestrator.core.container import get_container
+                llm_client = get_container().llm_client
+            except Exception:
+                llm_client = None
+
+        # Step 1: Direct LLM call produces TWO things:
+        #   "task"   — one sentence for merge's "Original task" field
+        #   "slices" — N explicit per-product tasks, one per analyst agent
+        # Producing slices here bypasses the scatter split LLM, which misinterprets
+        # "compare 3 products" as "split 3 analytical dimensions across all products"
+        # instead of "one product per agent".
+        import json as _json
+        n_agents = len(self.scatter.agents)
+        resolved_task = input_text
+        input_slices: list[str] | None = None
+
+        if llm_client:
+            try:
+                history_msgs: list[dict] = []
+                if context.session_id and hasattr(runner, '_session_service') and runner._session_service:
+                    history = await runner._session_service.get_conversation_history(
+                        context.session_id, limit=6
+                    )
+                    history_msgs = history or []
+
+                system_prompt = (
+                    f"You are a task router for a pet shop analyst system with {n_agents} analyst agents.\n"
+                    "Read the conversation history and the user's message.\n"
+                    "Output a JSON object with two keys:\n"
+                    '  "task": one sentence summarising what the user wants to compare\n'
+                    f'  "slices": array of exactly {n_agents} strings, ONE PER PRODUCT — not one per analytical dimension\n'
+                    "Each slice: 'Fetch and assess [product name] ([price]) for value, quality, and suitability.'\n"
+                    "Resolve vague words ('those', 'them', 'the first one') to explicit product IDs using history.\n"
+                    "Output ONLY valid JSON — no markdown, no extra text.\n"
+                    "Example for 3 products:\n"
+                    '{"task": "Compare dog food p1 ($29.99), cat food p2 ($18.99), dog toy p5 ($6.99) for value.",\n'
+                    ' "slices": [\n'
+                    '   "Fetch and assess dog food p1 ($29.99) for value, quality, and suitability.",\n'
+                    '   "Fetch and assess cat food p2 ($18.99) for value, quality, and suitability.",\n'
+                    '   "Fetch and assess dog toy p5 ($6.99) for value, quality, and suitability."\n'
+                    " ]}"
+                )
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    *history_msgs,
+                    {"role": "user", "content": input_text},
+                ]
+                model = (self.coordinator.model if self.coordinator else None) or settings.default_llm_model
+                response = await llm_client.chat(
+                    messages=messages,
+                    config=LLMConfig(model=model, temperature=0.1, max_tokens=800),
+                    auto_session=False,
+                )
+                content = (response.content or "").strip()
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.strip()
+                parsed = _json.loads(content)
+                resolved_task = parsed.get("task", input_text)
+                input_slices = parsed.get("slices")
+                logger.info(f"ScatterCoordinator task: '{resolved_task}'")
+                logger.info(f"ScatterCoordinator slices: {input_slices}")
+            except Exception as e:
+                logger.warning(f"ScatterCoordinator routing failed ({e}), using raw input")
+
+        # Step 2: scatter analysts run on explicit per-product slices (stateless, no Redis).
+        # input_slices bypasses the scatter split LLM — each analyst gets exactly one product.
+        # scatter-inner/merge uses resolved_task as "Original task" for framing the synthesis.
+        _orig_slices = self.scatter.input_slices
+        if input_slices:
+            self.scatter.input_slices = input_slices
+        try:
+            scatter_ctx = create_run_context(
+                user_id=context.user_id,
+                conversation_id=context.conversation_id,
+            )
+            scatter_result = await self.scatter.execute(resolved_task, runner, scatter_ctx)
+        finally:
+            self.scatter.input_slices = _orig_slices
+
+        if context.session_id:
+            await runner.save_turn(
+                session_id=context.session_id,
+                user_message=input_text,
+                assistant_message=scatter_result.content or "",
+                agent=None,
+            )
+
+        return AgentResponse(
+            content=scatter_result.content,
+            agent_name=self.name,
+            status=ResponseStatus.SUCCESS,
+            usage=scatter_result.usage,
+        )
+
 
 class ScatterShop(_BaseWorkflow):
     """
-    Use case: "Compare p1, p2, p3 — which is best value?"
-    Three analyst-agents run in parallel, each analysing one product.
-    Results merged into a final recommendation.
+    Use case: "Compare dog food p1, cat food p2, dog toy p5 — which is best value?"
+    coordinator-agent (with memory) understands the query, three analyst-agents
+    analyse in parallel, coordinator synthesises the final recommendation.
     """
 
     def _build_workflow(self) -> None:
         m = self.config.model
-        analysts = [
-            make_analyst_agent(m),
-            make_analyst_agent(m),
-            make_analyst_agent(m),
-        ]
-        # Give each analyst a unique name
+        memory_client = self._container.memory_client if self._container else None
+        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+
+        analysts = [make_analyst_agent(self._tools, self._tool_executor, m) for _ in range(3)]
         for i, a in enumerate(analysts, 1):
             a.name = f"analyst-agent-{i}"
 
-        self._agent = ScatterAgent(
-            name="scatter-shop",
+        scatter = ScatterAgent(
+            name="scatter-inner",
             agents=analysts,
-            # input_slices=[
-            #     "Analyse product p1 (Dog Food Dry 5kg, $29.99). Is it good value?",
-            #     "Analyse product p2 (Cat Food Wet 12-pack, $18.99). Is it good value?",
-            #     "Analyse product p5 (Dog Toy Tennis Ball 3-pack, $6.99). Is it good value?",
-            # ],
+        )
+
+        coordinator = BaseAgent(
+            name="scatter-coordinator",
+            instructions=(
+                "You are a task router. "
+                "Read the user's message and conversation history, then output ONE sentence "
+                "that restates the request explicitly for product analysts. "
+                "Rules: "
+                "1. Never greet, never ask questions, never say you need more info. "
+                "2. Always resolve vague words ('those', 'them', 'the first one') to explicit "
+                "   product IDs using conversation history. "
+                "3. If products have prices in the message, include them. "
+                "4. Output exactly one sentence — nothing else. "
+                "Good: 'Compare dog food p1 ($29.99), cat food p2 ($18.99), dog toy p5 ($6.99) for value.' "
+                "Bad: 'Thank you! I need more details...' "
+                "Bad: 'Sure, let me help you compare...'"
+            ),
+            model=m,
+            memory_config=AgentMemoryConfig(
+                search_memories=memory_enabled,
+                store_memories=memory_enabled,
+                search_scope=AgentMemoryScope.USER,
+                store_scope=AgentMemoryScope.USER,
+                search_limit=5,
+            ),
+            config=AgentConfig(log_to_session=False),
+        )
+
+        self._agent = ScatterCoordinatorAgent(
+            name="scatter-shop",
+            coordinator=coordinator,
+            scatter=scatter,
         )
 
 
@@ -498,6 +733,10 @@ class RouterShop(_BaseWorkflow):
         cart = make_cart_agent(self._tools, self._tool_executor, m)
         support = make_support_agent(m)
 
+        # Specialists run statelessly — no cross-agent history bleed.
+        for specialist in (search, cart, support):
+            specialist.config.session_history_turns = 0
+
         self._agent = RouterAgent(
             name="router-shop",
             model=m,
@@ -512,10 +751,10 @@ class RouterShop(_BaseWorkflow):
                 ),
                 Route(
                     agent_name="support-agent",
-                    description="pet care advice, nutrition questions, general help",
+                    description="pet care advice, nutrition questions, general help, greetings, unclear intent",
                 ),
             ],
-            fallback_agent_name="search-agent",
+            fallback_agent_name="support-agent",
             router_config=RouterConfig(routing_strategy="llm"),
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=True),

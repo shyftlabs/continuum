@@ -362,12 +362,18 @@ class PlanningConfig:
     max_steps: int = 10
     enable_replanning: bool = False
     replan_on_failure: bool = True
+    planning_model: str | None = None
+    fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
+    strict_agent_pool: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "max_steps": self.max_steps,
             "enable_replanning": self.enable_replanning,
             "replan_on_failure": self.replan_on_failure,
+            "planning_model": self.planning_model,
+            "fail_strategy": self.fail_strategy.value,
+            "strict_agent_pool": self.strict_agent_pool,
         }
 
 

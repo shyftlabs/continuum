@@ -17,6 +17,7 @@ from orchestrator.agent.base import BaseAgent
 from orchestrator.agent.config import RouterConfig
 from orchestrator.agent.types import Route
 from orchestrator.config import settings
+from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
 from orchestrator.observability.trace_context import SpanScope
 
@@ -223,15 +224,16 @@ Agent name:"""
 
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config={
-                    "model": self.router_config.routing_model or self.model,
-                    "temperature": 0.1,  # Low temperature for consistent routing
-                    "max_tokens": 50,
-                },
+                config=LLMConfig(
+                    model=self.router_config.routing_model or self.model,
+                    temperature=0.1,
+                    max_tokens=50,
+                ),
+                auto_session=False,
             )
 
             # Parse response
-            result = response.content.strip().lower()
+            result = (response.content or "").strip().lower()
 
             # Find matching agent
             for route in self.routes:

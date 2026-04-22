@@ -185,6 +185,13 @@ class ReflectionAgent(BaseAgent):
             {"role": "user", "content": self.reflection_config.critique_prompt},
         ]
 
+        logger.info(
+            "===== CRITIQUE PROMPT [%s] =====\n%s\n%s\n=========================",
+            self.name,
+            response_content[:500],
+            self.reflection_config.critique_prompt,
+        )
+
         try:
             llm_response = await llm_client.chat(
                 messages=messages,
@@ -200,7 +207,9 @@ class ReflectionAgent(BaseAgent):
                     total_tokens=llm_response.usage.total_tokens or 0,
                 )
 
-            return {"verdict": (llm_response.content or "PASS").strip(), "usage": usage}
+            verdict = (llm_response.content or "PASS").strip()
+            logger.info("===== CRITIQUE VERDICT [%s] =====\n%s\n=========================", self.name, verdict)
+            return {"verdict": verdict, "usage": usage}
 
         except Exception as e:
             logger.warning(f"ReflectionAgent critique call failed: {e}")
