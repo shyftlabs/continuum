@@ -7,6 +7,7 @@ Simplified version for streaming that shares base logic with Executor.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -55,6 +56,10 @@ class StreamExecutor(IStreamExecutor):
         run_state: RunState,
     ) -> AsyncIterator[AgentEvent]:
         """
+        .. deprecated::
+            Use ``AgentRunner.run_stream()`` instead. This class does not execute
+            tools — it emits placeholder events only.
+
         Execute with streaming output.
 
         Args:
@@ -66,6 +71,12 @@ class StreamExecutor(IStreamExecutor):
         Yields:
             AgentEvent for each step
         """
+        warnings.warn(
+            "StreamExecutor.execute_stream() does not execute tools and will be removed. "
+            "Use AgentRunner.run_stream() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         turn = 0
 
         # Emit run start

@@ -148,123 +148,115 @@ class ScatterAgent(BaseAgent):
         if llm_client is None:
             llm_client = self._get_llm()
 
-        # Disable sub-agent Redis saves; one clean pair is saved at the end.
-        _orig_log = {a.name: a.config.log_to_session for a in self.agents}
-        for a in self.agents:
-            a.config.log_to_session = False
-        try:
-            async with SpanScope(
-                f"workflow.scatter.{self.name}",
-                input={
-                    "input_preview": input_text[:500],
-                    "agent_count": len(self.agents),
-                    "agents": [a.name for a in self.agents],
-                    "explicit_slices": self.input_slices is not None,
-                },
-                metadata={"workflow_type": "scatter"},
-            ) as workflow_span:
+        context.suppress_session_log = True
+        async with SpanScope(
+            f"workflow.scatter.{self.name}",
+            input={
+                "input_preview": input_text[:500],
+                "agent_count": len(self.agents),
+                "agents": [a.name for a in self.agents],
+                "explicit_slices": self.input_slices is not None,
+            },
+            metadata={"workflow_type": "scatter"},
+        ) as workflow_span:
 
-                # Step 1 — determine input slices
-                slices = await self._get_slices(input_text, llm_client)
-                logger.info(
-                    f"ScatterAgent '{self.name}': {len(slices)} slices for "
-                    f"{len(self.agents)} agents"
+            # Step 1 — determine input slices
+            slices = await self._get_slices(input_text, llm_client)
+            logger.info(
+                f"ScatterAgent '{self.name}': {len(slices)} slices for "
+                f"{len(self.agents)} agents"
+            )
+            workflow_span.add_metadata("slices_preview", [s[:100] for s in slices])
+
+            # Step 2 — launch all agents concurrently with their slices
+            tasks = [
+                asyncio.create_task(
+                    self._run_agent_safe(agent, slice_input, runner, context.branch_copy())
                 )
-                workflow_span.add_metadata("slices_preview", [s[:100] for s in slices])
+                for agent, slice_input in zip(self.agents, slices)
+            ]
 
-                # Step 2 — launch all agents concurrently with their slices
-                tasks = [
-                    asyncio.create_task(
-                        self._run_agent_safe(agent, slice_input, runner, context)
-                    )
-                    for agent, slice_input in zip(self.agents, slices)
-                ]
+            try:
+                done, pending = await asyncio.wait(
+                    tasks,
+                    timeout=self.scatter_config.timeout,
+                    return_when=asyncio.ALL_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+            except Exception as e:
+                raise ParallelWorkflowError(
+                    f"Scatter execution failed: {e}",
+                    run_id=context.run_id,
+                    original_error=e,
+                ) from e
 
-                try:
-                    done, pending = await asyncio.wait(
-                        tasks,
-                        timeout=self.scatter_config.timeout,
-                        return_when=asyncio.ALL_COMPLETED,
-                    )
-                    for task in pending:
-                        task.cancel()
-                except Exception as e:
+            # Step 3 — collect results
+            successful: dict[str, AgentResponse] = {}
+            failed: dict[str, str] = {}
+
+            for agent, task in zip(self.agents, tasks):
+                if task.done():
+                    try:
+                        successful[agent.name] = task.result()
+                    except Exception as e:
+                        failed[agent.name] = str(e)
+                else:
+                    failed[agent.name] = "Timed out"
+
+            if failed:
+                logger.warning(f"ScatterAgent: failed branches: {list(failed.keys())}")
+                if self.scatter_config.fail_strategy == FailStrategy.REQUIRE_ALL:
                     raise ParallelWorkflowError(
-                        f"Scatter execution failed: {e}",
+                        f"Some branches failed: {list(failed.keys())}",
+                        failed_agents=list(failed.keys()),
                         run_id=context.run_id,
-                        original_error=e,
-                    ) from e
-
-                # Step 3 — collect results
-                successful: dict[str, AgentResponse] = {}
-                failed: dict[str, str] = {}
-
-                for agent, task in zip(self.agents, tasks):
-                    if task.done():
-                        try:
-                            successful[agent.name] = task.result()
-                        except Exception as e:
-                            failed[agent.name] = str(e)
-                    else:
-                        failed[agent.name] = "Timed out"
-
-                if failed:
-                    logger.warning(f"ScatterAgent: failed branches: {list(failed.keys())}")
-                    if self.scatter_config.fail_strategy == FailStrategy.REQUIRE_ALL:
-                        raise ParallelWorkflowError(
-                            f"Some branches failed: {list(failed.keys())}",
-                            failed_agents=list(failed.keys()),
-                            run_id=context.run_id,
-                        )
-                    if self.scatter_config.fail_strategy == FailStrategy.FAIL_FAST and not successful:
-                        raise ParallelWorkflowError(
-                            "All branches failed",
-                            failed_agents=list(failed.keys()),
-                            run_id=context.run_id,
-                        )
-
-                if not successful:
-                    return AgentResponse(
-                        content="All scatter branches failed",
-                        agent_name=self.name,
-                        status=ResponseStatus.ERROR,
-                        error="; ".join(f"{k}: {v}" for k, v in failed.items()),
+                    )
+                if self.scatter_config.fail_strategy == FailStrategy.FAIL_FAST and not successful:
+                    raise ParallelWorkflowError(
+                        "All branches failed",
+                        failed_agents=list(failed.keys()),
+                        run_id=context.run_id,
                     )
 
-                # Step 4 — merge
-                merged = await self._merge_results(successful, input_text, llm_client)
-                total_usage = TokenUsage()
-                for resp in successful.values():
-                    total_usage = total_usage.add(resp.usage)
-
-                workflow_span.set_output({
-                    "success": True,
-                    "branches_succeeded": len(successful),
-                    "branches_failed": len(failed),
-                    "total_tokens": total_usage.total_tokens,
-                })
-
-                result = AgentResponse(
-                    content=merged,
+            if not successful:
+                return AgentResponse(
+                    content="All scatter branches failed",
                     agent_name=self.name,
-                    status=ResponseStatus.SUCCESS,
-                    usage=total_usage,
-                    agents_used=list(successful.keys()),
+                    status=ResponseStatus.ERROR,
+                    error="; ".join(f"{k}: {v}" for k, v in failed.items()),
                 )
 
-            if context.session_id:
-                await runner.save_turn(
-                    session_id=context.session_id,
-                    user_message=input_text,
-                    assistant_message=merged,
-                    agent=None,
-                )
+            # Step 4 — merge
+            merged = await self._merge_results(successful, input_text, llm_client)
+            total_usage = TokenUsage()
+            for resp in successful.values():
+                total_usage = total_usage.add(resp.usage)
 
-            return result
-        finally:
-            for a in self.agents:
-                a.config.log_to_session = _orig_log[a.name]
+            workflow_span.set_output({
+                "success": True,
+                "branches_succeeded": len(successful),
+                "branches_failed": len(failed),
+                "total_tokens": total_usage.total_tokens,
+            })
 
+            result = AgentResponse(
+                content=merged,
+                agent_name=self.name,
+                status=ResponseStatus.SUCCESS,
+                usage=total_usage,
+                agents_used=list(successful.keys()),
+            )
+
+        if context.session_id:
+            await runner.save_turn(
+                session_id=context.session_id,
+                user_message=input_text,
+                assistant_message=merged,
+                agent=None,
+            )
+
+        return result
     async def _get_slices(
         self,
         input_text: str,

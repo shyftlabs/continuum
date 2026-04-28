@@ -231,7 +231,7 @@ class HandoffExecutor(IHandoffExecutor):
                 conversation_id=context.conversation_id,
                 trace_id=context.trace_id,
                 agent_stack=run_state.agent_stack.copy(),
-                max_turns=context.max_turns - run_state.turn_count,
+                max_turns=max(1, context.max_turns - run_state.turn_count),
                 is_handoff=True,
                 data_labels=context.data_labels.copy(),
             )

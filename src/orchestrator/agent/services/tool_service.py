@@ -202,6 +202,7 @@ class ToolService(IToolService):
 
             # Try global tool executor
             if self._tool_executor:
+                logger.warning(f"⚠️ TOOL FALLBACK: {tool_name} retrying on global executor (agent executor failed)")
                 try:
                     # Get server name from tool registry if available
                     if (

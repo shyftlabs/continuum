@@ -108,10 +108,7 @@ class SequentialAgent(BaseAgent):
         Returns:
             Final AgentResponse from the pipeline
         """
-        # Disable sub-agent Redis saves; one clean pair is saved at the end.
-        _orig_log = {a.name: a.config.log_to_session for a in self.agents}
-        for a in self.agents:
-            a.config.log_to_session = False
+        context.suppress_session_log = True
         try:
             current_input = input_text
             all_responses: list[AgentResponse] = []
@@ -258,8 +255,6 @@ class SequentialAgent(BaseAgent):
 
             return result
         finally:
-            for a in self.agents:
-                a.config.log_to_session = _orig_log[a.name]
             context.metadata.pop("pipeline_context", None)
 
     def to_dict(self) -> dict[str, Any]:

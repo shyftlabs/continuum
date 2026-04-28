@@ -85,10 +85,8 @@ class ReflectionAgent(BaseAgent):
         Returns:
             Final AgentResponse (either passing or last attempt)
         """
-        # Disable inner agent Redis saves; one clean pair is saved at the end.
-        _orig_log = self.agent.config.log_to_session
+        context.suppress_session_log = True
         _orig_hist = self.agent.config.session_history_turns
-        self.agent.config.log_to_session = False
         try:
             total_usage = TokenUsage()
 
@@ -160,7 +158,6 @@ class ReflectionAgent(BaseAgent):
                 turn_count=response.turn_count,
             )
         finally:
-            self.agent.config.log_to_session = _orig_log
             self.agent.config.session_history_turns = _orig_hist
 
     async def _critique(

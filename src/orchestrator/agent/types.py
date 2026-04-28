@@ -916,6 +916,12 @@ class RunContext:
     # because the handoff messages already carry the summarized context.
     is_handoff: bool = False
 
+    # Set by workflow wrappers (Sequential, Parallel, etc.) so sub-agents skip
+    # their individual session saves — the wrapper does one clean save at the end.
+    # Lives here instead of agent.config so concurrent requests each have their
+    # own copy and cannot stomp on each other.
+    suppress_session_log: bool = False
+
     # Data sensitivity labels carried from Orla-style taint tracking.
     # Labels propagate through handoffs so downstream agents know what
     # sensitive categories (e.g. "pii", "phi") are in scope for this run.
@@ -946,6 +952,34 @@ class RunContext:
             "data_labels": sorted(self.data_labels),
             "priority": self.priority,
         }
+
+    def branch_copy(self) -> "RunContext":
+        """
+        Create an isolated copy of this context for use in a parallel branch.
+
+        All mutable collections are shallow-copied so concurrent branches cannot
+        contaminate each other's retrieved_memories, metadata, agent_stack, etc.
+        Immutable scalar fields (session_id, run_id, trace_id, …) are shared by
+        value — no copy needed.
+
+        Usage::
+
+            tasks = [
+                runner.run(agent=a, input=text, context=context.branch_copy())
+                for a in agents
+            ]
+        """
+        from dataclasses import replace  # local import — types.py has no circular dep here
+        return replace(
+            self,
+            metadata=dict(self.metadata),             # isolate — branches may write pipeline_context
+            retrieved_memories=[],                    # isolate — each branch does its own mem retrieval
+            agent_stack=list(self.agent_stack),       # isolate — branch handoffs shouldn't affect parent stack
+            handoff_chain=list(self.handoff_chain),   # isolate — same reason
+            tags=list(self.tags),                     # isolate — defensive copy
+            data_labels=set(self.data_labels),        # isolate — defensive copy
+            usage=TokenUsage(),                       # isolate — each branch tracks its own token usage
+        )
 
 
 @dataclass

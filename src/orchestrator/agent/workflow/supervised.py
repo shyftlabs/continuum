@@ -130,10 +130,7 @@ class SupervisedSequentialAgent(BaseAgent):
         Returns:
             Final AgentResponse from the last step
         """
-        # Disable sub-agent Redis saves; one clean pair is saved at the end.
-        _orig_log = {a.name: a.config.log_to_session for a in self.agents}
-        for a in self.agents:
-            a.config.log_to_session = False
+        context.suppress_session_log = True
         try:
             llm_client = self._get_llm()
             current_input = input_text
@@ -325,8 +322,6 @@ class SupervisedSequentialAgent(BaseAgent):
 
             return result
         finally:
-            for a in self.agents:
-                a.config.log_to_session = _orig_log[a.name]
             context.metadata.pop("pipeline_context", None)
 
     async def _score_output(

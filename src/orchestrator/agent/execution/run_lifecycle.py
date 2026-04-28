@@ -150,7 +150,12 @@ class RunLifecycle:
                 )
 
             if agent.tools:
-                error_metadata["available_tools"] = [t.name for t in agent.tools[:10]]
+                error_metadata["available_tools"] = [
+                    t.function.name
+                    if hasattr(t, "function")
+                    else t.get("function", {}).get("name", "")
+                    for t in agent.tools[:10]
+                ]
 
             report_error(
                 error,

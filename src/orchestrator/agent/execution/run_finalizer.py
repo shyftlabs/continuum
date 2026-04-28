@@ -198,7 +198,7 @@ class RunFinalizer:
     ) -> None:
         """Save messages and tool context to session."""
         original_session_id = context.session_id
-        if not (agent.config.log_to_session and original_session_id and self._session_client):
+        if not (agent.config.log_to_session and not context.suppress_session_log and original_session_id and self._session_client):
             return
 
         try:

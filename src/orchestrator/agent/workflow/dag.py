@@ -211,16 +211,8 @@ class DAGAgent(BaseAgent):
             metadata={"workflow_type": "dag"},
         ) as workflow_span:
 
-            # Disable sub-agent Redis saves; one pair saved at the end.
-            _orig_log = {sid: s.agent.config.log_to_session for sid, s in self._stages.items()}
-            for s in self._stages.values():
-                s.agent.config.log_to_session = False
-
-            try:
-                results = await self._run_dag(input_text, runner, context)
-            finally:
-                for sid, s in self._stages.items():
-                    s.agent.config.log_to_session = _orig_log[sid]
+            context.suppress_session_log = True
+            results = await self._run_dag(input_text, runner, context)
 
             # Collect successful results and any errors
             successful: dict[str, AgentResponse] = {}

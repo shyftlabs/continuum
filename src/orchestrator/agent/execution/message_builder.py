@@ -161,7 +161,7 @@ class MessageBuilder(IMessageBuilder):
                 )
 
         # Inject memory facts early (user profile/background — stable context like instructions)
-        if agent.memory_config.search_memories and self._memory_service:
+        if agent.memory_config and agent.memory_config.search_memories and self._memory_service:
             try:
                 query = input if isinstance(input, str) else str(input)
                 memories = await self._memory_service.retrieve_memories(agent, query, context)

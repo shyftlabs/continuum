@@ -143,11 +143,7 @@ class PlannerAgent(BaseAgent):
         total_usage = TokenUsage()
         completed: list[dict[str, Any]] = []
 
-        # Disable sub-agent Redis saves; one clean pair is saved at the end.
-        _all_agents = [self.agent] if self.agent else list(self.agents)
-        _orig_log = {a.name: a.config.log_to_session for a in _all_agents}
-        for a in _all_agents:
-            a.config.log_to_session = False
+        context.suppress_session_log = True
         try:
             async with SpanScope(
                 f"workflow.planner.{self.name}",
@@ -344,8 +340,6 @@ class PlannerAgent(BaseAgent):
 
             return result
         finally:
-            for a in _all_agents:
-                a.config.log_to_session = _orig_log[a.name]
             context.metadata.pop("pipeline_context", None)
 
     # -------------------------------------------------------------------------
