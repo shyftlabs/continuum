@@ -10,11 +10,13 @@ import abc
 import asyncio
 import inspect
 import json
+import typing
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypeVar, Union
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, StdioServerParameters, stdio_client
@@ -23,7 +25,7 @@ from mcp.client.session import MessageHandlerFnT
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
-from mcp.types import CallToolResult, GetPromptResult, InitializeResult, ListPromptsResult
+from mcp.types import CallToolResult, GetPromptResult, InitializeResult, ListPromptsResult, TextContent
 from typing_extensions import TypedDict
 
 from orchestrator.exceptions import ValidationError
@@ -168,6 +170,15 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         self.exit_stack: AsyncExitStack = AsyncExitStack()
         self._cleanup_lock: asyncio.Lock = asyncio.Lock()
         self._cleanup_called: bool = False
+
+        # In-flight call tracking for graceful drain before cleanup.
+        # _active_calls counts calls currently inside call_tool().
+        # _no_active_calls is set when the counter reaches zero so cleanup()
+        # can await it without polling.
+        self._active_calls: int = 0
+        self._no_active_calls: asyncio.Event = asyncio.Event()
+        self._no_active_calls.set()  # initially no active calls
+
         self.cache_tools_list = cache_tools_list
         self.server_initialize_result: InitializeResult | None = None
         self.validate_on_connect = validate_on_connect
@@ -367,6 +378,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         session = self.session
         assert session is not None
 
+        # Register this call so cleanup() can drain before tearing down the connection.
+        # Increment is synchronous (no await between it and the clear), so no race.
+        self._active_calls += 1
+        self._no_active_calls.clear()
         try:
             return await self._run_with_retries(lambda: session.call_tool(tool_name, arguments))
         except Exception as e:
@@ -407,6 +422,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 ) from e
             # Re-raise other errors as-is
             raise
+        finally:
+            self._active_calls -= 1
+            if self._active_calls == 0:
+                self._no_active_calls.set()
 
     async def list_prompts(self) -> ListPromptsResult:
         """List the prompts available on the server."""
@@ -442,6 +461,21 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 return
 
             self._cleanup_called = True
+
+            # Drain in-flight tool calls before tearing down the connection.
+            # Orla-style: drain → close → signal done.
+            if self._active_calls > 0:
+                logger.debug(
+                    f"MCP cleanup: waiting for {self._active_calls} in-flight "
+                    f"call(s) to complete on server '{self.name}'"
+                )
+                try:
+                    await asyncio.wait_for(self._no_active_calls.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"MCP cleanup: timed out waiting for in-flight calls to drain "
+                        f"on server '{self.name}' ({self._active_calls} still active)"
+                    )
 
             try:
                 # Check if current task is cancelled before attempting cleanup
@@ -833,3 +867,280 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+
+# =============================================================================
+# In-process function tool server (no subprocess / no network)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Schema generation helpers
+# ---------------------------------------------------------------------------
+
+def _type_to_schema(hint: Any) -> dict[str, Any]:
+    """Convert a single Python type hint to a JSON Schema fragment.
+
+    Handles: str, int, float, bool, list, dict, Optional[X].
+    Falls back to {} (open schema) for anything more complex.
+    """
+    origin = getattr(hint, "__origin__", None)
+    args = getattr(hint, "__args__", None)
+
+    # Optional[X]  →  Union[X, None]
+    if origin is Union and args and type(None) in args:
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1:
+            return _type_to_schema(non_none[0])
+        return {}
+
+    if hint is str:
+        return {"type": "string"}
+    if hint is int:
+        return {"type": "integer"}
+    if hint is float:
+        return {"type": "number"}
+    if hint is bool:
+        return {"type": "boolean"}
+    if hint is list or origin is list:
+        return {"type": "array"}
+    if hint is dict or origin is dict:
+        return {"type": "object"}
+
+    return {}  # unknown type — open schema, LLM sees no constraint
+
+
+def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
+    """Build a JSON Schema ``{"type": "object", ...}`` from a function's signature.
+
+    Parameters without type hints get an open ``{}`` schema.
+    Parameters without defaults (and not Optional) are added to ``required``.
+    """
+    try:
+        hints = typing.get_type_hints(fn)
+    except Exception:
+        hints = {}
+
+    sig = inspect.signature(fn)
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+
+        hint = hints.get(name)
+        prop = _type_to_schema(hint) if hint is not None else {}
+        properties[name] = prop
+
+        if param.default is inspect.Parameter.empty:
+            # Optional[X] parameters are not required even without a default
+            origin = getattr(hint, "__origin__", None)
+            args = getattr(hint, "__args__", None)
+            is_optional = origin is Union and args and type(None) in args
+            if not is_optional:
+                required.append(name)
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def function_tool(fn: Callable[..., Any]) -> "FunctionTool":
+    """Decorator that converts a Python function to a ``FunctionTool``.
+
+    The tool name is taken from ``fn.__name__``.
+    The description is the first line of the docstring (or empty string).
+    The input schema is generated from type hints — supports ``str``, ``int``,
+    ``float``, ``bool``, ``list``, ``dict``, and ``Optional[X]``.
+
+    The function may use natural Python parameter signatures; arguments are
+    unpacked from the dict that ``call_tool`` receives::
+
+        @function_tool
+        def format_currency(amount: float, currency: str = "USD") -> str:
+            \"\"\"Format a number as a currency string.\"\"\"
+            return f"{amount:,.2f} {currency}"
+
+        server = MCPServerFunction("utils", [format_currency])
+    """
+    name = fn.__name__
+    doc = (fn.__doc__ or "").strip()
+    description = doc.split("\n")[0].strip() if doc else ""
+    input_schema = _schema_from_function(fn)
+
+    # Wrap so call_tool can pass a dict while fn uses natural kwargs signatures.
+    if inspect.iscoroutinefunction(fn):
+        async def _wrapped(args: dict[str, Any]) -> Any:
+            return await fn(**args)
+    else:
+        def _wrapped(args: dict[str, Any]) -> Any:  # type: ignore[misc]
+            return fn(**args)
+
+    return FunctionTool(name=name, fn=_wrapped, description=description, input_schema=input_schema)
+
+
+def _coerce_to_function_tool(item: "FunctionTool | Callable[..., Any] | dict[str, Any]") -> "FunctionTool":
+    """Normalise the three accepted tool formats into a ``FunctionTool``.
+
+    Accepted formats:
+    - ``FunctionTool`` dataclass — passed through unchanged.
+    - Callable — schema generated from type hints via ``function_tool()``.
+    - dict — must have ``"name"`` and ``"fn"`` keys; ``"description"`` and
+      ``"input_schema"`` are optional.
+    """
+    if isinstance(item, FunctionTool):
+        return item
+    if callable(item):
+        return function_tool(item)
+    if isinstance(item, dict):
+        fn = item.get("fn")
+        if fn is None or not callable(fn):
+            raise ValueError(
+                "Tool dict must contain a callable 'fn' key. "
+                f"Got keys: {list(item.keys())}"
+            )
+        name = item.get("name") or getattr(fn, "__name__", "unknown")
+        description = item.get("description") or (fn.__doc__ or "").strip().split("\n")[0]
+        input_schema = item.get("input_schema") or _schema_from_function(fn)
+        return FunctionTool(name=name, fn=fn, description=description, input_schema=input_schema)
+    raise TypeError(
+        f"Expected FunctionTool, callable, or dict — got {type(item).__name__}"
+    )
+
+
+@dataclass
+class FunctionTool:
+    """A single Python function exposed as an MCP-compatible tool.
+
+    Args:
+        name: Tool name (used as the MCP tool identifier).
+        fn: Sync or async callable that receives ``dict[str, Any]`` arguments
+            and returns any JSON-serialisable value (or raises on failure).
+        description: Human-readable description passed to the LLM.
+        input_schema: JSON Schema for the tool's arguments.  Defaults to an
+            open ``{"type": "object"}`` if omitted.
+    """
+
+    name: str
+    fn: Callable[[dict[str, Any]], Any]
+    description: str = ""
+    input_schema: dict[str, Any] = field(default_factory=lambda: {"type": "object"})
+
+
+class MCPServerFunction(MCPServer):
+    """Wraps plain Python callables as an in-process MCPServer.
+
+    Tool execution always happens in the calling Python process — never routed
+    through a subprocess or network connection. This is an explicit design
+    contract: in-process tools have direct access to your application's state,
+    databases, and local APIs without any serialization overhead.
+
+    Accepts three tool formats:
+
+    1. ``FunctionTool`` dataclass — full control over name, description, schema.
+    2. Decorated function via ``@function_tool`` — schema auto-generated from
+       type hints, description from docstring.
+    3. Plain callable — same auto-generation as ``@function_tool``.
+    4. Dict with ``"fn"`` key — ``{"name": ..., "description": ...,
+       "input_schema": ..., "fn": ...}``.
+
+    Example::
+
+        # FunctionTool (explicit schema)
+        server = MCPServerFunction("utils", [
+            FunctionTool(
+                name="format_currency",
+                description="Format a number as USD",
+                input_schema={
+                    "type": "object",
+                    "properties": {"amount": {"type": "number"}},
+                    "required": ["amount"],
+                },
+                fn=lambda args: f"${args['amount']:,.2f}",
+            ),
+        ])
+
+        # @function_tool decorator (auto-schema)
+        @function_tool
+        def add(a: int, b: int) -> int:
+            \"\"\"Add two integers.\"\"\"
+            return a + b
+
+        server = MCPServerFunction("math", [add])
+
+        # Plain callable (auto-schema from type hints)
+        def multiply(a: int, b: int) -> int:
+            \"\"\"Multiply two integers.\"\"\"
+            return a * b
+
+        server = MCPServerFunction("math", [multiply])
+
+        executor = ToolExecutor({server: None})
+        await executor.initialize()
+    """
+
+    def __init__(
+        self,
+        name: str,
+        tools: list[FunctionTool | Callable[..., Any] | dict[str, Any]],
+        context_config: ToolContextConfig | None = None,
+    ) -> None:
+        super().__init__(context_config=context_config)
+        self._name = name
+        self._registry: dict[str, tuple[MCPTool, Callable[[dict[str, Any]], Any]]] = {}
+        for item in tools:
+            ft = _coerce_to_function_tool(item)
+            mcp_tool = MCPTool(
+                name=ft.name,
+                description=ft.description,
+                inputSchema=ft.input_schema,
+            )
+            self._registry[ft.name] = (mcp_tool, ft.fn)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def connect(self) -> None:
+        pass  # No external connection needed.
+
+    async def cleanup(self) -> None:
+        pass  # No resources to release.
+
+    async def list_tools(self, metadata: dict[str, Any] | None = None) -> list[MCPTool]:
+        return [mcp_tool for mcp_tool, _ in self._registry.values()]
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+        if tool_name not in self._registry:
+            raise MCPError(
+                f"Tool '{tool_name}' not registered on server '{self._name}'",
+                server_name=self._name,
+                tool_name=tool_name,
+            )
+        _, fn = self._registry[tool_name]
+        args = arguments or {}
+        try:
+            if inspect.iscoroutinefunction(fn):
+                result = await fn(args)
+            else:
+                result = fn(args)
+            text = result if isinstance(result, str) else json.dumps(result)
+            return CallToolResult(content=[TextContent(type="text", text=text)])
+        except Exception as e:
+            error_text = json.dumps({"error": str(e), "error_type": type(e).__name__})
+            return CallToolResult(
+                content=[TextContent(type="text", text=error_text)],
+                isError=True,
+            )
+
+    async def list_prompts(self) -> ListPromptsResult:
+        return ListPromptsResult(prompts=[])
+
+    async def get_prompt(
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> GetPromptResult:
+        raise MCPError(
+            f"Server '{self._name}' has no prompts",
+            server_name=self._name,
+        )

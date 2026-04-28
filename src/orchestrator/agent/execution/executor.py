@@ -101,7 +101,7 @@ class Executor(IExecutor):
             reasoning_text, reasoning_usage = await self._run_reasoning_pass(
                 messages=messages,
                 agent=agent,
-                session_id=context.session_id,
+                context=context,
             )
             messages.append(
                 {"role": "system", "content": f"<reasoning>\n{reasoning_text}\n</reasoning>"}
@@ -178,6 +178,8 @@ class Executor(IExecutor):
                         if context.session_id
                         else None,
                         auto_session=False,  # Executor manages the message loop
+                        priority=context.priority,
+                        stage_priority=agent.config.stage_priority if agent.config else 5,
                     )
                 except Exception as e:
                     turn_span.set_error(str(e))
@@ -520,7 +522,7 @@ class Executor(IExecutor):
         self,
         messages: list[dict[str, Any]],
         agent: "BaseAgent",
-        session_id: str | None,
+        context: RunContext,
     ) -> tuple[str, TokenUsage]:
         """
         Run a silent think-first LLM call and return (reasoning_text, token_usage).
@@ -544,8 +546,10 @@ class Executor(IExecutor):
         response = await self.llm_client.chat(
             messages=reasoning_messages,
             config=reasoning_config,
-            session_id=session_id,
+            session_id=context.session_id,
             auto_session=False,
+            priority=context.priority,
+            stage_priority=agent.config.stage_priority if agent.config else 5,
         )
 
         usage = TokenUsage()
@@ -597,6 +601,8 @@ class Executor(IExecutor):
                 config=llm_config,
                 session_id=context.session_id,
                 auto_session=False,
+                priority=context.priority,
+                stage_priority=agent.config.stage_priority if agent.config else 5,
             )
 
             if response.usage:

@@ -8,13 +8,16 @@ agent capabilities with external tools and resources.
 try:
     from .executor import ToolExecutor
     from .mcp import (
+        FunctionTool,
         MCPServer,
+        MCPServerFunction,
         MCPServerSse,
         MCPServerSseParams,
         MCPServerStdio,
         MCPServerStdioParams,
         MCPServerStreamableHttp,
         MCPServerStreamableHttpParams,
+        function_tool,
     )
     from .schema import (
         ensure_strict_json_schema,
@@ -39,12 +42,16 @@ except ImportError:
 __all__ = [
     # MCP Server classes
     "MCPServer",
+    "MCPServerFunction",
     "MCPServerSse",
     "MCPServerSseParams",
     "MCPServerStdio",
     "MCPServerStdioParams",
     "MCPServerStreamableHttp",
     "MCPServerStreamableHttpParams",
+    # In-process function tools
+    "FunctionTool",
+    "function_tool",
     # Utilities
     "MCPUtil",
     "ToolExecutor",

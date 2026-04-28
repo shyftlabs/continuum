@@ -28,6 +28,7 @@ from orchestrator.tools.util import MCPUtil
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
+    from orchestrator.security.policy import PolicyStore
     from orchestrator.tools.mcp import MCPServer
 
 logger = get_logger(__name__)
@@ -444,6 +445,8 @@ class ToolExecutor:
         trace_id: str | None = None,
         span_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
     ) -> ChatMessage:
         """
         Execute a single tool call and return the result as a ChatMessage.
@@ -459,12 +462,16 @@ class ToolExecutor:
             trace_id: Optional trace ID for Langfuse correlation.
             span_id: Optional parent span ID for nesting.
             metadata: Optional additional metadata.
+            policy_store: Optional access control policy store. When provided,
+                a "tool:<tool_name>" resource check is performed before execution.
+            subject: Caller identity for policy evaluation (typically agent name).
 
         Returns:
             ChatMessage with role="tool" containing the tool result.
 
         Raises:
             MCPToolError: If the tool is not found or execution fails.
+            ToolAccessDeniedError: If a policy denies the tool call.
         """
         tool_name = tool_call.function.name
 
@@ -477,6 +484,19 @@ class ToolExecutor:
             )
 
         server, tool = self.tool_registry[tool_name]
+
+        # Access control check (deny-overrides policy engine)
+        if policy_store is not None and subject is not None:
+            from orchestrator.agent.exceptions import ToolAccessDeniedError
+
+            decision = policy_store.check(subject, f"tool:{tool_name}")
+            if not decision.allowed:
+                raise ToolAccessDeniedError(
+                    tool_name=tool_name,
+                    policy_name=decision.policy_name,
+                    subject=subject,
+                    denial_message=decision.denial_message,
+                )
 
         # Parse arguments
         try:
@@ -525,10 +545,20 @@ class ToolExecutor:
                         extra={"tool_name": tool_name, "server_name": server.name},
                     )
 
+                # When the MCP server reports isError=True the tool ran but produced
+                # a failure. Wrap it in the same error envelope used by the exception
+                # paths so the LLM receives a consistent structure it can act on.
+                if artifact.is_error:
+                    content = json.dumps(
+                        {"error": result, "error_type": "MCPToolError", "is_error": True}
+                    )
+                else:
+                    content = result
+
                 # Return as ChatMessage with tool role
                 return ChatMessage(
                     role="tool",
-                    content=result,
+                    content=content,
                     tool_call_id=tool_call.id,
                 )
             except TimeoutError:
@@ -614,6 +644,8 @@ class ToolExecutor:
         trace_id: str | None = None,
         span_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
     ) -> list[ChatMessage]:
         """
         Execute multiple tool calls and return results as ChatMessages.
@@ -623,6 +655,8 @@ class ToolExecutor:
             trace_id: Optional trace ID for Langfuse correlation.
             span_id: Optional parent span ID for nesting.
             metadata: Optional additional metadata.
+            policy_store: Optional access control policy store passed to each call.
+            subject: Caller identity for policy evaluation (typically agent name).
 
         Returns:
             List of ChatMessage objects with role="tool" containing tool results.
@@ -632,24 +666,47 @@ class ToolExecutor:
         # Execute all tool calls concurrently with return_exceptions=True
         # to prevent one tool failure from cancelling all other in-flight calls
         tasks = [
-            self.execute_tool_call(tc, trace_id=trace_id, span_id=span_id, metadata=metadata)
+            self.execute_tool_call(
+                tc,
+                trace_id=trace_id,
+                span_id=span_id,
+                metadata=metadata,
+                policy_store=policy_store,
+                subject=subject,
+            )
             for tc in tool_calls
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Convert exceptions to error ChatMessages so they can be reported to LLM
+        from orchestrator.agent.exceptions import ToolAccessDeniedError
+
         processed: list[ChatMessage] = []
         for i, result in enumerate(results):
             if isinstance(result, BaseException):
                 tc = tool_calls[i]
-                logger.error(
-                    f"Tool call '{tc.function.name}' failed: {result}",
-                    exc_info=result,
-                )
+                if isinstance(result, ToolAccessDeniedError):
+                    # Policy denial is expected — log at INFO without traceback
+                    logger.info(f"Tool '{tc.function.name}' denied by policy: {result}")
+                    denial_message = result.context.get("denial_message", "")
+                    if denial_message:
+                        content = f"POLICY DENIED: {denial_message}"
+                    else:
+                        policy_name = result.context.get("policy_name", "unknown")
+                        content = (
+                            f"POLICY DENIED: '{tc.function.name}' was blocked by policy '{policy_name}'. "
+                            "Inform the user this operation is not permitted."
+                        )
+                else:
+                    logger.error(
+                        f"Tool call '{tc.function.name}' failed: {result}",
+                        exc_info=result,
+                    )
+                    content = f"Error executing tool '{tc.function.name}': {result}"
                 processed.append(
                     ChatMessage(
                         role="tool",
-                        content=f"Error executing tool '{tc.function.name}': {result}",
+                        content=content,
                         tool_call_id=tc.id,
                     )
                 )

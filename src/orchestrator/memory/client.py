@@ -8,7 +8,7 @@ for actual memory operations.
 import asyncio
 import threading
 from collections.abc import Coroutine
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from orchestrator.logging import get_logger
 from orchestrator.memory.base import BaseMemoryProvider
@@ -25,6 +25,9 @@ from orchestrator.memory.types import (
     MemoryMetadata,
     MemorySearchResult,
 )
+
+if TYPE_CHECKING:
+    from orchestrator.security.policy import PolicyStore
 
 T = TypeVar("T")
 
@@ -236,6 +239,8 @@ class MemoryClient:
         metadata: MemoryMetadata | dict[str, Any] | None = None,
         custom_prompt: str | None = None,
         infer: bool = True,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
     ) -> MemoryAddResult:
         """
         Add memories from messages or text.
@@ -247,11 +252,27 @@ class MemoryClient:
             conversation_id: Conversation identifier for scoping
             metadata: Additional metadata for the memories
             custom_prompt: Custom prompt for fact extraction
+            policy_store: Optional access control policy store. When provided,
+                a "memory:write" resource check is performed before writing.
+            subject: Caller identity for policy evaluation (typically agent name).
 
         Returns:
             MemoryAddResult with status and extracted memories.
         """
         self._ensure_enabled()
+
+        # Access control check
+        if policy_store is not None and subject is not None:
+            from orchestrator.agent.exceptions import MemoryAccessDeniedError
+
+            scope_label = agent_id or user_id or "unknown"
+            decision = policy_store.check(subject, f"memory:{scope_label}")
+            if not decision.allowed:
+                raise MemoryAccessDeniedError(
+                    operation="write",
+                    scope=scope_label,
+                    policy_name=decision.policy_name,
+                )
 
         # Build scope from identifiers
         scope = self._build_scope(user_id, agent_id, conversation_id)
@@ -280,6 +301,8 @@ class MemoryClient:
         conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
     ) -> MemorySearchResult:
         """
         Search memories using semantic similarity.
@@ -291,11 +314,27 @@ class MemoryClient:
             conversation_id: Conversation identifier for scoping
             limit: Maximum results to return
             filters: Additional metadata filters (provider-specific)
+            policy_store: Optional access control policy store. When provided,
+                a "memory:read" resource check is performed before reading.
+            subject: Caller identity for policy evaluation (typically agent name).
 
         Returns:
             MemorySearchResult with matching memories.
         """
         self._ensure_enabled()
+
+        # Access control check
+        if policy_store is not None and subject is not None:
+            from orchestrator.agent.exceptions import MemoryAccessDeniedError
+
+            scope_label = agent_id or user_id or "unknown"
+            decision = policy_store.check(subject, f"memory:{scope_label}")
+            if not decision.allowed:
+                raise MemoryAccessDeniedError(
+                    operation="read",
+                    scope=scope_label,
+                    policy_name=decision.policy_name,
+                )
 
         scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()

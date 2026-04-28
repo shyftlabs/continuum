@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from orchestrator.agent.base import BaseAgent
 from orchestrator.agent.config import RouterConfig
-from orchestrator.agent.types import Route
+from orchestrator.agent.types import Route, RunContext
 from orchestrator.config import settings
 from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
@@ -119,6 +119,7 @@ If the request doesn't clearly fit any specialist, respond with "none".
         self,
         input_text: str,
         llm_client: LLMClient | None = None,
+        context: RunContext | None = None,
     ) -> str | None:
         """
         Determine which agent should handle the input.
@@ -151,29 +152,42 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 result = self.custom_router(input_text, self.routes)
                 if result:
                     span.set_output({"selected_route": result, "method": "custom_router"})
+                    self._stamp_priority(result, context)
                     return result
 
             if strategy == "rule_based":
                 result = self._rule_based_route(input_text)
                 span.set_output({"selected_route": result, "method": "rule_based"})
+                self._stamp_priority(result, context)
                 return result
             elif strategy == "llm":
                 result = await self._llm_route(input_text, llm_client)
                 span.set_output({"selected_route": result, "method": "llm"})
+                self._stamp_priority(result, context)
                 return result
             elif strategy == "hybrid":
                 # Try rules first
                 rule_result = self._rule_based_route(input_text)
                 if rule_result:
                     span.set_output({"selected_route": rule_result, "method": "hybrid_rule"})
+                    self._stamp_priority(rule_result, context)
                     return rule_result
                 # Fall back to LLM
                 llm_result = await self._llm_route(input_text, llm_client)
                 span.set_output({"selected_route": llm_result, "method": "hybrid_llm"})
+                self._stamp_priority(llm_result, context)
                 return llm_result
 
             span.set_output({"selected_route": None, "method": "none"})
             return None
+
+    def _stamp_priority(self, agent_name: str | None, context: RunContext | None) -> None:
+        """Stamp RunContext.priority from the selected route's dispatch_priority."""
+        if context is None or agent_name is None:
+            return
+        route = self.get_route(agent_name)
+        if route is not None:
+            context.priority = route.dispatch_priority
 
     def _rule_based_route(self, input_text: str) -> str | None:
         """Route based on rules/conditions."""

@@ -236,6 +236,50 @@ class AgentToolError(AgentError):
             self.context["tool_args"] = tool_args
 
 
+class ToolAccessDeniedError(AgentToolError):
+    """Raised when an access policy denies a tool call."""
+
+    def __init__(
+        self,
+        tool_name: str,
+        policy_name: str | None = None,
+        subject: str | None = None,
+        denial_message: str = "",
+        **kwargs: Any,
+    ):
+        message = f"Access denied: tool '{tool_name}' is blocked by policy"
+        if policy_name:
+            message += f" '{policy_name}'"
+        super().__init__(message, tool_name=tool_name, **kwargs)
+        if policy_name:
+            self.context["policy_name"] = policy_name
+        if subject:
+            self.context["subject"] = subject
+        if denial_message:
+            self.context["denial_message"] = denial_message
+
+
+class MemoryAccessDeniedError(AgentError):
+    """Raised when an access policy denies a memory read or write."""
+
+    def __init__(
+        self,
+        operation: str,
+        scope: str | None = None,
+        policy_name: str | None = None,
+        **kwargs: Any,
+    ):
+        message = f"Access denied: memory {operation} is blocked by policy"
+        if policy_name:
+            message += f" '{policy_name}'"
+        super().__init__(message, **kwargs)
+        self.context["operation"] = operation
+        if scope:
+            self.context["scope"] = scope
+        if policy_name:
+            self.context["policy_name"] = policy_name
+
+
 # =============================================================================
 # Workflow Errors
 # =============================================================================

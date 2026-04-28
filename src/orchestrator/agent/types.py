@@ -724,7 +724,8 @@ class Route:
     agent_name: str
     description: str  # Description for LLM routing
     condition: str | Callable[..., bool] | None = None  # Optional programmatic condition
-    priority: int = 0  # Higher priority routes checked first
+    priority: int = 0  # Higher priority routes checked first (rule selection order)
+    dispatch_priority: int = 5  # Request dispatch priority stamped on RunContext (1-10)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -733,6 +734,7 @@ class Route:
             "description": self.description,
             "condition": str(self.condition) if callable(self.condition) else self.condition,
             "priority": self.priority,
+            "dispatch_priority": self.dispatch_priority,
         }
 
 
@@ -914,6 +916,17 @@ class RunContext:
     # because the handoff messages already carry the summarized context.
     is_handoff: bool = False
 
+    # Data sensitivity labels carried from Orla-style taint tracking.
+    # Labels propagate through handoffs so downstream agents know what
+    # sensitive categories (e.g. "pii", "phi") are in scope for this run.
+    data_labels: set[str] = field(default_factory=set)
+
+    # Dispatch priority for this request (1=lowest, 10=highest, 5=default).
+    # Set by the RouterAgent (triage layer) based on user tier, query urgency,
+    # or any other runtime signal. The PriorityDispatcher uses this to order
+    # API calls when multiple requests are queued for the same provider.
+    priority: int = 5
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -930,6 +943,8 @@ class RunContext:
             "metadata": self.metadata,
             "tags": self.tags,
             "usage": self.usage.to_dict(),
+            "data_labels": sorted(self.data_labels),
+            "priority": self.priority,
         }
 
 

@@ -273,6 +273,36 @@ class ValidationError(OrchestratorError):
         super().__init__(message, context=context, **kwargs)
 
 
+class InputBlockedError(OrchestratorError):
+    """
+    Raised when an input scanner or injection-detection check blocks a message.
+
+    Examples:
+        - A custom input_scanner returns a blocked result
+        - Injection detection fires in strict mode
+    """
+
+    default_message = "Input blocked by security policy"
+    default_error_code = "INPUT_BLOCKED"
+    default_category = ErrorCategory.VALIDATION
+    default_severity = ErrorSeverity.HIGH
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        reason: str | None = None,
+        scanner: str | None = None,
+        **kwargs: Any,
+    ):
+        context = kwargs.pop("context", {}) or {}
+        if reason:
+            context["reason"] = reason
+        if scanner:
+            context["scanner"] = scanner
+        super().__init__(message, context=context, **kwargs)
+
+
 class ObservabilityError(OrchestratorError):
     """
     Base class for observability-related errors.

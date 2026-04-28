@@ -25,6 +25,7 @@ from orchestrator.config import settings
 if TYPE_CHECKING:
     from orchestrator.agent.types import RunContext
     from orchestrator.llm.types import ToolDefinition
+    from orchestrator.security.policy import PolicyStore
     from orchestrator.tools import MCPServer, ToolExecutor
 
 _logger = get_logger(__name__)
@@ -106,6 +107,7 @@ class BaseAgent:
     tools: list[ToolDefinition] | list[dict[str, Any]] = field(default_factory=list)
     tool_executor: ToolExecutor | None = None
     mcp_servers: list[MCPServer] = field(default_factory=list)
+    policy_store: PolicyStore | None = None
 
     # Handoffs
     handoffs: list[Handoff] = field(default_factory=list)
@@ -400,6 +402,7 @@ class BaseAgent:
             "tools": copy.deepcopy(self.tools),
             "tool_executor": self.tool_executor,
             "mcp_servers": list(self.mcp_servers),  # shallow OK — server instances are shared
+            "policy_store": self.policy_store,
             "handoffs": copy.deepcopy(self.handoffs),
             "memory_config": copy.deepcopy(self.memory_config),
             "config": copy.deepcopy(self.config),

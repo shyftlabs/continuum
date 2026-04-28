@@ -219,6 +219,22 @@ class AgentConfig:
     input_scanners: list[Callable[[str], tuple[str, bool, str | None]]] = field(default_factory=list)
     output_scanners: list[Callable[[str, str], tuple[str, bool, str | None]]] = field(default_factory=list)
 
+    # Dispatch priority for this agent's LLM calls (1=lowest, 10=highest, 5=default).
+    # Used as the stage-level weight in TwoLevelDispatcher for internal models:
+    # a higher stage_priority agent's queue is served before lower-priority ones
+    # when multiple agents are competing for the same inference backend.
+    # For external APIs, RunContext.priority (request-level) is used instead.
+    stage_priority: int = 5
+
+    # Access control policies applied before each tool call and memory access.
+    # Evaluated with deny-overrides semantics (Orla-style): an explicit deny always
+    # wins over any allow. If no policy matches, access is open (default allow).
+    # Use the resource prefixes "tool:", "memory:", "data:" to target different layers.
+    # Example:
+    #   AccessPolicy(name="no-delete", subjects=["billing_agent"],
+    #                resources=["tool:delete_*"], effect="deny")
+    access_policies: list[Any] = field(default_factory=list)  # list[AccessPolicy]
+
     # Tracing
     trace_all_turns: bool = True  # Trace every turn
     log_to_session: bool = True  # Log messages to session

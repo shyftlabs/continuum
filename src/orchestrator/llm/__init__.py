@@ -18,6 +18,7 @@ from orchestrator.llm.callbacks import (
 )
 from orchestrator.llm.client import LLMClient
 from orchestrator.llm.config import LLMConfig
+from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
 from orchestrator.llm.context_management import (
     CompressionResult,
     CompressionStrategy,
@@ -68,6 +69,9 @@ __all__ = [
     # Client
     "LLMClient",
     "LLMConfig",
+    # Dispatchers
+    "PriorityDispatcher",
+    "TwoLevelDispatcher",
     # Types
     "ChatMessage",
     "LLMResponse",

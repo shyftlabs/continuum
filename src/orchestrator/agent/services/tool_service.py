@@ -162,9 +162,12 @@ class ToolService(IToolService):
                         server, _ = agent.tool_executor.tool_registry[tool_name]
                         exec_metadata["server_name"] = server.name
 
+                    agent_policy_store = getattr(agent, "policy_store", None)
                     results = await agent.tool_executor.execute_tool_calls(
                         tool_calls=[tc_obj],
                         trace_id=context.trace_id,
+                        policy_store=agent_policy_store,
+                        subject=agent.name if agent_policy_store else None,
                     )
                     if results:
                         result = self._message_to_dict(results[0])

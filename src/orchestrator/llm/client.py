@@ -18,6 +18,7 @@ from orchestrator.llm.callbacks import (
     setup_langfuse,
 )
 from orchestrator.llm.config import LLMConfig
+from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
 from orchestrator.llm.exceptions import (
     LLMError,
 )
@@ -81,10 +82,15 @@ class LLMClient:
         self,
         config: LLMConfig | None = None,
         enable_langfuse: bool = True,
+        dispatcher: PriorityDispatcher | TwoLevelDispatcher | None = None,
     ):
         self.default_config = config or LLMConfig()
         self._langfuse_enabled = enable_langfuse
         self._rate_limiter: _LLMRateLimiter | None = None
+        # Optional priority dispatcher — routes LLM calls through a priority
+        # queue so high-priority requests are served first under load.
+        # PriorityDispatcher for external APIs; TwoLevelDispatcher for internal models.
+        self._dispatcher = dispatcher
 
         if self.default_config.rate_limit_rpm and self.default_config.rate_limit_rpm > 0:
             self._rate_limiter = _LLMRateLimiter(self.default_config.rate_limit_rpm)
@@ -255,6 +261,8 @@ class LLMClient:
         session_id: str | None = None,
         trace_metadata: dict[str, Any] | None = None,
         auto_session: bool = True,
+        priority: int = 5,
+        stage_priority: int = 5,
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -323,7 +331,20 @@ class LLMClient:
         provider = get_provider(effective_config)
         logger.debug(f"Async completion: model={effective_config.model}")
 
-        llm_response = await provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice)
+        if self._dispatcher is not None:
+            if isinstance(self._dispatcher, TwoLevelDispatcher):
+                llm_response = await self._dispatcher.dispatch(
+                    lambda: provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice),
+                    stage_priority=stage_priority,
+                    request_priority=priority,
+                )
+            else:
+                llm_response = await self._dispatcher.dispatch(
+                    lambda: provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice),
+                    priority=priority,
+                )
+        else:
+            llm_response = await provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice)
         self._validate_json_response(llm_response.content, effective_config)
 
         # Save messages to session

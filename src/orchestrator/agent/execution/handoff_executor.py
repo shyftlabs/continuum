@@ -233,6 +233,7 @@ class HandoffExecutor(IHandoffExecutor):
                 agent_stack=run_state.agent_stack.copy(),
                 max_turns=context.max_turns - run_state.turn_count,
                 is_handoff=True,
+                data_labels=context.data_labels.copy(),
             )
 
             # Log target agent details (mirrors message_builder output for top-level runs)
