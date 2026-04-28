@@ -68,6 +68,10 @@ class OrlaPlayground:
         self.container = get_container()
         container = self.container
 
+        # Wire PriorityDispatcher to the LLM client so context.priority is honoured
+        if container and container.has_llm_client():
+            container.llm_client._dispatcher = self.config.dispatcher
+
         memory_client = container.memory_client if container else None
         memory_enabled = (
             self.config.enable_memory
