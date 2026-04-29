@@ -29,6 +29,7 @@ class MCPUtil:
         normalize_schemas: bool = True,
         strict_mode: bool = False,
         metadata: dict[str, Any] | None = None,
+        namespace_tools: bool = False,
     ) -> list[ToolDefinition]:
         """Get all function tools from a list of MCP servers.
 
@@ -40,12 +41,16 @@ class MCPUtil:
             strict_mode: Whether to apply strict mode (all properties required,
                 no additional properties). Only applies if normalize_schemas=True.
             metadata: Optional metadata for tool filtering context.
+            namespace_tools: When True, prefix each tool name with its server name
+                (e.g. "my-server__search") to avoid collisions across servers.
+                Must match the namespace_tools setting used in ToolExecutor.
 
         Returns:
             List of ToolDefinition objects that can be used with LLMClient.
 
         Raises:
-            MCPError: If duplicate tool names are found across servers.
+            MCPError: If duplicate tool names are found across servers and
+                namespace_tools is False.
         """
         tools = []
         tool_names: set[str] = set()
@@ -53,14 +58,18 @@ class MCPUtil:
             server_tools = await cls.get_function_tools(
                 server, normalize_schemas, strict_mode, metadata
             )
-            server_tool_names = {tool.function.name for tool in server_tools}
-            if len(server_tool_names & tool_names) > 0:
-                raise MCPError(
-                    f"Duplicate tool names found across MCP servers: "
-                    f"{server_tool_names & tool_names}",
-                    server_name=server.name,
-                )
-            tool_names.update(server_tool_names)
+            if namespace_tools:
+                for tool_def in server_tools:
+                    tool_def.function.name = f"{server.name}__{tool_def.function.name}"
+            else:
+                server_tool_names = {tool.function.name for tool in server_tools}
+                if len(server_tool_names & tool_names) > 0:
+                    raise MCPError(
+                        f"Duplicate tool names found across MCP servers: "
+                        f"{server_tool_names & tool_names}",
+                        server_name=server.name,
+                    )
+                tool_names.update(server_tool_names)
             tools.extend(server_tools)
 
         return tools
@@ -446,7 +455,7 @@ class MCPUtil:
             # Process text output for LLM
             # IMPORTANT: If structuredContent exists, prefer it for LLM (has actual data like totals)
             # Otherwise, extract from content (which may be a text summary)
-            if result.structuredContent:
+            if result.structuredContent and server.use_structured_content:
                 # Use structuredContent directly - it has the actual data
                 try:
                     tool_output = json.dumps(result.structuredContent)

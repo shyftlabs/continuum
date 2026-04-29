@@ -186,6 +186,7 @@ class ToolExecutor:
         tool_registry: dict["MCPServer", list[str] | None] | None = None,
         config: ToolExecutorConfig | None = None,
         context_state: ToolContextState | None = None,
+        namespace_tools: bool = False,
     ):
         """
         Initialize the tool executor.
@@ -198,10 +199,14 @@ class ToolExecutor:
             config: Configuration for rate limiting and concurrency control.
             context_state: Shared context state for variable capture/injection.
                 If None, a new empty state is created.
+            namespace_tools: When True, registry keys are prefixed with the server name
+                (e.g. "my-server__search"). Must match the namespace_tools setting used
+                in MCPUtil.get_all_function_tools so the LLM-facing names align.
         """
         self.tool_registry: dict[str, tuple[MCPServer, MCPTool]] = {}
         self._tool_registry_config = tool_registry
         self._config = config or ToolExecutorConfig()
+        self._namespace_tools = namespace_tools
 
         # Context state for session management
         self._context_state = context_state or ToolContextState()
@@ -239,6 +244,16 @@ class ToolExecutor:
         """
         self._run_artifacts.clear()
         self._run_artifacts.run_id = run_id
+
+    @staticmethod
+    def _resolve_json_path(data: dict, path: str) -> Any:
+        """Walk a dot-notation path through a nested dict. Returns None if any step is missing."""
+        node: Any = data
+        for part in path.split("."):
+            if not isinstance(node, dict):
+                return None
+            node = node.get(part)
+        return node
 
     def _get_namespace(self, server: "MCPServer") -> str:
         """Get the namespace for a server (for context variable isolation)."""
@@ -387,9 +402,28 @@ class ToolExecutor:
         # Track what we capture for logging
         captured = []
 
-        # Check each field in the result
+        # Handle variables with json_path first (explicit nested extraction)
+        for var in config.variables:
+            if var.json_path is None:
+                continue
+            if not config.should_capture(tool_name, var.name):
+                continue
+            value = self._resolve_json_path(data, var.json_path)
+            if value is None:
+                continue
+            scope = config.get_scope(var.name)
+            is_sensitive = var.name in SENSITIVE_CONTEXT_VARIABLES or var.sensitive
+            self._context_state.set(namespace, var.name, value, scope=scope, sensitive=is_sensitive)
+            display_value = "****" if is_sensitive else str(value)[:30]
+            captured.append(f"{var.name}={display_value}")
+
+        # Check each top-level field in the result
+        json_path_names = {var.name for var in config.variables if var.json_path is not None}
         for key, value in data.items():
             if value is None:
+                continue
+            # Skip variables already captured via json_path
+            if key in json_path_names:
                 continue
 
             # Check if we should capture this variable
@@ -432,9 +466,14 @@ class ToolExecutor:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list
                     if allowed_tools is None or tool.name in allowed_tools:
-                        if tool.name in self.tool_registry:
-                            logger.warning(f"Tool '{tool.name}' already registered, overwriting")
-                        self.tool_registry[tool.name] = (server, tool)
+                        registry_key = (
+                            f"{server.name}__{tool.name}"
+                            if self._namespace_tools
+                            else tool.name
+                        )
+                        if registry_key in self.tool_registry:
+                            logger.warning(f"Tool '{registry_key}' already registered, overwriting")
+                        self.tool_registry[registry_key] = (server, tool)
             except Exception as e:
                 logger.error(f"Error building tool registry for server {server.name}: {e}")
                 raise

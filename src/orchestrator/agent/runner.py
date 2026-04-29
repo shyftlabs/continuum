@@ -492,9 +492,33 @@ class AgentRunner:
                         is_handoff, target = agent.is_handoff_tool_call(tool_name)
                         if is_handoff and target:
                             yield AgentEvent(type=EventType.HANDOFF_START, agent_name=agent.name, run_id=ctx.run_id, data={"target": target}, trace_id=ctx.trace_id)
-                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"Handoff to {target} initiated. Note: Full handoff support requires non-streaming mode."})
-                            yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "note": "Streaming mode has limited handoff support"}, trace_id=ctx.trace_id)
-                            continue
+
+                            if not self._handoff_executor:
+                                yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": "HandoffExecutor not available in streaming mode"}, trace_id=ctx.trace_id)
+                                return
+
+                            handoff_result = await self._handoff_executor.execute_handoff(
+                                agent=agent,
+                                target_name=target,
+                                tool_call=tc,
+                                messages=messages,
+                                context=ctx,
+                                run_state=run_state,
+                            )
+
+                            if not handoff_result.success:
+                                yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": handoff_result.error}, trace_id=ctx.trace_id)
+                                return
+
+                            handoff_content = handoff_result.response.content if handoff_result.response else ""
+                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": handoff_content or ""})
+
+                            yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": True}, trace_id=ctx.trace_id)
+                            if handoff_content:
+                                yield AgentEvent(type=EventType.HANDOFF_RETURN, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "content": handoff_content}, trace_id=ctx.trace_id)
+                                yield AgentEvent(type=EventType.CONTENT_COMPLETE, agent_name=agent.name, run_id=ctx.run_id, data={"content": handoff_content}, trace_id=ctx.trace_id)
+                                content = handoff_content
+                            break
 
                         yield AgentEvent(type=EventType.TOOL_CALL_START, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name}, trace_id=ctx.trace_id)
 
