@@ -457,6 +457,39 @@ class ToolExecutor:
         if self._tool_registry_config:
             await self._build_registry(self._tool_registry_config)
 
+    def get_tool_definitions(
+        self,
+        normalize_schemas: bool = True,
+        strict_mode: bool = False,
+    ) -> list["ToolDefinition"]:
+        """Return LLM-facing tool definitions derived from the already-built registry.
+
+        Use this instead of MCPUtil.get_all_function_tools() to avoid a second
+        list_tools() round-trip to the MCP server.  Must be called after initialize().
+
+        Args:
+            normalize_schemas: Whether to normalize schemas for LLM provider compatibility.
+            strict_mode: Whether to apply strict mode (all properties required,
+                no additional properties).
+
+        Returns:
+            List of ToolDefinition objects ready to pass to BaseAgent(tools=...).
+        """
+        from orchestrator.tools.util import MCPUtil
+
+        if not self.tool_registry and self._tool_registry_config:
+            raise RuntimeError(
+                "get_tool_definitions() called before initialize(). "
+                "Call await executor.initialize() first."
+            )
+
+        definitions = []
+        for registry_key, (server, tool) in self.tool_registry.items():
+            tool_def = MCPUtil.to_function_tool(tool, server, normalize_schemas, strict_mode)
+            tool_def.function.name = registry_key
+            definitions.append(tool_def)
+        return definitions
+
     async def _build_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
         """Build the internal tool name to (server, tool) mapping."""
         for server, allowed_tools in tool_registry.items():

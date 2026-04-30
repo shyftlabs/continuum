@@ -20,11 +20,11 @@ from orchestrator import (
     AgentRunner,
     BaseAgent,
     MCPServerStreamableHttp,
-    MCPUtil,
     RunnerConfig,
     ToolExecutor,
     get_logger,
 )
+from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
 from orchestrator.agent.types import generate_run_id
 from orchestrator.core.container import Container, get_container
 from orchestrator.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
@@ -41,8 +41,7 @@ class LocalShopAgent:
         self._tool_executor: ToolExecutor | None = None
         self._agent: BaseAgent | None = None
         self._runner: AgentRunner | None = None
-        self._tools: list[dict[str, Any]] = []
-        self._initialized = False
+        self._tools: list[Any] = []
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -72,34 +71,40 @@ class LocalShopAgent:
 
     async def _connect_mcp(self) -> None:
         logger.info(f"Connecting to MCP server: {self.config.mcp_url}")
+
+        context_config = ToolContextConfig(
+            variables=[
+                ToolContextVariable(
+                    name="session_id",
+                    inject_into=["add_to_cart", "view_cart", "checkout"],
+                )
+            ],
+            auto_capture_common=False,
+        )
+
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
             client_session_timeout_seconds=self.config.mcp_timeout,
+            context_config=context_config,
         )
         await self._mcp_server.connect()
 
-        tool_definitions = await MCPUtil.get_function_tools(self._mcp_server)
-        self._tools = []
-        for tool in tool_definitions:
-            if isinstance(tool, dict):
-                self._tools.append(tool)
-            elif hasattr(tool, "model_dump"):
-                self._tools.append(tool.model_dump())
-            else:
-                self._tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": getattr(tool, "name", str(tool)),
-                        "description": getattr(tool, "description", ""),
-                        "parameters": getattr(tool, "parameters", {}),
-                    },
-                })
-
-        names = [t.get("function", {}).get("name", "?") for t in self._tools if isinstance(t, dict)]
-        logger.info(f"✓ Discovered {len(self._tools)} tools: {', '.join(names)}")
-
         self._tool_executor = ToolExecutor({self._mcp_server: None})
         await self._tool_executor.initialize()
+
+        self._tools = self._tool_executor.get_tool_definitions()
+        # Strip injected parameters from schemas so the LLM never sees them as
+        # required fields and doesn't ask the user for values the executor provides.
+        _injected = {"session_id"}
+        for tool_def in self._tools:
+            params = tool_def.function.parameters or {}
+            props = params.get("properties", {})
+            for p in _injected:
+                props.pop(p, None)
+            params["required"] = [r for r in params.get("required", []) if r not in _injected]
+
+        names = [t.function.name for t in self._tools]
+        logger.info(f"✓ Discovered {len(self._tools)} tools: {', '.join(names)}")
 
     def _create_agent(self) -> None:
         memory_client = self._container.memory_client if self._container else None
@@ -128,7 +133,14 @@ class LocalShopAgent:
     async def chat(self, message: str, user_id: str, conversation_id: str) -> str:
         if not self._initialized:
             await self.initialize()
-            
+
+        namespace = self._mcp_server.name if self._mcp_server else "local-shop"
+        cart_session_id = f"{user_id}:{conversation_id}"
+
+        # Seed in-memory context (works when session service is disabled).
+        if self._tool_executor:
+            self._tool_executor.context_state.set(namespace, "session_id", cart_session_id)
+
         session_id = None
         if self._container:
             session_client = self._container.session_client
@@ -139,6 +151,16 @@ class LocalShopAgent:
                         conversation_id=conversation_id,
                     )
                     logger.info(f"✓ Active Session ID: {session_id}")
+                    # The runner loads tool context from Redis and overwrites the
+                    # in-memory context_state, so we must also persist cart_session_id
+                    # to Redis before run() is called.
+                    existing = await self._runner._session_service.load_tool_context_state(
+                        session_id
+                    )
+                    existing.set(namespace, "session_id", cart_session_id)
+                    await self._runner._session_service.save_tool_context_state(
+                        session_id, existing
+                    )
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 
@@ -164,11 +186,7 @@ class LocalShopAgent:
             await self._lifecycle.shutdown()
 
     @property
-    def tools(self) -> list[dict[str, Any]]:
-        return self._tools
-
-    @property
-    def tools(self) -> list[dict[str, Any]]:
+    def tools(self) -> list[Any]:
         return self._tools
 
 

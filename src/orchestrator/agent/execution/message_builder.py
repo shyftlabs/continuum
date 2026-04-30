@@ -320,6 +320,15 @@ class MessageBuilder(IMessageBuilder):
         )
         logger.info("===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted)
 
+        if agent.tools:
+            _tool_limit = None if _full else 200
+            _tools_formatted = "\n".join(
+                f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
+                if isinstance(t, dict) else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
+                for t in agent.tools
+            )
+            logger.info("===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted)
+
         return messages, user_message_index
 
     def _inject_tool_context_to_prompt(

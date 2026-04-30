@@ -31,7 +31,7 @@ cd playground/orla-based
                                                                                                                                            
   Test policy (free tier blocked from checkout):                                                                                           
   show me dog toys                                                                                                                         
-  add p5 to cart                                                                                                                           
+  add 3 p5 to cart                                                                                                                           
   checkout                                                                                                                                 
   The last one should be blocked.
                                                                                                                                            
@@ -50,3 +50,7 @@ cd playground/orla-based
   /labels                                                                                                                                  
          
   Test /tools, /policy, /cart, /summarize as well.    
+
+
+
+  

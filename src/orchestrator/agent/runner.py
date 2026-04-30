@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from orchestrator.agent.base import BaseAgent
 from orchestrator.agent.config import RunnerConfig
 from orchestrator.agent.exceptions import (
+    AgentConfigurationError,
     AgentError,
     AgentExecutionError,
 )
@@ -249,6 +250,18 @@ class AgentRunner:
         tags: list[str] | None = None,
     ) -> PrepareRunResult:
         """Prepare for agent run -- shared setup for run() and run_stream()."""
+        if agent.mcp_servers and not agent.tool_executor:
+            raise AgentConfigurationError(
+                f"Agent '{agent.name}' has mcp_servers set but no tool_executor. "
+                "mcp_servers alone does nothing — you must also build a ToolExecutor "
+                "and pass it via tool_executor=. Example:\n"
+                "  executor = ToolExecutor(tool_registry={server: None})\n"
+                "  await executor.initialize()\n"
+                "  agent = BaseAgent(..., tool_executor=executor, tools=executor.get_tool_definitions())",
+                agent_name=agent.name,
+                config_key="mcp_servers",
+            )
+
         if agent.name not in self._agent_registry:
             self.register_agent(agent)
 

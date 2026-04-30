@@ -330,7 +330,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
             if self.validate_on_connect:
                 await self.list_tools()
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             logger.error(f"Error initializing MCP server: {e}")
             await self.cleanup()
             raise MCPConnectionError(

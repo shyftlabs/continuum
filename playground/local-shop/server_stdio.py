@@ -1,20 +1,27 @@
 """
-Local fake shop MCP server using FastMCP.
+Local Shop MCP server — stdio transport.
 
-Run standalone:  python server.py
-Exposes tools: search_products, get_product, add_to_cart, view_cart, checkout
+Same tools as server.py but exposed via stdin/stdout.
+Used by MCPServerStdio — Continuum spawns this as a subprocess.
+
+Usage (Continuum side):
+    MCPServerStdio({
+        "command": "python",
+        "args": ["server_stdio.py"],
+        "cwd": "<path-to-local-shop>",
+    })
 """
 
-import sys
+import asyncio
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("local-shop")
+mcp = FastMCP("local-shop-stdio")
 
-# In-memory cart: {session_id: [{product_id, name, price, qty}]}
 _carts: dict[str, list[dict]] = {}
 
 PRODUCTS = [
@@ -30,7 +37,7 @@ PRODUCTS = [
 
 
 @mcp.tool()
-def search_products(query: str = "", animal: str = "", category: str = "") -> list[dict]:
+def search_products(query: str, animal: str = "", category: str = "") -> list[dict]:
     """Search for pet products. Filter by animal type (dog/cat/all) or category."""
     results = PRODUCTS
     q = query.lower()
@@ -96,7 +103,4 @@ def checkout(session_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    app = mcp.streamable_http_app()
-    print("Local Shop MCP server running at http://localhost:8888/mcp")
-    uvicorn.run(app, host="0.0.0.0", port=8888)
+    asyncio.run(mcp.run_stdio_async())
