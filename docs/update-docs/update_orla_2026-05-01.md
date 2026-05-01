@@ -288,11 +288,67 @@ Tool names and parameter summaries are now logged alongside the final prompt at 
 
 ---
 
+### 22. MCP Resources Support
+
+**Files:** `tools/mcp.py`, `playground/local-shop/server.py`, `playground/local-shop/agent.py`
+
+Implemented the MCP Resources capability across the full stack — server definition, framework interface, and agent-side consumption.
+
+**Background:** The MCP spec defines three server primitives. Continuum previously only implemented Tools and Prompts. Resources are passive, read-only data sources identified by URI (e.g. `shop://catalogue`) that the *application* fetches upfront as context — as opposed to Tools, which the *LLM* calls on demand during conversation.
+
+**Framework (`tools/mcp.py`):**
+
+Added `list_resources()` and `read_resource(uri)` as abstract methods on `MCPServer` and implemented them on `_MCPServerWithClientSession` using the MCP SDK's `session.list_resources()` and `session.read_resource()`. `MCPServerFunction` receives empty stubs (in-process servers have no resources).
+
+```python
+# List all resources the server exposes
+resources = await server.list_resources()
+
+# Fetch a specific resource by URI — returns text content
+catalogue = await server.read_resource("shop://catalogue")
+```
+
+**Server definition (`playground/local-shop/server.py`):**
+
+Three resources added using FastMCP's `@mcp.resource()` decorator:
+
+```python
+@mcp.resource("shop://catalogue")
+def get_catalogue() -> str:
+    """Full product catalogue."""
+    return json.dumps(PRODUCTS)
+
+@mcp.resource("shop://categories")
+def get_categories() -> str:
+    """All available categories and animal types."""
+    return json.dumps({"categories": [...], "animals": [...]})
+
+@mcp.resource("shop://products/{product_id}")
+def get_product_resource(product_id: str) -> str:
+    """Single product details by ID (resource template)."""
+    ...
+```
+
+**Agent consumption (`playground/local-shop/agent.py`):**
+
+Resources are fetched once at startup in `_fetch_resources()` and injected into the agent's system instructions. JSON curly braces are escaped (`{` → `{{`, `}` → `}}`) before injection to prevent `str.format_map()` in `resolve_system_prompt` from misinterpreting them as template placeholders.
+
+```python
+async def _fetch_resources(self) -> None:
+    catalogue = await self._mcp_server.read_resource("shop://catalogue")
+    categories = await self._mcp_server.read_resource("shop://categories")
+    self._resource_context = f"Product catalogue:\n{catalogue}\n\nCategories:\n{categories}"
+```
+
+**Effect:** Queries like "what categories do you have?" are now answered directly from context with no tool call — eliminating a round-trip to the MCP server for static data that doesn't change per-request.
+
+---
+
 ## Summary
 
 | Category | Count |
 |---|---|
 | Bug fixes | 12 |
-| New features | 9 |
+| New features | 10 |
 
-The most architecturally significant changes are the **session log suppression refactor** (fixes a concurrency correctness bug across every workflow), **parallel context isolation** (fixes data corruption in concurrent branches), the **priority dispatch system** (new infrastructure for load-based scheduling), and the **access control policy engine** (new security layer for tool and memory access).
+The most architecturally significant changes are the **session log suppression refactor** (fixes a concurrency correctness bug across every workflow), **parallel context isolation** (fixes data corruption in concurrent branches), the **priority dispatch system** (new infrastructure for load-based scheduling), the **access control policy engine** (new security layer for tool and memory access), and **MCP Resources support** (completes the MCP primitive triad and reduces unnecessary tool calls for static data).
