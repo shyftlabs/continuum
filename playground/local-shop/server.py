@@ -3,8 +3,10 @@ Local fake shop MCP server using FastMCP.
 
 Run standalone:  python server.py
 Exposes tools: search_products, get_product, add_to_cart, view_cart, checkout
+Exposes resources: shop://catalogue, shop://categories, shop://products/{product_id}
 """
 
+import json
 import sys
 import os
 
@@ -27,6 +29,27 @@ PRODUCTS = [
     {"id": "p7", "name": "Cat Litter (Clumping) 10L", "price": 15.99, "category": "litter", "animal": "cat"},
     {"id": "p8", "name": "Dog Collar (Adjustable)", "price": 9.99, "category": "accessories", "animal": "dog"},
 ]
+
+
+@mcp.resource("shop://catalogue")
+def get_catalogue() -> str:
+    """Full product catalogue."""
+    return json.dumps(PRODUCTS)
+
+
+@mcp.resource("shop://categories")
+def get_categories() -> str:
+    """All available categories and animal types."""
+    categories = sorted({p["category"] for p in PRODUCTS})
+    animals = sorted({p["animal"] for p in PRODUCTS})
+    return json.dumps({"categories": categories, "animals": animals})
+
+
+@mcp.resource("shop://products/{product_id}")
+def get_product_resource(product_id: str) -> str:
+    """Single product details by ID."""
+    product = next((p for p in PRODUCTS if p["id"] == product_id), None)
+    return json.dumps(product or {"error": f"Product {product_id!r} not found"})
 
 
 @mcp.tool()

@@ -152,6 +152,8 @@ class ToolService(IToolService):
             )
 
             # Try agent's tool executor first
+            agent_policy_store = getattr(agent, "policy_store", None)
+            _agent_executor_failed = False
             if agent.tool_executor:
                 try:
                     # Get server name from tool registry if available
@@ -162,7 +164,6 @@ class ToolService(IToolService):
                         server, _ = agent.tool_executor.tool_registry[tool_name]
                         exec_metadata["server_name"] = server.name
 
-                    agent_policy_store = getattr(agent, "policy_store", None)
                     results = await agent.tool_executor.execute_tool_calls(
                         tool_calls=[tc_obj],
                         trace_id=context.trace_id,
@@ -199,10 +200,12 @@ class ToolService(IToolService):
                     span.set_error(str(e))
                     metrics.track_error(f"tool_{tool_name}", e, metadata={"agent_name": agent.name})
                     exec_metadata["error"] = str(e)[:100]
+                    _agent_executor_failed = True
 
             # Try global tool executor
             if self._tool_executor:
-                logger.warning(f"⚠️ TOOL FALLBACK: {tool_name} retrying on global executor (agent executor failed)")
+                _reason = "agent executor failed" if _agent_executor_failed else "agent has no executor"
+                logger.warning(f"⚠️ TOOL FALLBACK: {tool_name} retrying on global executor ({_reason})")
                 try:
                     # Get server name from tool registry if available
                     if (
@@ -215,6 +218,8 @@ class ToolService(IToolService):
                     results = await self._tool_executor.execute_tool_calls(
                         tool_calls=[tc_obj],
                         trace_id=context.trace_id,
+                        policy_store=agent_policy_store,
+                        subject=agent.name if agent_policy_store else None,
                     )
                     if results:
                         result = self._message_to_dict(results[0])

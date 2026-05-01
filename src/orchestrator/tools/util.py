@@ -408,89 +408,22 @@ class MCPUtil:
                 raise
             duration_ms = (time.time() - start_time) * 1000
 
-            # LOG: Raw MCP response BEFORE processing (for debugging total/subtotal issues)
-            logger.info(
-                f"🔍 MCP tool {tool.name} raw response (BEFORE processing): "
+            logger.debug(
+                f"🔍 MCP tool {tool.name} raw response: "
                 f"has_structuredContent={result.structuredContent is not None}, "
                 f"has_meta={result.meta is not None}, "
                 f"content_items={len(result.content) if result.content else 0}"
             )
 
-            # Log structuredContent if it exists (especially for cart tools)
-            if result.structuredContent:
-                structured_dict = dict(result.structuredContent)
-                # Log key fields that might contain totals
-                total_fields = {}
-                for key in [
-                    "total",
-                    "subtotal",
-                    "total_cents",
-                    "subtotal_cents",
-                    "taxes",
-                    "tax_cents",
-                ]:
-                    if key in structured_dict:
-                        total_fields[key] = structured_dict[key]
-
-                if total_fields:
-                    logger.info(f"💰 MCP tool {tool.name} structuredContent totals: {total_fields}")
-
-                # Log items count and sample item prices if it's a cart/list tool
-                if "items" in structured_dict or "cart_items" in structured_dict:
-                    items = structured_dict.get("items") or structured_dict.get("cart_items") or []
-                    if isinstance(items, list) and len(items) > 0:
-                        sample_item = items[0] if items else {}
-                        item_price_fields = {
-                            k: v
-                            for k, v in sample_item.items()
-                            if "price" in k.lower() or "total" in k.lower()
-                        }
-                        logger.info(
-                            f"🛒 MCP tool {tool.name} cart data: "
-                            f"items_count={len(items)}, "
-                            f"sample_item_price_fields={item_price_fields}, "
-                            f"full_structuredContent_keys={list(structured_dict.keys())}"
-                        )
-
             # Process text output for LLM
-            # IMPORTANT: If structuredContent exists, prefer it for LLM (has actual data like totals)
-            # Otherwise, extract from content (which may be a text summary)
             if result.structuredContent and server.use_structured_content:
-                # Use structuredContent directly - it has the actual data
-                try:
-                    tool_output = json.dumps(result.structuredContent)
-                except (TypeError, ValueError) as e:
-                    # Handle case where structuredContent can't be serialized to JSON
-                    logger.warning(
-                        f"⚠️ Failed to serialize structuredContent to JSON for tool '{tool.name}': {e}. "
-                        f"Falling back to content extraction.",
-                        extra={
-                            "tool_name": tool.name,
-                            "server_name": server.name,
-                            "error_type": type(e).__name__,
-                        },
-                    )
-                    tool_output = cls._extract_mcp_content(result.content)
-
-                # Log what we're sending to LLM (especially for cart tools with totals)
-                if tool.name in ["get_cart", "cart", "get_cart_items"]:
-                    structured_dict = dict(result.structuredContent)
-                    llm_totals = {
-                        k: v
-                        for k, v in structured_dict.items()
-                        if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()
-                    }
-                    if llm_totals:
-                        logger.info(
-                            f"📤 MCP tool {tool.name} sending to LLM (structuredContent): totals={llm_totals}"
-                        )
-                    else:
-                        logger.warning(
-                            f"⚠️ MCP tool {tool.name} structuredContent has NO totals for LLM! "
-                            f"Keys: {list(structured_dict.keys())}"
-                        )
+                sc = result.structuredContent
+                if hasattr(sc, "model_dump"):
+                    sc = sc.model_dump()
+                elif hasattr(sc, "dict"):
+                    sc = sc.dict()
+                tool_output = json.dumps(sc)
             else:
-                # Fall back to extracting from content
                 tool_output = cls._extract_mcp_content(result.content)
                 logger.debug(
                     f"MCP tool {tool.name} using extracted content for LLM text output "
@@ -508,22 +441,16 @@ class MCPUtil:
                 except Exception:
                     pass
 
-            # Create artifact with structured content
-            structured_content_dict = (
-                dict(result.structuredContent) if result.structuredContent else None
-            )
-
-            # LOG: What we're storing in artifact (for debugging)
-            if structured_content_dict and tool.name in ["get_cart", "cart", "get_cart_items"]:
-                artifact_totals = {
-                    k: v
-                    for k, v in structured_content_dict.items()
-                    if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()
-                }
-                if artifact_totals:
-                    logger.info(
-                        f"💾 MCP tool {tool.name} artifact structured_content totals: {artifact_totals}"
-                    )
+            sc_raw = result.structuredContent
+            if sc_raw is not None:
+                if hasattr(sc_raw, "model_dump"):
+                    structured_content_dict = sc_raw.model_dump()
+                elif hasattr(sc_raw, "dict"):
+                    structured_content_dict = sc_raw.dict()
+                else:
+                    structured_content_dict = dict(sc_raw)
+            else:
+                structured_content_dict = None
 
             artifact = MCPToolArtifact(
                 tool_name=tool.name,
@@ -536,7 +463,6 @@ class MCPUtil:
                 latency_ms=duration_ms,
             )
 
-            # End span with success
             if span:
                 span.end(
                     output=tool_output,
@@ -550,23 +476,6 @@ class MCPUtil:
                         "has_widget": artifact.has_widget(),
                     },
                 )
-
-            # LOG: Final artifact before returning (verify totals are preserved)
-            if artifact.structured_content and tool.name in ["get_cart", "cart", "get_cart_items"]:
-                final_totals = {
-                    k: v
-                    for k, v in artifact.structured_content.items()
-                    if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()
-                }
-                if final_totals:
-                    logger.info(
-                        f"✅ MCP tool {tool.name} FINAL artifact structured_content totals (BEFORE passing to LLM): {final_totals}"
-                    )
-                else:
-                    logger.warning(
-                        f"⚠️ MCP tool {tool.name} FINAL artifact structured_content has NO total/subtotal fields! "
-                        f"Available keys: {list(artifact.structured_content.keys())}"
-                    )
 
             logger.debug(
                 f"MCP tool {tool.name} completed in {duration_ms:.2f}ms",

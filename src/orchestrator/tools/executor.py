@@ -207,6 +207,7 @@ class ToolExecutor:
         self._tool_registry_config = tool_registry
         self._config = config or ToolExecutorConfig()
         self._namespace_tools = namespace_tools
+        self._initialized = False
 
         # Context state for session management
         self._context_state = context_state or ToolContextState()
@@ -456,6 +457,7 @@ class ToolExecutor:
         """
         if self._tool_registry_config:
             await self._build_registry(self._tool_registry_config)
+        self._initialized = True
 
     def get_tool_definitions(
         self,
@@ -477,7 +479,7 @@ class ToolExecutor:
         """
         from orchestrator.tools.util import MCPUtil
 
-        if not self.tool_registry and self._tool_registry_config:
+        if not self._initialized and self._tool_registry_config:
             raise RuntimeError(
                 "get_tool_definitions() called before initialize(). "
                 "Call await executor.initialize() first."
@@ -490,8 +492,18 @@ class ToolExecutor:
             definitions.append(tool_def)
         return definitions
 
-    async def _build_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
-        """Build the internal tool name to (server, tool) mapping."""
+    async def _build_registry(
+        self,
+        tool_registry: dict["MCPServer", list[str] | None],
+        target: dict[str, tuple["MCPServer", "MCPTool"]] | None = None,
+    ) -> None:
+        """Build the internal tool name to (server, tool) mapping.
+
+        Args:
+            tool_registry: Mapping of servers to allowed tool lists.
+            target: Dict to write into. Defaults to self.tool_registry.
+        """
+        dest = target if target is not None else self.tool_registry
         for server, allowed_tools in tool_registry.items():
             try:
                 mcp_tools = await server.list_tools()
@@ -504,9 +516,9 @@ class ToolExecutor:
                             if self._namespace_tools
                             else tool.name
                         )
-                        if registry_key in self.tool_registry:
+                        if registry_key in dest:
                             logger.warning(f"Tool '{registry_key}' already registered, overwriting")
-                        self.tool_registry[registry_key] = (server, tool)
+                        dest[registry_key] = (server, tool)
             except Exception as e:
                 logger.error(f"Error building tool registry for server {server.name}: {e}")
                 raise
@@ -604,6 +616,9 @@ class ToolExecutor:
 
                 # Store artifact (per-run)
                 self._run_artifacts.add_artifact(artifact)
+
+                # Extension point for subclasses (e.g. debug logging in playground projects)
+                self._on_tool_result(tool_name, result, artifact)
 
                 # CAPTURE: Context variables from result after execution
                 # This may fail if result is not valid JSON, but that's okay - we continue
@@ -733,8 +748,6 @@ class ToolExecutor:
         Returns:
             List of ChatMessage objects with role="tool" containing tool results.
         """
-        import asyncio
-
         # Execute all tool calls concurrently with return_exceptions=True
         # to prevent one tool failure from cancelling all other in-flight calls
         tasks = [
@@ -786,6 +799,10 @@ class ToolExecutor:
                 processed.append(result)
         return processed
 
+    def _on_tool_result(self, tool_name: str, result: str, artifact: Any) -> None:
+        """Called after every successful tool execution. Override in subclasses for custom logging."""
+        pass
+
     def get_available_tools(self) -> list[str]:
         """Get list of available tool names."""
         return list(self.tool_registry.keys())
@@ -793,16 +810,14 @@ class ToolExecutor:
     async def refresh_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
         """Refresh the tool registry from MCP servers.
 
-        Builds a new registry first, then atomically swaps it in to avoid
-        serving an empty registry during the rebuild.
+        Builds into a temporary dict first, then swaps it in so concurrent
+        tool calls keep hitting the old registry until the new one is ready.
         """
-        # Build into a temporary dict, then swap
-        old_registry = self.tool_registry
-        new_registry: dict[str, Any] = {}
-        self.tool_registry = new_registry
+        temp: dict[str, tuple["MCPServer", "MCPTool"]] = {}
         try:
-            await self._build_registry(tool_registry)
+            await self._build_registry(tool_registry, target=temp)
         except Exception:
-            # Restore old registry on failure so tools remain available
-            self.tool_registry = old_registry
+            # Build failed — old registry is untouched, tools remain available
             raise
+        # Swap only after the temp dict is fully populated
+        self.tool_registry = temp

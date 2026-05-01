@@ -5,6 +5,7 @@ Single agent using MCPServerStreamableHttp (HTTP transport) — same pattern as 
 but against a local MCP server instead of the remote one.
 """
 
+import json
 import os
 import sys
 from typing import Any
@@ -31,6 +32,46 @@ from orchestrator.core.lifecycle import OrchestratorLifecycle, get_lifecycle_man
 
 logger = get_logger(__name__)
 
+_CART_TOOLS = {"get_cart", "cart", "get_cart_items"}
+_TOTAL_KEYS = {"total", "subtotal", "total_cents", "subtotal_cents", "taxes", "tax_cents"}
+
+
+class CartDebugToolExecutor(ToolExecutor):
+    """ToolExecutor subclass that adds cart-specific debug logging after each tool call."""
+
+    def _on_tool_result(self, tool_name: str, result: str, artifact: Any) -> None:
+        sc = artifact.structured_content if artifact else None
+
+        # Log totals from structuredContent for any tool that returns them
+        if sc:
+            total_fields = {k: v for k, v in sc.items() if k in _TOTAL_KEYS}
+            if total_fields:
+                logger.info(f"💰 {tool_name} structuredContent totals: {total_fields}")
+
+            # Log cart item count and sample price fields
+            items = sc.get("items") or sc.get("cart_items")
+            if isinstance(items, list) and items:
+                sample = {k: v for k, v in items[0].items()
+                          if "price" in k.lower() or "total" in k.lower()}
+                logger.info(
+                    f"🛒 {tool_name} cart: items_count={len(items)}, "
+                    f"sample_price_fields={sample}, "
+                    f"structuredContent_keys={list(sc.keys())}"
+                )
+
+        # Extra detail for known cart tools
+        if tool_name in _CART_TOOLS:
+            if sc:
+                llm_totals = {k: v for k, v in sc.items()
+                              if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()}
+                if llm_totals:
+                    logger.info(f"📤 {tool_name} sending to LLM (structuredContent): totals={llm_totals}")
+                else:
+                    logger.warning(
+                        f"⚠️ {tool_name} structuredContent has NO totals for LLM! "
+                        f"Keys: {list(sc.keys())}"
+                    )
+
 
 class LocalShopAgent:
     def __init__(self, config: ShopConfig | None = None):
@@ -42,6 +83,7 @@ class LocalShopAgent:
         self._agent: BaseAgent | None = None
         self._runner: AgentRunner | None = None
         self._tools: list[Any] = []
+        self._resource_context: str = ""
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -67,7 +109,7 @@ class LocalShopAgent:
         )
         self._runner.register_agent(self._agent)
         self._initialized = True
-        logger.info("✓ LocalShopAgent ready!")
+        logger.info(f"✓ LocalShopAgent ready! (llm model used: {self.config.agent_model})")
 
     async def _connect_mcp(self) -> None:
         logger.info(f"Connecting to MCP server: {self.config.mcp_url}")
@@ -89,7 +131,7 @@ class LocalShopAgent:
         )
         await self._mcp_server.connect()
 
-        self._tool_executor = ToolExecutor({self._mcp_server: None})
+        self._tool_executor = CartDebugToolExecutor({self._mcp_server: None})
         await self._tool_executor.initialize()
 
         self._tools = self._tool_executor.get_tool_definitions()
@@ -106,13 +148,33 @@ class LocalShopAgent:
         names = [t.function.name for t in self._tools]
         logger.info(f"✓ Discovered {len(self._tools)} tools: {', '.join(names)}")
 
+        await self._fetch_resources()
+
+    async def _fetch_resources(self) -> None:
+        try:
+            catalogue = await self._mcp_server.read_resource("shop://catalogue")
+            categories = await self._mcp_server.read_resource("shop://categories")
+            self._resource_context = (
+                f"Product catalogue:\n{catalogue}\n\nCategories:\n{categories}"
+            )
+            logger.info("✓ Loaded shop resources (catalogue + categories)")
+        except Exception as e:
+            logger.warning(f"Could not load shop resources: {e}")
+
     def _create_agent(self) -> None:
         memory_client = self._container.memory_client if self._container else None
         memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
 
+        instructions = self.config.system_instructions
+        if self._resource_context:
+            # Escape braces so format_map() in resolve_system_prompt doesn't
+            # misinterpret JSON curly braces as template placeholders.
+            escaped = self._resource_context.replace("{", "{{").replace("}", "}}")
+            instructions = f"{instructions}\n\n{escaped}"
+
         self._agent = BaseAgent(
             name=self.config.agent_name,
-            instructions=self.config.system_instructions,
+            instructions=instructions,
             model=self.config.agent_model,
             temperature=self.config.agent_temperature,
             tools=self._tools,
@@ -123,6 +185,13 @@ class LocalShopAgent:
                 search_scope=AgentMemoryScope.USER,
                 store_scope=AgentMemoryScope.USER,
                 search_limit=5,
+                extraction_prompt=(
+                    "You are a memory extraction system for a pet shop assistant. "
+                    "Only extract long-term facts about the user's pets, animal preferences, "
+                    "favourite products, or dietary needs. "
+                    "Do NOT store transient actions like adding to cart, checkout requests, "
+                    "or one-off searches. Do NOT store unrelated personal facts (e.g. favourite colour)."
+                ),
             ),
             config=AgentConfig(
                 max_turns=self.config.max_turns,

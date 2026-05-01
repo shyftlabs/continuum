@@ -25,7 +25,7 @@ from mcp.client.session import MessageHandlerFnT
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
-from mcp.types import CallToolResult, GetPromptResult, InitializeResult, ListPromptsResult, TextContent
+from mcp.types import CallToolResult, GetPromptResult, InitializeResult, ListPromptsResult, ListResourcesResult, ReadResourceResult, Resource, TextContent
 from typing_extensions import TypedDict
 
 from orchestrator.exceptions import ValidationError
@@ -118,6 +118,23 @@ class MCPServer(abc.ABC):
     ) -> GetPromptResult:
         """Get a specific prompt from the server."""
         pass
+
+    @abc.abstractmethod
+    async def list_resources(self) -> list[Resource]:
+        """List the resources available on the server."""
+        pass
+
+    @abc.abstractmethod
+    async def read_resource(self, uri: str) -> str:
+        """Read a resource by URI. Returns the text content."""
+        pass
+
+    async def __aenter__(self) -> "MCPServer":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.cleanup()
 
 
 class _MCPServerWithClientSession(MCPServer, abc.ABC):
@@ -282,13 +299,6 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         """Create the streams for the server."""
         pass
 
-    async def __aenter__(self):
-        await self.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.cleanup()
-
     def invalidate_tools_cache(self):
         """Invalidate the tools cache."""
         self._cache_dirty = True
@@ -298,12 +308,14 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         while True:
             try:
                 return await func()
-            except Exception:
+            except (ConnectionError, TimeoutError, OSError, MCPConnectionError):
                 attempts += 1
                 if self.max_retry_attempts != -1 and attempts > self.max_retry_attempts:
                     raise
                 backoff = self.retry_backoff_seconds_base * (2 ** (attempts - 1))
                 await asyncio.sleep(backoff)
+            except Exception:
+                raise  # permanent error — don't retry
 
     async def connect(self):
         """Connect to the server."""
@@ -448,6 +460,32 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             )
 
         return await self.session.get_prompt(name, arguments)
+
+    async def list_resources(self) -> list[Resource]:
+        """List the resources available on the server."""
+        if not self.session:
+            raise MCPError(
+                "Server not initialized. Make sure you call `connect()` first.",
+                server_name=self.name,
+            )
+        result = await self.session.list_resources()
+        return result.resources
+
+    async def read_resource(self, uri: str) -> str:
+        """Read a resource by URI. Returns the text content."""
+        if not self.session:
+            raise MCPError(
+                "Server not initialized. Make sure you call `connect()` first.",
+                server_name=self.name,
+            )
+        from pydantic import AnyUrl
+        from mcp.types import TextResourceContents
+
+        result = await self.session.read_resource(AnyUrl(uri))
+        for item in result.contents:
+            if isinstance(item, TextResourceContents):
+                return item.text
+        return ""
 
     async def cleanup(self):
         """Cleanup the server."""
@@ -927,6 +965,8 @@ def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
     for name, param in sig.parameters.items():
         if name == "self":
             continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
 
         hint = hints.get(name)
         prop = _type_to_schema(hint) if hint is not None else {}
@@ -1091,6 +1131,10 @@ class MCPServerFunction(MCPServer):
         self._registry: dict[str, tuple[MCPTool, Callable[[dict[str, Any]], Any]]] = {}
         for item in tools:
             ft = _coerce_to_function_tool(item)
+            if ft.name in self._registry:
+                raise ValueError(
+                    f"MCPServerFunction '{name}': duplicate tool name '{ft.name}'"
+                )
             mcp_tool = MCPTool(
                 name=ft.name,
                 description=ft.description,
@@ -1144,3 +1188,9 @@ class MCPServerFunction(MCPServer):
             f"Server '{self._name}' has no prompts",
             server_name=self._name,
         )
+
+    async def list_resources(self) -> list[Resource]:
+        return []
+
+    async def read_resource(self, uri: str) -> str:
+        return ""
