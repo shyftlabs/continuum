@@ -58,6 +58,14 @@ class ChatRequest(BaseModel):
     conversation_id: str
 
 
+class ClearMemoryRequest(BaseModel):
+    user_id: str
+
+
+class DeleteMemoryRequest(BaseModel):
+    memory_id: str
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_PAGE
@@ -74,6 +82,49 @@ async def chat(req: ChatRequest):
         conversation_id=req.conversation_id
     )
     return {"response": response}
+
+
+def _get_memory_client():
+    if not _agent or not _agent._initialized:
+        return None
+    client = _agent._container.memory_client if _agent._container else None
+    return client if client and client.is_enabled else None
+
+
+@app.get("/memory/list")
+async def list_memories(user_id: str):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        entries = await client.get_all(user_id=user_id)
+        return {"success": True, "memories": [{"id": e.id, "text": e.memory} for e in entries]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/memory/delete")
+async def delete_memory(req: DeleteMemoryRequest):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        await client.delete(req.memory_id)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/memory/clear")
+async def clear_memory(req: ClearMemoryRequest):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        await client.delete_all(user_id=req.user_id)
+        return {"success": True, "message": f"All memories cleared for user '{req.user_id}'"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.get("/status")
@@ -134,6 +185,15 @@ HTML_PAGE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="memory-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:999; align-items:center; justify-content:center;">
+  <div style="background:white; border-radius:12px; width:480px; max-height:80vh; display:flex; flex-direction:column; overflow:hidden;">
+    <div style="padding:16px 20px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Long-term Memories</h3>
+      <button onclick="closeMemoryPanel()" style="background:none; border:none; font-size:20px; cursor:pointer;">✕</button>
+    </div>
+    <div id="memory-list" style="flex:1; overflow-y:auto; padding:12px 20px;"></div>
+  </div>
+</div>
 <div id="login-overlay">
   <div class="login-box">
     <h2>Login</h2>
@@ -147,6 +207,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <h1>Local Shop Assistant - <span id="display-user">Not Logged In</span></h1>
   <div style="display:flex;">
     <button id="change-user-btn" style="display:none; background:#7f8c8d; margin-right:8px;" onclick="changeUser()">Switch User</button>
+    <button id="manage-memory-btn" style="display:none; background:#8e44ad; margin-right:8px;" onclick="openMemoryPanel()">Memories</button>
+  <button id="clear-memory-btn" style="display:none; background:#c0392b; margin-right:8px;" onclick="clearMemory()">Clear All</button>
     <button id="new-chat-btn" onclick="startNewChat()">+ New Chat</button>
   </div>
 </header>
@@ -176,7 +238,72 @@ function doLogin() {
   document.getElementById('login-overlay').style.display = 'none';
   document.getElementById('new-chat-btn').style.display = 'block';
   document.getElementById('change-user-btn').style.display = 'block';
+  document.getElementById('clear-memory-btn').style.display = 'block';
+  document.getElementById('manage-memory-btn').style.display = 'block';
   startNewChat();
+}
+
+async function openMemoryPanel() {
+  if (!currentUserId) return;
+  document.getElementById('memory-overlay').style.display = 'flex';
+  const list = document.getElementById('memory-list');
+  list.innerHTML = '<p style="color:#999;">Loading...</p>';
+  const res = await fetch(`/memory/list?user_id=${encodeURIComponent(currentUserId)}`);
+  const data = await res.json();
+  if (!data.success) {
+    list.innerHTML = `<p style="color:red;">${data.error}</p>`;
+    return;
+  }
+  if (data.memories.length === 0) {
+    list.innerHTML = '<p style="color:#999;">No memories found.</p>';
+    return;
+  }
+  list.innerHTML = data.memories.map(m => `
+    <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      <span style="flex:1; font-size:14px;">${m.text}</span>
+      <button onclick="deleteMemory('${m.id}', this)" style="padding:4px 10px; background:#c0392b; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Delete</button>
+    </div>
+  `).join('');
+}
+
+function closeMemoryPanel() {
+  document.getElementById('memory-overlay').style.display = 'none';
+}
+
+async function deleteMemory(memoryId, btn) {
+  btn.disabled = true;
+  btn.textContent = '...';
+  const res = await fetch('/memory/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({memory_id: memoryId})
+  });
+  const data = await res.json();
+  if (data.success) {
+    btn.closest('div').remove();
+    const list = document.getElementById('memory-list');
+    if (!list.children.length) list.innerHTML = '<p style="color:#999;">No memories found.</p>';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+    alert('Failed: ' + data.error);
+  }
+}
+
+async function clearMemory() {
+  if (!currentUserId) return;
+  if (!confirm(`Clear all long-term memories for user '${currentUserId}'?`)) return;
+  const res = await fetch('/memory/clear', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user_id: currentUserId})
+  });
+  const data = await res.json();
+  if (data.success) {
+    appendMsg('assistant', `Memory cleared. I no longer remember anything about you.`);
+  } else {
+    appendMsg('assistant', `Failed to clear memory: ${data.error}`);
+  }
 }
 
 function changeUser() {

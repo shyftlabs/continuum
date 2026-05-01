@@ -7,8 +7,10 @@ class ShopConfig:
     mcp_timeout: float = 10.0
 
     agent_name: str = "shop-assistant"
-    agent_model: str = "gemini/gemini-2.5-flash"
-    agent_temperature: float = 0.7
+    # agent_model: str = "gemini/gemini-2.5-flash"
+    # agent_model: str = "gpt-4o"
+    agent_model: str = "gpt-5"
+    agent_temperature: float = 1.0 # 0.7, gpt-5 only accepts 1.0
     max_turns: int = 10
 
     enable_memory: bool = True
