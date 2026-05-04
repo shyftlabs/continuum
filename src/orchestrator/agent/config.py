@@ -393,17 +393,123 @@ class PlanningConfig:
         }
 
 
+TierClassifierMode = Literal["light_only", "heavy_only", "gpt_4o_mini", "qwen", "qwen_local"]
+
+
 @dataclass
 class RouterConfig:
     """Configuration for router agent."""
 
-    routing_strategy: Literal["llm", "rule_based", "hybrid"] = "llm"
+    routing_strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "llm"
     routing_model: str | None = None  # Model for LLM routing (default: agent's model)
     routing_prompt: str | None = None  # Custom prompt for routing decision
+
+    # --- Smart layer (model_tier) -------------------------------------------------
+    tier_classifier: TierClassifierMode = "gpt_4o_mini"
+    tier_classifier_llm_model: str | None = None  # gpt_4o_mini default id; qwen/qwen_local require explicit id
+    tier_classifier_max_tokens: int = 128
+    # Keyword / length heuristics before the classifier LLM (disable to always call the classifier).
+    tier_classifier_heuristic_shortcut: bool = True
+    tier_router_api_base: str | None = None  # Remote Hugging Face (or other) router URL — qwen mode only
+    tier_router_api_key: str | None = None  # Remote router API key — qwen mode only
+    tier_local_router_api_base: str | None = None  # Local OpenAI-compatible URL — qwen_local only (never tier_router_api_base)
+    tier_local_router_api_key: str | None = None  # Optional key for local classifier server
+
+    tier_nano_model: str | None = None
+    tier_fast_model: str | None = None
+    tier_balanced_model: str | None = None
+    tier_specialist_model: str | None = None
+    tier_frontier_model: str | None = None
+    tier_light_model: str | None = None  # legacy → fast slot if tier_fast_model unset
+    tier_heavy_model: str | None = None  # legacy → balanced slot if tier_balanced_model unset
+    tier_force_completion_model: str | None = None  # if set, all completions use this model id
+
+    tier_light_temperature: float = 0.5  # nano, fast, balanced
+    tier_heavy_temperature: float = 0.3  # specialist, frontier
+    tier_completion_max_tokens: int = 4096
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "routing_strategy": self.routing_strategy,
             "routing_model": self.routing_model,
             "routing_prompt": self.routing_prompt,
+            "tier_classifier": self.tier_classifier,
+            "tier_classifier_llm_model": self.tier_classifier_llm_model,
+            "tier_classifier_max_tokens": self.tier_classifier_max_tokens,
+            "tier_classifier_heuristic_shortcut": self.tier_classifier_heuristic_shortcut,
+            "tier_router_api_base": self.tier_router_api_base,
+            "tier_router_api_key": self.tier_router_api_key,
+            "tier_local_router_api_base": self.tier_local_router_api_base,
+            "tier_local_router_api_key": self.tier_local_router_api_key,
+            "tier_nano_model": self.tier_nano_model,
+            "tier_fast_model": self.tier_fast_model,
+            "tier_balanced_model": self.tier_balanced_model,
+            "tier_specialist_model": self.tier_specialist_model,
+            "tier_frontier_model": self.tier_frontier_model,
+            "tier_light_model": self.tier_light_model,
+            "tier_heavy_model": self.tier_heavy_model,
+            "tier_force_completion_model": self.tier_force_completion_model,
+            "tier_light_temperature": self.tier_light_temperature,
+            "tier_heavy_temperature": self.tier_heavy_temperature,
+            "tier_completion_max_tokens": self.tier_completion_max_tokens,
         }
+
+
+_VALID_LLM_ROUTE_CLASSIFIERS: frozenset[str] = frozenset(
+    {"light_only", "heavy_only", "gpt_4o_mini", "qwen", "qwen_local"}
+)
+
+# HF/local router model ids must not override tier_classifier_llm_model for OpenAI-hosted classifiers.
+_ROUTER_MODEL_CLASSIFIER_MODES: frozenset[str] = frozenset({"qwen", "qwen_local"})
+
+
+def apply_llm_route_env_overrides(rc: RouterConfig) -> RouterConfig:
+    """
+    Apply ``LLM_ROUTE_*`` fields from global :mod:`orchestrator.config.settings`
+    onto ``rc`` (mutates in place). Safe to call before applying explicit API overrides.
+
+    Env vars (via Settings): ``LLM_ROUTE_TIER_CLASSIFIER``, ``LLM_ROUTE_ROUTER_MODEL`` (only applied when
+    ``tier_classifier`` is ``qwen`` or ``qwen_local`` — avoids sending HF model ids to OpenAI for
+    ``gpt_4o_mini``), ``LLM_ROUTE_ROUTER_API_BASE``, ``LLM_ROUTE_ROUTER_API_KEY``
+    (required for ``qwen``),
+    ``LLM_ROUTE_FORCE_COMPLETION_MODEL``,
+    ``LLM_ROUTE_TIER_CLASSIFIER_HEURISTIC_SHORTCUT`` (optional ``false`` to disable keyword shortcuts),
+    ``LLM_ROUTE_LOCAL_ROUTER_API_BASE`` / ``LLM_ROUTE_LOCAL_ROUTER_API_KEY`` → ``tier_local_router_api_*`` (``qwen_local``),
+    ``LLM_ROUTE_LOCAL_ROUTER_MODEL`` → classifier model id for ``qwen_local`` (e.g. MLX HF repo id).
+
+    For ``qwen`` classifier, ``HF_API_KEY`` (global Settings) is used when router API key env fields are unset;
+    default HF router URL and model are applied in :mod:`orchestrator.agent.smart_layer.classifier`.
+    """
+    tc_raw = (settings.llm_route_tier_classifier or "").strip().lower()
+    if tc_raw and tc_raw in _VALID_LLM_ROUTE_CLASSIFIERS:
+        rc.tier_classifier = tc_raw  # type: ignore[assignment]
+
+    rm = (settings.llm_route_router_model or "").strip()
+    lm = (settings.llm_route_local_router_model or "").strip()
+    if rc.tier_classifier == "qwen" and rm:
+        rc.tier_classifier_llm_model = rm
+    elif rc.tier_classifier == "qwen_local":
+        if lm:
+            rc.tier_classifier_llm_model = lm
+        elif rm:
+            rc.tier_classifier_llm_model = rm
+
+    if settings.llm_route_router_api_base and str(settings.llm_route_router_api_base).strip():
+        rc.tier_router_api_base = str(settings.llm_route_router_api_base).strip()
+
+    if settings.llm_route_router_api_key and str(settings.llm_route_router_api_key).strip():
+        rc.tier_router_api_key = str(settings.llm_route_router_api_key).strip()
+
+    if settings.llm_route_local_router_api_base and str(settings.llm_route_local_router_api_base).strip():
+        rc.tier_local_router_api_base = str(settings.llm_route_local_router_api_base).strip()
+
+    if settings.llm_route_local_router_api_key and str(settings.llm_route_local_router_api_key).strip():
+        rc.tier_local_router_api_key = str(settings.llm_route_local_router_api_key).strip()
+
+    if settings.llm_route_force_completion_model and str(settings.llm_route_force_completion_model).strip():
+        rc.tier_force_completion_model = str(settings.llm_route_force_completion_model).strip()
+
+    if settings.llm_route_tier_classifier_heuristic_shortcut is not None:
+        rc.tier_classifier_heuristic_shortcut = settings.llm_route_tier_classifier_heuristic_shortcut
+
+    return rc

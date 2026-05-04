@@ -133,7 +133,9 @@ class RunFinalizer:
         await self._lifecycle.report_error(agent, context, error, run_state)
 
     def attach_run_artifacts(self, agent: BaseAgent, response: AgentResponse) -> None:
-        """Attach MCP artifacts to response."""
+        """Attach MCP artifacts to response (merge with existing e.g. model_tier routing)."""
+        merged: dict[str, Any] = dict(response.run_artifacts or {})
+
         run_artifacts_dict = None
         if agent.tool_executor and hasattr(agent.tool_executor, "run_artifacts"):
             run_artifacts = agent.tool_executor.run_artifacts
@@ -145,10 +147,12 @@ class RunFinalizer:
                 run_artifacts_dict = run_artifacts.to_dict()
 
         if run_artifacts_dict:
-            response.run_artifacts = run_artifacts_dict
+            merged.update(run_artifacts_dict)
             logger.debug(
                 f"Attached {len(run_artifacts_dict.get('tool_artifacts', []))} artifacts to response"
             )
+
+        response.run_artifacts = merged if merged else None
 
     def track_mcp_session(
         self,

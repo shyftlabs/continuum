@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_organization: str | None = None
 
+    # Hugging Face (tier classifier via HF router when LLM_ROUTE_TIER_CLASSIFIER=qwen)
+    hf_api_key: str | None = None  # HF_API_KEY — used if LLM_ROUTE_ROUTER_API_KEY / tier_router_api_key unset
+
     # -------------------------------------------------------------------------
     # Google Gemini Configuration
     # -------------------------------------------------------------------------
@@ -94,6 +97,23 @@ class Settings(BaseSettings):
     # Logging Configuration
     # -------------------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    # -------------------------------------------------------------------------
+    # Smart layer (model_tier routing + tier classifiers)
+    # -------------------------------------------------------------------------
+    smart_layer_enabled: bool = True  # When False, RouterAgent model_tier falls back to llm routing
+
+    # Playground / SDK env aliases (OpenAI-compatible classifier host, e.g. HF router)
+    llm_route_tier_classifier: str | None = None  # LLM_ROUTE_TIER_CLASSIFIER
+    llm_route_router_model: str | None = None  # LLM_ROUTE_ROUTER_MODEL → tier_classifier_llm_model
+    llm_route_router_api_base: str | None = None  # LLM_ROUTE_ROUTER_API_BASE
+    llm_route_router_api_key: str | None = None  # LLM_ROUTE_ROUTER_API_KEY
+    llm_route_force_completion_model: str | None = None  # LLM_ROUTE_FORCE_COMPLETION_MODEL
+    llm_route_local_router_api_base: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_API_BASE (qwen_local)
+    llm_route_local_router_api_key: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_API_KEY
+    llm_route_local_router_model: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_MODEL → MLX/local model id for qwen_local
+    # When False, skip keyword/length heuristics and always run the classifier LLM (if mode allows).
+    llm_route_tier_classifier_heuristic_shortcut: bool | None = None  # LLM_ROUTE_TIER_CLASSIFIER_HEURISTIC_SHORTCUT
 
     # -------------------------------------------------------------------------
     # Memory Configuration (mem0 with pluggable vector store)

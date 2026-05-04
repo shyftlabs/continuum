@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Routing playground</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="hero">
+      <h1 id="hero-title">Routing playground</h1>
+      <p id="hero-desc">Loading…</p>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="panel">
+          <h2>Routing controls</h2>
+          <p id="server-default-hint" class="server-sync">Loading server defaults…</p>
+
+          <label for="tier-classifier">Classifier mode</label>
+          <select id="tier-classifier"></select>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="tier-heuristic-shortcut" checked />
+            Fast keyword / length shortcuts (skip classifier LLM when rules match)
+          </label>
+
+          <label for="forced-tier">Forced product tier (optional)</label>
+          <select id="forced-tier">
+            <option value="">— Let router decide —</option>
+            <option value="nano">nano</option>
+            <option value="fast">fast</option>
+            <option value="balanced">balanced</option>
+            <option value="specialist">specialist</option>
+            <option value="frontier">frontier</option>
+          </select>
+
+          <label for="force-completion-model">Force completion model (optional)</label>
+          <input
+            type="text"
+            id="force-completion-model"
+            placeholder="e.g. gpt-4o-mini — same model for every tier"
+            autocomplete="off"
+          />
+
+          <label for="classifier-llm-model">Classifier model id</label>
+          <input
+            type="text"
+            id="classifier-llm-model"
+            placeholder="Optional if LLM_ROUTE_LOCAL_ROUTER_MODEL / ROUTER_MODEL set — else MLX id e.g. mlx-community/Qwen2.5-3B-Instruct-4bit"
+            autocomplete="off"
+          />
+
+          <label for="tier-router-api-base">Remote classifier API base (Qwen API / HF router only)</label>
+          <input
+            type="text"
+            id="tier-router-api-base"
+            placeholder="https://router.huggingface.co/v1 — ignored for gpt-4o-mini and qwen_local"
+            autocomplete="off"
+          />
+
+          <label for="tier-router-api-key">Remote classifier API key (HF token)</label>
+          <input
+            type="text"
+            id="tier-router-api-key"
+            placeholder="Required for mode Qwen (API); not used for qwen_local"
+            autocomplete="off"
+          />
+
+          <label for="tier-local-router-api-base">Local classifier API base (qwen_local only)</label>
+          <input
+            type="text"
+            id="tier-local-router-api-base"
+            placeholder="http://127.0.0.1:11434/v1 — never uses remote HF field above"
+            autocomplete="off"
+          />
+
+          <label for="tier-local-router-api-key">Local classifier API key (optional)</label>
+          <input type="text" id="tier-local-router-api-key" placeholder="If your local OpenAI shim requires a key" autocomplete="off" />
+
+          <label for="local-classifier">Local registry (display)</label>
+          <select id="local-classifier" disabled></select>
+          <p id="local-classifier-hint" class="server-sync"></p>
+        </div>
+
+        <div class="panel">
+          <h2>Aggregate stats</h2>
+          <div id="stats-server"></div>
+          <div id="stats-client" style="margin-top: 0.65rem"></div>
+          <div class="row" style="margin-top: 0.5rem">
+            <button type="button" id="refresh-stats" class="secondary">Refresh</button>
+            <button type="button" id="clear-stats" class="secondary">Clear this session</button>
+          </div>
+          <button type="button" id="new-session" class="secondary" style="margin-top: 0.5rem; width: 100%">
+            New session ID
+          </button>
+        </div>
+
+        <div class="panel">
+          <h2>Golden evaluation</h2>
+          <p id="golden-meta" class="server-sync">Loading…</p>
+          <label for="golden-max-rows">Route-only max rows</label>
+          <input type="text" id="golden-max-rows" value="50" />
+          <label for="golden-e2e-rows">E2E + judge max rows (cap)</label>
+          <input type="text" id="golden-e2e-rows" value="5" />
+          <div class="row" style="margin-top: 0.35rem">
+            <button type="button" id="golden-route-btn" class="secondary">Run route-only</button>
+            <button type="button" id="golden-e2e-btn" class="secondary">Run e2e + judge</button>
+          </div>
+          <p class="server-sync">
+            Route-only checks tier labels only. E2E runs routed vs forced nano/frontier plus a judge — slow and uses quota.
+          </p>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="panel">
+          <h2>Chat</h2>
+          <label for="message-input">Message</label>
+          <textarea id="message-input" placeholder="Type a message…"></textarea>
+          <button type="button" id="send-btn">Send (streaming)</button>
+          <div id="chat-log" class="chat-log" style="margin-top: 0.65rem"></div>
+        </div>
+
+        <div class="panel">
+          <h2>This turn — routing transparency</h2>
+          <div id="routing-story"><p class="muted">Send a message to see tier, mode, models, and timings.</p></div>
+        </div>
+
+        <div class="panel">
+          <h2>Golden run results</h2>
+          <div id="golden-results"><p class="muted">Run a benchmark from the sidebar.</p></div>
+        </div>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from orchestrator.agent.base import BaseAgent
 from orchestrator.agent.config import RouterConfig
+from orchestrator.agent.smart_layer.defaults import MODEL_TIER_DEFAULT_INSTRUCTIONS
 from orchestrator.agent.types import Route, RunContext
 from orchestrator.config import settings
 from orchestrator.llm.config import LLMConfig
@@ -90,8 +91,10 @@ class RouterAgent(BaseAgent):
         """Initialize router agent."""
         super().__post_init__()
 
-        # Build routing prompt if not provided
-        if not self.instructions:
+        if self.router_config.routing_strategy == "model_tier":
+            if not (self.instructions or "").strip():
+                self.instructions = MODEL_TIER_DEFAULT_INSTRUCTIONS
+        elif not self.instructions:
             self.instructions = self._build_routing_instructions()
 
     def _build_routing_instructions(self) -> str:
@@ -136,6 +139,11 @@ If the request doesn't clearly fit any specialist, respond with "none".
         """
         available_routes = [r.agent_name for r in self.routes]
         strategy = self.router_config.routing_strategy
+        if strategy == "model_tier" and not settings.smart_layer_enabled:
+            logger.warning(
+                "routing_strategy=model_tier but smart_layer_enabled=false; using llm routing instead"
+            )
+            strategy = "llm"
 
         # Create span for routing decision
         async with SpanScope(
@@ -147,6 +155,10 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 "fallback_agent": self.fallback_agent_name,
             },
         ) as span:
+            if strategy == "model_tier":
+                span.set_output({"selected_route": None, "method": "model_tier_runner"})
+                return None
+
             # Try custom router first
             if self.custom_router:
                 result = self.custom_router(input_text, self.routes)
@@ -300,7 +312,7 @@ def create_router_agent(
     routes: list[tuple[str, str]],  # List of (agent_name, description)
     *,
     fallback: str | None = None,
-    strategy: Literal["llm", "rule_based", "hybrid"] = "hybrid",
+    strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "hybrid",
     model: str | None = None,
 ) -> RouterAgent:
     """

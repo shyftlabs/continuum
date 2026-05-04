@@ -70,6 +70,9 @@ class EventType(str, Enum):
     CONTENT_DELTA = "content_delta"
     CONTENT_COMPLETE = "content_complete"
 
+    # Smart layer (model_tier)
+    ROUTING = "routing"
+
     # Tool events
     TOOL_CALL_START = "tool_call_start"
     TOOL_CALL_END = "tool_call_end"

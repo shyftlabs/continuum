@@ -27,11 +27,18 @@ from orchestrator.agent.execution.run_lifecycle import RunLifecycle
 from orchestrator.agent.execution.stream_executor import StreamExecutor
 from orchestrator.agent.execution.tool_handler import ToolHandler
 from orchestrator.agent.handoff.manager import HandoffManager
+from orchestrator.agent.workflow.router import RouterAgent
 from orchestrator.agent.persistence.state import RunStateManager
 from orchestrator.agent.services.context_service import ContextService
 from orchestrator.agent.services.memory_service import MemoryService
 from orchestrator.agent.services.session_service import SessionService
 from orchestrator.agent.services.tool_service import ToolService
+from orchestrator.agent.smart_layer.runner_facade import (
+    extract_last_user_text,
+    run_model_tier_turn,
+    stream_model_tier_turn,
+)
+from orchestrator.agent.smart_layer.types import parse_product_tier, tier_dispatch_priority
 from orchestrator.agent.types import (
     AgentEvent,
     AgentResponse,
@@ -49,6 +56,7 @@ from orchestrator.agent.utils.message_utils import message_to_dict
 from orchestrator.agent.utils.validation_utils import validate_input
 from orchestrator.core.container import Container, get_container
 from orchestrator.logging import get_logger
+from orchestrator.config import settings as app_settings
 
 if TYPE_CHECKING:
     from orchestrator.llm import LLMClient
@@ -382,6 +390,64 @@ class AgentRunner:
 
         try:
             messages = list(run_state.messages) if run_state.messages else []
+
+            if (
+                isinstance(agent, RouterAgent)
+                and app_settings.smart_layer_enabled
+                and agent.router_config.routing_strategy == "model_tier"
+            ):
+                user_text = extract_last_user_text(input, messages)
+                try:
+                    mt_result = await run_model_tier_turn(
+                        agent,
+                        self._llm_client,
+                        user_text=user_text,
+                    )
+                except Exception as e_mt:
+                    self._circuit_breaker.record_failure()
+                    await self._finalizer.handle_error(agent, ctx, run_state, e_mt, start_time)
+                    if isinstance(e_mt, AgentError):
+                        raise
+                    raise AgentExecutionError(
+                        str(e_mt),
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        trace_id=ctx.trace_id,
+                        original_error=e_mt,
+                    ) from e_mt
+
+                te = parse_product_tier(mt_result.routing.get("tier"))
+                if te:
+                    ctx.priority = tier_dispatch_priority(te)
+
+                response = AgentResponse(
+                    content=mt_result.content,
+                    agent_name=agent.name,
+                    status=ResponseStatus.SUCCESS,
+                    trace_id=ctx.trace_id,
+                    run_artifacts={"routing": mt_result.routing},
+                )
+                out_messages = list(messages)
+                if mt_result.content:
+                    out_messages.append({"role": "assistant", "content": mt_result.content})
+
+                if agent.on_end:
+                    agent.on_end(agent, {"context": ctx, "response": response})
+
+                await self._finalizer.finalize(
+                    agent,
+                    ctx,
+                    run_state,
+                    response,
+                    result.user_message_index,
+                    result.tool_context_state,
+                    start_time,
+                    out_messages,
+                )
+
+                self._circuit_breaker.record_success()
+                return response
+
             response = await self._executor.execute_loop(
                 agent=agent, messages=messages, context=ctx, run_state=run_state,
             )
@@ -460,6 +526,112 @@ class AgentRunner:
                 type=EventType.AGENT_START, agent_name=agent.name,
                 run_id=ctx.run_id, trace_id=ctx.trace_id,
             )
+
+            if (
+                isinstance(agent, RouterAgent)
+                and app_settings.smart_layer_enabled
+                and agent.router_config.routing_strategy == "model_tier"
+            ):
+                user_text = extract_last_user_text(input, messages)
+                content_parts: list[str] = []
+                last_routing: dict = {}
+                try:
+                    async for ev in stream_model_tier_turn(
+                        agent,
+                        self._llm_client,
+                        user_text=user_text,
+                    ):
+                        if ev.kind == "routing" and ev.routing:
+                            last_routing = ev.routing
+                            yield AgentEvent(
+                                type=EventType.ROUTING,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data=ev.routing,
+                                trace_id=ctx.trace_id,
+                            )
+                        elif ev.kind == "content_delta" and ev.text:
+                            content_parts.append(ev.text)
+                            yield AgentEvent(
+                                type=EventType.CONTENT_DELTA,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={"content": ev.text},
+                                trace_id=ctx.trace_id,
+                            )
+                except Exception as e_mt:
+                    await self._finalizer.handle_error(agent, ctx, run_state, e_mt, start_time)
+                    yield AgentEvent(
+                        type=EventType.RUN_ERROR,
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        data={"error": str(e_mt), "error_type": type(e_mt).__name__},
+                        trace_id=ctx.trace_id,
+                    )
+                    if isinstance(e_mt, AgentError):
+                        raise
+                    raise AgentExecutionError(
+                        str(e_mt),
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        trace_id=ctx.trace_id,
+                        original_error=e_mt,
+                    ) from e_mt
+
+                content = "".join(content_parts)
+                te = parse_product_tier(last_routing.get("tier"))
+                if te:
+                    ctx.priority = tier_dispatch_priority(te)
+
+                if content:
+                    yield AgentEvent(
+                        type=EventType.CONTENT_COMPLETE,
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        data={"content": content},
+                        trace_id=ctx.trace_id,
+                    )
+
+                response = AgentResponse(
+                    content=content,
+                    run_id=ctx.run_id,
+                    agent_name=agent.name,
+                    status=ResponseStatus.SUCCESS,
+                    trace_id=ctx.trace_id,
+                    run_artifacts={"routing": last_routing} if last_routing else None,
+                )
+                if content:
+                    messages.append({"role": "assistant", "content": content})
+
+                if agent.on_end:
+                    agent.on_end(agent, {"context": ctx, "response": response})
+
+                await self._finalizer.finalize(
+                    agent,
+                    ctx,
+                    run_state,
+                    response,
+                    result.user_message_index,
+                    result.tool_context_state,
+                    start_time,
+                    messages,
+                )
+
+                yield AgentEvent(
+                    type=EventType.AGENT_END,
+                    agent_name=agent.name,
+                    run_id=ctx.run_id,
+                    data={"turn_count": 1},
+                    trace_id=ctx.trace_id,
+                )
+                yield AgentEvent(
+                    type=EventType.RUN_END,
+                    agent_name=agent.name,
+                    run_id=ctx.run_id,
+                    data={"content": content, "turn_count": 1},
+                    trace_id=ctx.trace_id,
+                )
+                return
 
             content = ""
             turn = 0

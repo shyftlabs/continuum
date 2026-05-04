@@ -31,6 +31,7 @@ from orchestrator.agent.config import (
     RouterConfig,
     RunnerConfig,
     SequentialConfig,
+    apply_llm_route_env_overrides,
 )
 
 # Exceptions
@@ -199,6 +200,7 @@ __all__ = [
     "HandoffConfig",
     "RunnerConfig",
     "RouterConfig",
+    "apply_llm_route_env_overrides",
     "SequentialConfig",
     "ParallelConfig",
     "LoopConfig",
