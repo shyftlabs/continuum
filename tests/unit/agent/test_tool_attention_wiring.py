@@ -85,7 +85,7 @@ def _make_run_state(messages: list) -> MagicMock:
 class TestExecutorToolAttentionWiring:
     @pytest.mark.asyncio
     async def test_executor_uses_filtered_tools_from_apply_tool_attention(self):
-        """apply_tool_attention result is passed as tools to LLM, not the full set."""
+        """Executor reads _filtered_tools from context.metadata and passes them to LLM."""
         filtered = [_make_dict_tool("search_products")]
         mock_llm = MagicMock()
         mock_llm.chat = AsyncMock(return_value=_make_llm_response())
@@ -93,14 +93,11 @@ class TestExecutorToolAttentionWiring:
         executor = Executor(llm_client=mock_llm)
         agent = _make_agent(tool_attention=ToolAttentionConfig(k=2, min_tools=3))
         messages = [{"role": "user", "content": "find dog food"}]
+        ctx = _make_context(metadata={"_filtered_tools": filtered})
 
-        with patch(
-            "orchestrator.tools.tool_attention.router.apply_tool_attention",
-            new_callable=AsyncMock,
-            return_value=filtered,
-        ), patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig:
+        with patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig:
             MockConfig.from_agent_config.return_value = MagicMock()
-            await executor.execute_loop(agent, messages, _make_context(), _make_run_state(messages))
+            await executor.execute_loop(agent, messages, ctx, _make_run_state(messages))
 
         tools_sent = mock_llm.chat.call_args.kwargs["tools"]
         assert tools_sent == filtered
@@ -241,7 +238,7 @@ def _make_runner(mock_llm) -> AgentRunner:
 class TestRunStreamToolAttentionWiring:
     @pytest.mark.asyncio
     async def test_run_stream_uses_filtered_tools_from_apply_tool_attention(self):
-        """apply_tool_attention result is passed as tools to chat_stream, not the full set."""
+        """run_stream reads _filtered_tools from context.metadata and passes them to chat_stream."""
         filtered = [_make_dict_tool("search_products")]
         captured: dict = {}
 
@@ -259,7 +256,7 @@ class TestRunStreamToolAttentionWiring:
         agent = _make_stream_agent(tool_attention=ToolAttentionConfig(k=2, min_tools=3))
         messages = [{"role": "user", "content": "find dog food"}]
 
-        mock_ctx = _make_context()
+        mock_ctx = _make_context(metadata={"_filtered_tools": filtered})
         prepare_result = PrepareRunResult(
             success=True,
             context=mock_ctx,
@@ -268,12 +265,7 @@ class TestRunStreamToolAttentionWiring:
         runner._prepare_run = AsyncMock(return_value=prepare_result)
         runner._finalizer.finalize = AsyncMock()
 
-        with patch(
-            "orchestrator.tools.tool_attention.router.apply_tool_attention",
-            new_callable=AsyncMock,
-            return_value=filtered,
-        ):
-            _ = [e async for e in runner.run_stream(agent, "find dog food")]
+        _ = [e async for e in runner.run_stream(agent, "find dog food")]
 
         assert captured["tools"] == filtered
         assert len(captured["tools"]) == 1
