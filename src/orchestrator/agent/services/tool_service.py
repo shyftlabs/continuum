@@ -92,6 +92,30 @@ class ToolService(IToolService):
             )
             tool_args = {}
 
+        # Hallucination gate: if tool-attention is active and this tool was not promoted,
+        # return a structured error so the LLM can recover by choosing an available tool.
+        promoted: set[str] | None = context.metadata.get("promoted_tools") if context.metadata else None
+        if promoted is not None and tool_name not in promoted:
+            logger.warning(
+                "tool-attention gate: '%s' not in promoted set %s",
+                tool_name, sorted(promoted),
+            )
+            return {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": json.dumps({
+                    "error": "tool_not_available",
+                    "message": f"Tool '{tool_name}' is not available for this turn.",
+                    "available": sorted(promoted),
+                }),
+            }, {
+                "tool_name": tool_name,
+                "latency_ms": 0.0,
+                "server_name": None,
+                "success": False,
+                "error": "tool_not_in_promoted_set",
+            }
+
         start_time = time.time()
         metrics = get_metrics_collector()
 
