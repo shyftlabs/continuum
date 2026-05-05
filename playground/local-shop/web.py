@@ -364,6 +364,7 @@ function appendMsg(role, text) {
   chat.scrollTop = chat.scrollHeight;
   return div;
 }
+
 </script>
 </body>
 </html>

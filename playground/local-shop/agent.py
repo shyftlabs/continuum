@@ -25,6 +25,7 @@ from orchestrator import (
     ToolExecutor,
     get_logger,
 )
+from orchestrator.tools.tool_attention.config import ToolAttentionConfig
 from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
 from orchestrator.agent.types import generate_run_id
 from orchestrator.core.container import Container, get_container
@@ -191,6 +192,9 @@ class LocalShopAgent:
             config=AgentConfig(
                 max_turns=self.config.max_turns,
                 log_to_session=self.config.enable_session,
+                # Tool-attention: local-shop has ~5 tools so set min_tools=3 to trigger.
+                # k=3 means top-3 semantically relevant tools promoted each turn.
+                tool_attention=ToolAttentionConfig(k=3, min_tools=3),
             ),
         )
 

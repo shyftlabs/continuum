@@ -17,7 +17,7 @@ class ShopConfig:
     enable_session: bool = True
 
     system_instructions: str = """You are a friendly pet shop assistant.
-Help users search for products, add items to their cart, and checkout.
+Help users find the right products for their pets, answer pet care questions, manage their cart, and checkout.
 Be concise and helpful."""
 
 

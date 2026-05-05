@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
 _REACT_TEMPLATE_BASE = """
 Before answering, call the 'think' tool to reason step by step.
 Then give your final answer.
@@ -311,21 +312,41 @@ class MessageBuilder(IMessageBuilder):
                 f"Context management failed for agent {agent.name}, continuing without compression: {e}"
             )
 
+        # Run tool-attention routing: filters tools and produces Phase 1 summary.
+        from orchestrator.tools.tool_attention.router import apply_tool_attention
+        filtered_tools = await apply_tool_attention(agent, messages, context) or agent.get_tools_for_llm()
+        if context.metadata is not None:
+            context.metadata["_filtered_tools"] = filtered_tools
+
         import os
         _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
         _limit = None if _full else 2000
+
+        # Build display messages: insert Phase 1 inline so it appears in FINAL PROMPT log.
+        _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
+        if _phase1:
+            _insert_at = 0
+            for _i, _msg in enumerate(messages):
+                if _msg.get("role") == "system":
+                    _insert_at = _i + 1
+                else:
+                    break
+            display_messages = messages[:_insert_at] + [_phase1] + messages[_insert_at:]
+        else:
+            display_messages = messages
+
         formatted = "\n".join(
             f"[{m.get('role','?')}] {str(m.get('content', ''))[:_limit]}"
-            for m in messages
+            for m in display_messages
         )
         logger.info("===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted)
 
-        if agent.tools:
+        if filtered_tools:
             _tool_limit = None if _full else 200
             _tools_formatted = "\n".join(
                 f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
                 if isinstance(t, dict) else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
-                for t in agent.tools
+                for t in filtered_tools
             )
             logger.info("===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted)
 
