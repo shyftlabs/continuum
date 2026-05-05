@@ -18,6 +18,8 @@ The tool-attention paper and reference implementation address this by routing on
 
 A compact list of all available tools is injected as a system message before the user message. Each entry contains only the tool name and a one-line description — no parameters. This gives the LLM awareness of every tool without the token cost of full schemas.
 
+Because Phase 1 is a stable system message that does not change between turns (tool names and descriptions are fixed), it is a strong candidate for **prompt caching**. On Anthropic, the Phase 1 message can be marked with `cache_control` so subsequent turns reuse the cached KV state rather than reprocessing the tool catalogue tokens. On OpenAI, prompt caching is automatic for prefixes of at least 1024 tokens. In both cases, Phase 1 sitting at the top of the system prompt — before session history and user messages — maximises the cacheable prefix length and reduces per-turn cost.
+
 Example:
 ```
 [Available tools]
