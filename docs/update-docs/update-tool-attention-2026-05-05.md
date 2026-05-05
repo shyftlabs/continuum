@@ -29,7 +29,7 @@ Example:
 - checkout: Complete the purchase
 - think: Internal reasoning step
 
-If you need to call a tool but its parameters are not available,
+If a tool you need is listed above but its parameters are not available,
 output: NEED_TOOL:<tool_name>
 ```
 
