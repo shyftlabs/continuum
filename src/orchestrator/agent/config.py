@@ -24,6 +24,7 @@ from orchestrator.config import settings
 
 if TYPE_CHECKING:
     from orchestrator.llm.context_management import ContextManagementConfig
+    from orchestrator.tools.tool_attention.config import ToolAttentionConfig
 
 
 # =============================================================================
@@ -188,6 +189,11 @@ class AgentConfig:
     # Type hint uses string to avoid circular import (TYPE_CHECKING)
     context_management: "ContextManagementConfig | None" = None  # noqa: UP037  # None = use global defaults
 
+    # Tool-attention: semantic per-turn tool schema routing to reduce token cost.
+    # Only activates when the agent has >= tool_attention.min_tools tools.
+    # None = disabled (all schemas sent every turn, original behaviour).
+    tool_attention: "ToolAttentionConfig | None" = None  # noqa: UP037
+
     # Input sanitization
     input_sanitization: bool = True
     injection_detection: bool = False
@@ -260,6 +266,18 @@ class AgentConfig:
             "react_mode": self.react_mode,
             "trace_all_turns": self.trace_all_turns,
             "log_to_session": self.log_to_session,
+            "tool_attention": (
+                {
+                    "k": self.tool_attention.k,
+                    "min_tools": self.tool_attention.min_tools,
+                    "threshold": self.tool_attention.threshold,
+                    "always_promote": self.tool_attention.always_promote,
+                    "collection_name": self.tool_attention.collection_name,
+                    "embedding_model": self.tool_attention.embedding_model,
+                    "embedding_dim": self.tool_attention.embedding_dim,
+                }
+                if self.tool_attention else None
+            ),
         }
 
 

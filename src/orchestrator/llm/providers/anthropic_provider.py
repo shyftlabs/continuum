@@ -52,7 +52,7 @@ class AnthropicProvider(BaseProvider):
         Tool results (role=tool) must be wrapped as user messages with tool_result blocks.
         Tool calls from assistant must be converted to tool_use content blocks.
         """
-        system_parts: list[str] = []
+        system_blocks: list[dict[str, Any]] = []
         anthropic_messages: list[dict[str, Any]] = []
 
         for msg in messages:
@@ -61,7 +61,11 @@ class AnthropicProvider(BaseProvider):
 
             if role == "system":
                 if content:
-                    system_parts.append(content)
+                    block: dict[str, Any] = {"type": "text", "text": content}
+                    cc = msg.get("cache_control")
+                    if cc:
+                        block["cache_control"] = cc
+                    system_blocks.append(block)
 
             elif role == "tool":
                 # Tool result — must live inside a user message
@@ -110,7 +114,12 @@ class AnthropicProvider(BaseProvider):
             elif role == "user":
                 anthropic_messages.append({"role": "user", "content": content or ""})
 
-        system = "\n\n".join(system_parts) if system_parts else None
+        if not system_blocks:
+            system: str | list | None = None
+        elif any("cache_control" in b for b in system_blocks):
+            system = system_blocks  # list form required for cache_control
+        else:
+            system = "\n\n".join(b["text"] for b in system_blocks)
         return system, anthropic_messages
 
     def _convert_tools(self, tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:

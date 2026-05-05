@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from orchestrator.agent.exceptions import MaxTurnsExceededError
+from orchestrator.tools.tool_attention.router import _tool_name
 from orchestrator.agent.interfaces.executor_interface import IExecutor
 from orchestrator.agent.types import (
     AgentResponse,
@@ -132,10 +133,26 @@ class Executor(IExecutor):
                     "max_turns": context.max_turns,
                 },
             ) as turn_span:
-                # Get tools including handoffs
-                tools = agent.get_tools_for_llm()
+                # Filtered tools set by message_builder via apply_tool_attention.
+                tools = (
+                    context.metadata.get("_filtered_tools") if context.metadata else None
+                ) or agent.get_tools_for_llm()
                 tool_names = [t.get("function", {}).get("name", "") for t in tools] if tools else []
                 turn_span.add_metadata("available_tools", tool_names[:20])
+
+                # Phase 1: insert tool catalogue after system messages, before history.
+                # Ephemeral — not added to `messages` (session history).
+                _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
+                if _phase1:
+                    _insert_at = 0
+                    for _i, _msg in enumerate(messages):
+                        if _msg.get("role") == "system":
+                            _insert_at = _i + 1
+                        else:
+                            break
+                    llm_messages = messages[:_insert_at] + [_phase1] + messages[_insert_at:]
+                else:
+                    llm_messages = messages
 
                 # Make LLM call
                 try:
@@ -170,7 +187,7 @@ class Executor(IExecutor):
                     # NOTE: We pass auto_session=False because Executor manages the
                     # conversation loop including tool calls.
                     response = await self.llm_client.chat(
-                        messages=messages,
+                        messages=llm_messages,
                         tools=tools if tools else None,
                         config=llm_config,
                         session_id=context.session_id,
@@ -181,6 +198,31 @@ class Executor(IExecutor):
                         priority=context.priority,
                         stage_priority=agent.config.stage_priority if agent.config else 5,
                     )
+
+                    # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry once.
+                    if response.content and "NEED_TOOL:" in response.content:
+                        needed = response.content.split("NEED_TOOL:")[1].strip().split()[0].rstrip(".,;")
+                        all_tools = agent.get_tools_for_llm()
+                        extra = [t for t in all_tools if _tool_name(t) == needed]
+                        if extra:
+                            logger.info("tool-attention fallback: adding %s and retrying", needed)
+                            expanded_tools = tools + [t for t in extra if t not in tools]
+                            if context.metadata is not None:
+                                promoted = context.metadata.get("promoted_tools", set())
+                                context.metadata["promoted_tools"] = promoted | {needed}
+                                # Persist expanded tools so subsequent turns include this tool.
+                                context.metadata["_filtered_tools"] = expanded_tools
+                            response = await self.llm_client.chat(
+                                messages=llm_messages,
+                                tools=expanded_tools,
+                                config=llm_config,
+                                session_id=context.session_id,
+                                trace_metadata={"session_id": context.session_id} if context.session_id else None,
+                                auto_session=False,
+                                priority=context.priority,
+                                stage_priority=agent.config.stage_priority if agent.config else 5,
+                            )
+
                 except Exception as e:
                     turn_span.set_error(str(e))
                     raise

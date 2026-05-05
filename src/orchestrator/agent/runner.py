@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from orchestrator.agent.base import BaseAgent
+from orchestrator.tools.tool_attention.router import _tool_name
 from orchestrator.agent.config import RunnerConfig
 from orchestrator.agent.exceptions import (
     AgentConfigurationError,
@@ -465,12 +466,29 @@ class AgentRunner:
             turn = 0
             while turn < ctx.max_turns:
                 turn += 1
-                tools = agent.get_tools_for_llm()
+                # Filtered tools set by message_builder via apply_tool_attention.
+                tools = (
+                    ctx.metadata.get("_filtered_tools") if ctx.metadata else None
+                ) or agent.get_tools_for_llm()
+                # Phase 1: insert tool catalogue after system messages, before history.
+                # Ephemeral — not persisted to session history.
+                _phase1 = ctx.metadata.get("tool_summary_message") if ctx.metadata else None
+                if _phase1:
+                    _insert_at = 0
+                    for _i, _msg in enumerate(messages):
+                        if _msg.get("role") == "system":
+                            _insert_at = _i + 1
+                        else:
+                            break
+                    llm_messages = messages[:_insert_at] + [_phase1] + messages[_insert_at:]
+                else:
+                    llm_messages = messages
+
                 content_parts: list[str] = []
                 tool_calls: list = []
 
                 async for chunk in self.llm_client.chat_stream(
-                    messages=messages,
+                    messages=llm_messages,
                     tools=tools if tools else None,
                     trace_metadata={"session_id": session_id} if session_id else None,
                 ):
@@ -485,6 +503,36 @@ class AgentRunner:
                         tool_calls = chunk.tool_calls
 
                 content = "".join(content_parts)
+
+                # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry.
+                if content and "NEED_TOOL:" in content and not tool_calls:
+                    needed = content.split("NEED_TOOL:")[1].strip().split()[0].rstrip(".,;")
+                    all_tools = agent.get_tools_for_llm()
+                    extra = [t for t in all_tools if _tool_name(t) == needed]
+                    if extra:
+                        logger.info("tool-attention fallback: adding %s and retrying", needed)
+                        expanded_tools = tools + [t for t in extra if t not in tools]
+                        if ctx.metadata is not None:
+                            promoted = ctx.metadata.get("promoted_tools", set())
+                            ctx.metadata["promoted_tools"] = promoted | {needed}
+                            ctx.metadata["_filtered_tools"] = expanded_tools
+                        content_parts = []
+                        tool_calls = []
+                        async for chunk in self.llm_client.chat_stream(
+                            messages=llm_messages,
+                            tools=expanded_tools,
+                            trace_metadata={"session_id": session_id} if session_id else None,
+                        ):
+                            if chunk.content:
+                                content_parts.append(chunk.content)
+                                yield AgentEvent(
+                                    type=EventType.CONTENT_DELTA, agent_name=agent.name,
+                                    run_id=ctx.run_id, data={"content": chunk.content},
+                                    trace_id=ctx.trace_id,
+                                )
+                            if chunk.tool_calls:
+                                tool_calls = chunk.tool_calls
+                        content = "".join(content_parts)
 
                 if content:
                     yield AgentEvent(
