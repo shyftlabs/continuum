@@ -166,11 +166,6 @@ class LocalShopAgent:
         memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
 
         instructions = self.config.system_instructions
-        if self._resource_context:
-            # Escape braces so format_map() in resolve_system_prompt doesn't
-            # misinterpret JSON curly braces as template placeholders.
-            escaped = self._resource_context.replace("{", "{{").replace("}", "}}")
-            instructions = f"{instructions}\n\n{escaped}"
 
         self._agent = BaseAgent(
             name=self.config.agent_name,
