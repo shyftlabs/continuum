@@ -446,7 +446,11 @@ class Executor(IExecutor):
 
                 # Parse structured output if JSON mode was enabled and output_schema is set
                 structured_output = None
-                if agent.enable_json_mode and agent.output_schema and response.content:
+                # Parse structured output whenever output_schema is set.
+                # `enable_json_mode` controls how the LLM is asked to format the
+                # response, but having an `output_schema` should be sufficient
+                # to opt into deserialization on the way back.
+                if agent.output_schema and response.content:
                     try:
                         import json
 

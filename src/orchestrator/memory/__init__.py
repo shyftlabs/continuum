@@ -61,6 +61,20 @@ Adding New Providers:
 See docs/memory.md for complete documentation.
 """
 
+# Silence mem0's optional-extra startup warnings (spaCy/fastembed). They fire
+# every time mem0 is imported and confuse hackathon participants who think the
+# warnings indicate something they need to fix. Semantic vector search is
+# unaffected by these missing optional extras. Participants who want
+# hybrid/lemma search can `pip install "mem0ai[nlp]" fastembed`.
+import logging as _logging
+
+for _noisy in (
+    "mem0.utils.spacy_models",
+    "mem0.vector_stores.qdrant",
+):
+    _logging.getLogger(_noisy).setLevel(_logging.ERROR)
+
+
 # Client
 # Base class (for custom providers)
 from orchestrator.memory.base import BaseMemoryProvider
