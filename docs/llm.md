@@ -1,278 +1,465 @@
 # LLM Module
 
-Unified interface for multi-LLM provider support using LiteLLM.
+Unified interface for LLM completions across **OpenAI**, **Anthropic**,
+and **Google Gemini**. Calls the provider SDKs directly — **LiteLLM has
+been removed** as of commit `657607a`.
 
-## Overview
+What this module gives you:
 
-- **LLMClient**: Unified client for 100+ LLM providers
-- **Structured Outputs**: JSON mode with Pydantic models or JSON schemas
-- **Automatic Compatibility**: Handles tools + JSON mode compatibility automatically
-- **Context Management**: Automatic context compression and window management
-- **Streaming**: Real-time response streaming
-- **Tool Calling**: Function/tool calling with tracing
-- **Observability**: Full Langfuse integration
+- A single `LLMClient` with sync, async, streaming, and tool-calling APIs
+- Provider routing by model-string prefix
+- Automatic structured outputs (JSON mode + Pydantic schemas)
+- Proactive context-window compression
+- Token-bucket rate limiting
+- Automatic Langfuse tracing via the `@observe` decorator
+- Auto-load and auto-save conversation history when a `session_id` is in scope
 
-## LLMClient
+> Most application code never touches `LLMClient` directly — `AgentRunner`
+> uses it under the hood. Reach for it directly when you need raw
+> completions outside the agent abstraction.
+
+---
+
+## 1 · Provider routing
+
+`from orchestrator.llm.providers import get_provider`
+
+The router picks a provider purely from the **model string prefix**, in
+this order:
+
+| Prefix | Provider | SDK |
+|---|---|---|
+| `gemini/`, `google/` | `GeminiProvider` | OpenAI SDK against the Gemini OpenAI-compat endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`) |
+| `claude/`, `anthropic/`, or starts with `claude-` | `AnthropicProvider` | Anthropic SDK |
+| anything else (`gpt-*`, `azure/...`, `openai/...`, …) | `OpenAIProvider` | OpenAI SDK |
+
+Each provider implements:
 
 ```python
-from orchestrator.llm import LLMClient, ChatMessage
+class BaseProvider(ABC):
+    def complete(messages, config, tools=None, tool_choice=None) -> LLMResponse
+    async def acomplete(messages, config, tools=None, tool_choice=None) -> LLMResponse
+    def stream(messages, config, tools=None, tool_choice=None) -> Iterator[StreamChunk]
+    async def astream(messages, config, tools=None, tool_choice=None) -> AsyncIterator[StreamChunk]
+```
 
-client = LLMClient()
+### Provider quirks (handled for you)
 
-# Simple chat
-response = await client.chat([
-    ChatMessage(role="user", content="Hello!")
-])
+- **Gemini** does not support tools and JSON mode simultaneously — the
+  framework auto-disables JSON mode when tools are present.
+- **Anthropic** uses a different message format (`system` is a top-level
+  parameter, tool results are wrapped in user-role messages) — the
+  provider transparently translates.
+- **Anthropic** requires `max_tokens` — defaults to `4096` if you don't
+  set one.
 
-# With tools
-response = await client.chat(
-    messages,
-    tools=[weather_tool],
-    trace_metadata={"task": "weather-lookup"}
+---
+
+## 2 · `LLMClient`
+
+`from orchestrator.llm import LLMClient`
+
+```python
+client = LLMClient(
+    config=None,                  # default LLMConfig() if None
+    enable_langfuse=True,         # auto-trace via @observe
 )
+```
 
-# Streaming
-async for chunk in client.chat_stream(messages):
+### Async API (primary)
+
+```python
+response: LLMResponse = await client.chat(
+    messages,                     # list[ChatMessage] | list[dict]
+    config=None,                  # override default LLMConfig
+    tools=None,                   # list[ToolDefinition] | list[dict]
+    tool_choice=None,             # "auto" | "required" | "none" | {"function": {"name": ...}}
+    *,
+    session_id=None,              # auto-load history & save messages
+    trace_metadata=None,          # forwarded to Langfuse
+    auto_session=True,            # set False to skip session integration
+)
+```
+
+```python
+async for chunk in client.chat_stream(messages, config=None, tools=None, tool_choice=None):
+    if chunk.content:
+        print(chunk.content, end="", flush=True)
+```
+
+### Sync API
+
+```python
+response = client.chat_sync(messages, config=None, tools=None, tool_choice=None, trace_metadata=None)
+
+for chunk in client.chat_stream_sync(messages, config=None, tools=None, tool_choice=None):
     print(chunk.content, end="")
 ```
 
-## Configuration
+### Aliases (legacy / convenience)
+
+| Alias | Equivalent |
+|---|---|
+| `complete()` | `chat_sync()` |
+| `stream()` | `chat_stream_sync()` |
+| `acomplete()` | `chat()` |
+
+### Utility methods
+
+- `get_model_info(model=None) -> dict` — context-window info (`max_tokens`, `max_input_tokens`, `max_output_tokens`, `effective_input_limit`)
+- `get_supported_models() -> list[str]` — known-good model names
+- `count_tokens(messages, model=None) -> int` — tiktoken-backed count
+
+### Auto-session behaviour
+
+When `auto_session=True` (the default) **and** a `session_id` is
+available (either passed explicitly or set via `trace_context`), the
+client:
+
+1. Loads the conversation history from Redis and prepends it to your
+   `messages` list.
+2. After the response completes, persists both the user input and the
+   assistant output back to the session.
+
+Set `auto_session=False` to opt out of this for a specific call.
+
+---
+
+## 3 · `LLMConfig`
+
+`from orchestrator.llm import LLMConfig`
+
+A Pydantic model with full provider-agnostic settings.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `model` | `str` | `settings.default_llm_model` | Routes to provider by prefix |
+| `fallback_models` | `list[str]` | `[]` | Tried in order if primary fails (when `enable_fallback=True`) |
+| `temperature` | `float` | `settings.default_llm_temperature` | |
+| `max_tokens` | `int \| None` | `settings.default_llm_max_tokens` | |
+| `top_p` | `float \| None` | `None` | |
+| `frequency_penalty` | `float \| None` | `None` | OpenAI-only |
+| `presence_penalty` | `float \| None` | `None` | OpenAI-only |
+| `stop` | `list[str] \| str \| None` | `None` | Stop sequences |
+| `seed` | `int \| None` | `None` | Determinism |
+| `timeout` | `int` | `settings.llm_request_timeout` | Seconds |
+| `max_retries` | `int` | `settings.llm_max_retries` | |
+| `enable_fallback` | `bool` | `settings.llm_enable_fallback` | |
+| `response_format` | `dict \| type[BaseModel] \| None` | `None` | Structured output |
+| `json_mode` | `bool` | `False` | Simple `json_object` mode |
+| `user` | `str \| None` | `None` | Forwarded for billing |
+| `metadata` | `dict[str, Any]` | `{}` | Trace metadata |
+| `api_base` | `str \| None` | `None` | Custom endpoint |
+| `api_key` | `str \| None` | `None` | Override env-supplied key |
+| `api_version` | `str \| None` | `None` | Azure |
+| `custom_llm_provider` | `str \| None` | `None` | Override prefix-based routing |
+| `rate_limit_rpm` | `int \| None` | `None` | Activates token-bucket limiter |
+| `cache` | `bool` | `False` | Provider-side cache hint |
+| `cache_ttl` | `int \| None` | `None` | |
+
+### Methods
+
+- `to_kwargs() -> dict` — convert to provider SDK kwargs
+- `with_overrides(**kwargs) -> LLMConfig` — copy with patches
+- `LLMConfig.from_agent_config(agent) -> LLMConfig` — derive from a `BaseAgent`, including JSON-mode setup
+
+### Rate limiting
 
 ```python
-from orchestrator.llm import LLMConfig
+LLMConfig(model="gpt-4o-mini", rate_limit_rpm=60)   # ≤ 60 RPM
+```
 
-config = LLMConfig(
-    model="gpt-4o",
-    temperature=0.7,
-    max_tokens=4096,
-    timeout=60,
+Internally `_LLMRateLimiter` does token-bucket math; if the bucket is
+empty, `client.chat()` blocks until a token frees up. Useful for
+respecting tier limits without trial-and-error 429s.
+
+---
+
+## 4 · Types
+
+`from orchestrator.llm import ChatMessage, LLMResponse, StreamChunk, Usage,
+                              FunctionCall, FunctionDefinition,
+                              ToolCall, ToolDefinition`
+
+### `ChatMessage`
+```python
+ChatMessage(
+    role="system" | "user" | "assistant" | "tool" | "function",
+    content: str | None = None,
+    name: str | None = None,
+    tool_calls: list[ToolCall] | None = None,
+    tool_call_id: str | None = None,
+    function_call: FunctionCall | None = None,
 )
 ```
 
-## Structured Outputs (JSON Mode)
+### `LLMResponse`
+- `id`, `model`, `content`, `role`
+- `tool_calls: list[ToolCall] | None`
+- `function_call: FunctionCall | None`
+- `usage: Usage | None`
+- `finish_reason: str | None`
+- `raw_response: dict | None` — provider-native payload
 
-The SDK supports LiteLLM's structured output features, allowing you to generate JSON responses with optional schema validation.
+### `StreamChunk`
+- `id`, `model`, `content`, `role`
+- `tool_calls: list[ToolCall] | None`
+- `finish_reason: str | None`
+- `is_finished: bool`
 
-### Basic JSON Mode
-
-Simple JSON object mode ensures the LLM returns valid JSON:
-
+### `ToolDefinition`
 ```python
-from orchestrator.llm import LLMConfig
-
-config = LLMConfig(
-    model="gpt-4o-mini",
-    json_mode=True,  # Enables {"type": "json_object"}
+ToolDefinition(
+    type="function",
+    function=FunctionDefinition(name=..., description=..., parameters={...}),
 )
-
-response = await client.chat(messages, config=config)
-# response.content will be valid JSON
 ```
 
-### JSON Schema with Pydantic Models
+### `Usage`
+`prompt_tokens`, `completion_tokens`, `total_tokens`.
 
-For structured outputs with validation, use a Pydantic model:
+---
 
+## 5 · Structured outputs
+
+Three ways to ask for structured output, in increasing strictness:
+
+### 5.1 Plain JSON mode
 ```python
-from pydantic import BaseModel
-from orchestrator.llm import LLMConfig
-
-class CalendarEvent(BaseModel):
-    name: str
-    date: str
-    participants: list[str]
-
-config = LLMConfig(
-    model="gpt-4o-2024-08-06",
-    response_format=CalendarEvent,  # Pydantic model
-)
-
-response = await client.chat(messages, config=config)
-# response.content will be JSON matching CalendarEvent schema
+config = LLMConfig(model="gpt-4o-mini", json_mode=True)
+resp = await client.chat(messages, config=config)
+# resp.content is valid JSON; you parse it.
 ```
 
-### JSON Schema with Raw Dicts
-
-You can also pass a raw JSON schema dictionary:
-
+### 5.2 JSON Schema (dict)
 ```python
-from orchestrator.llm import LLMConfig
-
-json_schema = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "event_schema",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "date": {"type": "string"},
-                "participants": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["name", "date", "participants"],
-            "additionalProperties": False
-        },
-        "strict": True
-    }
-}
-
-config = LLMConfig(
-    model="gpt-4o-2024-08-06",
-    response_format=json_schema,
-)
-
-response = await client.chat(messages, config=config)
+schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+config = LLMConfig(model="gpt-4o-mini", response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}})
+resp = await client.chat(messages, config=config)
 ```
 
-### Tools + JSON Mode Compatibility
-
-**Important**: Some models (like Gemini) don't support function calling (tools) with JSON mode simultaneously. The SDK automatically handles this:
-
-- **When tools are present**: The SDK checks if the model supports both tools and JSON mode
-- **If unsupported**: JSON mode is automatically disabled to allow tool usage (tools take priority)
-- **If supported**: Both tools and JSON mode work together
-
-This happens automatically - no configuration needed:
-
+### 5.3 Pydantic model (recommended)
 ```python
-from orchestrator.llm import LLMClient, LLMConfig
 from pydantic import BaseModel
 
 class Result(BaseModel):
-    answer: str
+    sentiment: str
+    confidence: float
+    topics: list[str]
 
-# Even if JSON mode is enabled, it will be auto-disabled for Gemini when tools are present
-config = LLMConfig(
-    model="gemini/gemini-2.5-flash",
-    response_format=Result,  # JSON mode enabled
-)
-
-# When tools are passed, JSON mode is automatically disabled for incompatible models
-response = await client.chat(
-    messages,
-    config=config,
-    tools=[some_tool],  # Tools present
-)
-# JSON mode was automatically disabled, tools work correctly
+config = LLMConfig(model="gpt-4o-mini", response_format=Result)
+resp = await client.chat(messages, config=config)
+parsed = Result.model_validate_json(resp.content)
 ```
 
-### Checking Model Support
+When using `BaseAgent`, `output_schema=Result` is the equivalent —
+`AgentRunner` parses the response for you and returns it on
+`response.structured_output`.
 
-Before enabling JSON mode, check if your model supports it:
+### Capability checks
 
 ```python
 from orchestrator.llm.utils import (
-    check_response_format_support,
-    check_json_schema_support,
+    check_response_format_support, check_json_schema_support,
     supports_tools_with_json_mode,
 )
-
-# Check basic JSON mode support
-if check_response_format_support("gpt-4o"):
-    # Model supports json_object mode
-    pass
-
-# Check JSON schema support (for structured outputs)
-if check_json_schema_support("gpt-4o-2024-08-06"):
-    # Model supports json_schema with Pydantic models
-    pass
-
-# Check if model supports tools + JSON mode together
-if supports_tools_with_json_mode("gemini/gemini-2.5-flash"):
-    # Model supports both - JSON mode won't be disabled
-    pass
-else:
-    # Model doesn't support both - JSON mode will be auto-disabled when tools are present
-    pass
 ```
 
-### Supported Models
+- `check_response_format_support(model, custom_llm_provider=None)` — does this model accept any `response_format`?
+- `check_json_schema_support(model, custom_llm_provider=None)` — does it accept *strict* JSON schemas?
+- `supports_tools_with_json_mode(model, custom_llm_provider=None)` — `False` for Gemini and Vertex (mutually exclusive features).
 
-**JSON Object Mode** (`{"type": "json_object"}`):
-- Most OpenAI models (GPT-4, GPT-3.5)
-- Most Anthropic models (Claude 3+)
-- Most Google models (Gemini)
+---
 
-**JSON Schema Mode** (Pydantic models or `json_schema` dict):
-- OpenAI: `gpt-4o-2024-08-06` or later
-- Google: Gemini 1.5 Pro, Gemini 1.5 Flash
-- Anthropic: Claude 3.5 Sonnet, Claude 3 Opus
-- Azure OpenAI: Models with structured outputs enabled
-- xAI: Grok-2 or later
-- Bedrock: Supported models via AWS Bedrock
-- Vertex AI: Gemini and Anthropic models
+## 6 · Context window management
 
-For a complete list, check LiteLLM's [model support documentation](https://docs.litellm.ai/docs/completion/json_mode).
+`from orchestrator.llm import (
+    ContextWindowManager, ModelLimits, TruncationStrategy,
+    get_context_window_manager,
+)`
 
-### Automatic Response Validation
+### `ContextWindowManager`
 
-The SDK automatically validates JSON responses when JSON mode is enabled:
-
-- **Logging**: Comprehensive logs show when JSON mode is active and response validation status
-- **Format Verification**: Responses are checked to ensure they're valid JSON
-- **Schema Validation**: When using Pydantic models, responses are validated against the schema
-- **Error Handling**: Graceful degradation if JSON parsing fails (warnings logged, but request doesn't fail)
-
-All validation happens automatically - you'll see logs like:
-- `📋 JSON mode active: ...` - When JSON mode is enabled in request
-- `✅ LLM response is valid JSON format` - When response is confirmed JSON
-- `✅ Successfully parsed JSON response` - When JSON parsing succeeds
-- `✅ Successfully validated structured output` - When schema validation succeeds
-
-## Context Management
-
-Automatic context compression when approaching token limits:
+Hardcoded limits per model. Usage:
 
 ```python
-from orchestrator.llm import ContextManagementConfig, get_progressive_context_manager
-
-config = ContextManagementConfig(
-    enabled=True,
-    compression_threshold=0.8,
-    summarization_model="gpt-4o-mini",
-)
-
-manager = get_progressive_context_manager(config=config)
-compressed, result = await manager.compress_if_needed(messages, model="gpt-4o")
+mgr = get_context_window_manager()
+limits = mgr.get_model_limits("gpt-4o-mini")          # ModelLimits
+mgr.count_tokens(messages, "gpt-4o-mini")             # int
+mgr.will_exceed_limit(messages, "gpt-4o-mini")        # bool
+truncated, result = mgr.truncate_messages(messages, "gpt-4o-mini",
+                                          strategy=TruncationStrategy.SMART)
 ```
 
-## LiteLLM Configuration
+Strategies: `OLDEST_FIRST`, `KEEP_SYSTEM_AND_RECENT`, `SMART`, `NONE`.
 
-The SDK uses `litellm_config.yaml` for model pricing and configuration. This file is automatically loaded.
+Built-in limits include GPT-4o (128K), Claude Sonnet/Opus/Haiku (200K),
+Gemini 2.5 family (1M), older Gemini Pro (32K), GPT-3.5 (16K), GPT-4
+(8K). 25% of the window is reserved for the response by default
+(`response_buffer_percent=0.25`).
 
-**Location**: The SDK searches for `litellm_config.yaml` in:
-1. Current working directory (for development)
-2. Project root (if installed from source)
-3. Package root (if installed via pip)
+### Proactive compression — `ProgressiveContextManager`
 
-**Usage**: Automatically loaded by LLMClient for cost calculation and model configuration.
+`from orchestrator.llm import (
+    ContextManagementConfig, ProgressiveContextManager,
+    CompressionStrategy, CompressionResult,
+    get_progressive_context_manager,
+)`
 
-**Customization**: Set `LITELLM_CONFIG_PATH` environment variable to specify a custom path.
+The agent runner automatically calls `compress_if_needed()` before each
+LLM call when context approaches the threshold.
 
-**After pip install**: Place `litellm_config.yaml` in your project root or set `LITELLM_CONFIG_PATH` to point to the file location.
+```python
+from orchestrator.llm.context_management import ContextManagementConfig
 
-## Supported Providers
+cfg = ContextManagementConfig(
+    enabled=True,
+    compression_threshold=0.8,           # at 80% of window
+    summarization_model="gpt-4o-mini",
+    summarization_temperature=0.1,
+    summarization_timeout=30,
+    summarization_max_retries=2,
+    keep_recent_messages=10,
+    compression_strategy=CompressionStrategy.SMART,   # SUMMARIZE_OLD | TRUNCATE_OLDEST | SMART
+    enable_caching=True,
+    cache_ttl_seconds=3600,
+)
 
-- OpenAI (GPT-4, GPT-3.5)
-- Google Gemini
-- Anthropic Claude
-- Azure OpenAI
-- 100+ other providers via LiteLLM
+mgr = get_progressive_context_manager(config=cfg)
+new_messages, result = await mgr.compress_if_needed(messages, model="gpt-4o-mini")
+```
 
-## Types
+`CompressionResult` reports `original_token_count`,
+`compressed_token_count`, `was_compressed`, `strategy_used`,
+`compression_ratio`, `latency_ms`, `cache_hit`, etc.
 
-- `ChatMessage`: Message structure
-- `LLMResponse`: Response with usage and metadata
-- `StreamChunk`: Streaming chunk
-- `ToolDefinition`: Tool/function definition
+To override per-agent: set `agent.config.context_management = cfg`.
 
-## Exceptions
+---
 
-- `LLMError`: Base LLM error
-- `LLMAuthenticationError`: API key issues
-- `LLMRateLimitError`: Rate limit exceeded
-- `LLMContextLengthError`: Context too long
-- `LLMTimeoutError`: Request timeout
+## 7 · Tracing & callbacks
+
+`from orchestrator.llm.callbacks import (
+    setup_langfuse, get_langfuse_callback, get_langfuse_metadata,
+    trace_context, set_trace_context, get_trace_context, clear_trace_context,
+    flush_langfuse, shutdown_langfuse,
+    LangfuseTraceContext,
+)`
+
+Every LLM call is wrapped in `@observe(name="llm_chat")` and
+automatically nests under any active span. To explicitly scope a series
+of calls to a single trace:
+
+```python
+from orchestrator.llm.callbacks import trace_context
+
+with trace_context(trace_id="my-trace-id"):
+    a = await client.chat(messages_a)
+    b = await client.chat(messages_b)
+```
+
+`LangfuseTraceContext` wraps a higher-level Langfuse trace:
+
+```python
+with LangfuseTraceContext(name="customer-support-flow",
+                          user_id="u1", session_id="s1",
+                          metadata={"tier": "pro"}):
+    ...
+```
+
+`flush_langfuse()` and `shutdown_langfuse()` are normally handled by
+`OrchestratorLifecycle.shutdown()` — call them yourself only if you
+manage observability outside the lifecycle manager.
+
+---
+
+## 8 · Exception hierarchy
+
+`from orchestrator.llm import (
+    LLMError, LLMAuthenticationError, LLMRateLimitError,
+    LLMTimeoutError, LLMContextLengthError, LLMInvalidRequestError,
+    LLMServiceUnavailableError, LLMFallbackExhaustedError,
+    LLMToolCallError, LLMStreamingError, LLMContentFilterError,
+)`
+
+Each provider maps native SDK exceptions into this hierarchy, so your
+error-handling code is provider-agnostic.
+
+---
+
+## 9 · Examples
+
+### 9.1 Direct chat (no agent)
+
+```python
+import asyncio
+from orchestrator.llm import LLMClient, LLMConfig, ChatMessage
+
+async def main():
+    client = LLMClient()
+    resp = await client.chat(
+        [ChatMessage(role="user", content="Capital of France?")],
+        config=LLMConfig(model="gpt-4o-mini", temperature=0.1),
+    )
+    print(resp.content, "—", resp.usage.total_tokens, "tokens")
+
+asyncio.run(main())
+```
+
+### 9.2 Tool calling
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city",
+        "parameters": {"type": "object",
+                       "properties": {"city": {"type": "string"}},
+                       "required": ["city"]},
+    },
+}]
+
+resp = await client.chat(messages, tools=tools, tool_choice="auto")
+if resp.tool_calls:
+    for tc in resp.tool_calls:
+        print(tc.function.name, tc.function.arguments)
+```
+
+### 9.3 Streaming
+
+```python
+async for chunk in client.chat_stream(messages):
+    if chunk.content:
+        print(chunk.content, end="", flush=True)
+    if chunk.is_finished:
+        print()
+```
+
+### 9.4 Per-call rate limit
+
+```python
+cfg = LLMConfig(model="gpt-4o-mini", rate_limit_rpm=10)
+for prompt in big_batch:
+    await client.chat([ChatMessage(role="user", content=prompt)], config=cfg)
+```
+
+---
+
+## 10 · Gotchas
+
+- **No LiteLLM imports anywhere** — searches like `from litellm import ...`
+  will fail. Use `LLMClient` (or call the provider SDKs directly if you
+  must).
+- **`OPENAI_API_KEY` is required at framework startup** even when using
+  Anthropic or Gemini, because mem0 instantiates an OpenAI embedder by
+  default. To avoid this, disable long-term memory: see
+  [`memory.md`](memory.md).
+- **Anthropic + JSON mode**: Claude doesn't have a native `response_format`
+  — `check_response_format_support()` returns `False` for Claude. If you
+  need JSON, instruct it via the system prompt and parse the result.
+- **Gemini + tools + JSON**: not supported simultaneously; the framework
+  drops `json_mode` automatically when `tools` are present.
+- **`session_id` in `chat()`** triggers automatic Redis history loading
+  *and* persistence. Pass `auto_session=False` if you want to manage
+  history yourself.

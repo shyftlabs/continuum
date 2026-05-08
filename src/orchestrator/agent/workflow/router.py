@@ -118,6 +118,76 @@ Your task:
 If the request doesn't clearly fit any specialist, respond with "none".
 """
 
+    async def execute(
+        self,
+        input_text: str,
+        runner: Any,
+        context: RunContext | None = None,
+    ) -> Any:
+        """
+        Pick a route, then run the chosen specialist agent.
+
+        Wired so that `runner.run(router, ...)` works the same way as
+        `runner.run(sequential_pipeline, ...)`. Returns the chosen
+        specialist's `AgentResponse`, augmented with the router-level
+        `agents_used` chain so callers can see which specialist served
+        the request.
+        """
+        from orchestrator.agent.exceptions import (
+            AgentNotFoundError,
+            NoRouteFoundError,
+        )
+        from orchestrator.agent.types import AgentResponse, ResponseStatus
+
+        target_name = await self.route(
+            input_text,
+            llm_client=runner.llm_client,
+            context=context,
+        )
+
+        # Fall back if no route matched
+        if not target_name or target_name == "none":
+            if self.fallback_agent_name:
+                target_name = self.fallback_agent_name
+            else:
+                available = [r.agent_name for r in self.routes]
+                raise NoRouteFoundError(available_routes=available)
+
+        # Resolve target — registry first
+        target_agent = runner.get_agent(target_name) if hasattr(runner, "get_agent") else None
+        if target_agent is None:
+            available = [r.agent_name for r in self.routes]
+            raise AgentNotFoundError(
+                target_name,
+                f"RouterAgent '{self.name}' selected '{target_name}' but it isn't "
+                f"registered with the runner. Register it via "
+                f"runner.register_agent(...) or the agent_registry kwarg. "
+                f"Available routes: {available}",
+            )
+
+        target_response = await runner.run(
+            agent=target_agent,
+            input=input_text,
+            context=context,
+        )
+
+        # Surface the routing chain on agents_used
+        chain = list(target_response.agents_used or [target_name])
+        if self.name not in chain:
+            chain = [self.name] + chain
+
+        return AgentResponse(
+            content=target_response.content,
+            structured_output=target_response.structured_output,
+            agent_name=self.name,
+            status=target_response.status if target_response.status else ResponseStatus.SUCCESS,
+            usage=target_response.usage,
+            turn_count=target_response.turn_count,
+            agents_used=chain,
+            messages=target_response.messages,
+            run_artifacts=target_response.run_artifacts,
+        )
+
     async def route(
         self,
         input_text: str,
@@ -219,7 +289,12 @@ If the request doesn't clearly fit any specialist, respond with "none".
                     return route.agent_name
             # Check description keywords
             else:
-                keywords = route.description.lower().split()
+                # Use word-character extraction so punctuation in the
+                # description (e.g. "Money, invoices, refunds, payments")
+                # doesn't bleed into the keyword (without this, "refunds,"
+                # wouldn't match "refund").
+                import re as _re
+                keywords = _re.findall(r"\w+", route.description.lower())
                 if any(kw in input_lower for kw in keywords if len(kw) > 3):
                     return route.agent_name
 

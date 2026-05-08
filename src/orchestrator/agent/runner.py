@@ -302,6 +302,20 @@ class AgentRunner:
         input_preview = input if isinstance(input, str) else str(input)[:500]
         await self._lifecycle.start_trace(agent, context, run_state, input_preview)
 
+        # Lazily ensure the session exists when the caller passes a session_id
+        # that hasn't been registered yet. This avoids the "Session not found"
+        # warnings when participants pick a session id and pass it straight
+        # into runner.run() without calling get_or_create_session() first.
+        if context.session_id and self.session_client and self.session_client.is_enabled:
+            try:
+                await self.session_client.get_or_create_session(
+                    session_id=context.session_id,
+                    user_id=context.user_id,
+                    agent_id=agent.name,
+                )
+            except Exception as e:
+                logger.debug(f"Lazy session create skipped: {e}")
+
         tool_context_state = None
         if context.session_id and self.session_client:
             tool_context_state = await self._session_service.load_tool_context_state(
@@ -449,9 +463,21 @@ class AgentRunner:
                 self._circuit_breaker.record_success()
                 return response
 
-            response = await self._executor.execute_loop(
-                agent=agent, messages=messages, context=ctx, run_state=run_state,
-            )
+            # Workflow agents (Sequential, Parallel, Loop, Reflection, Router,
+            # Planner, Debate, Scatter, SupervisedSequential) implement their
+            # own `execute()` method that orchestrates sub-agents. Dispatch to
+            # it rather than running the wrapper as a single LLM call.
+            if hasattr(agent, "execute") and callable(getattr(agent, "execute", None)):
+                input_text = input if isinstance(input, str) else str(input)
+                response = await agent.execute(
+                    input_text=input_text,
+                    runner=self,
+                    context=ctx,
+                )
+            else:
+                response = await self._executor.execute_loop(
+                    agent=agent, messages=messages, context=ctx, run_state=run_state,
+                )
 
             if agent.on_end:
                 agent.on_end(agent, {"context": ctx, "response": response})
