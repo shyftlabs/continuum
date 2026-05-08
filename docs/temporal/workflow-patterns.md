@@ -1,272 +1,291 @@
-# Workflow Patterns
+# Temporal — Workflow Patterns
 
-The Temporal integration provides four orchestration patterns out of the box.
-Each pattern is available as a step type in the generic `AgentWorkflow` and
-as a standalone convenience workflow class.
+The Temporal integration ships **one general workflow** (`AgentWorkflow`)
+that interprets a declarative step list, plus three convenience
+workflows for common shapes.
 
-## 1. Sequential
+`from orchestrator.temporal import (
+    AgentWorkflow, SequentialAgentWorkflow,
+    ParallelAgentWorkflow, LoopAgentWorkflow,
+    AgentStep, ApprovalStep, ParallelStep, ConditionalStep, WaitStep,
+    WorkflowInput, WorkflowResult, parse_step,
+    AgentActivityParams, AgentActivityResult,
+    NotificationParams,
+    ApprovalRequest, ApprovalDecision,
+    StepType,
+)`
 
-Agents run one after another. Each agent receives the previous agent's output
-as its input.
+---
 
-### Via AgentWorkflow (declarative)
+## 1 · `AgentWorkflow` (general purpose)
 
-```python
-from orchestrator.temporal import WorkflowInput, AgentWorkflow
+Decorated with `@workflow.defn(sandboxed=False)`. Takes a `WorkflowInput`
+and runs each step in order.
 
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "researcher"},
-            {"type": "agent", "agent_name": "writer"},
-            {"type": "agent", "agent_name": "editor"},
-        ],
-        initial_input="Write about distributed systems.",
-    ),
-    id="sequential-1",
-    task_queue="orchestrator-agents",
-)
-```
+### Step types
 
-### Via SequentialAgentWorkflow (convenience)
-
-```python
-from orchestrator.temporal.workflows.sequential_workflow import (
-    SequentialAgentWorkflow,
-    SequentialWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    SequentialAgentWorkflow.run,
-    SequentialWorkflowInput(
-        agent_names=["researcher", "writer", "editor"],
-        initial_input="Write about distributed systems.",
-    ),
-    id="sequential-2",
-    task_queue="orchestrator-agents",
-)
-```
-
-**Options:**
-- `approval_between_steps: bool = False` -- insert approval gates between agents
-- `approval_timeout: int = 86400` -- timeout per approval gate
-
-## 2. Parallel
-
-Multiple agents run concurrently. Results are merged according to a configurable
-strategy.
-
-### Via AgentWorkflow (declarative)
-
-```python
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {
-                "type": "parallel",
-                "agents": [
-                    {"type": "agent", "agent_name": "analyst-a"},
-                    {"type": "agent", "agent_name": "analyst-b"},
-                    {"type": "agent", "agent_name": "analyst-c"},
-                ],
-                "merge_strategy": "concatenate",
-            },
-        ],
-        initial_input="Analyze Q4 market data.",
-    ),
-    id="parallel-1",
-    task_queue="orchestrator-agents",
-)
-```
-
-### Via ParallelAgentWorkflow (convenience)
-
-```python
-from orchestrator.temporal.workflows.parallel_workflow import (
-    ParallelAgentWorkflow,
-    ParallelWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    ParallelAgentWorkflow.run,
-    ParallelWorkflowInput(
-        agent_names=["analyst-a", "analyst-b", "analyst-c"],
-        initial_input="Analyze Q4 market data.",
-        merge_strategy="structured",
-    ),
-    id="parallel-2",
-    task_queue="orchestrator-agents",
-)
-```
-
-### Merge strategies
-
-| Strategy | Behavior |
-|---|---|
-| `concatenate` (default) | Join all outputs with `\n\n` |
-| `first_success` | Use the first non-error result |
-| `structured` | Dict mapping agent name to output: `{"analyst-a": "...", "analyst-b": "..."}` |
-
-**Options:**
-- `timeout_per_agent: int = 300` -- activity timeout for each parallel agent
-
-## 3. Conditional
-
-Run a condition-checking agent. Based on its output, branch into different
-step sequences.
-
-```python
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {
-                "type": "conditional",
-                "condition_agent": "classifier",
-                "if_true": [
-                    {"type": "agent", "agent_name": "positive-handler"},
-                ],
-                "if_false": [
-                    {"type": "agent", "agent_name": "negative-handler"},
-                ],
-            },
-        ],
-        initial_input="Customer feedback: The product is amazing!",
-    ),
-    id="conditional-1",
-    task_queue="orchestrator-agents",
-)
-```
-
-The condition agent's output is evaluated as truthy if it contains one of:
-`"true"`, `"yes"`, `"1"`, `"approved"`, `"continue"` (case-insensitive).
-
-## 4. Loop
-
-Run a single agent repeatedly until a termination condition is met or the
-maximum number of iterations is reached.
-
-### Via AgentWorkflow
-
-Loops are not a first-class step type in the generic workflow, but are available
-as a standalone workflow.
-
-### Via LoopAgentWorkflow (convenience)
-
-```python
-from orchestrator.temporal.workflows.loop_workflow import (
-    LoopAgentWorkflow,
-    LoopWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    LoopAgentWorkflow.run,
-    LoopWorkflowInput(
-        agent_name="refiner",
-        initial_input="Draft: The quick brown fox...",
-        max_iterations=5,
-        termination_phrase="COMPLETE",
-    ),
-    id="loop-1",
-    task_queue="orchestrator-agents",
-)
-```
-
-The loop terminates when either:
-- The agent's output contains the `termination_phrase` (case-insensitive).
-- `max_iterations` is reached.
-
-**Options:**
-- `approval_per_iteration: bool = False` -- require approval between iterations
-- `approval_timeout: int = 86400` -- timeout per approval
-
-## 5. Wait
-
-Pause the workflow for a fixed duration.
-
-```python
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "researcher"},
-            {"type": "wait", "duration_seconds": 60},  # wait 1 minute
-            {"type": "agent", "agent_name": "writer"},
-        ],
-        initial_input="Topic...",
-    ),
-    id="wait-1",
-    task_queue="orchestrator-agents",
-)
-```
-
-## Combining patterns
-
-The generic `AgentWorkflow` supports mixing step types in a single workflow:
-
-```python
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "planner"},
-            {
-                "type": "approval",
-                "description": "Review the plan",
-                "timeout": 3600,
-            },
-            {
-                "type": "parallel",
-                "agents": [
-                    {"type": "agent", "agent_name": "writer-a"},
-                    {"type": "agent", "agent_name": "writer-b"},
-                ],
-                "merge_strategy": "concatenate",
-            },
-            {
-                "type": "conditional",
-                "condition_agent": "quality-checker",
-                "if_true": [{"type": "agent", "agent_name": "publisher"}],
-                "if_false": [{"type": "agent", "agent_name": "editor"}],
-            },
-        ],
-        initial_input="Create a comprehensive guide on Temporal.",
-    ),
-    id="complex-pipeline",
-    task_queue="orchestrator-agents",
-)
-```
-
-## WorkflowResult
-
-All workflows return a `WorkflowResult`:
-
-```python
-result = await handle.result()
-
-result.status              # "completed", "rejected", "timed_out", "failed", "cancelled"
-result.content             # final output string
-result.step_results        # list[AgentActivityResult] -- per-step results
-result.approval_decisions  # list[ApprovalDecision] -- approval audit trail
-result.error               # error message if status == "failed"
-```
-
-## Signals and queries
-
-All workflows support these interaction points:
-
-| Type | Name | Description |
+| `type` | Class | Purpose |
 |---|---|---|
-| Signal | `submit_approval` | Submit an approval decision |
-| Signal | `cancel_workflow` | Cancel the workflow |
-| Signal | `inject_input` | Inject data mid-workflow (AgentWorkflow only) |
-| Query | `get_status` | Get current workflow status |
-| Query | `get_pending_approvals` | List pending approval requests |
+| `"agent"` | `AgentStep` | Run one registered agent |
+| `"approval"` | `ApprovalStep` | Pause for human approval |
+| `"parallel"` | `ParallelStep` | Run multiple agents concurrently, merge results |
+| `"conditional"` | `ConditionalStep` | Branch on the output of a condition agent |
+| `"wait"` | `WaitStep` | Sleep for a duration (1 s – 7 days) |
 
-## Next steps
+### Step schemas
 
-- [Custom Agents](custom-agents.md) -- registering your agents
-- [Human-in-the-Loop](human-in-loop.md) -- detailed approval guide
-- [Custom Workflows](custom-workflows.md) -- writing your own workflow definitions
+```python
+AgentStep(
+    type="agent",
+    agent_name: str,                       # required
+    input: str | None = None,              # default: pass the previous step's output
+    timeout: int = 300,
+    retries: int = 3,
+    metadata: dict[str, Any] = {},
+)
+
+ApprovalStep(
+    type="approval",
+    description: str,                      # required
+    approvers: list[str] = [],
+    timeout: int = 86400,                  # 24h default
+    auto_approve_if: str | None = None,    # reserved
+)
+
+ParallelStep(
+    type="parallel",
+    agents: list[AgentStep],               # one AgentStep per branch
+    merge_strategy: str = "concatenate",   # "concatenate" | "first_success" | "structured"
+)
+
+ConditionalStep(
+    type="conditional",
+    condition_agent: str,                  # agent that returns true/false
+    if_true: list[dict[str, Any]] = [],    # nested steps
+    if_false: list[dict[str, Any]] = [],
+    timeout: int = 300,
+    retries: int = 3,
+    metadata: dict[str, Any] = {},
+)
+
+WaitStep(
+    type="wait",
+    duration_seconds: int,                 # 1 ≤ x ≤ 604800 (7 days)
+)
+```
+
+`parse_step(data)` converts a `dict` to the appropriate model; it
+raises `ValueError` for unknown `type`. The workflow validates *all*
+steps upfront before running anything.
+
+### Signals
+
+| Signal | Purpose |
+|---|---|
+| `submit_approval(decision: ApprovalDecision)` | Human submits approval/rejection/escalation |
+| `cancel_workflow()` | Cancel the run |
+| `inject_input(data: dict)` | Inject data mid-workflow |
+
+### Queries
+
+| Query | Returns |
+|---|---|
+| `get_status()` | `{"status", "current_step_index", "total_steps", "completed_steps", "cancelled"}` |
+| `get_pending_approvals()` | `list[dict]` — each with `request_id`, `description`, `context` |
+
+### `WorkflowResult`
+
+```python
+WorkflowResult(
+    status: str,                           # "completed" | "rejected" | "timed_out" | "failed" | "cancelled"
+    content: str | None = None,            # final output
+    step_results: list[AgentActivityResult] = [],
+    approval_decisions: list[ApprovalDecision] = [],
+    error: str | None = None,
+)
+```
+
+### Example
+
+```python
+input_data = WorkflowInput(
+    steps=[
+        {"type": "agent", "agent_name": "drafter"},
+        {"type": "approval", "description": "Review draft before publishing", "approvers": ["alice"]},
+        {"type": "parallel",
+         "agents": [{"type":"agent","agent_name":"seo"}, {"type":"agent","agent_name":"legal"}],
+         "merge_strategy": "structured"},
+        {"type": "agent", "agent_name": "publisher"},
+    ],
+    initial_input="Write a blog post about durable execution.",
+)
+handle = await client.run_agent_workflow(input_data, id="post-001")
+result = await handle.result()
+```
+
+### Retry policy (per agent activity)
+
+```python
+RetryPolicy(
+    maximum_attempts=step.retries,         # default 3
+    initial_interval=timedelta(seconds=1),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=60),
+)
+```
+
+Activities also use `heartbeat_timeout=60s`; `run_agent_activity` calls
+`activity.heartbeat()` so long-running agents don't get evicted.
+
+### Parallel merge strategies
+
+| Strategy | Behaviour |
+|---|---|
+| `"concatenate"` *(default)* | `"\n\n".join(results)` |
+| `"first_success"` | Return the first non-error result |
+| `"structured"` | JSON dict keyed by agent name |
+
+### Conditional truthiness
+
+`condition_agent`'s output is matched case-insensitively against:
+
+```
+true / yes / 1 / approved / continue
+```
+
+…to take the `if_true` branch. Anything else takes `if_false`.
+
+---
+
+## 2 · `SequentialAgentWorkflow`
+
+Convenience workflow: run a list of agents in sequence, optionally with
+approval gates between steps.
+
+```python
+from orchestrator.temporal import SequentialAgentWorkflow
+from orchestrator.temporal.workflows.sequential_workflow import SequentialWorkflowInput
+
+input_data = SequentialWorkflowInput(
+    agent_names=["researcher", "writer", "editor"],
+    initial_input="Topic: durable execution",
+    session_id=None,
+    user_id=None,
+    approval_between_steps=False,          # if True, an ApprovalStep is inserted after each step
+    approval_timeout=86400,
+)
+handle = await client.start_workflow(SequentialAgentWorkflow.run, input_data, id="seq-001")
+```
+
+Signals: `submit_approval`, `cancel_workflow`. Queries: `get_status`,
+`get_pending_approvals`.
+
+---
+
+## 3 · `ParallelAgentWorkflow`
+
+Run a list of agents concurrently against the same input.
+
+```python
+from orchestrator.temporal import ParallelAgentWorkflow
+from orchestrator.temporal.workflows.parallel_workflow import ParallelWorkflowInput
+
+input_data = ParallelWorkflowInput(
+    agent_names=["seo_critic", "legal_critic", "tone_critic"],
+    initial_input="<draft>",
+    merge_strategy="structured",           # "concatenate" | "first_success" | "structured"
+    timeout_per_agent=300,
+)
+handle = await client.start_workflow(ParallelAgentWorkflow.run, input_data)
+```
+
+Signal: `cancel_workflow`. Query: `get_status`.
+
+---
+
+## 4 · `LoopAgentWorkflow`
+
+Run one agent in a loop until it emits a termination phrase.
+
+```python
+from orchestrator.temporal import LoopAgentWorkflow
+from orchestrator.temporal.workflows.loop_workflow import LoopWorkflowInput
+
+input_data = LoopWorkflowInput(
+    agent_name="reviser",
+    initial_input="<draft>",
+    max_iterations=10,
+    termination_phrase="COMPLETE",          # case-insensitive substring match
+    approval_per_iteration=False,
+    approval_timeout=86400,
+)
+handle = await client.start_workflow(LoopAgentWorkflow.run, input_data)
+```
+
+Signals: `submit_approval`, `cancel_workflow`. Query: `get_status` (with
+iteration count), `get_pending_approvals`.
+
+---
+
+## 5 · `AgentActivityParams` / `AgentActivityResult`
+
+Each agent step runs as the `run_agent_activity` activity:
+
+```python
+AgentActivityParams(
+    agent_name: str,
+    input: str,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    metadata: dict[str, Any] = {},
+    tags: list[str] = [],
+)
+
+AgentActivityResult(
+    content: str,
+    status: str,                            # "completed" | "error"
+    structured_output: dict[str, Any] | None = None,
+    usage: dict[str, int] = {},             # prompt/completion/total tokens
+    agents_used: list[str] = [],
+    error: str | None = None,
+)
+```
+
+`AgentActivityResult.from_agent_response(resp)` converts an
+`AgentResponse` into the activity-shaped result for serialization.
+
+---
+
+## 6 · Notifications
+
+`send_notification_activity` calls a registered handler:
+
+```python
+NotificationParams(
+    type: str,                              # e.g. "approval_required"
+    payload: dict[str, Any] = {},
+)
+```
+
+Register the handler on the registry:
+
+```python
+registry.set_notification_handler(my_async_handler)
+```
+
+If no handler is registered, the activity logs a warning and returns
+cleanly — the workflow does not fail.
+
+---
+
+## 7 · Tips
+
+- **Validate steps locally** before submitting: `parse_step(my_dict)`
+  raises `ValueError` on bad input.
+- **Use `AgentWorkflow` for anything non-trivial.** The convenience
+  workflows are easier to reason about for fixed shapes; the general
+  workflow handles approval gates, branches, and waits in one place.
+- **Sequential ↔ Parallel ↔ Loop** can be **nested** by using
+  `AgentWorkflow` and putting a `ParallelStep` inside a step list, etc.
+- **Token usage** is rolled up per step into `step_results[i].usage` —
+  add them yourself for a workflow-level total.

@@ -1,248 +1,255 @@
-# Custom Workflows
+# Temporal — Custom Workflows & Activities
 
-The built-in workflows cover common patterns, but you can write your own
-Temporal workflow definitions and still use the SDK's agent activities.
+The built-in workflows cover most patterns, but you can write your own
+`@workflow.defn` and `@activity.defn` and have the worker pick them up
+automatically.
 
-## Writing a custom workflow
+---
+
+## 1 · Custom workflow
+
+Workflow code runs inside Temporal's deterministic sandbox. **No I/O
+allowed** — every side effect must go through an activity.
 
 ```python
-from __future__ import annotations
-
-from dataclasses import dataclass
 from datetime import timedelta
-
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from orchestrator.temporal.types import (
-        AgentActivityParams,
-        AgentActivityResult,
+        AgentActivityParams, AgentActivityResult, WorkflowResult,
     )
 
-
-@dataclass
-class MyWorkflowInput:
-    topic: str
-    user_id: str | None = None
-
-
 @workflow.defn(sandboxed=False)
-class MyCustomWorkflow:
+class TranslationFanoutWorkflow:
+    """
+    Run the same input through multiple translators in parallel,
+    then have a reviewer agent choose the best.
+    """
+
     @workflow.run
-    async def run(self, input: MyWorkflowInput) -> dict:
-        # Step 1: Run the research agent
-        raw = await workflow.execute_activity(
+    async def run(self, input_text: str) -> WorkflowResult:
+        translators = ["translator_french", "translator_german", "translator_spanish"]
+        retry = RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=1),
+                            backoff_coefficient=2.0)
+
+        # Fan out
+        handles = [
+            workflow.start_activity(
+                "run_agent_activity",
+                AgentActivityParams(agent_name=name, input=input_text),
+                start_to_close_timeout=timedelta(seconds=300),
+                retry_policy=retry,
+            )
+            for name in translators
+        ]
+        results: list[AgentActivityResult] = list(await asyncio.gather(*handles))
+
+        # Pick the best
+        chooser = await workflow.execute_activity(
             "run_agent_activity",
             AgentActivityParams(
-                agent_name="researcher",
-                input=f"Research: {input.topic}",
-                user_id=input.user_id,
+                agent_name="best_translation_picker",
+                input="\n\n".join(f"{t.agents_used[0]}:\n{t.content}" for t in results),
             ),
-            start_to_close_timeout=timedelta(seconds=600),
-            retry_policy=RetryPolicy(maximum_attempts=3),
-            heartbeat_timeout=timedelta(seconds=60),
-            result_type=AgentActivityResult,
-        )
-        research = (
-            raw if isinstance(raw, AgentActivityResult)
-            else AgentActivityResult.model_validate(raw)
+            start_to_close_timeout=timedelta(seconds=120),
+            retry_policy=retry,
         )
 
-        if research.status == "error":
-            return {"status": "failed", "error": research.error}
-
-        # Step 2: Custom logic (no agent needed)
-        word_count = len(research.content.split())
-
-        # Step 3: Run the writer agent only if research is substantial
-        if word_count > 50:
-            raw = await workflow.execute_activity(
-                "run_agent_activity",
-                AgentActivityParams(
-                    agent_name="writer",
-                    input=research.content,
-                    user_id=input.user_id,
-                ),
-                start_to_close_timeout=timedelta(seconds=300),
-                retry_policy=RetryPolicy(maximum_attempts=2),
-                result_type=AgentActivityResult,
-            )
-            writer_result = (
-                raw if isinstance(raw, AgentActivityResult)
-                else AgentActivityResult.model_validate(raw)
-            )
-            return {
-                "status": "completed",
-                "content": writer_result.content,
-                "word_count": word_count,
-            }
-
-        return {
-            "status": "completed",
-            "content": research.content,
-            "word_count": word_count,
-            "note": "Research was brief; skipped writer.",
-        }
+        return WorkflowResult(
+            status="completed",
+            content=chooser.content,
+            step_results=results + [chooser],
+        )
 ```
 
-### Key conventions
-
-1. **Use `sandboxed=False`** -- the SDK imports (Pydantic models, etc.) don't
-   work well inside Temporal's sandbox.
-2. **Use dataclasses for workflow input** -- they serialize cleanly with the
-   Pydantic data converter.
-3. **Reference activities by string name** (`"run_agent_activity"`) -- this is
-   the registered activity name.
-4. **Set `result_type=AgentActivityResult`** -- ensures proper deserialization.
-5. **Import SDK types inside `workflow.unsafe.imports_passed_through()`** --
-   this prevents sandbox import restrictions.
-
-## Registering custom workflows
-
-Register your workflow with the `WorkerManager` before starting the worker:
+### Register with the worker
 
 ```python
-from orchestrator.temporal import get_worker_manager
+from orchestrator.temporal import get_worker_manager, get_temporal_client
 
-manager = get_worker_manager()
-manager.register_workflow(MyCustomWorkflow)
-await manager.start()
+worker = get_worker_manager(get_temporal_client(), get_agent_registry())
+worker.register_workflow(TranslationFanoutWorkflow)
+await worker.start()
 ```
 
-## Custom activities
+`register_workflow()` adds your class to the worker's workflow list
+*before* it starts. The worker then accepts both built-in workflows
+(`AgentWorkflow`, `SequentialAgentWorkflow`, …) and yours.
 
-You can also define custom activities alongside the built-in ones:
+### Submit it
+
+```python
+client = get_temporal_client()
+await client.connect()
+handle = await client.start_workflow(
+    TranslationFanoutWorkflow.run,
+    "Hello world",
+    id="translation-001",
+    task_queue="orchestrator-agents",
+)
+result = await handle.result()
+```
+
+---
+
+## 2 · Custom activity
+
+Activities are where I/O lives. Anything async-friendly works:
+filesystem, HTTP, DB, queues, your own internal services.
 
 ```python
 from temporalio import activity
+import httpx
 
-
-@activity.defn
-async def fetch_external_data(url: str) -> str:
-    """Custom activity that fetches data from an API."""
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url)
-        return resp.text
-
-
-# Register before starting the worker
-manager.register_activity(fetch_external_data)
-await manager.start()
+@activity.defn(name="fetch_url_activity")
+async def fetch_url_activity(url: str) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.text
 ```
 
-Then use your custom activity in any workflow:
+### Register with the worker
+
+```python
+worker.register_activity(fetch_url_activity)
+```
+
+### Use from a workflow
 
 ```python
 @workflow.defn(sandboxed=False)
-class DataEnrichedWorkflow:
+class FetchAndSummarizeWorkflow:
     @workflow.run
-    async def run(self, input: MyWorkflowInput) -> dict:
-        external = await workflow.execute_activity(
-            "fetch_external_data",
-            f"https://api.example.com/data/{input.topic}",
-            start_to_close_timeout=timedelta(seconds=30),
+    async def run(self, url: str) -> WorkflowResult:
+        text = await workflow.execute_activity(
+            fetch_url_activity,
+            url,
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
-        # ... use external data with agent activities
+        summary = await workflow.execute_activity(
+            "run_agent_activity",
+            AgentActivityParams(agent_name="summarizer", input=text),
+            start_to_close_timeout=timedelta(seconds=120),
+        )
+        return WorkflowResult(status="completed", content=summary.content)
 ```
 
-## Starting your custom workflow
+---
 
-```python
-from orchestrator.temporal import get_temporal_client
+## 3 · Determinism rules (read this!)
 
-client = get_temporal_client()
-handle = await client.start_workflow(
-    MyCustomWorkflow.run,
-    MyWorkflowInput(topic="quantum computing", user_id="user-42"),
-    id="custom-workflow-1",
-    task_queue="orchestrator-agents",
-)
+Workflow code is replayed during recovery. Anything that returns a
+different result on replay breaks Temporal's contract.
 
-result = await handle.result()
-print(result)
-```
+**Don't:**
+- `random.random()`, `uuid.uuid4()` — use `workflow.uuid4()` and `workflow.random()`
+- `datetime.now()`, `time.time()` — use `workflow.now()`
+- `requests.get()`, file I/O, DB calls — call activities instead
+- Spawn threads or asyncio tasks outside `workflow.start_activity` /
+  `workflow.start_child_workflow`
+- Run import-time side effects unless wrapped in
+  `with workflow.unsafe.imports_passed_through():`
 
-## Adding signals and queries
+**Do:**
+- `await workflow.sleep(...)`, `await workflow.wait_condition(...)`
+- `workflow.signal`, `workflow.query` decorators
+- `workflow.execute_activity(...)`, `workflow.start_activity(...)`
+- Keep the workflow body small — push complexity into activities
+
+---
+
+## 4 · Signals & queries
 
 ```python
 @workflow.defn(sandboxed=False)
-class InteractiveWorkflow:
+class MyWorkflow:
     def __init__(self):
-        self._paused = False
-        self._status = "running"
+        self._cancel = False
+        self._injected_input: str | None = None
 
     @workflow.signal
-    async def pause(self) -> None:
-        self._paused = True
+    async def cancel_workflow(self) -> None:
+        self._cancel = True
 
     @workflow.signal
-    async def resume(self) -> None:
-        self._paused = False
+    async def inject_input(self, data: str) -> None:
+        self._injected_input = data
 
     @workflow.query
-    def status(self) -> str:
-        return self._status
+    def get_status(self) -> dict[str, Any]:
+        return {"cancelled": self._cancel, "injected": self._injected_input is not None}
 
     @workflow.run
-    async def run(self, input: MyWorkflowInput) -> dict:
-        for step_name in ["research", "write", "edit"]:
-            # Wait until unpaused
-            await workflow.wait_condition(lambda: not self._paused)
-            self._status = f"running:{step_name}"
-
-            raw = await workflow.execute_activity(
-                "run_agent_activity",
-                AgentActivityParams(
-                    agent_name=step_name,
-                    input=input.topic,
-                ),
-                start_to_close_timeout=timedelta(seconds=300),
-                result_type=AgentActivityResult,
-            )
-            # ... process result
-
-        self._status = "completed"
-        return {"status": "completed"}
+    async def run(self) -> str:
+        await workflow.wait_condition(lambda: self._injected_input or self._cancel)
+        if self._cancel:
+            return "cancelled"
+        return f"got: {self._injected_input}"
 ```
 
-## Testing custom workflows
-
-Use Temporal's time-skipping test environment:
+Signal from outside:
 
 ```python
-import pytest
-from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
-
-
-@pytest.fixture
-async def temporal_env():
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        yield env
-
-
-async def test_my_workflow(temporal_env, mock_registry):
-    """Register mock agents, start worker, run workflow."""
-    async with Worker(
-        temporal_env.client,
-        task_queue="test-queue",
-        workflows=[MyCustomWorkflow],
-        activities=[run_agent_activity, send_notification_activity],
-    ):
-        handle = await temporal_env.client.start_workflow(
-            MyCustomWorkflow.run,
-            MyWorkflowInput(topic="test"),
-            id="test-custom-1",
-            task_queue="test-queue",
-        )
-        result = await handle.result()
-        assert result["status"] == "completed"
+await client.signal_workflow("workflow-id", "inject_input", "hello")
 ```
 
-## Next steps
+Query from outside:
 
-- [Getting Started](getting-started.md) -- setup and first workflow
-- [Workflow Patterns](workflow-patterns.md) -- built-in patterns reference
-- [Human-in-the-Loop](human-in-loop.md) -- approval gate patterns
+```python
+status = await client.query_workflow("workflow-id", "get_status")
+```
+
+---
+
+## 5 · Patterns
+
+### Long-running with periodic heartbeat
+
+```python
+@activity.defn
+async def long_running_activity(params: dict) -> str:
+    while not done():
+        activity.heartbeat({"progress": progress()})
+        await asyncio.sleep(5)
+    return result
+```
+
+Set `heartbeat_timeout=timedelta(seconds=30)` on the call site.
+
+### Fan-out with bounded concurrency
+
+```python
+async def run(self, items: list[str]) -> list[str]:
+    semaphore = asyncio.Semaphore(5)
+    async def one(item):
+        async with semaphore:
+            return await workflow.execute_activity(
+                "run_agent_activity", AgentActivityParams(agent_name="worker", input=item),
+                start_to_close_timeout=timedelta(seconds=60),
+            )
+    return await asyncio.gather(*(one(i) for i in items))
+```
+
+### Child workflow
+
+```python
+result = await workflow.execute_child_workflow(
+    OtherWorkflow.run, child_input, id="child-123",
+)
+```
+
+---
+
+## 6 · Common errors
+
+| Error | Cause |
+|---|---|
+| `Activity is not registered` | You forgot `worker.register_activity(fn)` |
+| `Workflow is not registered` | You forgot `worker.register_workflow(cls)` |
+| `non-deterministic` errors during replay | I/O, randomness, or `datetime.now()` in workflow body |
+| `task_queue` mismatch | Caller and worker use different `TEMPORAL_TASK_QUEUE` |
+| `WorkflowAlreadyStartedError` | Re-using the same workflow `id` |

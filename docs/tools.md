@@ -1,195 +1,386 @@
-# Tools Module
+# Tools / MCP Module
 
-Model Context Protocol (MCP) integration for tool execution.
+Continuum is **MCP-native** — every tool surface is exposed via the
+[Model Context Protocol](https://modelcontextprotocol.io). Three
+transports ship out of the box (Stdio, SSE, StreamableHTTP), all sharing
+the same agent-facing API.
 
-## Overview
+What this module gives you:
+- `MCPServer` (abstract) and three concrete transports
+- `ToolExecutor` — concurrency, rate-limiting, context capture/injection,
+  artifact collection
+- `MCPUtil` — discover tools from servers, normalize their schemas for
+  any LLM provider
+- A **tool-context** mechanism that captures things like `session_id` /
+  `auth_token` from one tool's output and injects them into subsequent
+  tool calls (so the LLM doesn't have to thread them around)
+- A **run-artifact** mechanism that captures structured tool output
+  (UI widgets, tables, charts) separately from the text the LLM sees
 
-- **ToolExecutor**: Execute MCP tools
-- **MCPServer**: Connect to MCP servers (SSE, Stdio, HTTP)
-- **Tool Filtering**: Filter tools by name or function
-- **Context State**: Maintain tool context across calls
+---
 
-## ToolExecutor
-
-```python
-from orchestrator.tools import ToolExecutor, MCPServerStdio
-
-# Create MCP server
-server = MCPServerStdio(
-    command="npx",
-    args=["-y", "@modelcontextprotocol/server-puppeteer"],
-)
-
-# Create executor
-executor = ToolExecutor({server: None})
-await executor.initialize()
-
-# Get tools
-tools = await executor.list_tools()
-
-# Execute tool
-result = await executor.execute_tool(
-    tool_name="search",
-    arguments={"query": "Python SDK"},
-)
-```
-
-## MCP Server Types
-
-### Stdio Server
+## 1 · Quick start
 
 ```python
-from orchestrator.tools import MCPServerStdio, MCPServerStdioParams
-
-server = MCPServerStdio(
-    command="python",
-    args=["-m", "my_mcp_server"],
-    env={"API_KEY": "..."},
+from orchestrator.tools import (
+    MCPServerStreamableHttp, ToolExecutor, MCPUtil,
 )
-```
-
-### SSE Server
-
-```python
-from orchestrator.tools import MCPServerSse, MCPServerSseParams
-
-server = MCPServerSse(
-    url="https://api.example.com/mcp",
-    headers={"Authorization": "Bearer ..."},
-)
-```
-
-### HTTP Server
-
-```python
-from orchestrator.tools import MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from orchestrator.agent import BaseAgent, AgentRunner
 
 server = MCPServerStreamableHttp(
-    url="https://api.example.com/mcp",
-    headers={"Authorization": "Bearer ..."},
+    {"url": "https://example.com/mcp", "headers": {"Authorization": "Bearer …"}},
+    name="example",
 )
+await server.connect()
+
+executor = ToolExecutor({server: None})            # None = expose all tools
+await executor.initialize()
+
+agent = BaseAgent(
+    name="tool-agent",
+    instructions="Use the available tools to answer.",
+    mcp_servers=[server],
+)
+resp = await AgentRunner().run(agent, "What's in the latest report?")
 ```
 
-## Tool Filtering
+---
 
-Attach the tool filter to the server (not the executor). The executor takes a **tool_registry**: a dict mapping each server to an optional list of allowed tool names (`None` = all tools).
+## 2 · MCP Server classes
+
+All three inherit from the abstract `MCPServer` and share a common
+constructor shape (only the `params` payload differs).
+
+### Common constructor parameters
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `params` | TypedDict | required | See per-transport details below |
+| `cache_tools_list` | `bool` | `False` | Cache `list_tools()` across calls; invalidate via `server.invalidate_tools_cache()` |
+| `name` | `str \| None` | auto | Human-readable name (auto-generated from command/url if `None`) |
+| `client_session_timeout_seconds` | `float \| None` | `5` | Read timeout for the MCP `ClientSession` |
+| `tool_filter` | `ToolFilter \| None` | `None` | See Section 5 |
+| `use_structured_content` | `bool` | `False` | Prefer `tool_result.structured_content` over text content |
+| `max_retry_attempts` | `int` | `0` | Retries for transient failures |
+| `retry_backoff_seconds_base` | `float` | `1.0` | Exponential backoff base |
+| `message_handler` | `MessageHandlerFnT \| None` | `None` | Hook for raw MCP messages |
+| `context_config` | `ToolContextConfig \| None` | `None` | See Section 4 |
+| `validate_on_connect` | `bool` | `False` | If `True`, calls `list_tools()` after connect to fail fast on a broken server |
+
+### Common methods
+
+| Method | Description |
+|---|---|
+| `await server.connect()` | Open the transport |
+| `await server.cleanup()` | Close cleanly |
+| `await server.list_tools(metadata=None)` | Discover available tools |
+| `await server.call_tool(tool_name, arguments)` | Invoke a tool directly |
+| `await server.list_prompts()` / `get_prompt(name, arguments)` | MCP prompt API |
+| `server.invalidate_tools_cache()` | Force a re-fetch of `list_tools()` |
+| `async with server: ...` | Context manager calls connect/cleanup automatically |
+
+### `MCPServerStdio`
+
+`from orchestrator.tools import MCPServerStdio`
 
 ```python
-from orchestrator.tools import create_static_tool_filter, MCPServerStreamableHttp, ToolExecutor
+mcp = MCPServerStdio({
+    "command": "npx",                     # required
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "./data"],
+    "env": {"NODE_ENV": "production"},
+    "cwd": "/path/to/cwd",
+    "encoding": "utf-8",
+    "encoding_error_handler": "strict",   # "strict" | "ignore" | "replace"
+})
+```
 
-# Filter by tool names (use allowed_tool_names, not allowed_tools)
-filter_config = create_static_tool_filter(
-    allowed_tool_names=["search", "get_weather"],
+### `MCPServerSse`
+
+`from orchestrator.tools import MCPServerSse`
+
+```python
+mcp = MCPServerSse({
+    "url": "https://example.com/sse",     # required
+    "headers": {"Authorization": "Bearer …"},
+    "timeout": 5.0,
+    "sse_read_timeout": 300.0,
+})
+```
+
+### `MCPServerStreamableHttp` *(recommended for remote)*
+
+`from orchestrator.tools import MCPServerStreamableHttp`
+
+```python
+from datetime import timedelta
+
+mcp = MCPServerStreamableHttp({
+    "url": "https://example.com/mcp",     # required
+    "headers": {"Authorization": "Bearer …"},
+    "timeout": timedelta(seconds=10),     # or float
+    "sse_read_timeout": timedelta(minutes=5),
+    "terminate_on_close": True,
+    # "httpx_client_factory": custom_factory,
+})
+```
+
+---
+
+## 3 · `ToolExecutor`
+
+`from orchestrator.tools import ToolExecutor, ToolExecutorConfig`
+
+```python
+executor = ToolExecutor(
+    tool_registry={                       # dict[MCPServer, list[str] | None]
+        local_server: None,               # None = expose all of this server's tools
+        remote_server: ["search", "ingest"],   # restrict to these tools
+    },
+    config=ToolExecutorConfig(
+        max_concurrent_calls=5,
+        rate_limit_per_second=10.0,       # 0 disables
+        timeout_seconds=30.0,
+    ),
+    context_state=None,
 )
-
-# Attach filter to the server
-server = MCPServerStreamableHttp(
-    {"url": "https://api.example.com/mcp"},
-    tool_filter=filter_config,
-)
-
-# Executor uses tool_registry: { server: None } means all tools from that server
-executor = ToolExecutor({server: None})
 await executor.initialize()
 ```
 
-## Tool Context State
+### Methods
 
-Maintain context across tool calls:
+| Method | Returns | Description |
+|---|---|---|
+| `await initialize()` | `None` | Build the internal `tool_name → (server, tool)` registry. **Required** if you constructed with a `tool_registry` |
+| `await execute_tool_call(tool_call, trace_id=None, span_id=None, metadata=None)` | `ChatMessage` (role=`tool`) | Run one tool call with context injection/capture, rate-limiting, timeout |
+| `await execute_tool_calls(tool_calls, trace_id=None, span_id=None, metadata=None)` | `list[ChatMessage]` | Concurrent execution; one failure does not cancel others |
+| `clear_run_artifacts(run_id=None)` | `None` | Reset captured artifacts at the start of a run |
+| `get_available_tools()` | `list[str]` | Names known to this executor |
+| `await refresh_registry(tool_registry)` | `None` | Atomic rebuild — keeps the old registry until the new one validates |
 
-```python
-from orchestrator.tools.types import ToolContextState
+### Properties
 
-# Get context state
-context_state = executor.context_state
+- `context_state: ToolContextState` (read/write)
+- `run_artifacts: RunArtifacts` (read-only)
 
-# Set variable
-context_state.set("namespace", "session_id", "session-123")
+---
 
-# Get variable
-session_id = context_state.get("namespace", "session_id")
-```
+## 4 · Tool context (capture & inject)
 
-## Run Artifacts
+A common MCP pattern: the first tool call returns a `session_id` (or
+`auth_token`, `merchant_id`, etc.) that every subsequent call must
+include. Continuum captures this automatically and re-injects it.
 
-Capture MCP tool artifacts (widgets, structured data):
-
-```python
-# Artifacts are automatically captured
-run_artifacts = executor.run_artifacts
-
-# Get artifacts as dict
-artifacts_dict = run_artifacts.to_dict()
-```
-
-## Schema Normalization
-
-Normalize tool schemas for LLM compatibility:
+### `ToolContextConfig`
 
 ```python
-from orchestrator.tools import normalize_schema_for_llm
+from orchestrator.tools import ToolContextConfig, ToolContextVariable
 
-normalized = normalize_schema_for_llm(tool_schema)
+ctx_cfg = ToolContextConfig(
+    variables=[
+        ToolContextVariable(
+            name="session_id",
+            capture_from=["create_session"],
+            inject_into=None,                     # all tools with `session_id` param
+            json_path=None,
+            scope="session",                      # "session" | "run"
+            override_llm_value=True,
+            required=False,
+            sensitive=False,
+        ),
+        ToolContextVariable(name="auth_token", scope="session", sensitive=True),
+    ],
+    auto_capture_common=True,                     # session_id, auth_token, user_id, merchant_id, store_id, …
+    namespace="my-server",
+    inject_into_system_prompt=True,
+)
+
+server = MCPServerStreamableHttp({"url": "..."}, context_config=ctx_cfg)
 ```
 
-## Types
+`ToolContextVariable` fields:
 
-- `ToolExecutor`: Main executor class
-- `MCPServer`: Base server class
-- `ToolContextState`: Context state management
-- `RunArtifacts`: Per-run artifacts
-- `ToolFilter`: Tool filtering interface
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | `str` | required | Variable to capture/inject |
+| `capture_from` | `list[str] \| None` | `None` | Tool names to capture from (None = all) |
+| `inject_into` | `list[str] \| None` | `None` | Tool names to inject into (None = all matching) |
+| `json_path` | `str \| None` | `None` | JSONPath; default uses `name` as a top-level key |
+| `scope` | `Literal["session","run"]` | `"session"` | Run-scoped values are cleared between runs |
+| `override_llm_value` | `bool` | `True` | Override an LLM-provided value with the captured one |
+| `required` | `bool` | `False` | If `True`, the call fails when the variable is missing |
+| `sensitive` | `bool` | `False` | Mask in logs and `to_dict()` |
 
-## Adding any MCP (database, API, etc.)
+### `ToolContextState`
 
-The framework works with **any** MCP server: database MCPs, file servers, custom APIs, etc. Use the transport that fits how the server runs:
+Where captured values live. Thread-safe; persists across runs at session
+scope. Methods include `get`, `set`, `get_all`, `get_all_namespaces`,
+`has`, `clear_namespace`, `clear_run_scoped`, `merge_from`,
+`to_prompt_context`, `is_empty`, `to_dict`, `from_dict`.
 
-| Server type | Transport | Example |
-|-------------|-----------|---------|
-| Local process (CLI, dev DB server) | **Stdio** | `MCPServerStdio({"command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite"]})` |
-| Remote / hosted (API, DB gateway) | **Streamable HTTP** | `MCPServerStreamableHttp({"url": "https://mcp.example.com/db"})` |
+### Auto-captured names
 
-**Steps to add an MCP and use it everywhere:**
+```
+session_id, sessionId, session,
+auth_token, token, access_token, authToken,
+user_id, userId,
+merchant_id, merchantId,
+store_id, storeId
+```
 
-1. **Create the server** (pick one):
-   - Stdio (local): `server = MCPServerStdio({"command": "...", "args": [...]})`
-   - Remote: `server = MCPServerStreamableHttp({"url": "...", "headers": {...}})`
-2. **Connect and build executor:** `await server.connect()` then `executor = ToolExecutor({server: None})` and `await executor.initialize()`.
-3. **Get tool definitions for the LLM:** `tool_definitions = await MCPUtil.get_function_tools(server)` then convert to dicts (e.g. `t.to_dict()` or `t.model_dump()`).
-4. **Wire to an agent:** pass those dicts as `tools=...` and the same `executor` as `tool_executor` (on the agent or via the runner).
-5. **Run:** use `AgentRunner(tool_executor=executor)` or set `agent.tool_executor = executor`; the runner will use it to execute tool calls.
+Sensitive (always masked in logs):
 
-You can attach multiple MCP servers to one executor: `ToolExecutor({server_db: None, server_api: ["search", "get"]})`. Use **tool filtering** (e.g. `create_static_tool_filter(allowed_tool_names=[...])` on the server) to expose only the tools you need.
+```
+auth_token, token, access_token, authToken, bearer
+```
 
-## Using MCP with agents and across the SDK
+---
 
-- **Single agent:** Create server(s) and executor as above. Build the agent with `tools=<MCP tool dicts>` and either set `agent.tool_executor = executor` or pass `tool_executor=executor` when creating `AgentRunner(...)`. The runner uses that executor to run tool calls and will use the same tools you passed to the agent.
-- **Shared executor (multiple agents or entrypoints):** Build one `ToolExecutor` from your MCP server(s), then pass it into `AgentRunner(tool_executor=executor)` or set it on the **Container** with `container.set_tool_executor(executor)` so any runner using that container gets the same MCP tools.
-- **Per-agent executor:** Set `agent.tool_executor` on each `BaseAgent`. The runner prefers the agent’s executor when executing that agent’s tool calls.
+## 5 · Tool filtering
 
-So yes: adding any MCP (database or otherwise) is the same pattern—create server, connect, build executor, get tools, attach to agent/runner/container—and the same executor is used for execution across the SDK.
+```python
+from orchestrator.tools import create_static_tool_filter, ToolFilterContext
 
-## MCP client compatibility
+# Static (allowlist / blocklist)
+server = MCPServerStreamableHttp(
+    {"url": "..."},
+    tool_filter=create_static_tool_filter(allowed_tool_names=["search", "fetch"]),
+)
 
-Use the transport that matches your MCP client and deployment:
+# Dynamic (sync or async callable)
+async def admin_only(context: ToolFilterContext, tool) -> bool:
+    return context.metadata.get("role") == "admin"
 
-| Transport | Use case | When to use |
-|-----------|-----------|--------------|
-| **Stdio** | Local/CLI | Dev, CLI tools, one process per client (e.g. local scripts). |
-| **Streamable HTTP** | Remote/web | Preferred for remote servers, Cursor, Claude, web apps; single endpoint, session via `Mcp-Session-Id`, resumable sessions. |
-| **SSE** | Legacy | Backward compatibility with existing HTTP+SSE servers only. |
+server = MCPServerStreamableHttp({"url": "..."}, tool_filter=admin_only)
+await server.list_tools(metadata={"role": "admin"})
+```
 
-- **Remote servers:** Use `MCPServerStreamableHttp` with `url` and optional `headers` (e.g. `Authorization: Bearer ...`).
-- **Session ID:** Streamable HTTP sessions are managed by the MCP SDK; the client sends/receives `Mcp-Session-Id` automatically. There is no API yet to read the session ID from the client; see [MCP Python SDK #942](https://github.com/modelcontextprotocol/python-sdk/issues/942) if you need it for UI/widget correlation.
-- **Spec:** [MCP transports](https://modelcontextprotocol.io/docs/concepts/transports).
+---
 
-## Connection and timeouts
+## 6 · Run artifacts
 
-- **Validate on connect:** You can pass `validate_on_connect=True` when creating an MCP server (Stdio, SSE, or Streamable HTTP) to call `list_tools()` once after connect and fail fast if the server is misconfigured. Default is `False` so slow servers are not penalized.
-- **Timeouts:** Use `client_session_timeout_seconds` for the MCP session read timeout, and for HTTP transports use `timeout` (request) and `sse_read_timeout` (stream). For long-running tool calls, set `sse_read_timeout` to at least 300 (5 minutes). If the SSE connection drops, the SDK can hang; setting these timeouts helps mitigate that.
+Tools often produce **two** outputs: text (for the LLM) and structured
+data (for the UI). Continuum captures both and exposes the structured
+data via `AgentResponse.run_artifacts`.
 
-## Testing
+### `MCPToolArtifact`
 
-- **Unit tests (no MCP server):** Run `pytest tests/unit/tools/` to test tools util, executor, types, and MCP client logic with mocks. No external MCP server required.
-- **Integration tests:** Run `pytest -m integration` to run all integration tests. MCP integration tests can use a mock/in-process server (no network) or a live URL.
-- **Live MCP server:** To run tests against a real MCP server, set env `MCP_SERVER_URL` (e.g. `https://your-mcp.example.com/mcp`) and run `pytest tests/integration/test_tools_mcp.py`. Tests marked `live_mcp` require this; CI can run `pytest -m "integration and not live_mcp"` to skip live-only tests when no server is available.
+| Field | Description |
+|---|---|
+| `tool_name`, `server_name` | Identification |
+| `meta: dict \| None` | MCP `_meta` (widget templates, etc.) |
+| `structured_content: dict \| None` | The data for rendering |
+| `text_content: str \| None` | The LLM-facing text |
+| `raw_content: list[dict] \| None` | Raw MCP `content` items |
+| `is_error: bool` | |
+| `timestamp`, `latency_ms` | |
+
+Methods: `has_widget()`, `get_widget_template()`, `to_dict()`, `from_dict(data)`.
+
+### `RunArtifacts`
+
+| Method | Returns |
+|---|---|
+| `add_artifact(a)` | — |
+| `clear()` / `is_empty()` | `None` / `bool` |
+| `get_by_tool(tool_name)` | `list[MCPToolArtifact]` |
+| `get_latest_by_tool(tool_name)` | `MCPToolArtifact \| None` |
+| `get_widgets()` | `list[MCPToolArtifact]` |
+| `get_structured_data()` | merged `dict` |
+| `to_dict()` / `from_dict(data)` | round-trip |
+
+Access at the application level via `response.run_artifacts`. See
+`playground/commerce-chat/multi_agent.py` (in the framework repo) for
+a real-world pattern that injects an MCP `session_id` into each
+captured widget before forwarding to a frontend.
+
+---
+
+## 7 · `MCPUtil`
+
+`from orchestrator.tools import MCPUtil`
+
+| Method | Returns | Notes |
+|---|---|---|
+| `await MCPUtil.get_function_tools(server, normalize_schemas=True, strict_mode=False, metadata=None)` | `list[ToolDefinition]` | LLM-shaped tools from one server |
+| `await MCPUtil.get_all_function_tools(servers, normalize_schemas=True, strict_mode=False, metadata=None)` | `list[ToolDefinition]` | Across multiple servers; raises `MCPError` on duplicate tool names |
+| `MCPUtil.to_function_tool(tool, server, normalize_schemas=True, strict_mode=False)` | `ToolDefinition` | Convert one MCP tool |
+| `await MCPUtil.invoke_mcp_tool(server, tool, input_json, trace_id=None, span_id=None, metadata=None)` | `str` | JSON-string result |
+| `await MCPUtil.invoke_mcp_tool_with_artifact(server, tool, input_json, ...)` | `tuple[str, MCPToolArtifact]` | Result text + full artifact |
+
+Schema helpers:
+
+```python
+from orchestrator.tools import normalize_schema_for_llm, ensure_strict_json_schema
+```
+
+These fix common MCP schema oddities (arrays without `items`, objects
+without `properties`, missing `type`) so that strict OpenAI/Gemini JSON
+schemas don't reject them.
+
+---
+
+## 8 · Exceptions
+
+`from orchestrator.tools.exceptions import (
+    ToolError, MCPError, MCPConnectionError, MCPToolError,
+)`
+
+`MCPError` constructors carry `server_name` and `tool_name` in their
+context dict.
+
+---
+
+## 9 · Common patterns
+
+### Multiple servers in one agent
+
+```python
+local = MCPServerStdio({"command": "python", "args": ["my_server.py"]}, name="local")
+remote = MCPServerStreamableHttp({"url": "https://api.example.com/mcp"}, name="remote")
+await local.connect(); await remote.connect()
+
+agent = BaseAgent(name="multi", mcp_servers=[local, remote], instructions="...")
+```
+
+### Restricting tools per-agent (security)
+
+```python
+plan_tool_names = {step.tool_name for step in plan.steps}
+filtered = [t for t in all_tools
+            if t.get("function", {}).get("name") in plan_tool_names]
+agent = BaseAgent(name="executor", tools=filtered, instructions="...")
+```
+
+### Capturing a session id from `create_session`
+
+```python
+ctx = ToolContextConfig(
+    variables=[ToolContextVariable(name="session_id", capture_from=["create_session"])],
+    auto_capture_common=False,
+)
+server = MCPServerStreamableHttp({"url": "..."}, context_config=ctx)
+```
+
+The first time `create_session` runs, its output's `session_id` is
+captured. Every subsequent tool call that has a `session_id` parameter
+gets the captured value injected automatically.
+
+---
+
+## 10 · Gotchas
+
+- **`await server.connect()` first.** Forgetting this is the #1 source
+  of "no tools available" reports.
+- **`ToolExecutor.initialize()` is required** when you build it with a
+  `tool_registry` argument.
+- **Tool names must be unique across servers** when using
+  `MCPUtil.get_all_function_tools(...)`.
+- **`use_structured_content=True`** changes what gets sent to the LLM —
+  prefer leaving it `False` unless you specifically want the structured
+  payload as text.
+- **Schemas:** if the LLM rejects a tool's schema, `normalize_schemas=True`
+  (the default) usually fixes it. Add `strict_mode=True` if your provider
+  needs strict OpenAI-style schemas.
+- **`run`-scoped vs `session`-scoped** context variables behave
+  differently — `run` values are wiped between runs, `session` values
+  persist as long as the session.

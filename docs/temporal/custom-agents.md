@@ -1,200 +1,178 @@
-# Custom Agents with Temporal
+# Temporal — Registering Custom Agents
 
-This guide shows how to register your own `BaseAgent` instances with the
-Temporal integration and execute them as durable workflow steps.
+Workflows look up agents **by name** from a registry at activity
+execution time. Any `BaseAgent` works — including workflow agents like
+`SequentialAgent` or `RouterAgent` — as long as it's registered before
+the worker spins up an activity.
 
-## How it works
+`from orchestrator.temporal import (
+    AgentRegistry, get_agent_registry, reset_agent_registry,
+)`
 
-The Temporal integration is **agent-agnostic**. It never imports or references
-your agent code directly. Instead:
+---
 
-1. You register `BaseAgent` instances in the **Agent Registry** by name.
-2. Temporal activities look up agents by name at runtime and execute them
-   through the standard `AgentRunner`.
-3. All existing SDK features (LLM, memory, session, tools, observability)
-   work unchanged inside Temporal activities.
-
-```
-┌─────────────┐       ┌───────────────┐       ┌─────────────────┐
-│  Workflow    │──────▶│  Activity     │──────▶│  AgentRunner    │
-│  (steps)    │       │  (lookup by   │       │  (your agent)   │
-│             │       │   name)       │       │                 │
-└─────────────┘       └───────────────┘       └─────────────────┘
-                             │
-                      ┌──────┴──────┐
-                      │ AgentRegistry│
-                      └─────────────┘
-```
-
-## Defining agents
-
-Create agents exactly as you would without Temporal:
+## 1 · Register agents
 
 ```python
 from orchestrator.agent import BaseAgent
-
-research_agent = BaseAgent(
-    name="researcher",
-    instructions="Research the given topic and return key findings.",
-    model="gpt-4o",
-    temperature=0.3,
-)
-
-writer_agent = BaseAgent(
-    name="writer",
-    instructions="Write a polished article from the research findings.",
-    model="gpt-4o",
-    temperature=0.7,
-)
-
-editor_agent = BaseAgent(
-    name="editor",
-    instructions="Edit the article for clarity, grammar, and style.",
-    model="gpt-4o-mini",
-    temperature=0.2,
-)
-```
-
-## Registering agents
-
-### Single agent
-
-```python
 from orchestrator.temporal import get_agent_registry
 
-registry = get_agent_registry()
-registry.register(research_agent)
+registry = get_agent_registry()                    # thread-safe singleton
+
+registry.register(BaseAgent(
+    name="summarizer",
+    instructions="Summarize the input.",
+    model="gpt-4o-mini",
+))
+registry.register(BaseAgent(
+    name="translator",
+    instructions="Translate to French.",
+))
 ```
 
-### Multiple agents
+Or batch:
 
 ```python
-registry.register_many([research_agent, writer_agent, editor_agent])
+registry.register_many([summarizer, translator, reviewer])
 ```
 
-### Listing registered agents
+The registry uses `agent.name` as the lookup key — names must be
+unique across all registered agents.
 
-```python
-print(registry.list_agents())
-# ['researcher', 'writer', 'editor']
-```
+---
 
-## Running registered agents in workflows
+## 2 · `AgentRegistry` API
 
-Once registered, reference agents by their `name` string in any workflow input:
+| Method | Returns | Notes |
+|---|---|---|
+| `register(agent)` | `None` | Add (or overwrite) an agent |
+| `register_many(agents)` | `None` | Bulk register |
+| `get(name)` | `BaseAgent` | Raises `AgentNotRegisteredError` if missing |
+| `list_agents()` | `list[str]` | Names |
+| `set_runner_factory(factory)` | `None` | Custom factory `() -> AgentRunner` (used in activities) |
+| `get_runner()` | `AgentRunner` | Returns the factory result, or builds a default runner |
+| `set_notification_handler(handler)` | `None` | `async def handler(params: NotificationParams) -> None` |
+| `get_notification_handler()` | `Callable \| None` | |
+| `clear()` | `None` | Wipe the registry (testing) |
 
-```python
-from orchestrator.temporal import WorkflowInput, AgentWorkflow, get_temporal_client
+---
 
-client = get_temporal_client()
+## 3 · Wiring shared services to workflow runs
 
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "researcher"},
-            {"type": "agent", "agent_name": "writer"},
-            {"type": "agent", "agent_name": "editor"},
-        ],
-        initial_input="Write an article about durable execution patterns.",
-    ),
-    id="article-pipeline",
-    task_queue="orchestrator-agents",
-)
-
-result = await handle.result()
-print(result.content)  # Final edited article
-```
-
-## Customizing per-step behavior
-
-Each `AgentStep` supports per-step overrides:
-
-```python
-steps = [
-    {
-        "type": "agent",
-        "agent_name": "researcher",
-        "input": "Focus on Temporal and workflow engines",  # override input
-        "timeout": 600,    # 10 minutes (default: 300s)
-        "retries": 5,      # retry on failure (default: 3)
-        "metadata": {"priority": "high"},
-    },
-    {
-        "type": "agent",
-        "agent_name": "writer",
-        # Uses previous agent's output as input (default behavior)
-    },
-]
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `agent_name` | `str` | required | Name of the registered agent |
-| `input` | `str \| None` | `None` | Override input (otherwise uses previous step's output) |
-| `timeout` | `int` | `300` | Activity timeout in seconds |
-| `retries` | `int` | `3` | Max retry attempts |
-| `metadata` | `dict` | `{}` | Passed to the agent as metadata |
-
-## Custom AgentRunner factory
-
-By default, the registry creates a standard `AgentRunner`. If you need custom
-configuration, set a runner factory:
+If you want activities to share a memory client, session client, or
+custom container, supply a `runner_factory`:
 
 ```python
 from orchestrator.agent import AgentRunner
+from orchestrator.core.container import Container, ContainerConfig
 
-def my_runner_factory() -> AgentRunner:
-    return AgentRunner()  # add custom config as needed
+container = Container(ContainerConfig(enable_memory=True, enable_session=True))
 
-registry.set_runner_factory(my_runner_factory)
+def make_runner() -> AgentRunner:
+    return AgentRunner(container=container)
+
+registry.set_runner_factory(make_runner)
 ```
 
-## Session and user context
+Without a factory, the activity falls back to a default `AgentRunner()`
+which uses the global `Container` singleton — that's usually fine for
+hackathons.
 
-Pass `session_id` and `user_id` through the workflow input to maintain
-conversation context across agents:
+---
+
+## 4 · Workflow agents inside Temporal
+
+Workflow agents (`SequentialAgent`, `RouterAgent`, etc.) are themselves
+`BaseAgent` subclasses, so they register the same way:
 
 ```python
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "researcher"},
-            {"type": "agent", "agent_name": "writer"},
-        ],
-        initial_input="Research quantum computing breakthroughs.",
-        session_id="session-abc123",
-        user_id="user-42",
-    ),
-    id="session-aware-workflow",
-    task_queue="orchestrator-agents",
+from orchestrator.agent import create_sequential_agent, BaseAgent
+
+researcher = BaseAgent(name="researcher", instructions="…")
+writer     = BaseAgent(name="writer",     instructions="…")
+editor     = BaseAgent(name="editor",     instructions="…")
+
+pipeline = create_sequential_agent(
+    name="content-pipeline",
+    agents=[researcher, writer, editor],
 )
+
+registry.register_many([researcher, writer, editor, pipeline])
+
+# In WorkflowInput:
+WorkflowInput(steps=[{"type": "agent", "agent_name": "content-pipeline"}], initial_input="…")
 ```
 
-## Error handling
+The pipeline runs as one Temporal activity — durability is at the
+**Temporal step** boundary, not at the inner sub-agent boundary.
 
-If an agent raises an exception, the activity catches it and returns an
-`AgentActivityResult` with `status="error"` and the error message in the
-`error` field. The workflow continues to subsequent steps (the errored agent's
-output will be empty).
+---
 
-To trigger a workflow-level failure, the step's retry policy must be exhausted
-first (default: 3 attempts).
+## 5 · Inside `run_agent_activity`
 
-## Agent not registered?
+For reference, this is what the activity does (so you understand what
+becomes durable):
 
-If a workflow references an agent name that hasn't been registered, the activity
-raises `AgentNotRegisteredError` with a helpful message listing available
-agents:
+1. `agent = registry.get(params.agent_name)`
+2. `runner = registry.get_runner()`
+3. `activity.heartbeat(f"Running agent: {params.agent_name}")`
+4. `resp = await runner.run(agent, params.input,
+                            session_id=params.session_id,
+                            user_id=params.user_id,
+                            metadata=params.metadata, tags=params.tags)`
+5. Return `AgentActivityResult.from_agent_response(resp)`
 
+If `run()` raises, the activity catches it and returns a result with
+`status="error"` and `error=str(exc)`. The workflow then decides what
+to do based on its retry policy and step config.
+
+---
+
+## 6 · Exception: `AgentNotRegisteredError`
+
+`from orchestrator.temporal import AgentNotRegisteredError`
+
+Raised when a workflow references an unknown `agent_name`. Carries
+`agent_name` and `available_agents` in its context dict for fast
+debugging.
+
+---
+
+## 7 · Patterns
+
+### Per-environment agents
+
+```python
+def production_agents():
+    return [
+        BaseAgent(name="summarizer", model="gpt-4o", ...),
+        BaseAgent(name="translator", model="claude-sonnet-4-20250514", ...),
+    ]
+
+def dev_agents():
+    return [
+        BaseAgent(name="summarizer", model="gpt-4o-mini", ...),
+        BaseAgent(name="translator", model="gpt-4o-mini", ...),
+    ]
+
+registry.register_many(production_agents() if env == "prod" else dev_agents())
 ```
-AgentNotRegisteredError: Agent 'missing-agent' is not registered.
-Available agents: ['researcher', 'writer', 'editor']
+
+### Hot-replacing an agent
+
+```python
+registry.register(BaseAgent(name="summarizer", instructions="<v2 prompt>"))
 ```
 
-## Next steps
+`register()` overwrites in place — new workflow runs pick up the change
+instantly. Workflows already in flight continue with the original
+because Temporal replays history deterministically.
 
-- [Workflow Patterns](workflow-patterns.md) -- sequential, parallel, conditional, loop
-- [Human-in-the-Loop](human-in-loop.md) -- approval gates between agent steps
-- [Custom Workflows](custom-workflows.md) -- write your own `@workflow.defn`
+### Tests
+
+```python
+from orchestrator.temporal import reset_agent_registry
+
+def setup_function():
+    reset_agent_registry()
+```

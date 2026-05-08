@@ -1,241 +1,231 @@
-# Human-in-the-Loop Approvals
+# Temporal — Human-in-the-Loop Approvals
 
-The Temporal integration supports human-in-the-loop (HITL) approval gates
-within workflows. A workflow can pause, send a notification to a human
-approver, wait for a decision (approve / reject / escalate), and then
-continue or abort based on the response.
+Approval gates pause a workflow until a human submits an
+`ApprovalDecision`. The framework provides a high-level
+`HumanInLoopManager` so you don't have to wrangle signals manually.
 
-## Approval step in the generic workflow
+`from orchestrator.temporal import (
+    HumanInLoopManager, ApprovalNotificationConfig,
+    ApprovalRequest, ApprovalDecision,
+)`
 
-Add an `approval` step to any `WorkflowInput`:
+---
 
-```python
-from orchestrator.temporal import WorkflowInput, AgentWorkflow, get_temporal_client
+## 1 · The flow
 
-client = get_temporal_client()
-
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "researcher"},
-            {
-                "type": "approval",
-                "description": "Review research findings before writing",
-                "approvers": ["manager@example.com"],
-                "timeout": 86400,  # 24 hours
-            },
-            {"type": "agent", "agent_name": "writer"},
-        ],
-        initial_input="Analyze market trends for Q4.",
-    ),
-    id="approval-workflow-1",
-    task_queue="orchestrator-agents",
-)
+```
+workflow ──▶ ApprovalStep
+              │
+              ├─▶ send_notification_activity ──▶ your handler (Slack/email/UI/…)
+              │
+              ▼
+       wait_condition (with timeout)
+              │
+   external caller ──▶ HumanInLoopManager.approve(...)
+                          │
+                          └─▶ submit_approval signal ──▶ ApprovalDecision validated
+                                                          │
+                          ┌───────────────────────────────┘
+                          ▼
+              workflow resumes / rejects / times out
 ```
 
-The workflow will:
-1. Run the `researcher` agent.
-2. Pause at the approval step and send a notification.
-3. Wait up to 24 hours for a human decision.
-4. If approved, continue to the `writer` agent.
-5. If rejected or timed out, the workflow completes with `status="rejected"` or
-   `status="timed_out"`.
+---
 
-## ApprovalStep fields
+## 2 · Wire up notifications
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `description` | `str` | required | What the approver should review |
-| `approvers` | `list[str]` | `[]` | List of approver identifiers |
-| `timeout` | `int` | `86400` | Seconds to wait before timing out |
-| `auto_approve_if` | `str \| None` | `None` | Reserved for auto-approval conditions |
-
-## Submitting a decision
-
-### Using `HumanInLoopManager` (recommended)
-
-```python
-from orchestrator.temporal import HumanInLoopManager, get_temporal_client
-
-client = get_temporal_client()
-hitl = HumanInLoopManager(client)
-
-# Approve
-await hitl.approve(
-    workflow_id="approval-workflow-1",
-    request_id="approval-abc123",  # from pending approvals
-    decided_by="manager@example.com",
-    reason="Looks good, proceed.",
-)
-
-# Reject
-await hitl.reject(
-    workflow_id="approval-workflow-1",
-    request_id="approval-abc123",
-    decided_by="manager@example.com",
-    reason="Needs more data.",
-)
-```
-
-### Using raw signals
-
-You can also send the approval signal directly:
-
-```python
-from orchestrator.temporal import ApprovalDecision
-from orchestrator.temporal.workflows.agent_workflow import AgentWorkflow
-
-handle = client.raw_client.get_workflow_handle("approval-workflow-1")
-await handle.signal(
-    AgentWorkflow.submit_approval,
-    ApprovalDecision(
-        request_id="approval-abc123",
-        decision="approved",
-        decided_by="manager@example.com",
-        reason="LGTM",
-    ),
-)
-```
-
-## Querying pending approvals
-
-```python
-pending = await hitl.get_pending_approvals("approval-workflow-1")
-for req in pending:
-    print(f"  {req['request_id']}: {req['description']}")
-```
-
-## Querying workflow status
-
-```python
-status = await hitl.get_workflow_status("approval-workflow-1")
-print(status)
-# {'status': 'waiting_for_approval', 'current_step_index': 1, ...}
-```
-
-## Escalation
-
-If an approval isn't handled in time, you can escalate to another person:
-
-```python
-await hitl.escalate(
-    workflow_id="approval-workflow-1",
-    request_id="approval-abc123",
-    escalate_to="director@example.com",
-)
-```
-
-This sends a new notification (if an escalation handler is configured) and
-records an `"escalated"` decision.
-
-## Notification hooks
-
-When an approval step activates, the workflow executes the
-`send_notification_activity`. Configure a handler in the registry:
+The notification handler is responsible for **alerting a human** that
+an approval is pending. You set it on the agent registry:
 
 ```python
 from orchestrator.temporal import get_agent_registry
 from orchestrator.temporal.types import NotificationParams
 
-async def slack_notifier(params: NotificationParams) -> None:
-    """Send approval request to Slack."""
-    import httpx
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
-            json={
-                "text": f"Approval needed: {params.payload.get('description')}",
-                "workflow_id": params.payload.get("workflow_id"),
-            },
-        )
+async def notify_slack(params: NotificationParams) -> None:
+    if params.type == "approval_required":
+        body = params.payload                  # {request_id, workflow_id, description, context, ...}
+        await slack.post(channel="#approvals",
+                         text=f"Approve workflow {body['workflow_id']}: {body['description']}",
+                         attachments=[{"actions": [{"type": "button", "text": "Open",
+                                                    "url": f"https://yourapp/approvals/{body['request_id']}"}]}])
 
-registry = get_agent_registry()
-registry.set_notification_handler(slack_notifier)
+get_agent_registry().set_notification_handler(notify_slack)
 ```
 
-### ApprovalNotificationConfig
+If no handler is registered, the activity logs a warning and the
+workflow proceeds to wait — handy for tests, but in production wire one
+up.
 
-For more advanced setups, use `ApprovalNotificationConfig`:
+---
+
+## 3 · Use `HumanInLoopManager`
 
 ```python
-from orchestrator.temporal import ApprovalNotificationConfig, HumanInLoopManager
+from orchestrator.temporal import HumanInLoopManager, ApprovalNotificationConfig
 
 config = ApprovalNotificationConfig(
-    handler=slack_notifier,
-    timeout_seconds=86400,
-    escalation_timeout=7200,
-    escalation_handler=escalation_notifier,  # async callable
+    handler=notify_slack,                        # also wire here for legacy reasons
+    webhook_url=None,                            # reserved
+    timeout_seconds=86400,                       # 1 day
+    escalation_timeout=7200,                     # 2 hours before escalation
+    escalation_handler=notify_oncall,            # async handler
+    auto_approve_conditions=[],                  # list of (request) -> bool
 )
-
-hitl = HumanInLoopManager(client, notification_config=config)
+hlm = HumanInLoopManager(client, config)
 ```
 
-## Approval in convenience workflows
+### Caller-side API
 
-### SequentialAgentWorkflow with approval gates
+| Method | Behaviour |
+|---|---|
+| `await hlm.approve(workflow_id, request_id, decided_by, reason="")` | Submit `decision="approved"` |
+| `await hlm.reject(workflow_id, request_id, decided_by, reason="")` | Submit `decision="rejected"` |
+| `await hlm.escalate(workflow_id, request_id, escalate_to)` | Send escalation notification + signal `decision="escalated"` |
+| `await hlm.submit_decision(workflow_id, decision)` | Low-level; the three above wrap it |
+| `await hlm.get_pending_approvals(workflow_id)` | Query the workflow for pending requests |
+| `await hlm.get_workflow_status(workflow_id)` | Status, current step, completed steps |
+
+### `ApprovalRequest`
 
 ```python
-from orchestrator.temporal.workflows.sequential_workflow import (
-    SequentialAgentWorkflow,
-    SequentialWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    SequentialAgentWorkflow.run,
-    SequentialWorkflowInput(
-        agent_names=["researcher", "writer", "editor"],
-        initial_input="Write about AI trends.",
-        approval_between_steps=True,   # pause between every agent
-        approval_timeout=3600,         # 1 hour per gate
-    ),
-    id="seq-with-approvals",
-    task_queue="orchestrator-agents",
+ApprovalRequest(
+    request_id: str,
+    workflow_id: str,
+    step_index: int,
+    description: str,
+    context: str | None = None,                  # last step's output
+    approvers: list[str] = [],
+    timeout: int = 86400,
+    created_at: str,                             # ISO datetime
 )
 ```
 
-### LoopAgentWorkflow with per-iteration approval
+### `ApprovalDecision`
 
 ```python
-from orchestrator.temporal.workflows.loop_workflow import (
-    LoopAgentWorkflow,
-    LoopWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    LoopAgentWorkflow.run,
-    LoopWorkflowInput(
-        agent_name="refiner",
-        initial_input="Draft text...",
-        max_iterations=5,
-        approval_per_iteration=True,
-        approval_timeout=7200,
-    ),
-    id="loop-with-approvals",
-    task_queue="orchestrator-agents",
+ApprovalDecision(
+    request_id: str,
+    decision: str,                               # "approved" | "rejected" | "escalated"
+    decided_by: str,
+    reason: str | None = None,
+    decided_at: str,                             # ISO datetime
 )
 ```
 
-## Cancelling a workflow during approval
+The workflow's `submit_approval(decision)` signal validates that
+`decision.request_id` matches a pending request before applying it.
 
-Send the cancel signal at any time:
+---
+
+## 4 · End-to-end example
+
+### A) The workflow steps
 
 ```python
-handle = await client.get_workflow_handle("approval-workflow-1")
-await handle.signal(AgentWorkflow.cancel_workflow)
+input_data = WorkflowInput(
+    steps=[
+        {"type": "agent",    "agent_name": "draft"},
+        {"type": "approval", "description": "Review draft before publishing.",
+                              "approvers": ["alice"], "timeout": 86400},
+        {"type": "agent",    "agent_name": "publish"},
+    ],
+    initial_input="Topic: Q4 results",
+)
+handle = await client.run_agent_workflow(input_data, id="q4-001")
 ```
 
-The workflow completes immediately with `status="cancelled"`.
+### B) The notification handler
 
-## Timeout behavior
+```python
+async def handler(params: NotificationParams) -> None:
+    body = params.payload
+    if params.type == "approval_required":
+        await send_email(
+            to="alice@example.com",
+            subject=f"Approve {body['workflow_id']}",
+            body=(f"Description: {body['description']}\n"
+                  f"Context:\n{body['context']}\n\n"
+                  f"Approve: https://app/api/approve/{body['workflow_id']}/{body['request_id']}\n"
+                  f"Reject:  https://app/api/reject/{body['workflow_id']}/{body['request_id']}\n"),
+        )
 
-If no decision is received within the approval step's `timeout` seconds,
-the workflow:
-- Removes the pending approval request.
-- Returns `WorkflowResult(status="timed_out")`.
+get_agent_registry().set_notification_handler(handler)
+```
 
-## Next steps
+### C) The approve / reject endpoints
 
-- [Workflow Patterns](workflow-patterns.md) -- all orchestration patterns
-- [Custom Workflows](custom-workflows.md) -- build your own approval logic
-- [Docker Setup](docker.md) -- infrastructure configuration
+```python
+@app.post("/api/approve/{workflow_id}/{request_id}")
+async def approve_endpoint(workflow_id: str, request_id: str, decided_by: str):
+    await hlm.approve(workflow_id, request_id, decided_by=decided_by)
+    return {"ok": True}
+
+@app.post("/api/reject/{workflow_id}/{request_id}")
+async def reject_endpoint(workflow_id: str, request_id: str, decided_by: str, reason: str):
+    await hlm.reject(workflow_id, request_id, decided_by=decided_by, reason=reason)
+    return {"ok": True}
+```
+
+### D) Polling pending approvals (e.g. dashboard)
+
+```python
+status = await hlm.get_workflow_status("q4-001")
+# {"status": "running", "current_step_index": 1, "total_steps": 3, "completed_steps": 1}
+
+pending = await hlm.get_pending_approvals("q4-001")
+# [{"request_id": "...", "description": "Review draft before publishing.", ...}]
+```
+
+---
+
+## 5 · Behaviour reference
+
+| Scenario | Workflow result |
+|---|---|
+| Approver submits `approved` before timeout | Continues with the next step |
+| Approver submits `rejected` | Workflow returns `WorkflowResult(status="rejected", content=<last output>, step_results=..., approval_decisions=[<the rejection>])`. `error` is `None`; the rejection reason is on `approval_decisions[-1].reason` |
+| Approver submits `escalated` | `escalation_handler` invoked; workflow keeps waiting until a non-`escalated` decision arrives or timeout fires |
+| No decision before `timeout_seconds` | Workflow returns `WorkflowResult(status="timed_out", content=<last output>, step_results=..., approval_decisions=...)`. `error` is `None` |
+| Caller calls `client.cancel_workflow(...)` while waiting | Workflow returns `WorkflowResult(status="cancelled")` (Temporal-level cancel; raises inside the workflow) |
+
+---
+
+## 6 · Auto-approval
+
+`ApprovalNotificationConfig.auto_approve_conditions` accepts a list of
+predicates `(ApprovalRequest) -> bool`. If any returns `True`, the
+manager auto-approves on the worker side without notifying a human.
+
+```python
+config = ApprovalNotificationConfig(
+    auto_approve_conditions=[
+        lambda req: "<small refund>" in req.description,
+    ],
+)
+```
+
+Use sparingly — auto-approvals defeat the point of an approval gate.
+
+---
+
+## 7 · Exceptions
+
+`from orchestrator.temporal import ApprovalTimeoutError, WorkflowCancelledError`
+
+`ApprovalTimeoutError(message, *, request_id=None, timeout_seconds=None, **kwargs)` carries those fields in its context dict.
+`WorkflowCancelledError(message, *, workflow_id=None, **kwargs)` likewise.
+
+---
+
+## 8 · Tips
+
+- **Encode the URL in the notification.** Approvers click a link →
+  your endpoint calls `hlm.approve()` → workflow resumes. No polling
+  needed.
+- **Set a `request_id` based on `workflow_id + step_index`** if you
+  need idempotency on the approve/reject endpoint — a duplicate signal
+  is a no-op once a decision is recorded.
+- **Use queries for dashboards.** `get_workflow_status()` and
+  `get_pending_approvals()` are cheap and don't replay the workflow.
+- **Reasonable timeouts.** Default is 24h. Longer for human-driven
+  flows; shorter for time-sensitive ones.

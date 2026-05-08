@@ -1,180 +1,205 @@
-# Temporal Integration -- Getting Started
+# Temporal — Getting Started
 
-This guide walks you through installing the Temporal optional dependency,
-starting the infrastructure with Docker Compose, registering your agents, and
-running your first durable workflow.
+[Temporal](https://temporal.io) gives Continuum **durable execution**:
+agent workflows survive process crashes, can pause for human approval,
+support automatic retries, and run for days or weeks without losing
+state.
 
-## Prerequisites
+This guide walks through installing the optional dependency, starting
+the Temporal infrastructure, and running your first agent workflow.
 
-| Requirement | Version |
+---
+
+## 1 · Install the optional extra
+
+```bash
+pip install "shyftlabs-continuum[temporal]" --find-links wheels/
+```
+
+This adds `temporalio >= 1.23.0`.
+
+---
+
+## 2 · Start the Temporal services
+
+The Temporal server, UI, and Postgres come up via the optional
+`temporal` profile in the included `docker-compose.yml`:
+
+```bash
+docker compose --profile temporal up -d
+```
+
+| Service | Port |
 |---|---|
-| Python | 3.13 |
-| Docker & Docker Compose | latest |
-| Orchestrator SDK | installed (`pip install -e .`) |
+| Temporal server (gRPC) | `localhost:7233` |
+| Temporal Web UI | http://localhost:8080 |
+| Temporal Postgres | internal |
 
-## 1. Install the Temporal extra
+---
 
-```bash
-pip install -e ".[temporal]"
-```
+## 3 · Configure
 
-This pulls in `temporalio>=1.23.0`. The rest of the SDK continues to work
-without it -- Temporal is entirely opt-in.
+Add to `.env`:
 
-## 2. Start infrastructure
-
-```bash
-docker compose up -d temporal postgres-temporal temporal-ui
-```
-
-| Service | URL |
-|---|---|
-| Temporal gRPC | `localhost:7233` |
-| Temporal UI | `http://localhost:8233` |
-| Temporal Postgres | `localhost:5434` |
-
-Wait for the health checks to go green:
-
-```bash
-docker compose ps          # all services should show "healthy"
-```
-
-## 3. Enable Temporal in the SDK
-
-Add the following to your `.env` (or export as environment variables):
-
-```dotenv
+```env
 TEMPORAL_ENABLED=true
 TEMPORAL_HOST=localhost:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=orchestrator-agents
+TEMPORAL_ENABLE_HUMAN_IN_LOOP=true
+TEMPORAL_APPROVAL_TIMEOUT_SECONDS=86400
+TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT=604800
+TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
+TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
 ```
 
-The SDK reads these through the global `Settings` class. You can also override
-them programmatically via `TemporalConfig`:
+---
 
-```python
-from orchestrator.temporal import TemporalConfig
+## 4 · The 30-second mental model
 
-config = TemporalConfig(
-    enabled=True,
-    host="localhost:7233",
-    namespace="default",
-    task_queue="my-queue",
-)
+Three actors, three lifecycles:
+
+1. **Worker process** (long-running): polls the Temporal task queue,
+   executes activities (each activity calls `AgentRunner.run()` for one
+   registered agent).
+2. **Workflow** (the durable plan): a declarative list of `AgentStep`,
+   `ApprovalStep`, `ParallelStep`, `ConditionalStep`, `WaitStep`. Lives
+   inside Temporal's database; resilient to crashes.
+3. **Caller** (your app): submits a workflow with `WorkflowInput`, gets
+   a handle, can `result()`, `signal()`, or `query()` it.
+
+```text
+caller ──▶ Temporal server ──▶ worker ──▶ AgentRunner ──▶ LLM/MCP
+                       ▲                                    │
+                       └──────── activity result ◀──────────┘
 ```
 
-## 4. Register agents
+---
 
-Any `BaseAgent` can be executed inside a Temporal workflow. Register them with
-the global `AgentRegistry`:
+## 5 · Hello, durable workflow
 
 ```python
+import asyncio
 from orchestrator.agent import BaseAgent
-from orchestrator.temporal import get_agent_registry
-
-summarizer = BaseAgent(
-    name="summarizer",
-    instructions="Summarize the input concisely.",
+from orchestrator.temporal import (
+    get_temporal_client, get_worker_manager, get_agent_registry,
+    WorkflowInput,
 )
 
-reviewer = BaseAgent(
-    name="reviewer",
-    instructions="Review the summary for accuracy.",
-)
+async def run_caller():
+    # 5.1  Register at least one agent
+    registry = get_agent_registry()
+    registry.register(BaseAgent(
+        name="summarizer",
+        instructions="Summarize the input in two sentences.",
+        model="gpt-4o-mini",
+    ))
 
-registry = get_agent_registry()
-registry.register_many([summarizer, reviewer])
+    # 5.2  Connect & start the worker
+    #
+    # `worker.start()` spawns the polling task and RETURNS IMMEDIATELY —
+    # it does not block. To keep the worker alive in a hello-world
+    # script, run the caller in a separate process, or `await
+    # worker._worker_task` after submitting workflows.
+    client = get_temporal_client()
+    await client.connect()
+    worker = get_worker_manager(client, registry)
+    await worker.start()
+
+    # 5.3  Submit a workflow
+    handle = await client.run_agent_workflow(
+        WorkflowInput(
+            steps=[
+                {"type": "agent", "agent_name": "summarizer"},
+                {"type": "wait", "duration_seconds": 5},
+                {"type": "agent", "agent_name": "summarizer"},
+            ],
+            initial_input="Temporal is a durable execution platform.",
+        ),
+        id="hello-temporal-001",
+    )
+
+    result = await handle.result()
+    print(result.status, "=>", result.content)
+
+asyncio.run(run_caller())
 ```
 
-## 5. Connect and start the worker
+Open http://localhost:8080 — your workflow shows up there with full
+event history.
+
+---
+
+## 6 · Anatomy of `WorkflowInput`
 
 ```python
-from orchestrator.temporal import (
-    get_temporal_client,
-    get_worker_manager,
-)
+from orchestrator.temporal import WorkflowInput
 
+WorkflowInput(
+    steps=[                                # list[dict] — parsed via parse_step()
+        {"type": "agent",       "agent_name": "...", "input": "...", "timeout": 300, "retries": 3},
+        {"type": "approval",    "description": "...", "approvers": ["alice"], "timeout": 86400},
+        {"type": "parallel",    "agents": [{"type":"agent","agent_name":"a"}, {"type":"agent","agent_name":"b"}], "merge_strategy": "concatenate"},
+        {"type": "conditional", "condition_agent": "is_done", "if_true": [...], "if_false": [...]},
+        {"type": "wait",        "duration_seconds": 60},
+    ],
+    initial_input="…",
+    session_id=None,
+    user_id=None,
+    metadata={},
+)
+```
+
+Step types are validated up-front via `parse_step()`; invalid steps
+fail fast before any LLM call.
+
+---
+
+## 7 · Production deployment outline
+
+In production, run the worker as its own process:
+
+```python
+# worker_main.py
+import asyncio
+from orchestrator.temporal import (
+    get_temporal_client, get_worker_manager, get_agent_registry,
+)
+from my_app.agents import all_agents
+
+async def main():
+    registry = get_agent_registry()
+    registry.register_many(all_agents())
+    client = get_temporal_client()
+    await client.connect()
+    worker = get_worker_manager(client, registry)
+    await worker.start()
+    # `start()` spawns the worker as an asyncio Task and returns. To
+    # keep the process alive in a long-running worker, await the task
+    # (or another forever-pending future).
+    await worker._worker_task
+
+asyncio.run(main())
+```
+
+Your API process is the **caller**:
+
+```python
 client = get_temporal_client()
 await client.connect()
-
-manager = get_worker_manager()
-await manager.start()
+handle = await client.run_agent_workflow(WorkflowInput(...), id=request_id)
+return {"workflow_id": handle.id}
 ```
 
-The worker automatically registers all built-in workflows
-(`AgentWorkflow`, `SequentialAgentWorkflow`, `ParallelAgentWorkflow`,
-`LoopAgentWorkflow`) and activities (`run_agent_activity`,
-`send_notification_activity`).
+---
 
-## 6. Run a workflow
+## 8 · Where to go next
 
-### Option A: Generic `AgentWorkflow` (declarative steps)
-
-```python
-from orchestrator.temporal import WorkflowInput, AgentWorkflow
-
-handle = await client.start_workflow(
-    AgentWorkflow.run,
-    WorkflowInput(
-        steps=[
-            {"type": "agent", "agent_name": "summarizer"},
-            {"type": "agent", "agent_name": "reviewer"},
-        ],
-        initial_input="Temporal is an open-source durable execution platform...",
-    ),
-    id="my-first-workflow",
-    task_queue="orchestrator-agents",
-)
-
-result = await handle.result()
-print(result.status)   # "completed"
-print(result.content)  # final output from the last agent
-```
-
-### Option B: Convenience `SequentialAgentWorkflow`
-
-```python
-from orchestrator.temporal.workflows.sequential_workflow import (
-    SequentialAgentWorkflow,
-    SequentialWorkflowInput,
-)
-
-handle = await client.start_workflow(
-    SequentialAgentWorkflow.run,
-    SequentialWorkflowInput(
-        agent_names=["summarizer", "reviewer"],
-        initial_input="Temporal is an open-source durable execution platform...",
-    ),
-    id="seq-workflow-1",
-    task_queue="orchestrator-agents",
-)
-
-result = await handle.result()
-```
-
-## 7. Verify in the Temporal UI
-
-Open `http://localhost:8233` and navigate to your namespace. You should see the
-completed workflow with full execution history.
-
-## 8. Shut down cleanly
-
-```python
-await manager.stop()
-await client.disconnect()
-```
-
-Or stop Docker services:
-
-```bash
-docker compose down
-```
-
-## Next steps
-
-- [Custom Agents Guide](custom-agents.md) -- registering and running your own agents
-- [Human-in-the-Loop](human-in-loop.md) -- approval gates and notification hooks
-- [Workflow Patterns](workflow-patterns.md) -- sequential, parallel, conditional, loop
-- [Custom Workflows](custom-workflows.md) -- writing your own `@workflow.defn`
-- [Docker Setup](docker.md) -- full Docker Compose configuration reference
+- [`workflow-patterns.md`](workflow-patterns.md) — every step type with
+  examples
+- [`custom-agents.md`](custom-agents.md) — registering your own agents
+- [`custom-workflows.md`](custom-workflows.md) — writing custom
+  `@workflow.defn` and `@activity.defn`
+- [`human-in-loop.md`](human-in-loop.md) — approval gates,
+  notifications, escalation
+- [`docker.md`](docker.md) — what each Temporal service does

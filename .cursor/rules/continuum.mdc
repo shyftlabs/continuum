@@ -1,0 +1,302 @@
+---
+description: Continuum Agent Framework — API reference and conventions for hackathon participants
+globs: ["**/*.py", "examples/**", "*.md"]
+alwaysApply: true
+---
+
+# Continuum Agent Framework — Cursor Rule
+
+This project uses the **Continuum** agentic framework (Python 3.13).
+Continuum is shipped as a pre-built wheel under `wheels/` and is imported
+as `from orchestrator import ...` (the wheel package is named
+`shyftlabs-continuum`, but the import name is `orchestrator`).
+
+When generating code, follow the rules below. Treat `AGENTS.md` and
+`docs/` as authoritative — never guess at API signatures.
+
+---
+
+## Setup invariants
+
+- **Python 3.13** required. Venv: `python3.13 -m venv .venv`.
+- `OPENAI_API_KEY` is required at startup (mem0 uses it for embeddings)
+  even when the LLM is Anthropic or Gemini.
+- Infra runs in Docker: **Redis on host :6380**, **Qdrant on :6333**.
+- All public APIs are **async**. Wrap entrypoints in `asyncio.run(main())`.
+- Always `load_dotenv()` at the top of scripts.
+
+---
+
+## Imports cheat sheet
+
+```python
+# Agent core
+from orchestrator.agent import BaseAgent, AgentRunner
+from orchestrator.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
+from orchestrator.agent.types import (
+    Handoff, MemoryScope, RunContext, EventType, AgentResponse,
+    HistorySummarizationMode, MergeStrategy, FailStrategy, TerminationType,
+)
+
+# Workflow factories — most are re-exported from orchestrator.agent
+from orchestrator.agent import (
+    create_sequential_agent, create_parallel_agent, create_loop_agent,
+    create_reflection_agent, create_planner_agent, create_router_agent,
+)
+# Debate / scatter / supervised live one level deeper
+from orchestrator.agent.workflow import (
+    create_debate_agent, create_scatter_agent, create_supervised_agent,
+)
+
+# DI container & lifecycle
+from orchestrator.core.container import Container, ContainerConfig, get_container
+from orchestrator.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
+
+# LLM (use directly only when not wrapping in BaseAgent)
+from orchestrator.llm import LLMClient, LLMConfig, ChatMessage
+
+# MCP tools
+from orchestrator.tools import (
+    MCPServerStdio, MCPServerSse, MCPServerStreamableHttp,
+    ToolExecutor, MCPUtil,
+    ToolContextConfig, ToolContextVariable,
+    create_static_tool_filter, ToolFilterContext,
+)
+from orchestrator.tools.executor import ToolExecutorConfig
+
+# Memory & sessions
+from orchestrator.memory import MemoryClient, MemoryConfig
+from orchestrator.session import SessionClient
+
+# Observability
+from orchestrator.observability import observe, trace_tool, SpanLevel
+```
+
+---
+
+## Canonical agent template
+
+```python
+import asyncio, os
+from dotenv import load_dotenv
+from orchestrator.agent import AgentRunner, BaseAgent
+from orchestrator.agent.config import AgentMemoryConfig
+from orchestrator.agent.types import MemoryScope
+
+load_dotenv()
+
+async def main() -> None:
+    agent = BaseAgent(
+        name="my-agent",                                # [A-Za-z0-9_-]+
+        instructions="You are a helpful assistant.",
+        model=os.getenv("DEFAULT_LLM_MODEL", "gpt-4o-mini"),
+        memory_config=AgentMemoryConfig(
+            search_memories=True, store_memories=True,
+            search_scope=MemoryScope.USER, store_scope=MemoryScope.USER,
+        ),
+    )
+    runner = AgentRunner()
+    resp = await runner.run(agent, "Hello!", user_id="u1", session_id="s1")
+    print(resp.content)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## Provider routing rules (model string prefix → provider)
+
+- `gemini/...` or `google/...` → Gemini (OpenAI-compat endpoint)
+- `claude/...`, `anthropic/...`, or starts with `claude-` → Anthropic SDK
+- everything else (`gpt-*`, `azure/...`, `openai/...`) → OpenAI SDK
+
+**Do not** suggest LiteLLM imports — LiteLLM was removed; the framework
+calls provider SDKs directly.
+
+---
+
+## Memory scopes
+
+| Scope | Visibility |
+|---|---|
+| `MemoryScope.SHARED` | All agents, all users |
+| `MemoryScope.USER` | Per user (default) |
+| `MemoryScope.AGENT` | Per agent |
+| `MemoryScope.RUN` | Single run only |
+
+Without a key, memory init fails. To opt out entirely:
+`MEMORY_ENABLED=false` in `.env`, plus `enable_memory=False` if you
+construct a `Container` directly.
+
+---
+
+## MCP tooling
+
+```python
+mcp = MCPServerStreamableHttp({"url": "https://api.example.com/mcp"})
+await mcp.connect()
+tools = await MCPUtil.get_function_tools(mcp)
+agent = BaseAgent(name="tool-agent", instructions="...", mcp_servers=[mcp])
+```
+
+Always `await server.connect()` before use. `ToolExecutor({mcp: None})`
+wraps multiple servers under one executor.
+
+---
+
+## Workflow agents (composable, all `BaseAgent` subclasses)
+
+`RouterAgent`, `SequentialAgent`, `ParallelAgent`, `LoopAgent`,
+`ReflectionAgent`, `PlannerAgent`, `DebateAgent`, `ScatterAgent`,
+`SupervisedSequentialAgent`. Use the `create_*` factories. They nest
+freely (a `ParallelAgent` of two `SequentialAgent`s is fine).
+
+```python
+pipeline = create_sequential_agent(name="content", agents=[researcher, writer, editor])
+
+debate = create_debate_agent(
+    name="debate",
+    pro_stance="Argue in favor.",          # strings, not agent instances
+    con_stance="Argue against.",
+    judge_instructions=None,
+)
+
+reflective = create_reflection_agent(
+    name="self-improving",
+    agent=writer,
+    max_reflections=2,                     # NOT max_iterations; no `critic` kwarg
+)
+```
+
+---
+
+## Streaming events
+
+```python
+from orchestrator.agent.types import EventType
+
+async for ev in runner.run_stream(agent, "..."):
+    if ev.type == EventType.CONTENT_DELTA:
+        print(ev.data["content"], end="", flush=True)
+    elif ev.type == EventType.TOOL_CALL_START:
+        print(f"\n[tool: {ev.data['tool_name']}]")
+```
+
+`EventType` values: `RUN_START`, `RUN_END`, `RUN_ERROR`, `AGENT_START`,
+`AGENT_END`, `CONTENT_DELTA`, `CONTENT_COMPLETE`, `TOOL_CALL_START`,
+`TOOL_CALL_END`, `TOOL_CALL_ERROR`, `HANDOFF_START`, `HANDOFF_END`,
+`HANDOFF_RETURN`, `MEMORY_RETRIEVAL`, `MEMORY_STORAGE`, `WORKFLOW_STEP`,
+`LOOP_ITERATION`.
+
+---
+
+## Handoffs
+
+```python
+from orchestrator.agent.types import Handoff
+
+triage = BaseAgent(
+    name="triage",
+    instructions="Route the customer.",
+    handoffs=[
+        Handoff(target_agent="billing",   description="Billing & refunds"),
+        Handoff(target_agent="technical", description="Technical issues"),
+    ],
+)
+runner = AgentRunner(agent_registry={
+    "triage": triage, "billing": billing_agent, "technical": tech_agent,
+})
+# Handoff target MUST be registered, otherwise HandoffTargetNotFoundError.
+```
+
+The framework injects a hidden `handoff_to_<target>` tool per
+`Handoff` — you don't write tools yourself. Cycles raise
+`HandoffCycleDetectedError` (import from `orchestrator.agent.exceptions`,
+not `orchestrator.agent`).
+
+---
+
+## Structured output
+
+```python
+from pydantic import BaseModel
+
+class Plan(BaseModel):
+    intent: str
+    steps: list[str]
+
+agent = BaseAgent(name="planner", instructions="...", output_schema=Plan)
+resp = await runner.run(agent, "...")
+plan: Plan = resp.structured_output
+```
+
+---
+
+## Per-feature do/don't
+
+### Memory
+- DO pass `MemoryScope.USER` from `orchestrator.agent.types`.
+- DON'T pass the dataclass `MemoryScope` from `orchestrator.memory.scopes` to `AgentMemoryConfig` — different type.
+- DO use `client.delete_all(user_id="u1")` to wipe one user.
+- DON'T call `client.reset()` casually — it nukes the entire vector store.
+
+### Sessions
+- DO pass `ChatMessage(role=, content=)` to `add_message`.
+- DON'T pass `role=`/`content=` as kwargs — the signature is `add_message(session_id, message: ChatMessage, ...)`.
+- DON'T change Redis port — SDK expects `:6380` (mapped from container `:6379`).
+
+### Tools / MCP
+- DO `await server.connect()` before any agent uses it.
+- DO `await executor.initialize()` after constructing `ToolExecutor` with a registry.
+- DON'T use `MCPServerStdio(command="...", args=[...])` — first arg is a dict.
+- DON'T import `ToolExecutorConfig` from `orchestrator.tools` — use `orchestrator.tools.executor`.
+
+### Workflows
+- DO use string `pro_stance`/`con_stance` for `create_debate_agent`.
+- DON'T pass `pro_agent=`/`con_agent=` instances — wrong API.
+- DO use `max_reflections` for `create_reflection_agent`.
+- DON'T use `max_iterations` (wrong name) or `critic=` (no such kwarg).
+
+### Temporal
+- DO `await worker._worker_task` (or another forever-pending future) after `worker.start()` to keep the worker alive — `start()` returns immediately.
+- DON'T expect `WorkflowResult.error` to be populated on rejection or timeout — check `approval_decisions[-1].reason` for rejection reason.
+- DON'T do I/O inside `@workflow.defn` — push it into an `@activity.defn`.
+
+### Observability
+- DO use `with ObservationContext(...)` (sync).
+- DON'T use `async with ObservationContext(...)` — no async context-manager support.
+- DO call `obs.add_metadata(...)`.
+- DON'T call `obs.update_metadata(...)` — wrong method name.
+- DO call `report_error(e, context="some-label", metadata={...})`.
+- DON'T pass a dict as `context=` — that field is a short label string.
+
+---
+
+## What NOT to do
+
+- Don't import or modify anything under `wheels/` — it's a sealed binary.
+- Don't suggest synchronous APIs; everything async.
+- Don't change Redis/Qdrant ports (`6380`/`6333`) — defaults are wired.
+- Don't write tests, scratch files, or new docs to repo root — use
+  `examples/`, `docs/`, or a dedicated subfolder.
+- Don't suggest LiteLLM. It was removed in commit `657607a`.
+- Don't fabricate parameter names — check `docs/agent.md` /
+  `docs/memory.md` / `docs/tools.md` first.
+- Don't reference `transfer_to_<target>` — actual handoff tool prefix is `handoff_to_<target>`.
+
+---
+
+## Doc map
+
+| Topic | File |
+|---|---|
+| `BaseAgent`, runner, hooks | `docs/agent.md` |
+| LLM providers, fallback, compression | `docs/llm.md` |
+| mem0 + Qdrant memory | `docs/memory.md` |
+| Redis sessions | `docs/session.md` |
+| MCP tools | `docs/tools.md` |
+| Langfuse tracing | `docs/observability.md` |
+| Container, lifecycle, health | `docs/core.md` |
+| Install / env vars | `docs/installation.md` |
+| Temporal durable workflows | `docs/temporal/*.md` |
