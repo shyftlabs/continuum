@@ -76,7 +76,7 @@ registry.set_runner_factory(make_runner)
 
 Without a factory, the activity falls back to a default `AgentRunner()`
 which uses the global `Container` singleton — that's usually fine for
-hackathons.
+most projects.
 
 ---
 

@@ -1,20 +1,16 @@
 # Continuum Documentation
 
-Reference documentation for the Continuum agentic framework, written
-against version **0.2.0** (the wheel shipped in this hackathon kit).
+Reference documentation for the **Continuum** agentic framework
+(`shyftlabs-continuum` on PyPI, importable as `orchestrator`).
 
 > **Note**: every example in these docs has been verified against the
-> actual source. Imports, parameter names, defaults, and signatures
-> match what's compiled into `wheels/shyftlabs_continuum-0.2.0-py3-none-any.whl`.
+> actual source under `src/orchestrator/`. Imports, parameter names,
+> defaults, and signatures match the codebase as of the latest
+> release.
 
 ---
 
 ## Where to start
-
-**Start here**: [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) — five things in
-the shipped wheel are surprising or broken (notably `structured_output`
-and `MemoryClient.search()`). Each has a workaround; none block
-shipping a working agent.
 
 If you've never used Continuum before, read in this order:
 
@@ -72,21 +68,29 @@ If you've never used Continuum before, read in this order:
 
 ---
 
-## Examples that ship with this kit
+## Runnable example apps
 
-| File | Demonstrates |
+The repository ships a `playground/` tree with end-to-end example apps
+that exercise different feature combinations:
+
+| Path | Demonstrates |
 |---|---|
-| [`../examples/01_hello_agent.py`](../examples/01_hello_agent.py) | Minimal agent (no infra needed) |
-| [`../examples/02_memory_session.py`](../examples/02_memory_session.py) | Two-tier memory in action |
-| [`../examples/03_workflow_sequential.py`](../examples/03_workflow_sequential.py) | Researcher → writer → editor pipeline |
+| [`../playground/sdk_feature_test/`](../playground/sdk_feature_test/) | SDK-feature smoke test |
+| [`../playground/memory-modes-demo/`](../playground/memory-modes-demo/) | All four memory scopes (USER / AGENT / RUN / SHARED) |
+| [`../playground/commerce-chat/`](../playground/commerce-chat/) | Plan-and-execute multi-agent + MCP tool restriction |
+| [`../playground/fetch-agent/`](../playground/fetch-agent/) | Tool-using agent with MCP fetch server |
+| [`../playground/assortment/`](../playground/assortment/) | FastAPI-served agent endpoint |
+
+A separate `continuum-hackathon` kit packages a pre-built wheel and
+minimal starter examples for downstream users; this repository is the
+source of truth.
 
 ---
 
 ## Working with AI assistants
 
-If you're using Claude Code / Codex / Cursor, the kit ships
-preconfigured assistant skills so they can write Continuum code
-correctly without any prompting:
+The repo ships AI-assistant configuration so Claude Code / Codex /
+Cursor can write Continuum code correctly without prompting:
 
 - [`../AGENTS.md`](../AGENTS.md) — canonical knowledge pack
 - [`../CLAUDE.md`](../CLAUDE.md) — Claude Code project rules

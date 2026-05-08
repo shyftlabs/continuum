@@ -1,8 +1,9 @@
 # Installation & Configuration
 
-The hackathon kit ships a pre-built Continuum wheel
-(`wheels/shyftlabs_continuum-0.2.0-py3-none-any.whl`) so participants
-don't need access to the framework source.
+Continuum is distributed as `shyftlabs-continuum` on PyPI and
+importable as `orchestrator`. This doc covers both **library
+consumers** (who `pip install` the package) and **framework
+contributors** (working in this repository).
 
 ---
 
@@ -18,30 +19,42 @@ don't need access to the framework source.
 
 ---
 
-## 2 · Quick install (5 commands)
+## 2 · Install paths
+
+### As a library (consumer)
 
 ```bash
-git clone https://github.com/bhavik-shyftlabs/continuum-hackathon.git
-cd continuum-hackathon
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install shyftlabs-continuum            # latest release
+# or for a specific extra:
+# pip install "shyftlabs-continuum[temporal,eval]"
+```
 
-cp .env.template .env                       # add OPENAI_API_KEY
-docker compose up -d                        # Redis (:6380) + Qdrant (:6333)
+### From source (contributor / development)
+
+```bash
+git clone https://github.com/bhavik-shyftlabs/continuum.git
+cd continuum
+
+cp .env.template .env                      # add OPENAI_API_KEY
+docker compose up -d                       # Redis (:6380) + Qdrant (:6333)
 
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt             # installs the wheel
+pip install -e ".[dev,temporal,eval]"     # editable install with all extras
 
-python examples/01_hello_agent.py           # smoke test
+# Smoke-test against a runnable example
+python -m playground.sdk_feature_test
 ```
 
 ---
 
-## 3 · The wheel
+## 3 · The package
 
 ```bash
 $ pip show shyftlabs-continuum
 Name: shyftlabs-continuum
-Version: 0.2.0
 ```
 
 Importable as `orchestrator`:
@@ -50,8 +63,7 @@ Importable as `orchestrator`:
 from orchestrator.agent import BaseAgent, AgentRunner
 ```
 
-The wheel pulls these runtime dependencies (declared in
-`pyproject.toml`):
+Runtime dependencies (declared in `pyproject.toml`):
 
 - `aiohttp >= 3.13.2`
 - `openai >= 1.50.0`
@@ -76,11 +88,10 @@ Optional extras (declared but not installed by default):
 | `[eval]` | `deepeval`, `ragas` | Evaluation framework |
 | `[dev]` | `pytest`, `ruff`, `mypy`, `respx`, `fakeredis` | Tests & linting |
 
-The hackathon kit doesn't install these by default — install them
-on-demand:
+Install on demand:
 
 ```bash
-pip install "shyftlabs-continuum[temporal]" --find-links wheels/
+pip install "shyftlabs-continuum[temporal]"
 ```
 
 ---
@@ -154,7 +165,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 
 | Variable | Default | Description |
 |---|---|---|
-| `LANGFUSE_ENABLED` | `true` | (the hackathon `.env.template` defaults to `false`) |
+| `LANGFUSE_ENABLED` | `true` | Set to `false` to disable tracing entirely |
 | `LANGFUSE_PUBLIC_KEY` | unset | |
 | `LANGFUSE_SECRET_KEY` | unset | |
 | `LANGFUSE_HOST` | `http://localhost:3000` | |
@@ -220,7 +231,7 @@ Smoke-test with infra:
 
 ```bash
 docker compose up -d
-python examples/01_hello_agent.py
+python -m playground.sdk_feature_test
 ```
 
 Expected: agent prints a one-line greeting. A clean `OpenAIError:

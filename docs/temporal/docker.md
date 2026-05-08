@@ -1,6 +1,6 @@
 # Temporal — Docker Compose Setup
 
-The hackathon kit's `docker-compose.yml` includes Temporal services
+The repository's `docker-compose.yml` includes Temporal services
 behind the optional `temporal` profile so they don't run by default.
 
 ```bash

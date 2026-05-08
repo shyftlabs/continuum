@@ -9,12 +9,12 @@ Continuum ships an evaluation framework under `orchestrator.evaluation`.
 It's an **optional extra** — install with:
 
 ```bash
-pip install "shyftlabs-continuum[eval]" --find-links wheels/
+pip install "shyftlabs-continuum[eval]"
 # adds: deepeval >= 1.0.0, ragas >= 0.2.0
 ```
 
-Authoritative source: `src/orchestrator/evaluation/` in the framework.
-The hackathon docs do not have a dedicated chapter; this skill is the
+Authoritative source: `src/orchestrator/evaluation/` in this
+repository. There is no dedicated user-facing doc; this skill is the
 primary reference.
 
 ---
@@ -175,6 +175,7 @@ Wire this into CI to catch regressions before they ship.
 - Don't compare scores across different judge models / prompts —
   always pin the evaluator's `model` and `criteria` for stable
   longitudinal comparisons.
-- Don't forget `pip install "shyftlabs-continuum[eval]" --find-links wheels/`
-  before importing `orchestrator.evaluation` — the eval module's
-  third-party deps are an optional extra.
+- Don't forget `pip install "shyftlabs-continuum[eval]"` (or
+  `pip install -e ".[eval]"` from a checkout) before importing
+  `orchestrator.evaluation` — the eval module's third-party deps are
+  an optional extra.

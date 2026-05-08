@@ -17,7 +17,7 @@ Authoritative sources: [`docs/temporal/getting-started.md`](../../../docs/tempor
 ## Setup
 
 ```bash
-pip install "shyftlabs-continuum[temporal]" --find-links wheels/
+pip install "shyftlabs-continuum[temporal]"
 docker compose --profile temporal up -d
 ```
 

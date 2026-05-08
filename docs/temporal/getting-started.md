@@ -13,7 +13,7 @@ the Temporal infrastructure, and running your first agent workflow.
 ## 1 · Install the optional extra
 
 ```bash
-pip install "shyftlabs-continuum[temporal]" --find-links wheels/
+pip install "shyftlabs-continuum[temporal]"
 ```
 
 This adds `temporalio >= 1.23.0`.

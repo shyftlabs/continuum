@@ -181,7 +181,7 @@ built-in `RedisSessionProvider` implements this with:
   `get_or_create_session`
 
 `is_redis_available()` returns `False` if `redis` isn't installed
-(unlikely in this hackathon — it's a hard dependency).
+(unlikely — `redis` is a hard runtime dependency).
 
 To swap in a custom provider:
 

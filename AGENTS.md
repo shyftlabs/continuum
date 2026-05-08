@@ -21,31 +21,39 @@ A Python 3.13 agentic framework by ShyftLabs. Provides:
 - Optional **Temporal** durable workflows with human-in-the-loop approval gates
 - **Langfuse** observability and tracing
 
-The framework is shipped to participants as a wheel under `wheels/` and
-imported as `from orchestrator import ...` (note: importable name is
-`orchestrator`, package name on disk is `shyftlabs-continuum`).
+Distributed as a Python package — `pip install shyftlabs-continuum`
+(or `pip install -e .` from a checkout). Importable as
+`from orchestrator import ...` — the wheel name on disk is
+`shyftlabs-continuum`, the import name is `orchestrator`.
 
 ---
 
-## Project layout participants see
+## Repository layout
 
 ```
-continuum-hackathon/
-├── AGENTS.md / CLAUDE.md / .cursor/rules/continuum.mdc   # this file
-├── README.md                                             # quickstart
-├── docs/                                                 # full framework docs
+continuum/
+├── AGENTS.md / .cursor/rules/continuum.mdc          # this file
+├── .claude/skills/continuum-*                        # 13 invocable skills
+├── README.md                                         # project overview
+├── pyproject.toml                                    # package metadata
+├── src/orchestrator/                                 # framework source
+│   ├── agent/, llm/, memory/, session/, tools/,
+│   │   observability/, core/, evaluation/, temporal/
+│   ├── config.py, protocols.py, exceptions.py
+├── docs/                                             # API reference
 │   ├── agent.md, llm.md, memory.md, session.md, tools.md,
 │   │   observability.md, core.md, installation.md
 │   └── temporal/*.md
-├── docker-compose.yml                                    # Redis + Qdrant (+ Langfuse profile)
-├── .env.template                                         # API keys go here
-├── requirements.txt                                      # → ./wheels/shyftlabs_continuum-*.whl
-├── wheels/shyftlabs_continuum-0.2.0-py3-none-any.whl
-└── examples/
-    ├── 01_hello_agent.py
-    ├── 02_memory_session.py
-    └── 03_workflow_sequential.py
+├── tests/                                            # pytest suite (unit / integration / e2e)
+├── playground/                                       # runnable example apps
+│   ├── memory-modes-demo/, sdk_feature_test/,
+│   │   commerce-chat/, fetch-agent/, assortment/
+├── docker-compose.yml                                # Redis + Qdrant + Langfuse stack
+└── .env.template                                     # API keys go here
 ```
+
+A separate hackathon-kit repo ships a pre-built wheel and minimal
+starter examples; this repo is the source of truth.
 
 ---
 
@@ -262,12 +270,15 @@ When the participant asks a topical question, point them at the right doc.
 
 ## Hackathon-specific tips
 
-- Start from `examples/01_hello_agent.py` and incrementally add memory/tools/handoffs.
+- Start from `playground/memory-modes-demo/` or `playground/sdk_feature_test/`
+  and incrementally add memory/tools/handoffs.
 - Use `docker compose ps` to confirm Redis + Qdrant are healthy before running memory examples.
-- For tracing, run `docker compose --profile observability up -d` and visit `http://localhost:3000`.
-- For durable workflows, run `docker compose --profile temporal up -d` and visit `http://localhost:8080`.
+- For tracing, run `docker compose up -d langfuse` (or full Langfuse stack) and visit `http://localhost:3000`.
+- For durable workflows, install the temporal extra (`pip install -e ".[temporal]"`),
+  run `docker compose --profile temporal up -d`, and visit `http://localhost:8080`.
 - If you change `.env`, re-source / restart the venv shell — pydantic-settings reads on import.
-- Don't write to `wheels/`. If you need a newer build, ask the maintainer.
+- Editable install for development: `pip install -e ".[dev,temporal,eval]"`.
+- Run the test suite with `pytest -m unit` (or `-m integration` once infra is up).
 
 ---
 

@@ -1,15 +1,16 @@
 ---
-description: Continuum Agent Framework — API reference and conventions for hackathon participants
-globs: ["**/*.py", "examples/**", "*.md"]
+description: Continuum Agent Framework — API reference and conventions for the orchestrator source tree
+globs: ["src/orchestrator/**/*.py", "playground/**/*.py", "tests/**/*.py", "*.md", "docs/**/*.md"]
 alwaysApply: true
 ---
 
 # Continuum Agent Framework — Cursor Rule
 
-This project uses the **Continuum** agentic framework (Python 3.13).
-Continuum is shipped as a pre-built wheel under `wheels/` and is imported
-as `from orchestrator import ...` (the wheel package is named
-`shyftlabs-continuum`, but the import name is `orchestrator`).
+This is the **Continuum** agentic framework source repository
+(Python 3.13). The PyPI package name is `shyftlabs-continuum`; the
+import name is `orchestrator`. For development, use editable install
+(`pip install -e ".[dev,temporal,eval]"`); downstream consumers
+install via `pip install shyftlabs-continuum`.
 
 When generating code, follow the rules below. Treat `AGENTS.md` and
 `docs/` as authoritative — never guess at API signatures.
@@ -275,7 +276,7 @@ plan: Plan = resp.structured_output
 
 ## What NOT to do
 
-- Don't import or modify anything under `wheels/` — it's a sealed binary.
+- Don't add new infra services to `docker-compose.yml` casually — Redis, Qdrant, and the Langfuse stack are the canonical set.
 - Don't suggest synchronous APIs; everything async.
 - Don't change Redis/Qdrant ports (`6380`/`6333`) — defaults are wired.
 - Don't write tests, scratch files, or new docs to repo root — use
