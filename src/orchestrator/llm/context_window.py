@@ -123,6 +123,7 @@ class ContextWindowManager:
     # Context window limits per model (tokens)
     DEFAULT_LIMITS: dict[str, int] = {
         # OpenAI
+        "gpt-5": 128000,
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         "gpt-4o-turbo": 128000,

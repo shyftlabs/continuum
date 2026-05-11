@@ -328,20 +328,15 @@ class Mem0Provider(BaseMemoryProvider):
         """
         self._ensure_initialized()
 
-        # mem0ai >= 1.0.0 removed top-level entity kwargs (user_id / agent_id /
-        # conversation_id) on Memory.search() and requires them under
-        # filters={...}. Merge identifiers + caller filters into a single dict.
         identifiers = self._build_identifiers(user_id, agent_id, conversation_id)
-        merged_filters: dict[str, Any] = dict(identifiers)
-        if filters:
-            merged_filters.update(filters)
 
         kwargs: dict[str, Any] = {
             "query": query,
             "limit": limit,
+            **identifiers,
         }
-        if merged_filters:
-            kwargs["filters"] = merged_filters
+        if filters:
+            kwargs["filters"] = filters
 
         try:
             logger.debug(f"mem0.search() query='{query[:50]}...', limit={limit}")
@@ -612,19 +607,15 @@ class Mem0Provider(BaseMemoryProvider):
         """Search memories using mem0's Memory.search()."""
         self._ensure_initialized()
 
-        # See note in async search(): mem0ai >= 1.0.0 requires identifiers
-        # under filters={...} rather than top-level kwargs.
         identifiers = self._build_identifiers(user_id, agent_id, conversation_id)
-        merged_filters: dict[str, Any] = dict(identifiers)
-        if filters:
-            merged_filters.update(filters)
 
         kwargs: dict[str, Any] = {
             "query": query,
             "limit": limit,
+            **identifiers,
         }
-        if merged_filters:
-            kwargs["filters"] = merged_filters
+        if filters:
+            kwargs["filters"] = filters
 
         try:
             response = self._sync_memory.search(**kwargs)

@@ -53,12 +53,7 @@ class RunFinalizer:
         response.run_id = context.run_id
         response.latency_ms = int((time.time() - start_time) * 1000)
         response.trace_id = context.trace_id
-        # Preserve agents_used if a workflow agent already populated it
-        # (SequentialAgent.execute() etc. set this to the list of sub-agents).
-        # For non-workflow agents the response field is empty, so we fall back
-        # to the run_state's agent stack.
-        if not response.agents_used:
-            response.agents_used = list(set(run_state.agent_stack))
+        response.agents_used = list(set(run_state.agent_stack))
         response.handoff_chain = [h.get("to_agent", "") for h in run_state.handoff_chain]
 
         self.attach_run_artifacts(agent, response)
