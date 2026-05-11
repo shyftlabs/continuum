@@ -53,6 +53,7 @@ class RunFinalizer:
         response.run_id = context.run_id
         response.latency_ms = int((time.time() - start_time) * 1000)
         response.trace_id = context.trace_id
+        # Workflow agents bypass runner.run(), so agent_stack is always the right source.
         response.agents_used = list(set(run_state.agent_stack))
         response.handoff_chain = [h.get("to_agent", "") for h in run_state.handoff_chain]
 

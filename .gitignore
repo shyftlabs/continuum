@@ -128,6 +128,8 @@ dmypy.json
 
 # Tool-generated
 .claude/
+!.claude/skills/
+!.claude/skills/**
 .deepeval/
 *.swp
 *.swo

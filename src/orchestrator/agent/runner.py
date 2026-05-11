@@ -302,6 +302,7 @@ class AgentRunner:
         input_preview = input if isinstance(input, str) else str(input)[:500]
         await self._lifecycle.start_trace(agent, context, run_state, input_preview)
 
+        # Caller is responsible for creating the session before calling runner.run().
         tool_context_state = None
         if context.session_id and self.session_client:
             tool_context_state = await self._session_service.load_tool_context_state(
@@ -449,6 +450,7 @@ class AgentRunner:
                 self._circuit_breaker.record_success()
                 return response
 
+            # Workflow agents must use agent.execute() directly, not runner.run().
             response = await self._executor.execute_loop(
                 agent=agent, messages=messages, context=ctx, run_state=run_state,
             )
