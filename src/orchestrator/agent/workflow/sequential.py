@@ -152,7 +152,7 @@ class SequentialAgent(BaseAgent):
                             # Inject prior steps as system context for the LLM.
                             # Skip when pass_full_history=True — [N+1] user message already
                             # contains all prior steps in full, so this would be redundant.
-                            if pipeline_history and not self.sequential_config.pass_full_history:
+                            if pipeline_history and not self.sequential_config.pass_full_history and context.metadata is not None:
                                 context.metadata["pipeline_context"] = (
                                     "Prior pipeline steps in this request:\n"
                                     + "\n".join(pipeline_history)
@@ -194,7 +194,7 @@ class SequentialAgent(BaseAgent):
                                 current_input = "\n\n".join(history_parts)
                             else:
                                 # Just pass the output
-                                current_input = response.content
+                                current_input = response.content or ""
 
                         except Exception as e:
                             logger.error(f"Sequential step {step_num} failed: {e}")
@@ -255,7 +255,8 @@ class SequentialAgent(BaseAgent):
 
             return result
         finally:
-            context.metadata.pop("pipeline_context", None)
+            if context.metadata is not None:
+                context.metadata.pop("pipeline_context", None)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""

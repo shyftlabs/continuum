@@ -551,7 +551,7 @@ class Executor(IExecutor):
                     messages=messages,
                 )
                 # Store tool summary in metadata for session storage
-                if merged_tool_summary and not merged_tool_summary.is_empty():
+                if merged_tool_summary and not merged_tool_summary.is_empty() and context.metadata is not None:
                     context.metadata["tool_execution_summary"] = merged_tool_summary.to_dict()
 
                 return agent_response

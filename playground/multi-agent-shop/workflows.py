@@ -244,48 +244,44 @@ class ParallelCoordinatorAgent(BaseAgent):
     async def execute(self, input_text: str, runner: Any, context: Any, llm_client: Any = None) -> AgentResponse:
         from orchestrator.agent.utils.context_utils import create_run_context
 
-        _orig_synth_log = self.synthesiser.config.log_to_session
-        self.synthesiser.config.log_to_session = False
-        try:
-            # Step 1: parallel workers get the raw user query (stateless — no history, no save)
-            parallel_ctx = create_run_context(
-                user_id=context.user_id,
-                conversation_id=context.conversation_id,
-            )
-            parallel_result = await self.parallel.execute(input_text, runner, parallel_ctx)
+        context.suppress_session_log = True
+        # Step 1: parallel workers get the raw user query (stateless — no history, no save)
+        parallel_ctx = create_run_context(
+            user_id=context.user_id,
+            conversation_id=context.conversation_id,
+        )
+        parallel_result = await self.parallel.execute(input_text, runner, parallel_ctx)
 
-            # Step 2: synthesiser builds the user-facing reply
-            # log_to_session=False prevents auto-save; context carries session_id so
-            # message_builder loads history and memory normally.
-            # The explicit save_turn() below is the only Redis write for this turn.
-            synthesis_input = (
-                f"User asked: {input_text}\n\n"
-                f"Search results:\n{parallel_result.content}\n\n"
-                f"Write a clear, concise response grouped by animal type."
-            )
-            final = await runner.run(
-                agent=self.synthesiser,
-                input=synthesis_input,
-                context=context,
+        # Step 2: synthesiser builds the user-facing reply
+        # suppress_session_log=True blocks auto-save; context carries session_id so
+        # message_builder loads history and memory normally.
+        # The explicit save_turn() below is the only Redis write for this turn.
+        synthesis_input = (
+            f"User asked: {input_text}\n\n"
+            f"Search results:\n{parallel_result.content}\n\n"
+            f"Write a clear, concise response grouped by animal type."
+        )
+        final = await runner.run(
+            agent=self.synthesiser,
+            input=synthesis_input,
+            context=context,
+        )
+
+        if context.session_id:
+            await runner.save_turn(
+                session_id=context.session_id,
+                user_message=input_text,
+                assistant_message=final.content or "",
+                agent=None,
             )
 
-            if context.session_id:
-                await runner.save_turn(
-                    session_id=context.session_id,
-                    user_message=input_text,
-                    assistant_message=final.content or "",
-                    agent=None,
-                )
-
-            total_usage = parallel_result.usage.add(final.usage)
-            return AgentResponse(
-                content=final.content,
-                agent_name=self.name,
-                status=ResponseStatus.SUCCESS,
-                usage=total_usage,
-            )
-        finally:
-            self.synthesiser.config.log_to_session = _orig_synth_log
+        total_usage = parallel_result.usage.add(final.usage)
+        return AgentResponse(
+            content=final.content,
+            agent_name=self.name,
+            status=ResponseStatus.SUCCESS,
+            usage=total_usage,
+        )
 
 
 class ParallelShop(_BaseWorkflow):

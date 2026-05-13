@@ -251,7 +251,7 @@ class LoopAgent(BaseAgent):
         elif term_type == TerminationType.OUTPUT_MATCH:
             # Check if output matches pattern
             if self.termination.pattern:
-                return bool(re.search(self.termination.pattern, response.content))
+                return bool(re.search(self.termination.pattern, response.content or ""))
             return False
 
         elif term_type == TerminationType.CUSTOM:
