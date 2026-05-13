@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Multi-Agent Shop Web UI — all 10 workflow modes.
+No-MCP Demo Web UI — all 10 workflow modes, no external tools.
 
 Usage:
-  Terminal 1: python server.py   (MCP server on :8890)
-  Terminal 2: python web.py      (Web UI on :8082)
+  python web.py      (Web UI on :8083)
 """
 
 import asyncio
@@ -20,13 +19,12 @@ from config import default_config
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from workflows import MODES, create_workflow, _BaseWorkflow
+from workflows import MODES, _BaseWorkflow, create_workflow
 
 from orchestrator import LogLevel, setup_logging
 
 setup_logging(level=LogLevel.INFO)
 
-# One workflow instance per mode, created on first use
 _workflows: dict[str, _BaseWorkflow] = {}
 _init_errors: dict[str, str] = {}
 
@@ -34,8 +32,7 @@ _init_errors: dict[str, str] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    # Shutdown all initialized workflows
-    for mode, wf in _workflows.items():
+    for wf in _workflows.values():
         if wf._initialized:
             try:
                 await asyncio.wait_for(wf.close(), timeout=1.0)
@@ -54,7 +51,6 @@ class ChatRequest(BaseModel):
 
 
 async def get_workflow(mode: str) -> tuple[_BaseWorkflow | None, str | None]:
-    """Get or lazily initialize a workflow for the given mode."""
     if mode in _init_errors:
         return None, _init_errors[mode]
     if mode not in _workflows:
@@ -79,7 +75,7 @@ async def chat(req: ChatRequest):
         return {"response": f"Unknown mode '{req.mode}'. Choose from: {', '.join(MODES)}"}
     wf, error = await get_workflow(req.mode)
     if error:
-        return {"response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"}
+        return {"response": f"Failed to initialize '{req.mode}' mode: {error}"}
     response = await wf.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
     return {"response": response}
 
@@ -90,7 +86,6 @@ async def status():
         "modes": list(MODES.keys()),
         "initialized": list(_workflows.keys()),
         "errors": _init_errors,
-        "mcp_url": default_config.mcp_url,
     }
 
 
@@ -101,32 +96,28 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Multi-Agent Shop</title>
+<title>No-MCP Demo</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          background: #f0f4f8; height: 100vh; display: flex; flex-direction: column; }
 
-  /* Header */
   header { background: #1a365d; color: white; padding: 12px 20px;
            display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   header h1 { font-size: 16px; font-weight: 600; flex: 1; min-width: 160px; }
   #user-display { font-size: 13px; opacity: 0.8; }
 
-  /* Mode bar */
   #mode-bar { background: #2a4a7f; padding: 8px 20px; display: flex; align-items: center; gap: 10px; }
   #mode-bar label { color: #cdd; font-size: 13px; white-space: nowrap; }
   #mode-select { padding: 6px 10px; border-radius: 6px; border: none; font-size: 13px;
                  background: white; cursor: pointer; }
   #mode-desc { color: #aac; font-size: 12px; flex: 1; font-style: italic; }
 
-  /* Header buttons */
   .hdr-btn { padding: 6px 14px; background: transparent; border: 1px solid rgba(255,255,255,0.5);
              color: white; border-radius: 6px; cursor: pointer; font-size: 13px; }
   .hdr-btn:hover { background: rgba(255,255,255,0.1); }
   .hdr-btn.hidden { display: none; }
 
-  /* Chat area */
   #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex;
           flex-direction: column; gap: 10px; }
   .msg { max-width: 74%; padding: 10px 14px; border-radius: 12px;
@@ -137,13 +128,11 @@ HTML_PAGE = """<!DOCTYPE html>
   .thinking { align-self: flex-start; color: #999; font-style: italic; font-size: 13px; }
   .mode-tag { font-size: 11px; color: #888; margin-bottom: 3px; }
 
-  /* Suggestions */
   .suggestions { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 20px 0; }
   .chip { padding: 5px 11px; background: white; border: 1px solid #ddd;
           border-radius: 14px; font-size: 12px; cursor: pointer; color: #555; white-space: nowrap; }
   .chip:hover { border-color: #1a365d; color: #1a365d; }
 
-  /* Input */
   #input-row { padding: 12px 20px; background: white; border-top: 1px solid #e0e0e0;
                display: flex; gap: 8px; }
   #input { flex: 1; padding: 9px 13px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; }
@@ -153,7 +142,6 @@ HTML_PAGE = """<!DOCTYPE html>
   #send:hover { background: #2a4a7f; }
   #send:disabled { background: #aaa; cursor: not-allowed; }
 
-  /* Login overlay */
   #login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex;
                    align-items: center; justify-content: center; z-index: 100; }
   .login-box { background: white; padding: 28px; border-radius: 12px; width: 360px;
@@ -170,17 +158,17 @@ HTML_PAGE = """<!DOCTYPE html>
 
 <div id="login-overlay">
   <div class="login-box">
-    <h2>🛒 Multi-Agent Shop</h2>
+    <h2>Research Assistant</h2>
     <p>Enter a User ID to start. Reuse the same ID and the assistant will remember you.</p>
     <input id="login-input" type="text" placeholder="e.g. alice, bob, user_123"
            onkeydown="if(event.key==='Enter') doLogin()" autofocus />
-    <button onclick="doLogin()">Start Shopping</button>
+    <button onclick="doLogin()">Start</button>
   </div>
 </div>
 
 <header>
-  <span>🛒</span>
-  <h1>Multi-Agent Shop</h1>
+  <span>🔬</span>
+  <h1>No-MCP Demo — Research &amp; Writing Assistant</h1>
   <span id="user-display"></span>
   <button id="change-user-btn" class="hdr-btn hidden" onclick="changeUser()">Switch User</button>
   <button id="new-chat-btn" class="hdr-btn hidden" onclick="startNewChat()">+ New Chat</button>
@@ -208,7 +196,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <div id="chat"></div>
 
 <div id="input-row">
-  <input id="input" type="text" placeholder="Ask about products, cart, checkout..."
+  <input id="input" type="text" placeholder="Ask anything — research, writing, analysis..."
          onkeydown="if(event.key==='Enter') sendClick()" />
   <button id="send" onclick="sendClick()">Send</button>
 </div>
@@ -217,16 +205,16 @@ HTML_PAGE = """<!DOCTYPE html>
 const MODE_DESCRIPTIONS = """ + str({k: v for k, v in MODE_DESCRIPTIONS.items()}).replace("'", '"') + """;
 
 const MODE_SUGGESTIONS = {
-  sequential:  ["buy dog food", "get me a cat toy", "I need a dog leash"],
-  parallel:    ["what's available for dogs and cats?", "show me all pet products"],
-  loop:        ["find me something under $10", "find a dog toy under $15"],
-  scatter:     ["compare p1 p2 and p5", "which of these is best value?"],
-  supervised:  ["write a buying guide for a new puppy", "create a pet care guide"],
-  planner:     ["set up for a new puppy", "I just got a cat, what do I need?"],
-  debate:      ["should I buy premium or budget dog food?", "premium vs budget cat food"],
-  reflection:  ["write a recommendation email for my friend", "draft a product review"],
-  router:      ["show me dog toys", "add p5 to my cart", "how often should I feed my cat?"],
-  handoff:     ["show me dog toys", "add p3 to my cart", "what's in my cart?", "checkout"],
+  sequential:  ["Explain quantum computing", "How does the internet work?", "What is blockchain?"],
+  parallel:    ["Explain climate change", "Analyse the French Revolution", "Explain artificial intelligence"],
+  loop:        ["Explain recursion until I understand", "Explain photosynthesis simply", "How does GPS work?"],
+  scatter:     ["Compare Python, JavaScript, and Rust", "Compare solar, wind, and nuclear energy"],
+  supervised:  ["Write an essay about the Renaissance", "Write about the impact of the printing press"],
+  planner:     ["Help me understand machine learning from scratch", "Explain the history of computing"],
+  debate:      ["Should AI replace human jobs?", "Is remote work better than office work?", "Nuclear energy: good or bad?"],
+  reflection:  ["Write a cover letter for a software engineer role", "Write a summary of World War II"],
+  router:      ["How does photosynthesis work?", "Write a haiku about autumn", "Is the Great Wall visible from space?"],
+  handoff:     ["Research the causes of World War I", "Explain the theory of relativity", "What is quantum entanglement?"],
 };
 
 let currentUserId = null;
@@ -263,7 +251,7 @@ function startNewChat() {
 }
 
 function getWelcome(mode) {
-  return `Hi! Running in ${mode.toUpperCase()} mode.\\n${MODE_DESCRIPTIONS[mode] || ''}\\n\\nAsk me anything about pet products!`;
+  return `Hi! Running in ${mode.toUpperCase()} mode.\\n${MODE_DESCRIPTIONS[mode] || ''}\\n\\nAsk me anything!`;
 }
 
 function onModeChange() {
@@ -332,7 +320,6 @@ function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// Init
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('mode-desc').textContent = MODE_DESCRIPTIONS['sequential'] || '';
   renderSuggestions('sequential');
@@ -343,6 +330,5 @@ document.addEventListener('DOMContentLoaded', () => {
 """
 
 if __name__ == "__main__":
-    print("Multi-Agent Shop Web UI at http://localhost:8082")
-    print("Make sure MCP server is running first: python server.py")
-    uvicorn.run(app, host="0.0.0.0", port=8082)
+    print("No-MCP Demo Web UI at http://localhost:8083")
+    uvicorn.run(app, host="0.0.0.0", port=8083)

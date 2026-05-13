@@ -533,7 +533,7 @@ class ScatterShop(_BaseWorkflow):
         memory_client = self._container.memory_client if self._container else None
         memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
 
-        analysts = [make_analyst_agent(self._tools, self._tool_executor, m) for _ in range(3)]
+        analysts = [make_analyst_agent(m) for _ in range(3)]
         for i, a in enumerate(analysts, 1):
             a.name = f"analyst-agent-{i}"
 
@@ -842,7 +842,9 @@ class HandoffShop(_BaseWorkflow):
             tools=self._tools,
             tool_executor=self._tool_executor,
             memory_config=no_memory,
-            config=AgentConfig(log_to_session=True),
+            # don't take into effect, because executor_agent doesn't use runner.run but execute_loop directly,
+            # - which bypasses message_builder entirely. Session history loading happens inside message_builder
+            # config=AgentConfig(log_to_session=False), 
         )
 
         self._agent = BaseAgent(

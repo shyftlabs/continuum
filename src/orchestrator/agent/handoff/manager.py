@@ -14,10 +14,7 @@ from orchestrator.agent.exceptions import (
     HandoffDepthExceededError,
     HandoffNotAllowedError,
 )
-from orchestrator.agent.handoff.history import (
-    HistorySummarizer,
-    flatten_nested_history,
-)
+from orchestrator.agent.handoff.history import HistorySummarizer
 from orchestrator.agent.types import (
     AgentEvent,
     EventType,
@@ -201,7 +198,7 @@ class HandoffManager:
                 # Summarize history
                 summarizer = HistorySummarizer(
                     mode=handoff.summarization_mode,
-                    recent_n=handoff.recent_messages,
+                    recent_turns=handoff.recent_turns,
                 )
 
                 summarized = await summarizer.summarize(
@@ -290,16 +287,14 @@ class HandoffManager:
 
         # Add history (may be summarized)
         if handoff_data.history:
-            # Flatten any nested histories first
-            flattened = flatten_nested_history(handoff_data.history)
             # Strip system messages (source agent's instructions) and empty assistant
             # messages (in-progress turns) — target agent has its own system prompt
-            flattened = [
-                m for m in flattened
+            filtered = [
+                m for m in handoff_data.history
                 if m.get("role") != "system"
                 and not (m.get("role") == "assistant" and not m.get("content"))
             ]
-            messages.extend(flattened)
+            messages.extend(filtered)
 
         # Add handoff context as a system message
         context_parts = [

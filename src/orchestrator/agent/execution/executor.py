@@ -386,24 +386,39 @@ class Executor(IExecutor):
                             )
 
                             if handoff_result.success and handoff_result.response:
-                                # Handoff was executed and has response.
-                                # Append sub-agent response to messages so save_messages()
-                                # can persist it to Redis session history.
-                                if handoff_result.response.content:
+                                handoff_config = agent.get_handoff(target)
+                                return_to_parent = handoff_config and handoff_config.return_to_parent
+
+                                if return_to_parent:
+                                    # Add executor's result as a tool result so the
+                                    # orchestrator's LLM runs again and generates the
+                                    # final user-facing response.
+                                    tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                                     messages.append({
-                                        "role": "assistant",
-                                        "content": handoff_result.response.content,
+                                        "role": "tool",
+                                        "tool_call_id": tc_id,
+                                        "content": handoff_result.response.content or "",
                                     })
-                                turn_span.set_output({"handoff_to": target, "success": True})
-                                return AgentResponse(
-                                    content=handoff_result.response.content,
-                                    agent_name=handoff_result.response.agent_name,
-                                    status=ResponseStatus.SUCCESS,
-                                    usage=total_usage.add(handoff_result.response.usage),
-                                    turn_count=turn,
-                                    handoff_result=handoff_result,
-                                    messages=messages,
-                                )
+                                    total_usage = total_usage.add(handoff_result.response.usage)
+                                    turn_span.set_output({"handoff_to": target, "success": True, "return_to_parent": True})
+                                    continue
+                                else:
+                                    # No return_to_parent — return executor's response directly.
+                                    if handoff_result.response.content:
+                                        messages.append({
+                                            "role": "assistant",
+                                            "content": handoff_result.response.content,
+                                        })
+                                    turn_span.set_output({"handoff_to": target, "success": True, "return_to_parent": False})
+                                    return AgentResponse(
+                                        content=handoff_result.response.content,
+                                        agent_name=handoff_result.response.agent_name,
+                                        status=ResponseStatus.SUCCESS,
+                                        usage=total_usage.add(handoff_result.response.usage),
+                                        turn_count=turn,
+                                        handoff_result=handoff_result,
+                                        messages=messages,
+                                    )
                             else:
                                 # Handoff failed, add error as tool result
                                 messages.append(

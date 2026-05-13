@@ -229,7 +229,7 @@ class Handoff:
     transfer_history: bool = True  # Whether to pass conversation history
     summarize_history: bool = True  # Whether to summarize history
     summarization_mode: HistorySummarizationMode = HistorySummarizationMode.HYBRID
-    recent_messages: int = 5  # Number of recent messages for hybrid mode
+    recent_turns: int = 3  # Number of recent conversation turns for hybrid/recent_n mode
     return_to_parent: bool = True  # Whether to return control after completion
 
     def to_tool_definition(self) -> dict[str, Any]:

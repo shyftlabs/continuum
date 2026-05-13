@@ -253,6 +253,15 @@ class HandoffExecutor(IHandoffExecutor):
                 )
                 + "\n" + "=" * 30
             )
+            _tools = target_agent.get_tools_for_llm()
+            if _tools:
+                _tools_formatted = "\n".join(
+                    f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:200]}"
+                    for t in _tools
+                )
+                logger.info(
+                    f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
+                )
 
             # Execute target agent (executor guaranteed to be set by early validation)
             response = None

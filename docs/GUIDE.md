@@ -91,7 +91,7 @@ Every workflow agent (Sequential, Parallel, Loop, Reflection) calls `runner.run(
 
 To prevent this, every workflow agent must:
 
-**1. Set** `suppress_session_log = True` **at the start of** `execute()`  ****
+**1. Set** `suppress_session_log = True` **at the start of** `execute()`  
 
 ```python
 async def execute(self, input_text, runner, context) -> AgentResponse:
@@ -133,7 +133,7 @@ You can refer to `playground/multi-agent-shop/workflows.py` and `playground/mult
 
 ### Build your own workflow instead of using built-ins
 
-We recommend defining and building your own workflows using `BaseAgent` directly, rather than relying solely on the built-in workflow agents, because workflows are closely tied to your project's business logic — a custom agent gives you full control over the flow, session saving, and memory behaviour.
+We recommend defining and building your own workflows using `BaseAgent` directly, rather than relying solely on the built-in workflow agents, because workflows are closely tied to your project's business logic — a custom agent gives you full control over the flow, session saving, and memory behaviour. You may want some agents to be stateless and the others to be stateful in a workflow, you must control them by yourself based on your actual and specific requirements of projects.
 
 **Example: `ParallelCoordinatorAgent` in `playground/multi-agent-shop/workflows.py`**
 
@@ -232,5 +232,9 @@ await memory_client.delete(memory_id="abc-123")
 await memory_client.delete_all(user_id="user-123")
 ```
 
-> Consider exposing memory management to your frontend — let users view and delete what the AI remembers about them. This is important for privacy compliance (GDPR "right to be forgotten") and user trust.
+> Consider exposing memory management to your frontend — let users view and delete what the AI remembers about them. This is important for privacy compliance (GDPR "right to be forgotten") and user trust and experience.
+
+---
+
+> 📖 **Further reading:** Want to know more about the memory mechanism, see `[docs/update-docs/memory-issue-analysis.md](update-docs/memory-issue-analysis.md)`.
 

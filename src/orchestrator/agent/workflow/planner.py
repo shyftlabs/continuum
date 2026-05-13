@@ -225,11 +225,21 @@ class PlannerAgent(BaseAgent):
                     ) as step_span:
                         try:
                             # Inject prior steps so this agent sees what earlier agents produced.
-                            if pipeline_history:
-                                context.metadata["pipeline_context"] = (
-                                    "Prior pipeline steps in this request:\n"
-                                    + "\n".join(pipeline_history)
-                                )
+                            # For regular steps: exclude the immediately preceding step (it is
+                            # already the [user] input) — context carries only steps 1..N-2.
+                            # For the last step: [user] already contains ALL outputs, so skip
+                            # context entirely to avoid full redundancy.
+                            if not is_last_step:
+                                background = pipeline_history[:-1]
+                                if background:
+                                    context.metadata["pipeline_context"] = (
+                                        "Prior pipeline steps in this request:\n"
+                                        + "\n".join(background)
+                                    )
+                            else:
+                                # Last step [user] already contains all outputs — clear any
+                                # pipeline_context left over from the previous step iteration.
+                                context.metadata.pop("pipeline_context", None)
 
                             response = await runner.run(
                                 agent=agent,

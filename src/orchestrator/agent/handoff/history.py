@@ -52,6 +52,18 @@ def get_history_markers() -> tuple[str, str]:
     return (_history_start, _history_end)
 
 
+def _find_turn_boundary(messages: list[dict[str, Any]], n_turns: int) -> int:
+    """Return the start index of the last n_turns in messages.
+
+    A turn starts at each user message. All messages within a turn
+    (tool calls, tool results, assistant responses) are included.
+    """
+    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if len(user_indices) <= n_turns:
+        return 0
+    return user_indices[-n_turns]
+
+
 @dataclass
 class HistorySummarizer:
     """
@@ -59,14 +71,14 @@ class HistorySummarizer:
 
     Attributes:
         mode: Summarization mode
-        recent_n: Number of recent messages for RECENT_N or HYBRID modes
+        recent_turns: Number of recent conversation turns for RECENT_N or HYBRID modes
         max_length: Maximum length for summaries
         include_tool_calls: Whether to include tool call details
         include_metadata: Whether to include message metadata
     """
 
     mode: HistorySummarizationMode = HistorySummarizationMode.HYBRID
-    recent_n: int = 5
+    recent_turns: int = 3
     max_length: int = 4000
     include_tool_calls: bool = True
     include_metadata: bool = False
@@ -95,18 +107,19 @@ class HistorySummarizer:
             return deepcopy(messages)
 
         elif self.mode == HistorySummarizationMode.RECENT_N:
-            return deepcopy(messages[-self.recent_n :])
+            boundary = _find_turn_boundary(messages, self.recent_turns)
+            return deepcopy(messages[boundary:])
 
         elif self.mode == HistorySummarizationMode.SUMMARY:
             return await self._create_summary(messages, llm_client, model)
 
         elif self.mode == HistorySummarizationMode.HYBRID:
-            # Summary + recent messages
-            if len(messages) <= self.recent_n:
+            boundary = _find_turn_boundary(messages, self.recent_turns)
+            if boundary == 0:
                 return deepcopy(messages)
 
-            older_messages = messages[: -self.recent_n]
-            recent_messages = messages[-self.recent_n :]
+            older_messages = messages[:boundary]
+            recent_messages = messages[boundary:]
 
             summary = await self._create_summary(older_messages, llm_client, model)
             return summary + deepcopy(recent_messages)
@@ -138,6 +151,7 @@ class HistorySummarizer:
             response = await llm_client.chat(
                 messages=[ChatMessage(role="user", content=summary_prompt)],
                 config=llm_config,
+                auto_session=False,
             )
 
             return [
@@ -266,7 +280,7 @@ def default_history_mapper(
 def summarize_conversation(
     messages: list[dict[str, Any]],
     mode: HistorySummarizationMode = HistorySummarizationMode.HYBRID,
-    recent_n: int = 5,
+    recent_turns: int = 3,
 ) -> list[dict[str, Any]]:
     """
     Convenience function to summarize a conversation.
@@ -274,25 +288,27 @@ def summarize_conversation(
     Args:
         messages: Messages to summarize
         mode: Summarization mode
-        recent_n: Number of recent messages for hybrid mode
+        recent_turns: Number of recent conversation turns for hybrid/recent_n mode
 
     Returns:
         Summarized messages
     """
-    summarizer = HistorySummarizer(mode=mode, recent_n=recent_n)
+    summarizer = HistorySummarizer(mode=mode, recent_turns=recent_turns)
 
     # Use sync version (no LLM)
     if mode == HistorySummarizationMode.FULL:
         return deepcopy(messages)
     elif mode == HistorySummarizationMode.RECENT_N:
-        return deepcopy(messages[-recent_n:])
+        boundary = _find_turn_boundary(messages, recent_turns)
+        return deepcopy(messages[boundary:])
     elif mode == HistorySummarizationMode.SUMMARY:
         return [summarizer._text_summary(messages)]
     elif mode == HistorySummarizationMode.HYBRID:
-        if len(messages) <= recent_n:
+        boundary = _find_turn_boundary(messages, recent_turns)
+        if boundary == 0:
             return deepcopy(messages)
-        older = messages[:-recent_n]
-        recent = messages[-recent_n:]
+        older = messages[:boundary]
+        recent = messages[boundary:]
         return [summarizer._text_summary(older)] + deepcopy(recent)
 
     return deepcopy(messages)
