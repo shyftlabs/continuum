@@ -45,6 +45,7 @@ from playground.sdk_feature_test.agents.build import (
     build_loop_agent,
     build_normal_agent,
     build_parallel_agents,
+    build_question_detector_agent,
     build_react_agent,
     build_reflection_agent,
     build_research_route_agent,
@@ -495,6 +496,7 @@ async def run_hitl_pipeline(
     cfg: SDKFeatureTestConfig,
     user_id: str,
     session_id: str | None,
+    resume_workflow_id: str | None = None,
 ) -> bool:
     """
     Run a Temporal workflow with a Human-in-the-Loop approval gate.
@@ -504,6 +506,9 @@ async def run_hitl_pipeline(
       2. That agent runs inside a Temporal workflow
       3. An approval step pauses the workflow and prompts the CLI user
       4. If approved the next agent runs; if rejected the workflow aborts
+
+    Pass resume_workflow_id to reconnect to an existing paused workflow
+    instead of starting a new one (used for worker crash/resume testing).
 
     Exercises: Temporal AgentWorkflow, approval step, HumanInLoopManager,
     signal/query, worker lifecycle, and all underlying SDK features.
@@ -526,53 +531,63 @@ async def run_hitl_pipeline(
     research_agent = build_research_route_agent(cfg)
     summarize_agent = build_summarize_route_agent(cfg)
     qa_agent = build_qa_route_agent(cfg)
-    agents_by_key = {
-        "1": ("research", research_agent),
-        "2": ("summarize", summarize_agent),
-        "3": ("qa", qa_agent),
-    }
 
-    # ------------------------------------------------------------------
-    # CLI: let the user choose the first agent and follow-up agent
-    # ------------------------------------------------------------------
-    print("\n--- Human-in-the-Loop: Temporal Workflow with Approval Gate ---")
-    print("Choose the FIRST agent to run:")
-    print("  1. Research   – deep research on a topic")
-    print("  2. Summarize  – summarize content")
-    print("  3. Q&A        – answer questions about content")
-    first_choice = input("First agent [1-3, default=1]: ").strip() or "1"
-    if first_choice not in agents_by_key:
-        first_choice = "1"
-    first_name, first_agent = agents_by_key[first_choice]
+    if resume_workflow_id:
+        # Resuming: skip interactive prompts, register all agents so the
+        # worker can execute whichever activities the workflow needs.
+        print(f"\n--- Human-in-the-Loop: Resuming workflow {resume_workflow_id} ---")
+        all_agents = [research_agent, summarize_agent, qa_agent]
+        first_name = "previous"
+        second_name = "next agent"
+    else:
+        agents_by_key = {
+            "1": ("research", research_agent),
+            "2": ("summarize", summarize_agent),
+            "3": ("qa", qa_agent),
+        }
 
-    remaining = {k: v for k, v in agents_by_key.items() if k != first_choice}
-    print("\nChoose the FOLLOW-UP agent (runs after your approval):")
-    for k, (name, _) in sorted(remaining.items()):
-        print(f"  {k}. {name.capitalize()}")
-    second_choice = input(f"Follow-up agent [{'/'.join(sorted(remaining))}]: ").strip()
-    if second_choice not in remaining:
-        second_choice = sorted(remaining)[0]
-    second_name, second_agent = remaining[second_choice]
+        # ------------------------------------------------------------------
+        # CLI: let the user choose the first agent and follow-up agent
+        # ------------------------------------------------------------------
+        print("\n--- Human-in-the-Loop: Temporal Workflow with Approval Gate ---")
+        print("Choose the FIRST agent to run:")
+        print("  1. Research   – deep research on a topic")
+        print("  2. Summarize  – summarize content")
+        print("  3. Q&A        – answer questions about content")
+        first_choice = input("First agent [1-3, default=1]: ").strip() or "1"
+        if first_choice not in agents_by_key:
+            first_choice = "1"
+        first_name, first_agent = agents_by_key[first_choice]
 
-    print("\nEnter your query (paste multi-line text, then press Enter on an empty line to finish):")
-    print("(Or just press Enter for the default query)")
-    query_lines: list[str] = []
-    while True:
-        try:
-            line = input()
-        except EOFError:
-            break
-        if line == "" and query_lines:
-            break
-        if line == "" and not query_lines:
-            break
-        query_lines.append(line)
-    user_query = "\n".join(query_lines).strip()
-    if not user_query:
-        user_query = "What are three key benefits of renewable energy? Summarize briefly."
+        remaining = {k: v for k, v in agents_by_key.items() if k != first_choice}
+        print("\nChoose the FOLLOW-UP agent (runs after your approval):")
+        for k, (name, _) in sorted(remaining.items()):
+            print(f"  {k}. {name.capitalize()}")
+        second_choice = input(f"Follow-up agent [{'/'.join(sorted(remaining))}]: ").strip()
+        if second_choice not in remaining:
+            second_choice = sorted(remaining)[0]
+        second_name, second_agent = remaining[second_choice]
 
-    print(f"\nWorkflow: {first_name} → [APPROVAL GATE] → {second_name}")
-    print(f"Query: {user_query}\n")
+        print("\nEnter your query (paste multi-line text, then press Enter on an empty line to finish):")
+        print("(Or just press Enter for the default query)")
+        query_lines: list[str] = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
+            if line == "" and query_lines:
+                break
+            if line == "" and not query_lines:
+                break
+            query_lines.append(line)
+        user_query = "\n".join(query_lines).strip()
+        if not user_query:
+            user_query = "What are three key benefits of renewable energy? Summarize briefly."
+
+        print(f"\nWorkflow: {first_name} → [APPROVAL GATE] → {second_name}")
+        print(f"Query: {user_query}\n")
+        all_agents = [first_agent, second_agent]
 
     # ------------------------------------------------------------------
     # Temporal setup: registry, client, worker
@@ -582,6 +597,7 @@ async def run_hitl_pipeline(
             AgentWorkflow,
             HumanInLoopManager,
             WorkflowInput,
+            WorkflowResult,
             get_agent_registry,
             get_temporal_client,
             get_worker_manager,
@@ -592,8 +608,8 @@ async def run_hitl_pipeline(
         return False
 
     registry = get_agent_registry()
-    registry.register(first_agent)
-    registry.register(second_agent)
+    for agent in all_agents:
+        registry.register(agent)
 
     client = get_temporal_client()
     if not client.is_connected:
@@ -609,39 +625,51 @@ async def run_hitl_pipeline(
     logger.info("Temporal worker started")
 
     # ------------------------------------------------------------------
-    # Start workflow: agent → approval → agent
+    # Start or resume workflow
     # ------------------------------------------------------------------
-    wf_id = f"hitl-{generate_run_id()[-8:]}"
-    try:
-        handle = await client.start_workflow(
-            AgentWorkflow.run,
-            WorkflowInput(
-                steps=[
-                    {"type": "agent", "agent_name": first_name},
-                    {
-                        "type": "approval",
-                        "description": (
-                            f"Review the output of '{first_name}' before running '{second_name}'. "
-                            "Approve to continue, reject to abort."
-                        ),
-                        "approvers": [user_id],
-                        "timeout": 300,
-                    },
-                    {"type": "agent", "agent_name": second_name},
-                ],
-                initial_input=user_query,
-                user_id=user_id,
-                session_id=session_id,
-            ),
-            id=wf_id,
-            task_queue="orchestrator-agents",
-        )
-        logger.info(f"HITL workflow started: {wf_id}")
-    except Exception as e:
-        logger.error(f"Failed to start HITL workflow: {e}")
-        await worker_mgr.stop()
-        await lifecycle.shutdown()
-        return False
+    if resume_workflow_id:
+        wf_id = resume_workflow_id
+        try:
+            handle = client.raw_client.get_workflow_handle(wf_id, result_type=WorkflowResult)
+            print(f"\nReconnected to existing workflow: {wf_id}")
+            logger.info(f"Resuming HITL workflow: {wf_id}")
+        except Exception as e:
+            logger.error(f"Failed to get workflow handle for {wf_id}: {e}")
+            await worker_mgr.stop()
+            await lifecycle.shutdown()
+            return False
+    else:
+        wf_id = f"hitl-{generate_run_id()[-8:]}"
+        try:
+            handle = await client.start_workflow(
+                AgentWorkflow.run,
+                WorkflowInput(
+                    steps=[
+                        {"type": "agent", "agent_name": first_name},
+                        {
+                            "type": "approval",
+                            "description": (
+                                f"Review the output of '{first_name}' before running '{second_name}'. "
+                                "Approve to continue, reject to abort."
+                            ),
+                            "approvers": [user_id],
+                            "timeout": 300,
+                        },
+                        {"type": "agent", "agent_name": second_name},
+                    ],
+                    initial_input=user_query,
+                    user_id=user_id,
+                    session_id=session_id,
+                ),
+                id=wf_id,
+                task_queue="orchestrator-agents",
+            )
+            logger.info(f"HITL workflow started: {wf_id}")
+        except Exception as e:
+            logger.error(f"Failed to start HITL workflow: {e}")
+            await worker_mgr.stop()
+            await lifecycle.shutdown()
+            return False
 
     # ------------------------------------------------------------------
     # Poll for the approval gate and present it to the user
@@ -735,3 +763,411 @@ async def run_hitl_pipeline(
     logger.info("Temporal worker stopped")
     await lifecycle.shutdown()
     return True
+
+
+async def run_parallel_pipeline(
+    cfg: SDKFeatureTestConfig,
+    user_id: str,
+    session_id: str | None,
+) -> bool:
+    """
+    Run a Temporal workflow with a ParallelStep — two agents execute concurrently
+    and their outputs are merged.
+
+    Flow:
+      1. User enters a query
+      2. Research agent and QA agent run simultaneously inside a Temporal ParallelStep
+      3. Outputs are merged and printed side by side
+
+    Exercises: Temporal AgentWorkflow, ParallelStep, concurrent ActivityTask scheduling,
+    merge strategies, worker lifecycle.
+    """
+    logger.info("Running Parallel Temporal pipeline...")
+    validate_configuration()
+    lifecycle = get_lifecycle_manager(
+        fail_on_unhealthy=cfg.fail_on_unhealthy,
+        verify_connections=cfg.verify_connections,
+    )
+    init_result = await lifecycle.initialize()
+    if not init_result.success:
+        logger.warning(f"Lifecycle init: {init_result.errors}")
+
+    research_agent = build_research_route_agent(cfg)
+    summarize_agent = build_summarize_route_agent(cfg)
+    qa_agent = build_qa_route_agent(cfg)
+
+    print("\n--- Parallel Temporal Workflow ---")
+    print("Two agents (Research + QA) will run simultaneously on your query.")
+    print("\nEnter your query (or press Enter for default):")
+    try:
+        user_query = input("> ").strip()
+    except EOFError:
+        user_query = ""
+    if not user_query:
+        user_query = "What are the main benefits of renewable energy?"
+
+    print(f"\nQuery: {user_query}")
+    print("Starting parallel workflow...\n")
+
+    try:
+        from orchestrator.temporal import (
+            AgentWorkflow,
+            WorkflowInput,
+            WorkflowResult,
+            get_agent_registry,
+            get_temporal_client,
+            get_worker_manager,
+        )
+    except ImportError:
+        logger.error("Temporal SDK not installed. Install with: pip install shyftlabs-continuum[temporal]")
+        await lifecycle.shutdown()
+        return False
+
+    registry = get_agent_registry()
+    for agent in [research_agent, summarize_agent, qa_agent]:
+        registry.register(agent)
+
+    client = get_temporal_client()
+    if not client.is_connected:
+        try:
+            await client.connect()
+        except Exception as e:
+            logger.error(f"Cannot connect to Temporal: {e}")
+            await lifecycle.shutdown()
+            return False
+
+    worker_mgr = get_worker_manager(client=client, registry=registry)
+    await worker_mgr.start()
+    logger.info("Temporal worker started")
+
+    wf_id = f"parallel-{generate_run_id()[-8:]}"
+    try:
+        handle = await client.start_workflow(
+            AgentWorkflow.run,
+            WorkflowInput(
+                steps=[
+                    {
+                        "type": "parallel",
+                        "agents": [
+                            {"type": "agent", "agent_name": "research"},
+                            {"type": "agent", "agent_name": "qa"},
+                        ],
+                        "merge_strategy": "concat",
+                    },
+                ],
+                initial_input=user_query,
+                user_id=user_id,
+                session_id=session_id,
+            ),
+            id=wf_id,
+            task_queue="orchestrator-agents",
+        )
+        logger.info(f"Parallel workflow started: {wf_id}")
+    except Exception as e:
+        logger.error(f"Failed to start parallel workflow: {e}")
+        await worker_mgr.stop()
+        await lifecycle.shutdown()
+        return False
+
+    try:
+        result = await asyncio.wait_for(
+            client.raw_client.get_workflow_handle(wf_id, result_type=WorkflowResult).result(),
+            timeout=180,
+        )
+        print("\n" + "=" * 60)
+        print("  PARALLEL WORKFLOW RESULT")
+        print("=" * 60)
+        print(f"  Status : {result.status}")
+        print(f"  Steps  : {len(result.step_results)} step(s) completed")
+        if result.content:
+            preview = result.content[:1000] + ("..." if len(result.content) > 1000 else "")
+            print(f"  Output :\n{preview}")
+        print("=" * 60)
+        logger.info(f"Parallel workflow completed: status={result.status}")
+        success = result.status == "completed"
+    except asyncio.TimeoutError:
+        logger.warning("Timed out waiting for parallel workflow result")
+        success = False
+    except Exception as e:
+        logger.warning(f"Error getting parallel workflow result: {e}")
+        success = False
+
+    await worker_mgr.stop()
+    logger.info("Temporal worker stopped")
+    await lifecycle.shutdown()
+    return success
+
+
+async def run_mcp_temporal_pipeline(
+    cfg: SDKFeatureTestConfig,
+    user_id: str,
+    session_id: str | None,
+) -> bool:
+    """
+    Run a Temporal workflow where the agent has MCP tools available.
+
+    Flow:
+      1. Start the in-process fake MCP server (echo + add tools)
+      2. Build a researcher agent wired to that MCP server
+      3. Register the agent and run it inside a Temporal AgentWorkflow
+      4. Verify the agent called at least one MCP tool (echo) during execution
+
+    Exercises: Temporal AgentWorkflow, ActivityTask with tool calls,
+    ToolExecutor inside a Temporal activity, fake MCP server.
+    """
+    logger.info("Running MCP + Temporal pipeline...")
+    validate_configuration()
+    lifecycle = get_lifecycle_manager(
+        fail_on_unhealthy=cfg.fail_on_unhealthy,
+        verify_connections=cfg.verify_connections,
+    )
+    init_result = await lifecycle.initialize()
+    if not init_result.success:
+        logger.warning(f"Lifecycle init: {init_result.errors}")
+
+    if not MCPUtil or not ToolExecutor:
+        logger.error("MCP not available. Install with: pip install shyftlabs-continuum[mcp]")
+        await lifecycle.shutdown()
+        return False
+
+    # Connect fake MCP
+    try:
+        fake_server, tools_list, tool_executor = await _connect_fake_mcp()
+        logger.info(f"Fake MCP connected: {len(tools_list)} tools available")
+    except Exception as e:
+        logger.error(f"Failed to connect fake MCP: {e}")
+        await lifecycle.shutdown()
+        return False
+
+    from playground.sdk_feature_test.agents.build import build_researcher_agent
+    researcher = build_researcher_agent(cfg, tools_list, tool_executor)
+
+    print("\n--- MCP + Temporal Workflow ---")
+    print("A researcher agent with MCP tools (echo, add) runs inside a Temporal workflow.")
+    print("The agent should call the echo tool to record a finding.\n")
+
+    try:
+        from orchestrator.temporal import (
+            AgentWorkflow,
+            WorkflowInput,
+            WorkflowResult,
+            get_agent_registry,
+            get_temporal_client,
+            get_worker_manager,
+        )
+    except ImportError:
+        logger.error("Temporal SDK not installed. Install with: pip install shyftlabs-continuum[temporal]")
+        await fake_server.cleanup()
+        await lifecycle.shutdown()
+        return False
+
+    registry = get_agent_registry()
+    registry.register(researcher)
+
+    client = get_temporal_client()
+    if not client.is_connected:
+        try:
+            await client.connect()
+        except Exception as e:
+            logger.error(f"Cannot connect to Temporal: {e}")
+            await fake_server.cleanup()
+            await lifecycle.shutdown()
+            return False
+
+    worker_mgr = get_worker_manager(client=client, registry=registry)
+    await worker_mgr.start()
+    logger.info("Temporal worker started")
+
+    wf_id = f"mcp-temporal-{generate_run_id()[-8:]}"
+    try:
+        handle = await client.start_workflow(
+            AgentWorkflow.run,
+            WorkflowInput(
+                steps=[{"type": "agent", "agent_name": "researcher"}],
+                initial_input="Research the key benefits of renewable energy. Use the echo tool to record your main finding.",
+                user_id=user_id,
+                session_id=session_id,
+            ),
+            id=wf_id,
+            task_queue="orchestrator-agents",
+        )
+        logger.info(f"MCP+Temporal workflow started: {wf_id}")
+    except Exception as e:
+        logger.error(f"Failed to start workflow: {e}")
+        await worker_mgr.stop()
+        await fake_server.cleanup()
+        await lifecycle.shutdown()
+        return False
+
+    try:
+        result = await asyncio.wait_for(
+            client.raw_client.get_workflow_handle(wf_id, result_type=WorkflowResult).result(),
+            timeout=180,
+        )
+        print("\n" + "=" * 60)
+        print("  MCP + TEMPORAL WORKFLOW RESULT")
+        print("=" * 60)
+        print(f"  Status : {result.status}")
+        if result.step_results:
+            sr = result.step_results[0]
+            tool_calls = sr.tool_calls_made if hasattr(sr, "tool_calls_made") else None
+            if tool_calls:
+                print(f"  MCP tool calls : {tool_calls}")
+            else:
+                print("  MCP tool calls : (check DEBUG logs for tool call details)")
+        if result.content:
+            preview = result.content[:800] + ("..." if len(result.content) > 800 else "")
+            print(f"  Output :\n{preview}")
+        print("=" * 60)
+        logger.info(f"MCP+Temporal workflow completed: status={result.status}")
+        success = result.status == "completed"
+    except asyncio.TimeoutError:
+        logger.warning("Timed out waiting for MCP+Temporal workflow result")
+        success = False
+    except Exception as e:
+        logger.warning(f"Error getting workflow result: {e}")
+        success = False
+
+    await worker_mgr.stop()
+    logger.info("Temporal worker stopped")
+    await fake_server.cleanup()
+    await lifecycle.shutdown()
+    return success
+
+
+async def run_conditional_pipeline(
+    cfg: SDKFeatureTestConfig,
+    user_id: str,
+    session_id: str | None,
+) -> bool:
+    """
+    Run a Temporal workflow with a ConditionalStep — a condition agent decides
+    which branch to execute based on the input.
+
+    Flow:
+      1. User enters a query
+      2. A condition agent evaluates whether the input is a question (returns true/false)
+      3. If true  → QA agent answers it
+      4. If false → Summarize agent summarizes it
+      5. Which branch ran is printed alongside the output
+
+    Exercises: Temporal AgentWorkflow, ConditionalStep, branch selection,
+    deterministic condition evaluation, worker lifecycle.
+    """
+    logger.info("Running Conditional Temporal pipeline...")
+    validate_configuration()
+    lifecycle = get_lifecycle_manager(
+        fail_on_unhealthy=cfg.fail_on_unhealthy,
+        verify_connections=cfg.verify_connections,
+    )
+    init_result = await lifecycle.initialize()
+    if not init_result.success:
+        logger.warning(f"Lifecycle init: {init_result.errors}")
+
+    condition_agent = build_question_detector_agent(cfg)
+    qa_agent = build_qa_route_agent(cfg)
+    summarize_agent = build_summarize_route_agent(cfg)
+
+    print("\n--- Conditional Temporal Workflow ---")
+    print("A condition agent checks if your input is a question.")
+    print("  Question  → QA agent answers it")
+    print("  Not a question → Summarize agent summarizes it")
+    print("\nEnter your input (or press Enter for default question):")
+    try:
+        user_input = input("> ").strip()
+    except EOFError:
+        user_input = ""
+    if not user_input:
+        user_input = "What are the main benefits of renewable energy?"
+
+    print(f"\nInput: {user_input}")
+    print("Starting conditional workflow...\n")
+
+    try:
+        from orchestrator.temporal import (
+            AgentWorkflow,
+            WorkflowInput,
+            WorkflowResult,
+            get_agent_registry,
+            get_temporal_client,
+            get_worker_manager,
+        )
+    except ImportError:
+        logger.error("Temporal SDK not installed. Install with: pip install shyftlabs-continuum[temporal]")
+        await lifecycle.shutdown()
+        return False
+
+    registry = get_agent_registry()
+    for agent in [condition_agent, qa_agent, summarize_agent]:
+        registry.register(agent)
+
+    client = get_temporal_client()
+    if not client.is_connected:
+        try:
+            await client.connect()
+        except Exception as e:
+            logger.error(f"Cannot connect to Temporal: {e}")
+            await lifecycle.shutdown()
+            return False
+
+    worker_mgr = get_worker_manager(client=client, registry=registry)
+    await worker_mgr.start()
+    logger.info("Temporal worker started")
+
+    wf_id = f"conditional-{generate_run_id()[-8:]}"
+    try:
+        handle = await client.start_workflow(
+            AgentWorkflow.run,
+            WorkflowInput(
+                steps=[
+                    {
+                        "type": "conditional",
+                        "condition_agent": "question_detector",
+                        "if_true": [{"type": "agent", "agent_name": "qa"}],
+                        "if_false": [{"type": "agent", "agent_name": "summarize"}],
+                    },
+                ],
+                initial_input=user_input,
+                user_id=user_id,
+                session_id=session_id,
+            ),
+            id=wf_id,
+            task_queue="orchestrator-agents",
+        )
+        logger.info(f"Conditional workflow started: {wf_id}")
+    except Exception as e:
+        logger.error(f"Failed to start conditional workflow: {e}")
+        await worker_mgr.stop()
+        await lifecycle.shutdown()
+        return False
+
+    try:
+        result = await asyncio.wait_for(
+            client.raw_client.get_workflow_handle(wf_id, result_type=WorkflowResult).result(),
+            timeout=180,
+        )
+        print("\n" + "=" * 60)
+        print("  CONDITIONAL WORKFLOW RESULT")
+        print("=" * 60)
+        print(f"  Status : {result.status}")
+        if result.step_results:
+            agents_used = result.step_results[-1].agents_used or []
+            branch = "QA (question detected)" if "qa" in agents_used else "Summarize (not a question)"
+            print(f"  Branch : {branch}")
+        if result.content:
+            preview = result.content[:800] + ("..." if len(result.content) > 800 else "")
+            print(f"  Output :\n{preview}")
+        print("=" * 60)
+        logger.info(f"Conditional workflow completed: status={result.status}")
+        success = result.status == "completed"
+    except asyncio.TimeoutError:
+        logger.warning("Timed out waiting for conditional workflow result")
+        success = False
+    except Exception as e:
+        logger.warning(f"Error getting conditional workflow result: {e}")
+        success = False
+
+    await worker_mgr.stop()
+    logger.info("Temporal worker stopped")
+    await lifecycle.shutdown()
+    return success

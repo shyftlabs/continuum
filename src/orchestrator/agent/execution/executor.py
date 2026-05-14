@@ -394,13 +394,31 @@ class Executor(IExecutor):
                                     # orchestrator's LLM runs again and generates the
                                     # final user-facing response.
                                     tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                                    executor_content = handoff_result.response.content or ""
                                     messages.append({
                                         "role": "tool",
                                         "tool_call_id": tc_id,
-                                        "content": handoff_result.response.content or "",
+                                        "content": executor_content,
                                     })
+                                    logger.info(
+                                        f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
+                                        f"[tool] {executor_content[:500]}\n"
+                                        + "=" * 30
+                                    )
                                     total_usage = total_usage.add(handoff_result.response.usage)
+                                    # Pop the target agent so the parent can hand off
+                                    # to the same target again on the next turn.
+                                    run_state.pop_agent()
+                                    run_state.current_agent = agent.name
                                     turn_span.set_output({"handoff_to": target, "success": True, "return_to_parent": True})
+                                    logger.info(
+                                        f"===== RETURN TURN PROMPT [{agent.name}] =====\n"
+                                        + "\n".join(
+                                            f"[{m.get('role', '?')}] {str(m.get('content', '') or '')[:300]}"
+                                            for m in messages
+                                        )
+                                        + "\n" + "=" * 30
+                                    )
                                     continue
                                 else:
                                     # No return_to_parent — return executor's response directly.
@@ -420,7 +438,13 @@ class Executor(IExecutor):
                                         messages=messages,
                                     )
                             else:
-                                # Handoff failed, add error as tool result
+                                # Handoff failed — clean up stack if return_to_parent
+                                # (push_agent already ran in execute_handoff)
+                                handoff_config = agent.get_handoff(target)
+                                if handoff_config and handoff_config.return_to_parent:
+                                    run_state.pop_agent()
+                                    run_state.current_agent = agent.name
+                                # Add error as tool result so the LLM can react
                                 messages.append(
                                     {
                                         "role": "tool",
@@ -479,8 +503,13 @@ class Executor(IExecutor):
                             },
                         )
 
-                        # Check if content looks like JSON
+                        # Check if content looks like JSON (strip markdown fences first)
                         content_stripped = response.content.strip()
+                        if content_stripped.startswith("```"):
+                            import re as _re
+                            content_stripped = _re.sub(r"^```[a-z]*\n?", "", content_stripped)
+                            content_stripped = content_stripped.rstrip("`").rstrip()
+
                         is_json_like = (
                             content_stripped.startswith("{") and content_stripped.endswith("}")
                         ) or (content_stripped.startswith("[") and content_stripped.endswith("]"))
@@ -496,7 +525,17 @@ class Executor(IExecutor):
                             )
 
                         # Parse JSON content
-                        parsed_json = json.loads(response.content)
+                        parsed_json = json.loads(content_stripped)
+
+                        # Unwrap {"ClassName": {...}} or {"ClassName": [...]} if model
+                        # wraps the payload under the schema name instead of returning
+                        # the flat object directly.
+                        if isinstance(parsed_json, dict) and len(parsed_json) == 1:
+                            only_key = next(iter(parsed_json))
+                            if only_key == agent.output_schema.__name__:
+                                inner = parsed_json[only_key]
+                                parsed_json = {"leads": inner} if isinstance(inner, list) else inner
+
                         logger.info(
                             f"✅ Successfully parsed JSON response for agent {agent.name}",
                             extra={

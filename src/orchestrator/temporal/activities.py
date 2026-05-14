@@ -7,6 +7,8 @@ They are agent-agnostic: any registered BaseAgent can be executed.
 
 from __future__ import annotations
 
+import asyncio
+
 try:
     from temporalio import activity
 except ImportError as _err:
@@ -22,6 +24,8 @@ from orchestrator.temporal.types import (
     NotificationParams,
 )
 
+_HEARTBEAT_INTERVAL = 15  # seconds — must be less than heartbeat_timeout in the workflow
+
 
 @activity.defn
 async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult:
@@ -34,6 +38,15 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
 
     activity.heartbeat(f"Running agent: {params.agent_name}")
 
+    async def _heartbeat_loop() -> None:
+        """Keep Temporal from timing out the activity during long LLM calls."""
+        turn = 0
+        while True:
+            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+            turn += 1
+            activity.heartbeat(f"Agent {params.agent_name} running (turn ~{turn})")
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     try:
         runner = registry.get_runner()
         agent = registry.get(params.agent_name)
@@ -55,6 +68,8 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
             error=str(e),
             agents_used=[params.agent_name],
         )
+    finally:
+        heartbeat_task.cancel()
 
 
 @activity.defn

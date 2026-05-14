@@ -8,7 +8,6 @@ Supports: agent, approval, parallel, conditional, wait step types.
 from __future__ import annotations
 
 import asyncio
-import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -223,7 +222,7 @@ class AgentWorkflow:
         wf_input: WorkflowInput,
     ) -> bool:
         """Returns True if approved, False if rejected/timed-out."""
-        request_id = f"approval-{uuid.uuid4().hex[:12]}"
+        request_id = f"approval-{workflow.uuid4().hex[:12]}"
         approval_info: dict[str, Any] = {
             "request_id": request_id,
             "workflow_id": workflow.info().workflow_id,

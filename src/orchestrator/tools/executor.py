@@ -300,6 +300,9 @@ class ToolExecutor:
             Updated arguments with injected context variables
         """
         config = server.context_config
+        if config is None:
+            return arguments
+
         namespace = self._get_namespace(server)
 
         # Get tool's expected parameters from schema
@@ -384,6 +387,9 @@ class ToolExecutor:
             result: JSON string result from the tool
         """
         config = server.context_config
+        if config is None:
+            return
+
         namespace = self._get_namespace(server)
 
         # Parse result

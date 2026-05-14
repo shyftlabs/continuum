@@ -287,13 +287,50 @@ class HandoffManager:
 
         # Add history (may be summarized)
         if handoff_data.history:
-            # Strip system messages (source agent's instructions) and empty assistant
-            # messages (in-progress turns) — target agent has its own system prompt
-            filtered = [
-                m for m in handoff_data.history
-                if m.get("role") != "system"
-                and not (m.get("role") == "assistant" and not m.get("content"))
-            ]
+            # Only pass tool call/response pairs if the target agent has those tools.
+            # Orphaned tool messages (result without preceding tool_calls) cause 400
+            # errors from both OpenAI and Gemini.
+            target_tool_names = {
+                t.get("function", {}).get("name")
+                for t in (target_agent.get_tools_for_llm() or [])
+            }
+
+            filtered = []
+            i = 0
+            while i < len(handoff_data.history):
+                m = handoff_data.history[i]
+                role = m.get("role")
+
+                if role == "system":
+                    i += 1
+                    continue
+
+                if role == "assistant" and m.get("tool_calls"):
+                    called_tools = {
+                        tc.get("function", {}).get("name")
+                        for tc in m["tool_calls"]
+                    }
+                    if called_tools.issubset(target_tool_names):
+                        # Target has these tools — keep the pair
+                        filtered.append(m)
+                    # else: skip this message and let the tool results be skipped below
+                    i += 1
+                    continue
+
+                if role == "tool":
+                    # Only keep if the previous filtered message was a tool_calls assistant
+                    if filtered and filtered[-1].get("role") == "assistant" and filtered[-1].get("tool_calls"):
+                        filtered.append(m)
+                    i += 1
+                    continue
+
+                if role == "assistant" and not m.get("content"):
+                    i += 1
+                    continue
+
+                filtered.append(m)
+                i += 1
+
             messages.extend(filtered)
 
         # Add handoff context as a system message

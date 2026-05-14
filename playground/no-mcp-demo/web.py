@@ -7,6 +7,7 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 import sys
 
@@ -16,17 +17,23 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from config import default_config
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from workflows import MODES, _BaseWorkflow, create_workflow
 
-from orchestrator import LogLevel, setup_logging
+from orchestrator import AgentConfig, AgentMemoryConfig, AgentRunner, BaseAgent, LogLevel, RunnerConfig, setup_logging
+from orchestrator.agent.types import EventType
+from orchestrator.core.container import get_container
 
 setup_logging(level=LogLevel.INFO)
 
 _workflows: dict[str, _BaseWorkflow] = {}
 _init_errors: dict[str, str] = {}
+
+# Single shared streaming agent (stateless, no session history)
+_stream_runner: AgentRunner | None = None
+_stream_agent: BaseAgent | None = None
 
 
 @asynccontextmanager
@@ -48,6 +55,14 @@ class ChatRequest(BaseModel):
     user_id: str
     conversation_id: str
     mode: str = "sequential"
+
+
+class ClearMemoryRequest(BaseModel):
+    user_id: str
+
+
+class DeleteMemoryRequest(BaseModel):
+    memory_id: str
 
 
 async def get_workflow(mode: str) -> tuple[_BaseWorkflow | None, str | None]:
@@ -78,6 +93,102 @@ async def chat(req: ChatRequest):
         return {"response": f"Failed to initialize '{req.mode}' mode: {error}"}
     response = await wf.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
     return {"response": response}
+
+
+def _get_memory_client():
+    for wf in _workflows.values():
+        if wf._initialized and wf._container:
+            client = wf._container.memory_client
+            if client and client.is_enabled:
+                return client
+    return None
+
+
+@app.get("/memory/list")
+async def list_memories(user_id: str):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        entries = await client.get_all(user_id=user_id)
+        return {"success": True, "memories": [{"id": e.id, "text": e.memory} for e in entries]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/memory/delete")
+async def delete_memory(req: DeleteMemoryRequest):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        await client.delete(req.memory_id)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/memory/clear")
+async def clear_memory(req: ClearMemoryRequest):
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        await client.delete_all(user_id=req.user_id)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def get_stream_runner() -> AgentRunner:
+    global _stream_runner, _stream_agent
+    if _stream_runner is None:
+        container = get_container()
+        _stream_agent = BaseAgent(
+            name="stream-agent",
+            instructions="You are a knowledgeable assistant. Answer questions clearly and thoroughly.",
+            model=default_config.model,
+            memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
+            config=AgentConfig(log_to_session=False, session_history_turns=0),
+        )
+        _stream_runner = AgentRunner(
+            container=container,
+            config=RunnerConfig(persist_state=False, default_max_turns=5),
+        )
+    return _stream_runner
+
+
+@app.get("/stream")
+async def stream(request: Request, message: str = "", user_id: str = "anon"):
+    if not message:
+        return {"error": "message is required"}
+
+    runner = await get_stream_runner()
+
+    async def event_generator():
+        try:
+            async for event in runner.run_stream(
+                agent=_stream_agent,
+                input=message,
+                user_id=user_id,
+            ):
+                if await request.is_disconnected():
+                    break
+                if event.type == EventType.CONTENT_DELTA:
+                    chunk = event.data.get("content", "")
+                    yield f"data: {json.dumps({'content': chunk})}\n\n"
+                elif event.type == EventType.CONTENT_COMPLETE:
+                    yield f"data: {json.dumps({'done': True})}\n\n"
+                elif event.type == EventType.RUN_ERROR:
+                    yield f"data: {json.dumps({'error': event.data.get('error', 'Unknown error')})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/status")
@@ -141,6 +252,11 @@ HTML_PAGE = """<!DOCTYPE html>
           border-radius: 8px; cursor: pointer; font-size: 14px; }
   #send:hover { background: #2a4a7f; }
   #send:disabled { background: #aaa; cursor: not-allowed; }
+  #stream-btn { padding: 9px 18px; background: #2d6a4f; color: white; border: none;
+               border-radius: 8px; cursor: pointer; font-size: 14px; }
+  #stream-btn:hover { background: #1b4332; }
+  #stream-btn:disabled { background: #aaa; cursor: not-allowed; }
+  .streaming { border-left: 3px solid #2d6a4f; }
 
   #login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex;
                    align-items: center; justify-content: center; z-index: 100; }
@@ -155,6 +271,16 @@ HTML_PAGE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+
+<div id="memory-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:999; align-items:center; justify-content:center;">
+  <div style="background:white; border-radius:12px; width:480px; max-height:80vh; display:flex; flex-direction:column; overflow:hidden;">
+    <div style="padding:16px 20px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Long-term Memories</h3>
+      <button onclick="closeMemoryPanel()" style="background:none; border:none; font-size:20px; cursor:pointer;">✕</button>
+    </div>
+    <div id="memory-list" style="flex:1; overflow-y:auto; padding:12px 20px;"></div>
+  </div>
+</div>
 
 <div id="login-overlay">
   <div class="login-box">
@@ -171,6 +297,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <h1>No-MCP Demo — Research &amp; Writing Assistant</h1>
   <span id="user-display"></span>
   <button id="change-user-btn" class="hdr-btn hidden" onclick="changeUser()">Switch User</button>
+  <button id="manage-memory-btn" class="hdr-btn hidden" style="background:#8e44ad; border-color:#8e44ad;" onclick="openMemoryPanel()">Memories</button>
+  <button id="clear-memory-btn" class="hdr-btn hidden" style="background:#c0392b; border-color:#c0392b;" onclick="clearMemory()">Clear All</button>
   <button id="new-chat-btn" class="hdr-btn hidden" onclick="startNewChat()">+ New Chat</button>
 </header>
 
@@ -199,6 +327,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <input id="input" type="text" placeholder="Ask anything — research, writing, analysis..."
          onkeydown="if(event.key==='Enter') sendClick()" />
   <button id="send" onclick="sendClick()">Send</button>
+  <button id="stream-btn" onclick="streamClick()" title="Stream a single agent response token by token">Stream</button>
 </div>
 
 <script>
@@ -229,6 +358,8 @@ function doLogin() {
   document.getElementById('login-overlay').style.display = 'none';
   document.getElementById('new-chat-btn').classList.remove('hidden');
   document.getElementById('change-user-btn').classList.remove('hidden');
+  document.getElementById('manage-memory-btn').classList.remove('hidden');
+  document.getElementById('clear-memory-btn').classList.remove('hidden');
   startNewChat();
 }
 
@@ -304,6 +435,104 @@ async function sendClick() {
   }
   document.getElementById('send').disabled = false;
   input.focus();
+}
+
+async function openMemoryPanel() {
+  if (!currentUserId) return;
+  document.getElementById('memory-overlay').style.display = 'flex';
+  const list = document.getElementById('memory-list');
+  list.innerHTML = '<p style="color:#999;">Loading...</p>';
+  const res = await fetch(`/memory/list?user_id=${encodeURIComponent(currentUserId)}`);
+  const data = await res.json();
+  if (!data.success) { list.innerHTML = `<p style="color:red;">${data.error}</p>`; return; }
+  if (data.memories.length === 0) { list.innerHTML = '<p style="color:#999;">No memories found.</p>'; return; }
+  list.innerHTML = data.memories.map(m => `
+    <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      <span style="flex:1; font-size:14px;">${m.text}</span>
+      <button onclick="deleteMemory('${m.id}', this)" style="padding:4px 10px; background:#c0392b; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Delete</button>
+    </div>
+  `).join('');
+}
+
+function closeMemoryPanel() {
+  document.getElementById('memory-overlay').style.display = 'none';
+}
+
+async function deleteMemory(memoryId, btn) {
+  btn.disabled = true; btn.textContent = '...';
+  const res = await fetch('/memory/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({memory_id: memoryId})
+  });
+  const data = await res.json();
+  if (data.success) {
+    btn.closest('div').remove();
+    const list = document.getElementById('memory-list');
+    if (!list.children.length) list.innerHTML = '<p style="color:#999;">No memories found.</p>';
+  } else { btn.disabled = false; btn.textContent = 'Delete'; alert('Failed: ' + data.error); }
+}
+
+async function clearMemory() {
+  if (!currentUserId) return;
+  if (!confirm(`Clear all memories for user '${currentUserId}'?`)) return;
+  const res = await fetch('/memory/clear', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user_id: currentUserId})
+  });
+  const data = await res.json();
+  appendMsg('assistant', data.success ? 'Memory cleared.' : `Failed: ${data.error}`);
+}
+
+async function streamClick() {
+  if (!currentUserId) { alert('Please log in first!'); return; }
+  const input = document.getElementById('input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  document.getElementById('send').disabled = true;
+  document.getElementById('stream-btn').disabled = true;
+  appendMsg('user', msg);
+
+  const div = appendMsg('assistant', '');
+  div.classList.add('streaming');
+  div.innerHTML = '<div class="mode-tag">[stream — single agent]</div>';
+
+  const textNode = document.createElement('span');
+  div.appendChild(textNode);
+
+  const params = new URLSearchParams({ message: msg, user_id: currentUserId });
+  const resp = await fetch(`/stream?${params}`);
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = JSON.parse(line.slice(6));
+        if (payload.content) {
+          textNode.textContent += payload.content;
+          document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+        }
+        if (payload.error) {
+          textNode.textContent += `[Error: ${payload.error}]`;
+        }
+      }
+    }
+  } catch (e) {
+    textNode.textContent += `[Stream error: ${e.message}]`;
+  }
+
+  div.classList.remove('streaming');
+  document.getElementById('send').disabled = false;
+  document.getElementById('stream-btn').disabled = false;
+  document.getElementById('input').focus();
 }
 
 function appendMsg(role, text) {

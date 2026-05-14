@@ -354,3 +354,19 @@ def build_fact_checker_agent(cfg: SDKFeatureTestConfig) -> BaseAgent:
         config=_base_agent_config(cfg),
         memory_config=_memory_config(cfg, False),
     )
+
+
+def build_question_detector_agent(cfg: SDKFeatureTestConfig) -> BaseAgent:
+    """Condition agent: returns 'true' if input is a question, 'false' otherwise."""
+    return BaseAgent(
+        name="question_detector",
+        instructions=(
+            "Determine whether the user's input is a question. "
+            "Reply with exactly one word: 'true' if it is a question, 'false' if it is not. "
+            "No punctuation, no explanation, just 'true' or 'false'."
+        ),
+        model=cfg.default_model,
+        temperature=0.0,
+        config=_base_agent_config(cfg),
+        memory_config=_memory_config(cfg, False),
+    )
