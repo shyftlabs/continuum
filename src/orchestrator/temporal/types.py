@@ -53,6 +53,7 @@ class ParallelStep(BaseModel):
 class ConditionalStep(BaseModel):
     type: Literal["conditional"] = "conditional"
     condition_agent: str
+    condition_input: str | None = None
     if_true: list[dict[str, Any]] = Field(default_factory=list)
     if_false: list[dict[str, Any]] = Field(default_factory=list)
     timeout: int = 300

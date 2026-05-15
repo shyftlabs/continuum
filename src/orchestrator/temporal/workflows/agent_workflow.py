@@ -363,7 +363,7 @@ class AgentWorkflow:
             "run_agent_activity",
             AgentActivityParams(
                 agent_name=step.condition_agent,
-                input=self._last_output,
+                input=step.condition_input or self._last_output,
                 session_id=wf_input.session_id,
                 user_id=wf_input.user_id,
                 metadata=step.metadata,

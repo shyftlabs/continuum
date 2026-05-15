@@ -46,6 +46,7 @@ If you want session history to work (load prior turns, save new ones), you must 
 ```python
 # Step 1: create session
 session_id = await session_client.get_or_create_session(
+    session_id=session_id,
     user_id="user-123",
     conversation_id="conv-456",   # optional — see below
 )
@@ -74,12 +75,17 @@ response = await runner.run(
 | neither                       | random UUID                       |
 
 
-**Effect of** `conversation_id` **:** 
+### What is `conversation_id`
+
+Take chatbot as an example, if you have multiple chat windows, use `conversation_id` when you want to keep separate chat windows per user:
 
 - Without `conversation_id`: one session per user (`u:{user_id}`) — all conversations share the same history
 - With `conversation_id`: one session per conversation (`c:{conversation_id}:u:{user_id}`) — each conversation has its own isolated history
 
-Use `conversation_id` when you want to keep separate chat threads per user (e.g. multiple chat windows).
+**You need to customize `conversation_id` based on your projects:**
+
+- Chat UI projects (e.g. multiple chat windows per user): Generate `conversation_id` on the backend when the user creates a new conversation (POST /conversations), and return only the `conversation_id` to the frontend. The frontend passes it back with each message. `get_or_create_session` will use `conversation_id` and `user_id` to generate `session_id` at the first time.
+- Non-chat projects (task-based, webhook-triggered, background jobs): There is no chat window. Instead, you may use your natural entity ID (e.g. ticket ID, invoice ID, job ID) as `conversation_id`. Generate it on the backend at entity creation time. Each independent task gets its own session ID — never reuse session IDs across unrelated tasks.
 
 ---
 
