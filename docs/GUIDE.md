@@ -126,6 +126,26 @@ This saves exactly one clean turn — the original input and the final output �
 
 > **If you build a custom workflow agent, you must follow the same pattern.** Forgetting `suppress_session_log = True` will cause every sub-agent turn to be saved to session history.
 
+### Deciding which agent's output is the final response
+
+In a multi-agent workflow, you must explicitly decide which agent's output is the user-facing final response — this is what you pass to `save_turn()`.
+
+Two common patterns:
+
+**Pipeline (e.g. Sequential):** agents run one after another, each passing output to the next. The *last* agent produces the final response:
+
+```python
+await runner.save_turn(session_id, user_input, last_agent_response.content)
+```
+
+**Handoff / Router:** sub-agents do work and their results are injected back into the top-level agent's message list. The top-level agent then synthesizes and generates its own final response — so the *top-level agent's* output is what to save, not the sub-agents' intermediate results:
+
+```python
+await runner.save_turn(session_id, user_input, top_level_agent_response.content)
+```
+
+> If you save an intermediate agent's output by mistake, session history will contain turns the user never saw — and future turns will load them as prior context.
+
 ### Built-in workflow implementations
 
 Built-in workflow agents are provided in `src/orchestrator/agent/workflow/`:
