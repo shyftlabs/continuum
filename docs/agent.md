@@ -240,7 +240,7 @@ All importable from `orchestrator.agent`.
 | `output_type` | `Literal["text","json","structured"]` | `"text"` | |
 | `reasoning_mode` | `bool` | `False` | Silent think-first pass before main loop |
 | `react_mode` | `bool` | `False` | Inject the `think` tool with ReAct scaffold |
-| `session_history_limit` | `int \| None` | `None` | Cap history pulled from Redis |
+| `session_history_turns` | `int \| None` | `None` | Cap history pulled from Redis (None = 20 turns) |
 | `require_context` | `bool` | `False` | Fail if no `rag_context` provided |
 | `retrieval_top_k` | `int \| None` | `None` | RAG hook |
 | `rerank_enabled` | `bool \| None` | `None` | RAG hook |
@@ -257,7 +257,7 @@ All importable from `orchestrator.agent`.
 | `transfer_history` | `bool` | `True` |
 | `summarize_history` | `bool` | `True` |
 | `summarization_mode` | `HistorySummarizationMode` | `HYBRID` |
-| `recent_messages` | `int` | `5` |
+| `recent_turns` | `int` | `3` |
 | `summary_model` | `str \| None` | `None` |
 | `return_to_parent` | `bool` | `True` |
 | `max_handoff_depth` | `int` | `10` |
@@ -292,6 +292,7 @@ class EventType(str, Enum):
     RUN_START / RUN_END / RUN_ERROR
     AGENT_START / AGENT_END
     CONTENT_DELTA / CONTENT_COMPLETE
+    ROUTING
     TOOL_CALL_START / TOOL_CALL_END / TOOL_CALL_ERROR
     HANDOFF_START / HANDOFF_END / HANDOFF_RETURN
     MEMORY_RETRIEVAL / MEMORY_STORAGE
@@ -305,7 +306,7 @@ class RunStatus(str, Enum):
     HANDOFF_PENDING / PAUSED / COMPLETED / FAILED / CANCELLED
 
 class MemoryScope(str, Enum):           # NB: this is the enum re-exported from `orchestrator.agent`
-    SHARED / USER / AGENT / RUN          # `orchestrator.memory.scopes.MemoryScope` is a dataclass — different type
+    SHARED / USER / AGENT / CONVERSATION # `orchestrator.memory.scopes.MemoryScope` is a dataclass — different type
 
 class MergeStrategy(str, Enum):
     CONCATENATE / LLM_SUMMARIZE / STRUCTURED / FIRST_SUCCESS
@@ -331,7 +332,7 @@ Handoff(
     transfer_history: bool = True,
     summarize_history: bool = True,
     summarization_mode: HistorySummarizationMode = HYBRID,
-    recent_messages: int = 5,
+    recent_turns: int = 3,
     return_to_parent: bool = True,
 )
 ```
@@ -583,7 +584,7 @@ triage = BaseAgent(
             transfer_history=True,
             summarize_history=True,
             summarization_mode=HistorySummarizationMode.HYBRID,
-            recent_messages=5,
+            recent_turns=3,
             return_to_parent=True,
         ),
         Handoff(target_agent="technical", description="Bugs, errors, outages."),

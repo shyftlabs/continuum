@@ -140,7 +140,7 @@ WorkflowInput(
         {"type": "agent",       "agent_name": "...", "input": "...", "timeout": 300, "retries": 3},
         {"type": "approval",    "description": "...", "approvers": ["alice"], "timeout": 86400},
         {"type": "parallel",    "agents": [{"type":"agent","agent_name":"a"}, {"type":"agent","agent_name":"b"}], "merge_strategy": "concatenate"},
-        {"type": "conditional", "condition_agent": "is_done", "if_true": [...], "if_false": [...]},
+        {"type": "conditional", "condition_agent": "is_done", "condition_input": "...", "if_true": [...], "if_false": [...]},
         {"type": "wait",        "duration_seconds": 60},
     ],
     initial_input="…",

@@ -61,6 +61,7 @@ ParallelStep(
 ConditionalStep(
     type="conditional",
     condition_agent: str,                  # agent that returns true/false
+    condition_input: str | None = None,    # explicit input for the condition agent; default: last step's output
     if_true: list[dict[str, Any]] = [],    # nested steps
     if_false: list[dict[str, Any]] = [],
     timeout: int = 300,

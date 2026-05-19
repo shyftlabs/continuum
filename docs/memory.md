@@ -1,7 +1,7 @@
 # Memory Module
 
 Long-term semantic memory backed by **mem0** (fact extraction) +
-**Qdrant** (vector search). Memories are stored across sessions and
+**Qdrant or Milvus** (vector search; default is Milvus). Memories are stored across sessions and
 retrieved automatically by `AgentRunner` before each LLM call.
 
 This doc covers:
@@ -92,7 +92,7 @@ MemoryClient(
 | `update(memory_id, data, *, custom_prompt=None)` | `MemoryEntry` | Replace memory text |
 | `history(memory_id)` | `list[dict]` | All versions of a memory |
 | `reset()` | `bool` | **DESTRUCTIVE** — wipes the entire store |
-| `close()` | `None` | Release Qdrant client |
+| `close()` | `None` | Release vector store client |
 
 Every async method has a `*_sync` counterpart (`add_sync`, `search_sync`,
 …) that wraps the async method via `asyncio.to_thread`.
@@ -129,11 +129,15 @@ A Pydantic model. Fields with their defaults sourced from `Settings`.
 |---|---|---|---|
 | `provider` | `str` | `"mem0"` | Currently `mem0` is the only built-in provider |
 | `enabled` | `bool` | `settings.memory_enabled` | Master switch |
-| `vector_store_provider` | `Literal["qdrant"]` | `"qdrant"` | |
-| `qdrant_host` | `str` | `settings.qdrant_host` | |
+| `vector_store_provider` | `Literal["qdrant", "milvus"]` | `"milvus"` | Vector store backend |
+| `qdrant_host` | `str` | `settings.qdrant_host` | Used when `vector_store_provider="qdrant"` |
 | `qdrant_port` | `int` | `settings.qdrant_port` | |
 | `qdrant_api_key` | `str \| None` | `settings.qdrant_api_key` | For Qdrant Cloud |
 | `qdrant_collection` | `str` | `settings.qdrant_collection` | Default `"orchestrator_memories"` |
+| `milvus_host` | `str` | `settings.milvus_host` | Used when `vector_store_provider="milvus"` |
+| `milvus_port` | `int` | `settings.milvus_port` | Default `19530` |
+| `milvus_token` | `str \| None` | `settings.milvus_token` | For Zilliz Cloud |
+| `milvus_collection` | `str` | `settings.milvus_collection` | Default `"orchestrator_memories"` |
 | `memory_llm_model` | `str` | `settings.memory_llm_model` | LLM that does fact extraction |
 | `memory_llm_temperature` | `float` | `settings.memory_llm_temperature` | |
 | `embedder_provider` | `str` | `settings.embedder_provider` | `openai`, `azure_openai`, `huggingface`, `ollama`, `gemini`, `vertexai`, `cohere` |
@@ -142,7 +146,7 @@ A Pydantic model. Fields with their defaults sourced from `Settings`.
 | `embedder_api_key` | `str \| None` | `settings.embedder_api_key` | Override env-supplied key |
 | `embedder_api_base` | `str \| None` | `settings.embedder_api_base` | Self-hosted / Azure |
 | `history_db_path` | `str` | `settings.memory_history_db_path` | SQLite history file |
-| `memory_isolation` | `Literal["shared","user","agent","run"]` | `settings.memory_isolation` | Default scope |
+| `memory_isolation` | `Literal["shared","user","agent","conversation"]` | `settings.memory_isolation` | Default scope |
 | `search_limit` | `int` | `settings.memory_search_limit` | Default top-K |
 | `reranker_enabled` | `bool` | `False` | Enable mem0 reranker |
 | `custom_config` | `dict` | `{}` | Advanced mem0 overrides |
@@ -168,7 +172,7 @@ class MemoryScope(str, Enum):
     SHARED = "shared"
     USER = "user"
     AGENT = "agent"
-    RUN = "run"
+    CONVERSATION = "conversation"
 ```
 
 This is what you pass to `AgentMemoryConfig(search_scope=MemoryScope.USER)`.
@@ -178,7 +182,7 @@ This is what you pass to `AgentMemoryConfig(search_scope=MemoryScope.USER)`.
 | `SHARED` | All agents and users — global knowledge base |
 | `USER` | One user across all agents — default |
 | `AGENT` | One agent across all users |
-| `RUN` | Single run only — ephemeral |
+| `CONVERSATION` | Single conversation only — ephemeral |
 
 ### 4.2 The dataclass used at the memory layer
 
@@ -217,7 +221,7 @@ Conversions:
 - `get_primary_identifier(mode) -> dict[str, str]`
 
 `MemoryIsolationLevel` is the underlying enum: `SHARED`, `USER`,
-`AGENT`, `RUN` (string-valued).
+`AGENT`, `CONVERSATION` (string-valued).
 
 ### Custom scope registry
 

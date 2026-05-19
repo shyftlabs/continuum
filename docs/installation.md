@@ -11,7 +11,7 @@ contributors** (working in this repository).
 
 - **Python 3.13** — the framework requires it. Use `pyenv`, `uv`, or
   a system 3.13.
-- **Docker + Docker Compose** — for Redis, Qdrant, and (optionally) Langfuse.
+- **Docker + Docker Compose** — for Redis, Milvus (default vector store), and (optionally) Langfuse.
 - **An LLM provider key** — at minimum `OPENAI_API_KEY`. mem0's default
   embedder is OpenAI's `text-embedding-3-small`, which means an
   `OPENAI_API_KEY` is required at startup *even if* you only call
@@ -38,7 +38,7 @@ git clone https://github.com/bhavik-shyftlabs/continuum.git
 cd continuum
 
 cp .env.template .env                      # add OPENAI_API_KEY
-docker compose up -d                       # Redis (:6380) + Qdrant (:6333)
+docker compose up -d                       # Redis (:6380) + Milvus (:19530)
 
 python3.13 -m venv .venv
 source .venv/bin/activate
@@ -127,15 +127,20 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `LLM_MAX_RETRIES` | `3` | |
 | `LLM_ENABLE_FALLBACK` | `true` | |
 
-### Memory (mem0 + Qdrant)
+### Memory (mem0 + Qdrant / Milvus)
 
 | Variable | Default | Description |
 |---|---|---|
 | `MEMORY_ENABLED` | `true` | Master switch |
-| `QDRANT_HOST` | `localhost` | |
+| `VECTOR_STORE_PROVIDER` | `milvus` | `qdrant` or `milvus` |
+| `QDRANT_HOST` | `localhost` | Used when `VECTOR_STORE_PROVIDER=qdrant` |
 | `QDRANT_PORT` | `6333` | |
 | `QDRANT_API_KEY` | unset | Qdrant Cloud |
 | `QDRANT_COLLECTION` | `orchestrator_memories` | |
+| `MILVUS_HOST` | `localhost` | Used when `VECTOR_STORE_PROVIDER=milvus` |
+| `MILVUS_PORT` | `19530` | |
+| `MILVUS_TOKEN` | unset | Zilliz Cloud |
+| `MILVUS_COLLECTION` | `orchestrator_memories` | |
 | `MEMORY_LLM_MODEL` | `gpt-4o-mini` | LLM for fact extraction |
 | `MEMORY_LLM_TEMPERATURE` | `0.1` | |
 | `EMBEDDER_PROVIDER` | `openai` | `openai` / `azure_openai` / `huggingface` / `ollama` / `gemini` / `vertexai` / `cohere` |
@@ -144,7 +149,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `EMBEDDER_API_KEY` | unset | Override env-supplied key |
 | `EMBEDDER_API_BASE` | unset | Self-hosted / Azure |
 | `MEMORY_HISTORY_DB_PATH` | `~/.orchestrator/memory_history.db` | SQLite history |
-| `MEMORY_ISOLATION` | `user` | `shared` / `user` / `agent` / `run` |
+| `MEMORY_ISOLATION` | `user` | `shared` / `user` / `agent` / `conversation` |
 | `MEMORY_SEARCH_LIMIT` | `5` | Default top-K |
 
 ### Session (Redis)
@@ -247,7 +252,7 @@ Missing credentials` means infra is fine but `OPENAI_API_KEY` isn't set
 | `ModuleNotFoundError: orchestrator` | venv not active | `source .venv/bin/activate` |
 | `Failed to initialize mem0: Missing credentials` | mem0 needs OpenAI for embeddings | set `OPENAI_API_KEY` or `MEMORY_ENABLED=false` |
 | `redis.exceptions.ConnectionError` | Redis not running / wrong port | `docker compose ps`; check `SESSION_REDIS_PORT=6380` |
-| `Qdrant: collection X not found` | Stale volume after schema change | `docker compose down -v && docker compose up -d` |
+| Vector store collection not found | Stale volume after schema change | `docker compose down -v && docker compose up -d` |
 | `aiohttp` deprecation warnings | Older aiohttp | `pip install "aiohttp>=3.13.2" --upgrade` |
 | Imports work but tools never fire | Forgot `await server.connect()` or `executor.initialize()` | Add the missing `await` |
 | `add_message() got an unexpected keyword argument 'role'` | Old API | Pass a `ChatMessage` object — see [`session.md`](session.md) |

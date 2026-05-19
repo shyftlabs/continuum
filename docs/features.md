@@ -119,7 +119,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-05 ),
 
 | Feature                   | Description                                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Long-term memory          | Semantic vector search backed by mem0 + Qdrant                                                   |
+| Long-term memory          | Semantic vector search backed by mem0 + Qdrant or Milvus (configurable; default Milvus)          |
 | Memory scopes             | `USER`, `AGENT`, `SHARED`, `CONVERSATION`                                                        |
 | Memory isolation levels   | Configurable per deployment for multi-tenant safety                                              |
 | Custom extraction prompt  | Override mem0's fact extraction with a domain-specific prompt                                    |
