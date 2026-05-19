@@ -1,6 +1,6 @@
 # Continuum — Complete Feature Reference
 
-Full inventory of every feature available in Continuum (updated at 2026-05-05 ), compiled from source. Organised by layer so you can find what you need and know where to look in the code. 
+Full inventory of every feature available in Continuum (updated at 2026-05-19 ), compiled from source. Organised by layer so you can find what you need and know where to look in the code. 
 
 ---
 
@@ -13,7 +13,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-05 ),
 | Priority dispatcher           | Queues external API calls by request priority (1–10) under load                                                             |
 | Two-level dispatcher          | For self-hosted models (vLLM, SGLang): stage priority × request priority                                                    |
 | Smart layer / tier classifier | Routes to cheap vs. expensive models by query complexity; supports fixed rules, JSON classifier, remote Qwen, or local Qwen |
-| Streaming                     | `run_stream()` yields real-time events: content delta, tool calls, handoffs                                                 |
+| Streaming                     | `run_stream()` yields real-time events: content delta, tool calls, handoffs, routing decisions, memory retrieval/storage    |
 | Structured output             | JSON mode, Pydantic output schemas, strict mode                                                                             |
 
 
@@ -206,15 +206,15 @@ Full inventory of every feature available in Continuum (updated at 2026-05-05 ),
 Requires `pip install shyftlabs-continuum[temporal]`.
 
 
-| Feature                                 | Description                                                                    |
-| --------------------------------------- | ------------------------------------------------------------------------------ |
-| AgentWorkflow                           | Temporal workflow wrapper for long-running agents that survive process crashes |
-| AgentStep / ParallelStep / ApprovalStep | Composable workflow step types                                                 |
-| Human-in-the-loop                       | `HumanInLoopManager` for approval gating: approve, reject, escalate            |
-| Auto-approve conditions                 | Programmatic bypass for known-safe cases                                       |
-| Escalation                              | Configurable escalation handler and timeout when approval is not received      |
-| Worker manager                          | Start and stop Temporal workers                                                |
-| Agent registry                          | Named agent lookup for workflow activities                                     |
+| Feature                                                                             | Description                                                                     |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| AgentWorkflow / SequentialAgentWorkflow / ParallelAgentWorkflow / LoopAgentWorkflow | Temporal workflow wrappers for long-running agents that survive process crashes |
+| AgentStep / ParallelStep / ApprovalStep / ConditionalStep / WaitStep                | Composable workflow step types                                                  |
+| Human-in-the-loop                                                                   | `HumanInLoopManager` for approval gating: approve, reject, escalate             |
+| Auto-approve conditions                                                             | Programmatic bypass for known-safe cases                                        |
+| Escalation                                                                          | Configurable escalation handler and timeout when approval is not received       |
+| Worker manager                                                                      | Start and stop Temporal workers                                                 |
+| Agent registry                                                                      | Named agent lookup for workflow activities                                      |
 
 
 ---
