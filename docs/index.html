@@ -1,0 +1,1758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Continuum — Agent Development Framework</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --brand: #5b6cf9;
+      --brand-light: #eef0ff;
+      --brand-dark: #3d4ee0;
+      --bg: #ffffff;
+      --surface: #f8f9fc;
+      --border: #e8eaed;
+      --text: #1a1d23;
+      --text-secondary: #6b7280;
+      --code-bg: #0f1117;
+      --code-text: #e2e8f0;
+      --sidebar-bg: #f0f2f8;
+      --sidebar-width: 260px;
+      --topnav-height: 56px;
+      --green: #16a34a;
+      --yellow: #ca8a04;
+      --red: #dc2626;
+      --purple: #7c3aed;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; color: var(--text); background: var(--bg); font-size: 15px; line-height: 1.6; }
+
+    /* ── TOP NAV ── */
+    #topnav {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--topnav-height);
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; z-index: 100; padding: 0 24px; gap: 8px;
+    }
+    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); font-weight: 700; font-size: 17px; margin-right: 24px; }
+    .nav-logo-icon { width: 32px; height: 32px; background: var(--brand); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: 700; }
+    .nav-tabs { display: flex; gap: 2px; }
+    .nav-tab {
+      padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
+      color: var(--text-secondary); border: none; background: none; transition: all .15s;
+    }
+    .nav-tab:hover { background: var(--surface); color: var(--text); }
+    .nav-tab.active { background: var(--brand-light); color: var(--brand); }
+    .nav-badge { margin-left: auto; background: var(--brand); color: white; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+
+    /* ── LAYOUT ── */
+    #layout { display: flex; margin-top: var(--topnav-height); min-height: calc(100vh - var(--topnav-height)); }
+
+    /* ── SIDEBAR ── */
+    #sidebar {
+      width: var(--sidebar-width); flex-shrink: 0; background: var(--sidebar-bg);
+      border-right: 1px solid var(--border); position: sticky; top: var(--topnav-height);
+      height: calc(100vh - var(--topnav-height)); overflow-y: auto; padding: 20px 0;
+    }
+    .sidebar-group { margin-bottom: 4px; }
+    .sidebar-group-label { font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .07em; padding: 8px 20px 4px; }
+    .sidebar-link {
+      display: block; padding: 5px 20px; font-size: 13.5px; color: var(--text-secondary);
+      text-decoration: none; border-left: 2px solid transparent; transition: all .1s; cursor: pointer;
+    }
+    .sidebar-link:hover { color: var(--text); background: rgba(91,108,249,.06); }
+    .sidebar-link.active { color: var(--brand); font-weight: 600; border-left-color: var(--brand); background: rgba(91,108,249,.08); }
+    .sidebar-link-sub { padding-left: 34px; font-size: 12.5px; }
+
+    /* ── MAIN ── */
+    #main { flex: 1; max-width: 860px; padding: 40px 56px 80px; }
+
+    /* ── SECTIONS ── */
+    .page-section { display: none; }
+    .page-section.active { display: block; }
+
+    /* ── TYPOGRAPHY ── */
+    h1 { font-size: 32px; font-weight: 700; line-height: 1.25; margin-bottom: 12px; }
+    h2 { font-size: 22px; font-weight: 700; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+    h2:first-of-type { border-top: none; margin-top: 28px; }
+    h3 { font-size: 17px; font-weight: 600; margin: 28px 0 8px; }
+    h4 { font-size: 14px; font-weight: 600; margin: 20px 0 6px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .05em; }
+    p { margin-bottom: 14px; color: #374151; }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ul, ol { padding-left: 22px; margin-bottom: 14px; }
+    li { margin-bottom: 4px; color: #374151; }
+    strong { font-weight: 600; color: var(--text); }
+
+    /* ── HERO ── */
+    .hero { padding: 16px 0 36px; }
+    .hero h1 { font-size: 38px; }
+    .hero .tagline { font-size: 18px; color: var(--text-secondary); margin-bottom: 28px; max-width: 520px; }
+    .hero-badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 32px; }
+    .badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 20px; border: 1px solid; }
+    .badge-blue { color: var(--brand); border-color: var(--brand); background: var(--brand-light); }
+    .badge-green { color: var(--green); border-color: #bbf7d0; background: #f0fdf4; }
+    .badge-purple { color: var(--purple); border-color: #ddd6fe; background: #f5f3ff; }
+
+    /* ── FEATURE CARDS ── */
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+    .card-icon { font-size: 22px; margin-bottom: 10px; }
+    .card h3 { font-size: 15px; margin: 0 0 6px; }
+    .card p { font-size: 13.5px; color: var(--text-secondary); margin: 0; }
+
+    /* ── CODE ── */
+    .code-wrapper { position: relative; margin: 12px 0 20px; }
+    pre {
+      background: var(--code-bg); color: var(--code-text); border-radius: 8px;
+      padding: 18px 20px; overflow-x: auto; font-family: 'JetBrains Mono', monospace;
+      font-size: 13px; line-height: 1.65; margin: 0; white-space: pre;
+    }
+    code { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+    p code, li code, td code, h3 code {
+      background: #f1f3f9; color: #c7254e; padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+    }
+    .copy-btn {
+      position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,.1); border: none;
+      color: #94a3b8; font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+      z-index: 2;
+    }
+    .copy-btn:hover { background: rgba(255,255,255,.2); color: white; }
+
+    /* syntax colours (manual) */
+    .kw { color: #c792ea; }
+    .fn { color: #82aaff; }
+    .str { color: #c3e88d; }
+    .cm { color: #546e7a; font-style: italic; }
+    .num { color: #f78c6c; }
+    .cls { color: #ffcb6b; }
+    .op { color: #89ddff; }
+
+    /* ── CALLOUTS ── */
+    .callout { border-radius: 8px; padding: 14px 18px; margin: 16px 0; font-size: 14px; border-left: 4px solid; }
+    .callout-info { background: #eff6ff; border-color: #3b82f6; }
+    .callout-warn { background: #fffbeb; border-color: #f59e0b; }
+    .callout-tip { background: #f0fdf4; border-color: #22c55e; }
+    .callout-danger { background: #fef2f2; border-color: #ef4444; }
+    .callout > strong:first-child { display: block; margin-bottom: 4px; }
+
+    /* ── TABLES ── */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 13.5px; }
+    th { background: var(--surface); text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 2px solid var(--border); }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── STEP LIST ── */
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { counter-increment: step; padding: 14px 14px 14px 52px; position: relative; border-left: 2px solid var(--border); margin-left: 16px; margin-bottom: 0; }
+    .steps li::before {
+      content: counter(step); position: absolute; left: -17px; top: 14px;
+      width: 30px; height: 30px; background: var(--brand); color: white;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+    }
+    .steps li:last-child { border-left-color: transparent; }
+
+    /* ── PARAM TABLE ── */
+    .param-table { font-size: 13px; }
+    .param-table td:first-child { font-family: 'JetBrains Mono', monospace; color: var(--brand); white-space: nowrap; }
+    .param-table td:nth-child(2) { color: #7c3aed; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── SECTION HEADER ── */
+    .section-intro { font-size: 17px; color: var(--text-secondary); margin-bottom: 32px; max-width: 680px; }
+
+    /* ── TAG ── */
+    .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+    .tag-opt { background: #fef3c7; color: #92400e; }
+    .tag-req { background: #fee2e2; color: #991b1b; }
+    .tag-new { background: #dbeafe; color: #1e40af; }
+
+    /* ── WORKFLOW GRID ── */
+    .workflow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+    .workflow-card { border: 1px solid var(--border); border-radius: 8px; padding: 16px; background: var(--bg); }
+    .workflow-card .wf-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+    .workflow-card .wf-desc { font-size: 13px; color: var(--text-secondary); }
+
+    /* ── SCROLLSPY UTIL ── */
+    .anchor { display: block; position: relative; top: -80px; visibility: hidden; }
+
+    /* ── FOOTER ── */
+    footer { padding: 24px 56px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; display: flex; justify-content: space-between; }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════ TOP NAV ═══════════════════════ -->
+<nav id="topnav">
+  <a class="nav-logo" href="#" onclick="showSection('home')">
+    <div class="nav-logo-icon">C</div>
+    Continuum
+  </a>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showSection('home')">Home</button>
+    <button class="nav-tab" onclick="showSection('build')">Build Agents</button>
+    <button class="nav-tab" onclick="showSection('run')">Run Agents</button>
+    <button class="nav-tab" onclick="showSection('components')">Components</button>
+    <button class="nav-tab" onclick="showSection('integrations')">Integrations</button>
+    <button class="nav-tab" onclick="showSection('community')">Community</button>
+  </div>
+  <span class="nav-badge">v0.2.0</span>
+</nav>
+
+<!-- ═══════════════════════ LAYOUT ═══════════════════════ -->
+<div id="layout">
+
+<!-- ── SIDEBAR ── -->
+<aside id="sidebar">
+
+  <!-- HOME sidebar -->
+  <div class="sidebar-group" id="sb-home">
+    <div class="sidebar-group-label">Overview</div>
+    <a class="sidebar-link active" onclick="scrollToAnchor('home-intro')">Introduction</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-features')">Key Features</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-quickstart')">Quickstart</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-arch')">Architecture</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-docs')">Full Documentation</a>
+  </div>
+
+  <!-- BUILD sidebar -->
+  <div class="sidebar-group" id="sb-build" style="display:none">
+    <div class="sidebar-group-label">Agent Design</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('build-baseagent')">Base Agent</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-stateless')">Stateless vs Stateful</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-hooks')">Lifecycle Hooks</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-prompts')">Prompt Engineering</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-structured')">Structured Output</a>
+    <div class="sidebar-group-label">Workflows</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('build-workflows')">Multi-Agent Workflows</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-custom')">Custom Workflow</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-sequential')">Built-in Workflows</a>
+  </div>
+
+  <!-- RUN sidebar -->
+  <div class="sidebar-group" id="sb-run" style="display:none">
+    <div class="sidebar-group-label">Execution</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-runner')">AgentRunner</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-stream')">Streaming</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-events')">EventType Reference</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-session')">Session History</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-session-create')">Creating Sessions</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-session-multi')">Multi-agent Pattern</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-final')">Deciding Final Response</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-context')">Context Management</a>
+    <div class="sidebar-group-label">Deployment</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-lifecycle')">App Lifecycle</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-fastapi')">FastAPI Server</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-temporal-deploy')">Temporal Workers</a>
+    <div class="sidebar-group-label">Safety</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-safety')">Input / Output Scanning</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-testing')">Testing Guide</a>
+  </div>
+
+  <!-- COMPONENTS sidebar -->
+  <div class="sidebar-group" id="sb-components" style="display:none">
+    <div class="sidebar-group-label">Tools</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-mcp')">MCP Servers</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-tool-filtering')">Tool Filtering</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-tool-context')">Tool Context Injection</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-artifacts')">Run Artifacts</a>
+    <div class="sidebar-group-label">Memory</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-memory')">Long-term Memory</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-memory-scope')">Memory Scopes</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-intelligent-memory')">IntelligentMemoryClient</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-session')">Sessions (Redis)</a>
+    <div class="sidebar-group-label">Durable Workflows</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-temporal')">Temporal Integration</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-hitl')">Human-in-the-Loop</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-loop-workflow')">Loop Workflow</a>
+  </div>
+
+  <!-- INTEGRATIONS sidebar -->
+  <div class="sidebar-group" id="sb-integrations" style="display:none">
+    <div class="sidebar-group-label">LLM Providers</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-openai')">OpenAI</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-anthropic')">Anthropic</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-gemini')">Google Gemini</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-azure')">Azure OpenAI</a>
+    <div class="sidebar-group-label">Observability</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-langfuse')">Langfuse Tracing</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-observe')">Tracing Decorators</a>
+    <div class="sidebar-group-label">Vector Stores</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-qdrant')">Qdrant</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-milvus')">Milvus</a>
+  </div>
+
+  <!-- COMMUNITY sidebar -->
+  <div class="sidebar-group" id="sb-community" style="display:none">
+    <div class="sidebar-group-label">Get Involved</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('com-contributing')">Contributing</a>
+    
+    
+  </div>
+
+
+</aside>
+
+<!-- ── MAIN CONTENT ── -->
+<main id="main">
+
+<!-- ═══════════════════ HOME ═══════════════════ -->
+<section class="page-section active" id="sec-home">
+
+  <a class="anchor" id="home-intro"></a>
+  <div class="hero">
+    <h1>Build production AI agents,<br>not prototypes.</h1>
+    <p class="tagline">Continuum is a Python framework for building, running, and deploying reliable multi-agent systems at enterprise scale.</p>
+    <div class="hero-badges">
+      <span class="badge badge-blue">Python 3.13</span>
+      <span class="badge badge-green">OpenAI · Anthropic · Gemini</span>
+      <span class="badge badge-purple">MCP Native</span>
+      <span class="badge badge-blue">Temporal Durable Workflows</span>
+      <span class="badge badge-green">Langfuse Observability</span>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-features"></a>
+  <h2>Key Features</h2>
+  <div class="cards">
+    <div class="card">
+      <div class="card-icon">🤖</div>
+      <h3>Multi-provider LLMs</h3>
+      <p>Route by model-string prefix — <code>claude-*</code>, <code>gemini/*</code>, <code>gpt-*</code>. Direct SDK calls to OpenAI, Anthropic, and Google.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🧠</div>
+      <h3>Two-tier Memory</h3>
+      <p>Long-term semantic memory via mem0 + Milvus(default)/Qdrant. Short-term session history in Redis. Four long-term memory isolation scopes: USER, AGENT, SHARED, CONVERSATION.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚙️</div>
+      <h3>9 Workflow Patterns</h3>
+      <p>Sequential, Parallel, Loop, Reflection, Router, Planner, Debate, Scatter, and SupervisedSequential — all composable and traceable.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔧</div>
+      <h3>MCP-native Tooling</h3>
+      <p>Connect any MCP server over Stdio, SSE, or StreamableHTTP.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⏱️</div>
+      <h3>Durable Workflows</h3>
+      <p>Temporal integration for long-running workflows that survive restarts, with human-in-the-loop approval gates and audit trails.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">📊</div>
+      <h3>Full Observability</h3>
+      <p>Every LLM call, tool invocation, handoff, and memory operation is auto-traced in Langfuse. Add custom spans with <code>@observe</code>.</p>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-quickstart"></a>
+  <h2>Quickstart</h2>
+  <ol class="steps">
+    <li>
+      <strong>Install</strong>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
+python3.13 -m venv .venv    
+source .venv/bin/activate
+pip install shyftlabs-continuum </pre></div>
+    </li>
+    <li>
+      <strong>Setup environment and spin up infrastructure</strong>
+      
+      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>cp .env.template .env   </pre></div>
+      
+      <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Next, configure your <code>.env</code> file:</p>
+      <div class="code-wrapper" style="max-height: 400px; overflow-y: auto;"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># ── LLM Provider Keys ────────────────────────────────────────────────────────</span>
+OPENAI_API_KEY=your-openai-api-key        <span class="cm"># required (also used for embeddings)</span>
+GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># if using Gemini</span>
+<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # if using Claude</span>
+
+<span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
+DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
+FALLBACK_LLM_MODEL=gpt-4o-mini
+DEFAULT_LLM_TEMPERATURE=0.7
+DEFAULT_LLM_MAX_TOKENS=4096
+LLM_REQUEST_TIMEOUT=60
+LLM_MAX_RETRIES=3
+LLM_ENABLE_FALLBACK=true
+
+<span class="cm"># ── Embeddings ────────────────────────────────────────────────────────────────</span>
+EMBEDDER_PROVIDER=openai
+EMBEDDER_MODEL=text-embedding-3-small
+EMBEDDING_DIMS=1536
+
+<span class="cm"># ── Memory (mem0 + Milvus) ───────────────────────────────────────────────────</span>
+MEMORY_ENABLED=true
+VECTOR_STORE_PROVIDER=milvus
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
+MILVUS_TOKEN=
+MILVUS_COLLECTION=orchestrator_memories
+MEMORY_LLM_MODEL=gemini/gemini-2.5-flash
+MEMORY_LLM_TEMPERATURE=0.1
+MEMORY_ISOLATION=user
+MEMORY_SEARCH_LIMIT=5
+MEMORY_HISTORY_DB_PATH=~/.orchestrator/memory_history.db
+
+<span class="cm"># ── Session (Redis) ───────────────────────────────────────────────────────────</span>
+SESSION_ENABLED=true
+SESSION_REDIS_HOST=localhost
+SESSION_REDIS_PORT=6380
+SESSION_REDIS_PASSWORD=sdk123456789
+SESSION_REDIS_DB=0
+SESSION_REDIS_SSL=false
+SESSION_TTL_SECONDS=172800
+SESSION_MAX_MESSAGES=1000
+SESSION_KEY_PREFIX=orchestrator:session
+
+<span class="cm"># ── Langfuse Observability ────────────────────────────────────────────────────</span>
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
+LANGFUSE_SECRET_KEY=your-langfuse-secret-key
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_BASE_URL=http://localhost:3000
+NEXTAUTH_SECRET=your-nextauth-secret
+LANGFUSE_SAMPLE_RATE=1.0
+LANGFUSE_FLUSH_INTERVAL=1
+LANGFUSE_FLUSH_AT=15
+LANGFUSE_DEBUG=false
+
+<span class="cm"># ── Temporal (durable workflows) ─────────────────────────────────────────────</span>
+TEMPORAL_ENABLED=true
+TEMPORAL_HOST=localhost:7233
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=orchestrator-agents
+TEMPORAL_ENABLE_HUMAN_IN_LOOP=true
+TEMPORAL_APPROVAL_TIMEOUT_SECONDS=86400
+TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT=604800
+TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
+TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
+
+<span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+SHARED_SERVICES_ENABLED=true
+MEM0_TELEMETRY=false
+ANONYMIZED_TELEMETRY=false
+TOKENIZERS_PARALLELISM=false</pre></div>
+
+      <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Finally, spin up the infrastructure:</p>
+      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>docker compose up -d       <span class="cm"># Redis (:6380) + Milvus (:19530)</span></pre></div>
+    </li>
+    <li>
+      <strong>Create and run your first agent</strong>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> asyncio
+<span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"assistant"</span>,
+    instructions=<span class="str">"You are a helpful assistant."</span>,
+    model=<span class="str">"gpt-4o-mini"</span>,
+)
+
+<span class="kw">async def</span> <span class="fn">main</span>():
+    runner = <span class="cls">AgentRunner</span>()
+    response = <span class="kw">await</span> runner.run(agent, <span class="str">"Hello!"</span>, user_id=<span class="str">"u-001"</span>)
+    <span class="fn">print</span>(response.content)
+
+asyncio.<span class="fn">run</span>(main())</pre></div>
+    </li>
+  </ol>
+
+  <a class="anchor" id="home-arch"></a>
+  <h2>Architecture</h2>
+  <p>Continuum is structured as layered modules, each independently usable:</p>
+  <table>
+    <tr><th>Module</th><th>Import path</th><th>Purpose</th></tr>
+    <tr><td><code>agent</code></td><td><code>orchestrator.agent</code></td><td>BaseAgent, AgentRunner, 9 workflow patterns, handoffs</td></tr>
+    <tr><td><code>llm</code></td><td><code>orchestrator.llm</code></td><td>LLMClient, provider routing, structured output, context compression</td></tr>
+    <tr><td><code>memory</code></td><td><code>orchestrator.memory</code></td><td>mem0 + Qdrant/Milvus long-term memory</td></tr>
+    <tr><td><code>session</code></td><td><code>orchestrator.session</code></td><td>Redis-backed conversation history</td></tr>
+    <tr><td><code>tools</code></td><td><code>orchestrator.tools</code></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
+    <tr><td><code>observability</code></td><td><code>orchestrator.observability</code></td><td>Langfuse tracing, metrics, error reporting</td></tr>
+    <tr><td><code>temporal</code></td><td><code>orchestrator.temporal</code></td><td>Durable workflows, approval gates</td></tr>
+    <tr><td><code>core</code></td><td><code>orchestrator.core</code></td><td>DI Container, lifecycle, health checks</td></tr>
+  </table>
+
+  <a class="anchor" id="home-docs"></a>
+  <h2>Full Documentation</h2>
+  <p>Each module has a detailed markdown reference in the repository:</p>
+  <table>
+    <tr><th>Doc</th><th>Covers</th></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
+    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
+  </table>
+
+</section>
+
+
+<!-- ═══════════════════ BUILD AGENTS ═══════════════════ -->
+<section class="page-section" id="sec-build">
+
+  <a class="anchor" id="build-install"></a>
+  <h1>Build Agents</h1>
+  <p class="section-intro">From a minimal single agent to complex multi-agent workflows — everything starts with <code>BaseAgent</code>.</p>
+
+  <div style="display:flex; gap:12px; margin: 16px 0 0;">
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+    </div>
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>.
+    </div>
+  </div>
+
+  <a class="anchor" id="build-baseagent"></a>
+  <h2>Base Agent</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"support-bot"</span>,
+    instructions=<span class="str">"You are a support agent for Acme Corp. Be concise."</span>,
+    model=<span class="str">"gpt-4o-mini"</span>,
+    temperature=<span class="num">0.3</span>,
+)
+</pre></div>
+
+  <p><code>BaseAgent</code> is a dataclass. Every field has a sensible default — only <code>name</code> and <code>instructions</code> are required in practice.</p>
+
+  <table class="param-table">
+    <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
+    <tr><td>name</td><td>str</td><td>Unique identifier (alphanumeric, hyphens, underscores)</td></tr>
+    <tr><td>instructions</td><td>str</td><td>System prompt. Supports <code>{slot}</code> placeholders.</td></tr>
+    <tr><td>model</td><td>str</td><td>LLM model string, defaults to <code>DEFAULT_LLM_MODEL</code> env var</td></tr>
+    <tr><td>temperature</td><td>float</td><td>Default <code>0.7</code></td></tr>
+    <tr><td>max_tokens</td><td>int | None</td><td>Response token cap</td></tr>
+    <tr><td>tools</td><td>list[ToolDefinition]</td><td>Static tool definitions for the LLM</td></tr>
+    <tr><td>mcp_servers</td><td>list[MCPServer]</td><td>MCP servers whose tools are dynamically loaded</td></tr>
+    <tr><td>handoffs</td><td>list[Handoff]</td><td>Agents this agent can delegate to</td></tr>
+    <tr><td>memory_config</td><td>AgentMemoryConfig</td><td>Long-term memory search/store behavior</td></tr>
+    <tr><td>config</td><td>AgentConfig</td><td>Execution config — turns, timeouts, retries, react_mode</td></tr>
+    <tr><td>output_schema</td><td>type[BaseModel] | None</td><td>Pydantic model for structured output</td></tr>
+    <tr><td>input_schema</td><td>type[BaseModel] | None</td><td>Validates input before execution</td></tr>
+    <tr><td>template_vars</td><td>dict</td><td>Static values injected into <code>{slot}</code> placeholders</td></tr>
+    <tr><td>examples</td><td>list[dict]</td><td>Few-shot examples — each needs <code>input</code> and <code>output</code> keys</td></tr>
+    <tr><td>instruction_modifiers</td><td>list[Callable]</td><td>Dynamic prompt modifiers applied at runtime</td></tr>
+    <tr><td>metadata</td><td>dict</td><td>Arbitrary key-value metadata</td></tr>
+    <tr><td>tags</td><td>list[str]</td><td>Categorization tags for filtering / routing</td></tr>
+  </table>
+
+  <a class="anchor" id="build-stateless"></a>
+
+  <h3>Stateless vs Stateful</h3>
+  <p>Based on your needs, your agent can be stateless or stateful; if stateless, disable long-term and short-term memories; if stateful, you may only need either long-term memories(Memory) or short-term memories(Session) or both, you can control them by setting the parameters in <code>AgentConfig</code> and <code>AgentMemoryConfig</code>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Stateless — no Redis, no mem0 calls (fastest for prototypes)</span>
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"stateless"</span>,
+    instructions=<span class="str">"..."</span>,
+    memory_config=<span class="cls">AgentMemoryConfig</span>(search_memories=<span class="cls">False</span>, store_memories=<span class="cls">False</span>),
+    config=<span class="cls">AgentConfig</span>(log_to_session=<span class="cls">False</span>, session_history_turns=<span class="num">0</span>),
+)
+
+<span class="cm"># Stateful — loads last 20 turns + long-term memories (default)</span>
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"stateful"</span>,
+    instructions=<span class="str">"..."</span>,
+    memory_config=<span class="cls">AgentMemoryConfig</span>(search_memories=<span class="cls">True</span>, store_memories=<span class="cls">True</span>),
+    config=<span class="cls">AgentConfig</span>(log_to_session=<span class="cls">True</span>, session_history_turns=<span class="cls">None</span>),
+)</pre></div>
+
+<p style="font-weight: bold; margin-bottom: 0.5rem;">Memory (default):</p>
+      <ul style="list-style-type: disc; margin-left: 0; padding-left: 1.2rem; margin-bottom: 1rem; color: #374151;">
+        <li style="margin-bottom: 0.5rem;">
+          <code>search_memories=True</code> — looks up <code>long-term memories</code> before responding
+        </li>
+        <li>
+          <code>store_memories=True</code> — saves <code>long-term memories</code> after responding
+        </li>
+      </ul>
+
+      <p style="font-weight: bold; margin-bottom: 0.5rem;">Session (default):</p>
+      <ul style="list-style-type: disc; margin-left: 0; padding-left: 1.2rem; margin-bottom: 1.5rem; color: #374151;">
+        <li style="margin-bottom: 0.5rem;">
+          <code>log_to_session=True</code> — saves to session history (<code>short-term memory</code>)
+        </li>
+        <li>
+          <code>session_history_turns=None</code> — loads last 20 turns of history (<code>short-term memory</code>)
+        </li>
+      </ul>
+
+  <h4>session_history_turns behaviour</h4>
+  <table>
+    <tr><th>Value</th><th>Behaviour</th></tr>
+    <tr><td><code>None</code> (default)</td><td>Load last <strong>20</strong> turns from Redis</td></tr>
+    <tr><td><code>0</code></td><td><strong>Skip</strong> Redis entirely — load nothing</td></tr>
+    <tr><td><code>5</code></td><td>Load last <strong>5</strong> turns from Redis</td></tr>
+  </table>
+
+
+  <a class="anchor" id="build-hooks"></a>
+
+  <h2>Lifecycle Hooks</h2>
+  <p>Hooks are callables attached directly to <code>BaseAgent</code>. They receive the agent instance and the run context dict.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">async def</span> <span class="fn">on_start</span>(agent, context):
+    <span class="fn">print</span>(<span class="str">f"Starting <span class="op">{</span>agent.name<span class="op">}</span>"</span>)
+
+<span class="kw">async def</span> <span class="fn">on_tool</span>(agent, tool_name, context):
+    <span class="fn">print</span>(<span class="str">f"Calling tool: <span class="op">{</span>tool_name<span class="op">}</span>"</span>)
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"my-agent"</span>,
+    instructions=<span class="str">"..."</span>,
+    on_start=on_start,
+    on_end=<span class="kw">lambda</span> agent, ctx: <span class="fn">print</span>(<span class="str">"Done"</span>),
+    on_error=<span class="kw">lambda</span> agent, exc, ctx: <span class="fn">print</span>(<span class="str">f"Error: <span class="op">{</span>exc<span class="op">}</span>"</span>),
+    on_tool_call=on_tool,
+    on_handoff=<span class="kw">lambda</span> agent, target, ctx: <span class="fn">print</span>(<span class="str">f"Handing off to <span class="op">{</span>target<span class="op">}</span>"</span>),
+)</pre></div>
+
+  <a class="anchor" id="build-prompts"></a>
+  <h2>Prompt Engineering</h2>
+  <h3>Template Variables</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"regional-agent"</span>,
+    instructions=<span class="str">"You serve customers in {region}. Currency: {currency}."</span>,
+    template_vars={<span class="str">"region"</span>: <span class="str">"North America"</span>, <span class="str">"currency"</span>: <span class="str">"USD"</span>},
+)</pre></div>
+
+  <h3>Few-shot Examples</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"classifier"</span>,
+    instructions=<span class="str">"Classify the sentiment of the input."</span>,
+    examples=[
+        {<span class="str">"input"</span>: <span class="str">"I love this product!"</span>, <span class="str">"output"</span>: <span class="str">"positive"</span>},
+        {<span class="str">"input"</span>: <span class="str">"This is terrible."</span>,  <span class="str">"output"</span>: <span class="str">"negative"</span>},
+    ],
+)</pre></div>
+
+  <h3>Instruction Modifiers</h3>
+  <p>Modifiers are called at runtime and receive <code>(instructions: str, context: dict) → str</code>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">def</span> <span class="fn">add_date</span>(instructions, context):
+    <span class="kw">return</span> instructions + <span class="str">f"\n\nToday is {context.get('date', 'unknown')}."</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"date-aware"</span>,
+    instructions=<span class="str">"You are an assistant."</span>,
+    instruction_modifiers=[add_date],
+)</pre></div>
+
+  <a class="anchor" id="build-structured"></a>
+  <h2>Structured Output</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>
+
+<span class="kw">class</span> <span class="cls">Review</span>(<span class="cls">BaseModel</span>):
+    sentiment: <span class="fn">str</span>
+    score: <span class="fn">float</span>
+    summary: <span class="fn">str</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"reviewer"</span>,
+    instructions=<span class="str">"Analyze the review and return structured output."</span>,
+    output_schema=<span class="cls">Review</span>,
+)
+
+response = <span class="kw">await</span> runner.run(agent, <span class="str">"The hotel was fantastic but expensive."</span>)
+review: <span class="cls">Review</span> = response.structured_output
+<span class="fn">print</span>(review.score)  <span class="cm"># e.g. 0.75</span></pre></div>
+
+  <a class="anchor" id="build-workflows"></a>
+  <h2>Multi-Agent Workflows</h2>
+  <p>Continuum ships 9 built-in workflow patterns. Each has a class-based form and a factory shorthand. All patterns are composable — you can nest them or combine them with handoffs.</p>
+
+  <div class="workflow-grid">
+    <div class="workflow-card"><div class="wf-name">Sequential</div><div class="wf-desc">Pipeline — each agent's output feeds the next</div></div>
+    <div class="workflow-card"><div class="wf-name">Parallel</div><div class="wf-desc">All agents run concurrently on the same input</div></div>
+    <div class="workflow-card"><div class="wf-name">Loop</div><div class="wf-desc">Iterates until a termination condition is met</div></div>
+    <div class="workflow-card"><div class="wf-name">Reflection</div><div class="wf-desc">Agent runs, critic evaluates, agent retries if needed</div></div>
+    <div class="workflow-card"><div class="wf-name">Router</div><div class="wf-desc">Dispatches to the most relevant specialist agent</div></div>
+    <div class="workflow-card"><div class="wf-name">Planner</div><div class="wf-desc">Decomposes a goal into steps, executes each in turn</div></div>
+    <div class="workflow-card"><div class="wf-name">Debate</div><div class="wf-desc">Pro/con agents argue; a judge synthesizes a verdict</div></div>
+    <div class="workflow-card"><div class="wf-name">Scatter</div><div class="wf-desc">LLM splits input into slices; agents process in parallel</div></div>
+  </div>
+
+  <a class="anchor" id="build-custom"></a>
+  <h3>Custom Workflow</h3>
+  <p>We strongly recommend building custom workflows using <code>BaseAgent</code> directly for anything closely tied to your project's business logic. A custom agent gives you full control over the flow, session saving, and memory behaviour — you decide which sub-agents are stateless and which are stateful.</p>
+  <p><strong>Example: <code>ParallelCoordinatorAgent</code> in <code>playground/multi-agent-shop/workflows.py</code></strong></p>
+  <p>Instead of using <code>ParallelAgent</code> directly, the playground defines a custom <code>BaseAgent</code> subclass that orchestrates parallel search and synthesis manually:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">class</span> <span class="cls">ParallelCoordinatorAgent</span>(<span class="cls">BaseAgent</span>):
+    synthesiser: <span class="cls">BaseAgent</span> | <span class="kw">None</span> = <span class="kw">None</span>
+    parallel: <span class="cls">ParallelAgent</span> | <span class="kw">None</span> = <span class="kw">None</span>
+
+    <span class="kw">async def</span> <span class="fn">execute</span>(self, input_text, runner, context, llm_client=<span class="kw">None</span>) -> <span class="cls">AgentResponse</span>:
+        context.suppress_session_log = <span class="cls">True</span>
+
+        <span class="cm"># Step 1: parallel workers with a fresh stateless context (no history, no save)</span>
+        parallel_ctx = <span class="fn">create_run_context</span>(
+            user_id=context.user_id,
+            conversation_id=context.conversation_id,
+        )
+        parallel_result = <span class="kw">await</span> self.parallel.execute(input_text, runner, parallel_ctx)
+
+        <span class="cm"># Step 2: synthesiser uses session history + memory; suppress_session_log</span>
+        <span class="cm"># blocks auto-save but context carries session_id so history loads normally</span>
+        final = <span class="kw">await</span> runner.run(
+            agent=self.synthesiser,
+            input=synthesis_input,
+            context=context,
+        )
+
+        <span class="cm"># Step 3: save exactly one clean turn</span>
+        <span class="kw">await</span> runner.save_turn(
+            session_id=context.session_id,
+            user_message=input_text,
+            assistant_message=final.content,
+        )</pre></div>
+
+  <p>This gives the parallel workers a clean stateless context (no Redis calls) while the synthesiser still loads session history and memory — something the built-in <code>ParallelAgent</code> cannot do out of the box.</p>
+
+  <a class="anchor" id="build-sequential"></a>
+  <h3>Built-in Workflows</h3>
+
+  <h4>Sequential Workflow</h4>
+  <p>Executes agents as a pipeline — each agent receives the previous agent's output.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">SequentialAgent</span>
+
+pipeline = <span class="cls">SequentialAgent</span>(
+    name=<span class="str">"research-pipeline"</span>,
+    instructions=<span class="str">"Research pipeline coordinator."</span>,
+    agents=[researcher, summarizer, formatter],
+)</pre></div>
+
+  <p>Or use the factory shorthand:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_sequential_agent
+
+researcher = <span class="cls">BaseAgent</span>(name=<span class="str">"researcher"</span>, instructions=<span class="str">"Research the topic. Output key facts."</span>, model=<span class="str">"gpt-4o-mini"</span>)
+writer     = <span class="cls">BaseAgent</span>(name=<span class="str">"writer"</span>,     instructions=<span class="str">"Write a short report from the facts."</span>,  model=<span class="str">"gpt-4o-mini"</span>)
+editor     = <span class="cls">BaseAgent</span>(name=<span class="str">"editor"</span>,     instructions=<span class="str">"Polish the report for clarity."</span>,         model=<span class="str">"gpt-4o-mini"</span>)
+
+pipeline = <span class="fn">create_sequential_agent</span>(
+    name=<span class="str">"research-pipeline"</span>,
+    agents=[researcher, writer, editor],
+)
+response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().run(pipeline, <span class="str">"AI in healthcare"</span>)
+<span class="fn">print</span>(response.content)  <span class="cm"># editor's final output</span></pre></div>
+
+  <a class="anchor" id="build-parallel"></a>
+  <h4>Parallel Workflow</h4>
+  <p>All agents receive the same input and run concurrently. Results are merged by strategy.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">ParallelAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">ParallelConfig</span>, <span class="cls">MergeStrategy</span>
+
+fan_out = <span class="cls">ParallelAgent</span>(
+    name=<span class="str">"multi-analyst"</span>,
+    instructions=<span class="str">"Run multiple analyses in parallel."</span>,
+    agents=[sentiment_agent, topic_agent, entity_agent],
+    parallel_config=<span class="cls">ParallelConfig</span>(
+        merge_strategy=<span class="cls">MergeStrategy</span>.LLM_SUMMARIZE,
+    ),
+)</pre></div>
+
+  <table>
+    <tr><th>MergeStrategy</th><th>Behavior</th></tr>
+    <tr><td><code>CONCATENATE</code></td><td>All outputs joined with newlines</td></tr>
+    <tr><td><code>LLM_SUMMARIZE</code></td><td>A secondary LLM call synthesizes all outputs</td></tr>
+    <tr><td><code>STRUCTURED_DICT</code></td><td>Returns a dict keyed by agent name</td></tr>
+    <tr><td><code>FIRST_SUCCESS</code></td><td>Returns the first successful agent result</td></tr>
+  </table>
+
+  <p>Factory shorthand:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> create_parallel_agent
+<span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">MergeStrategy</span>
+
+parallel = <span class="fn">create_parallel_agent</span>(
+    name=<span class="str">"parallel-analysts"</span>,
+    agents=[analyst_a, analyst_b, analyst_c],
+    merge_strategy=<span class="cls">MergeStrategy</span>.CONCATENATE,
+)</pre></div>
+
+  <a class="anchor" id="build-loop"></a>
+  <h4>Loop Workflow</h4>
+  <p>Iterates an agent until a termination condition is satisfied.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">LoopAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">TerminationConfig</span>, <span class="cls">TerminationType</span>
+
+loop = <span class="cls">LoopAgent</span>(
+    name=<span class="str">"refinement-loop"</span>,
+    instructions=<span class="str">"Iteratively refine output."</span>,
+    agent=writer_agent,
+    termination=<span class="cls">TerminationConfig</span>(
+        type=<span class="cls">TerminationType</span>.LLM_DECISION,  <span class="cm"># LLM decides when done</span>
+        max_iterations=<span class="num">5</span>,
+    ),
+)</pre></div>
+
+  <table>
+    <tr><th>TerminationType</th><th>When it stops</th></tr>
+    <tr><td><code>LLM_DECISION</code></td><td>The inner agent's LLM signals completion</td></tr>
+    <tr><td><code>TOOL_CALL</code></td><td>A specific tool name is called</td></tr>
+    <tr><td><code>OUTPUT_MATCH</code></td><td>Output matches a regex pattern</td></tr>
+    <tr><td><code>MAX_ITERATIONS</code></td><td>Always run exactly N times</td></tr>
+    <tr><td><code>CUSTOM</code></td><td>User-supplied callable returns <code>True</code></td></tr>
+  </table>
+
+  <p>Factory shorthand with <code>OUTPUT_MATCH</code>:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> create_loop_agent
+<span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">TerminationType</span>
+
+loop = <span class="fn">create_loop_agent</span>(
+    name=<span class="str">"refinement-loop"</span>,
+    agent=refiner,
+    termination_type=<span class="cls">TerminationType</span>.OUTPUT_MATCH,
+    termination_pattern=<span class="str">r"\bDONE\b"</span>,
+    max_iterations=<span class="num">3</span>,
+)</pre></div>
+
+  <a class="anchor" id="build-reflection"></a>
+  <h4>Reflection Workflow</h4>
+  <p>The agent runs, a critic evaluates the output, and the agent retries if the critique is <code>NEEDS IMPROVEMENT</code>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">ReflectionAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">ReflectionConfig</span>
+
+reflective = <span class="cls">ReflectionAgent</span>(
+    name=<span class="str">"quality-writer"</span>,
+    instructions=<span class="str">"Improve output quality via self-critique."</span>,
+    agent=writer_agent,
+    reflection_config=<span class="cls">ReflectionConfig</span>(
+        max_reflections=<span class="num">3</span>,
+        critique_prompt=<span class="str">"Is this response accurate and complete? Reply APPROVED or NEEDS IMPROVEMENT."</span>,
+    ),
+)</pre></div>
+
+  <a class="anchor" id="build-router"></a>
+  <h4>Router Workflow</h4>
+  <p>Routes requests to specialist agents based on content. Three strategies: LLM, rule-based, or hybrid.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">RouterAgent</span>, <span class="cls">Route</span>
+
+router = <span class="cls">RouterAgent</span>(
+    name=<span class="str">"triage"</span>,
+    instructions=<span class="str">"Route customer requests to the right specialist."</span>,
+    routes=[
+        <span class="cls">Route</span>(agent_name=<span class="str">"billing-agent"</span>,  description=<span class="str">"Billing, payments, invoices"</span>),
+        <span class="cls">Route</span>(agent_name=<span class="str">"tech-support"</span>,  description=<span class="str">"Technical issues and bugs"</span>),
+        <span class="cls">Route</span>(agent_name=<span class="str">"sales-agent"</span>,   description=<span class="str">"Pricing and upgrades"</span>),
+    ],
+    fallback_agent_name=<span class="str">"general-agent"</span>,
+)</pre></div>
+
+  <p>Or use the factory with tuple-based routes (recommended — the old <code>Route(target=...)</code> API is removed):</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_router_agent
+
+billing   = <span class="cls">BaseAgent</span>(name=<span class="str">"billing-agent"</span>,   instructions=<span class="str">"Handle billing questions."</span>)
+technical = <span class="cls">BaseAgent</span>(name=<span class="str">"technical-agent"</span>, instructions=<span class="str">"Handle technical support."</span>)
+general   = <span class="cls">BaseAgent</span>(name=<span class="str">"general-agent"</span>,   instructions=<span class="str">"Handle general questions."</span>)
+
+router = <span class="fn">create_router_agent</span>(
+    name=<span class="str">"triage"</span>,
+    routes=[
+        (<span class="str">"billing-agent"</span>,   <span class="str">"billing, invoice, payment, subscription, refund"</span>),
+        (<span class="str">"technical-agent"</span>, <span class="str">"bug, error, crash, not working, how to"</span>),
+    ],
+    fallback=<span class="str">"general-agent"</span>,
+    strategy=<span class="str">"hybrid"</span>,
+)
+
+runner = <span class="cls">AgentRunner</span>(agent_registry={
+    <span class="str">"billing-agent"</span>: billing, <span class="str">"technical-agent"</span>: technical, <span class="str">"general-agent"</span>: general,
+})
+response = <span class="kw">await</span> runner.run(router, <span class="str">"My payment failed twice this week"</span>)</pre></div>
+
+  <a class="anchor" id="build-planner"></a>
+  <h4>Planner Workflow</h4>
+  <p>Decomposes a goal into sub-tasks and executes them — either with a single agent or by routing each step to a specialist from a pool.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">PlannerAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">PlanningConfig</span>
+
+<span class="cm"># Agent-pool mode: LLM routes each step to a specialist</span>
+planner = <span class="cls">PlannerAgent</span>(
+    name=<span class="str">"research-planner"</span>,
+    instructions=<span class="str">"Decompose research goals into steps."</span>,
+    agents=[web_researcher, analyst, writer],
+    planning_config=<span class="cls">PlanningConfig</span>(
+        max_steps=<span class="num">8</span>,
+        enable_replanning=<span class="cls">True</span>,
+    ),
+)</pre></div>
+
+  <a class="anchor" id="build-advanced-wf"></a>
+  <h4>Debate, Scatter &amp; SupervisedSequential</h4>
+  <div class="workflow-grid">
+    <div class="workflow-card">
+      <div class="wf-name">DebateAgent</div>
+      <div class="wf-desc">Two agents argue pro/con, a judge synthesizes a final verdict. Good for nuanced decisions.</div>
+    </div>
+    <div class="workflow-card">
+      <div class="wf-name">ScatterAgent</div>
+      <div class="wf-desc">LLM splits input into N slices; each agent processes its own slice in parallel; results merged.</div>
+    </div>
+    <div class="workflow-card">
+      <div class="wf-name">SupervisedSequential</div>
+      <div class="wf-desc">Like Sequential but an LLM quality gate checks each step's output before proceeding.</div>
+    </div>
+    <div class="workflow-card">
+      <div class="wf-name">DAGAgent</div>
+      <div class="wf-desc">Dependency-aware parallel execution. Steps with dependencies wait; independent steps run together.</div>
+    </div>
+  </div>
+
+  <a class="anchor" id="build-handoffs"></a>
+  <h3>Handoffs</h3>
+  <p>An agent can delegate to another agent mid-conversation. Handoffs appear to the LLM as callable tools.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>
+
+triage = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"triage"</span>,
+    instructions=<span class="str">"Triage requests and hand off to specialists."</span>,
+    handoffs=[
+        <span class="cls">Handoff</span>(
+            target_agent=<span class="str">"billing"</span>,
+            description=<span class="str">"Transfer to billing for payment questions."</span>,
+            return_to_parent=<span class="cls">True</span>,
+        ),
+        <span class="cls">Handoff</span>(
+            target_agent=<span class="str">"tech-support"</span>,
+            description=<span class="str">"Transfer for technical issues."</span>,
+        ),
+    ],
+)</pre></div>
+
+  <a class="anchor" id="build-handoff-history"></a>
+  <h3>Handoff History Modes</h3>
+  <p>Control how much context is passed when handing off between agents.</p>
+  <table>
+    <tr><th>Mode</th><th>What's passed</th><th>Best for</th></tr>
+    <tr><td><code>FULL</code></td><td>Complete conversation history</td><td>Short conversations, full context needed</td></tr>
+    <tr><td><code>SUMMARY</code></td><td>LLM-generated abstract of the conversation</td><td>Long conversations, context window limits</td></tr>
+    <tr><td><code>RECENT_N</code></td><td>Last N turns only</td><td>When only recent context matters</td></tr>
+    <tr><td><code>HYBRID</code></td><td>Summary of older messages + full recent N turns</td><td>Best of both — default recommendation</td></tr>
+  </table>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>, <span class="cls">HistorySummarizationMode</span>
+
+<span class="cls">Handoff</span>(
+    target_agent=<span class="str">"specialist"</span>,
+    description=<span class="str">"Escalate complex issues."</span>,
+    summarization_mode=<span class="cls">HistorySummarizationMode</span>.HYBRID,
+    recent_turns=<span class="num">4</span>,
+)</pre></div>
+
+
+</section>
+
+
+<!-- ═══════════════════ RUN AGENTS ═══════════════════ -->
+<section class="page-section" id="sec-run">
+
+  <h1>Run Agents</h1>
+  <p class="section-intro"><code>AgentRunner</code> is the execution engine — it orchestrates LLM calls, tool invocations, memory retrieval, and handoffs.</p>
+
+  <div style="display:flex; gap:12px; margin: 16px 0 0;">
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+    </div>
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>
+    </div>
+  </div>
+
+  <a class="anchor" id="run-runner"></a>
+  <h2>AgentRunner</h2>
+  <p>Create one <code>AgentRunner</code> instance per application. It manages internal service clients and can be shared across concurrent runs.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">RunnerConfig</span>
+
+runner = <span class="cls">AgentRunner</span>(
+    config=<span class="cls">RunnerConfig</span>(
+        default_max_turns=<span class="num">20</span>,
+        parallel_tool_calls=<span class="cls">True</span>,
+        max_parallel_tools=<span class="num">5</span>,
+        circuit_breaker_threshold=<span class="num">5</span>,
+    )
+)</pre></div>
+
+  <a class="anchor" id="run-run"></a>
+  <h2>runner.run()</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>response = <span class="kw">await</span> runner.run(
+    agent,
+    <span class="str">"What is my account balance?"</span>,
+    user_id=<span class="str">"user-123"</span>,
+    session_id=<span class="str">"sess-456"</span>,  <span class="cm"># optional — loads Redis history</span>
+    conversation_id=<span class="str">"conv-789"</span>,
+    max_turns=<span class="num">15</span>,
+    metadata={<span class="str">"channel"</span>: <span class="str">"web"</span>},
+    tags=[<span class="str">"prod"</span>],
+)
+
+<span class="fn">print</span>(response.content)         <span class="cm"># main text output</span>
+<span class="fn">print</span>(response.status)          <span class="cm"># SUCCESS, ERROR, MAX_TURNS_REACHED …</span>
+<span class="fn">print</span>(response.usage.total_tokens)
+<span class="fn">print</span>(response.latency_ms)
+<span class="fn">print</span>(response.trace_id)        <span class="cm"># Langfuse trace link</span></pre></div>
+
+  <a class="anchor" id="run-stream"></a>
+  <h2>Streaming</h2>
+  <p>Use <code>run_stream()</code> to yield tokens and events as they occur. Ideal for WebSocket or SSE endpoints.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">EventType</span>
+
+<span class="kw">async for</span> event <span class="kw">in</span> runner.run_stream(agent, <span class="str">"Explain quantum entanglement."</span>, user_id=<span class="str">"u-1"</span>):
+    <span class="kw">if</span> event.type == <span class="cls">EventType</span>.CONTENT_DELTA:
+        <span class="fn">print</span>(event.data[<span class="str">"content"</span>], end=<span class="str">""</span>, flush=<span class="cls">True</span>)
+
+    <span class="kw">elif</span> event.type == <span class="cls">EventType</span>.TOOL_CALL_START:
+        <span class="fn">print</span>(<span class="str">f"\n[calling tool: {event.data['tool_name']}]"</span>)
+
+    <span class="kw">elif</span> event.type == <span class="cls">EventType</span>.RUN_END:
+        <span class="fn">print</span>(<span class="str">f"\nDone — {event.data['usage']['total_tokens']} tokens"</span>)</pre></div>
+
+  <a class="anchor" id="run-events"></a>
+  <h3>EventType Reference</h3>
+  <table>
+    <tr><th>EventType</th><th>data keys</th></tr>
+    <tr><td><code>RUN_START</code></td><td><code>run_id</code>, <code>agent_name</code></td></tr>
+    <tr><td><code>CONTENT_DELTA</code></td><td><code>content</code> (text chunk)</td></tr>
+    <tr><td><code>CONTENT_COMPLETE</code></td><td><code>content</code> (full response)</td></tr>
+    <tr><td><code>TOOL_CALL_START</code></td><td><code>tool_name</code>, <code>arguments</code></td></tr>
+    <tr><td><code>TOOL_CALL_END</code></td><td><code>tool_name</code>, <code>result</code></td></tr>
+    <tr><td><code>TOOL_CALL_ERROR</code></td><td><code>tool_name</code>, <code>error</code></td></tr>
+    <tr><td><code>HANDOFF_START</code></td><td><code>from_agent</code>, <code>to_agent</code>, <code>reason</code></td></tr>
+    <tr><td><code>HANDOFF_END</code></td><td><code>to_agent</code>, <code>result</code></td></tr>
+    <tr><td><code>MEMORY_RETRIEVAL</code></td><td><code>query</code>, <code>results</code></td></tr>
+    <tr><td><code>RUN_END</code></td><td><code>status</code>, <code>usage</code>, <code>latency_ms</code></td></tr>
+    <tr><td><code>RUN_ERROR</code></td><td><code>error</code></td></tr>
+  </table>
+
+  <a class="anchor" id="run-session"></a>
+  <h2>Session History</h2>
+  <p>Pass a <code>session_id</code> to automatically load and save conversation history from Redis.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Turn 1 — user's first message</span>
+response1 = <span class="kw">await</span> runner.run(agent, <span class="str">"My name is Alice."</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
+
+<span class="cm"># Turn 2 — agent remembers context from Redis</span>
+response2 = <span class="kw">await</span> runner.run(agent, <span class="str">"What's my name?"</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
+<span class="cm"># → "Your name is Alice."</span></pre></div>
+
+  <p>Control how many turns are loaded with <code>AgentConfig.session_history_turns</code>. Set <code>log_to_session=False</code> in <code>AgentConfig</code> to disable session writes for intermediate pipeline agents.</p>
+
+  <a class="anchor" id="run-session-create"></a>
+  <h3>Creating sessions with get_or_create_session()</h3>
+  <p>If you want session history to persist across requests, create a session <em>before</em> calling <code>runner.run()</code>. Passing a <code>session_id</code> that was never created will silently fail to save or load history.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Step 1: create or retrieve the session</span>
+session_id = <span class="kw">await</span> session_client.get_or_create_session(
+    session_id=session_id,          <span class="cm"># pass existing ID to resume</span>
+    user_id=<span class="str">"user-123"</span>,
+    conversation_id=<span class="str">"conv-456"</span>,   <span class="cm"># optional — see below</span>
+)
+
+<span class="cm"># Step 2: run with that session_id</span>
+response = <span class="kw">await</span> runner.run(
+    agent=agent,
+    input=<span class="str">"Hello!"</span>,
+    session_id=session_id,
+    user_id=<span class="str">"user-123"</span>,
+)</pre></div>
+
+  <h4>How session_id is computed</h4>
+  <p><code>get_or_create_session()</code> derives a deterministic key from the arguments you pass:</p>
+  <table>
+    <tr><th>Arguments passed</th><th>Computed session_id</th></tr>
+    <tr><td>explicit <code>session_id</code></td><td>used as-is</td></tr>
+    <tr><td><code>conversation_id</code> + <code>user_id</code></td><td><code>c:{conversation_id}:u:{user_id}</code></td></tr>
+    <tr><td><code>user_id</code> only</td><td><code>u:{user_id}</code></td></tr>
+    <tr><td>neither</td><td>random UUID</td></tr>
+  </table>
+
+  <h4>When to use conversation_id</h4>
+  <p>Use <code>conversation_id</code> when a single user can have multiple independent chat windows. Without it, all conversations for a user share one session (<code>u:{user_id}</code>). With it, each window gets its own isolated session (<code>c:{conversation_id}:u:{user_id}</code>).</p>
+  <ul>
+    <li><strong>Chat UI projects:</strong> generate a <code>conversation_id</code> on the backend when the user opens a new chat window; pass it back with each request.</li>
+    <li><strong>Task-based or webhook projects:</strong> use your natural entity ID (ticket ID, invoice ID, job ID) as <code>conversation_id</code>. Never reuse IDs across unrelated tasks.</li>
+  </ul>
+
+  <a class="anchor" id="run-session-multi"></a>
+  <h3>Multi-agent session saving pattern</h3>
+  <p>Every workflow agent calls <code>runner.run()</code> once or multiple times internally. Without intervention, each sub-agent call auto-saves a turn — creating noisy intermediate history the user never saw. Prevent this with <code>suppress_session_log</code> + <code>save_turn()</code>:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">async def</span> <span class="fn">execute</span>(self, input_text, runner, context) -> <span class="cls">AgentResponse</span>:
+    context.suppress_session_log = <span class="cls">True</span>  <span class="cm"># blocks auto-save for ALL sub-agent runs</span>
+
+    response = <span class="kw">await</span> runner.run(
+        agent=sub_agent,
+        input=current_input,
+        context=context,   <span class="cm"># same context object passed every time</span>
+    )
+    <span class="cm"># ... more sub-agent calls ...</span>
+
+    <span class="cm"># Save exactly one clean turn at the end</span>
+    <span class="kw">await</span> runner.save_turn(
+        session_id=context.session_id,
+        user_message=input_text,        <span class="cm"># what user originally sent</span>
+        assistant_message=final_output, <span class="cm"># what user actually sees</span>
+    )</pre></div>
+
+  <div class="callout callout-warn">
+    <strong>Custom workflow agents:</strong> If you build a custom workflow by subclassing <code>BaseAgent</code>, you must follow this pattern yourself. Forgetting <code>suppress_session_log = True</code> will save every sub-agent turn to session history.
+  </div>
+
+  <a class="anchor" id="run-final"></a>
+  <h3>Deciding which agent's output is the final response</h3>
+  <p>In a multi-agent workflow, you must explicitly decide which agent's output is the final response — this is what you pass to <code>save_turn()</code>. Here are two examples</p>
+  <p><strong>Sequential:</strong> agents run one after another, each passing output to the next. The <em>last</em> agent may produce the final response:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">await</span> runner.<span class="fn">save_turn</span>(session_id, user_input, last_agent_response.content)</pre></div>
+
+  <p><strong>Handoff / Router:</strong> sub-agents do work and their results are injected back into the top-level agent's message list. The top-level agent then synthesizes its own final response — so the <em>top-level agent's</em> output is what to save, not the sub-agents' intermediate results:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">await</span> runner.<span class="fn">save_turn</span>(session_id, user_input, top_level_agent_response.content)</pre></div>
+
+  <div class="callout callout-warn">
+    <strong>Saving the wrong output:</strong> If you save an intermediate agent's output by mistake, session history will contain turns the user never saw — and future turns will load them as prior context.
+  </div>
+
+  <a class="anchor" id="run-context"></a>
+  <h2>Context Management</h2>
+  <p>When a conversation approaches the model's context window, Continuum automatically compresses older messages.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ContextManagementConfig</span>, <span class="cls">CompressionStrategy</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"long-conv"</span>,
+    instructions=<span class="str">"..."</span>,
+    config=<span class="cls">AgentConfig</span>(
+        context_management=<span class="cls">ContextManagementConfig</span>(
+            strategy=<span class="cls">CompressionStrategy</span>.MODERATE,  <span class="cm"># AGGRESSIVE / MODERATE / CONSERVATIVE / DISABLED</span>
+        )
+    ),
+)</pre></div>
+
+  <div class="callout callout-tip">
+    <strong>Tip:</strong> Set <code>CONTEXT_COMPRESSION_THRESHOLD=0.8</code> (default) to trigger compression at 80% of the model's context window. <code>CONTEXT_KEEP_RECENT_MESSAGES=10</code> ensures the last 10 messages are never truncated.
+  </div>
+
+  <a class="anchor" id="run-lifecycle"></a>
+  <h2>App Lifecycle</h2>
+  <p>Use <code>OrchestratorLifecycle</code> to initialise and cleanly shut down all shared services (Redis, Langfuse, vector store). Use <code>Container</code> to inject custom clients — useful in tests and multi-tenant setups.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">OrchestratorLifecycle</span>, <span class="cls">Container</span>
+
+lifecycle = <span class="cls">OrchestratorLifecycle</span>()
+<span class="kw">await</span> lifecycle.startup()   <span class="cm"># connects Redis, Langfuse, vector store</span>
+
+<span class="cm"># Health checks</span>
+health = <span class="kw">await</span> lifecycle.health_check()
+<span class="cm"># → {"redis": "ok", "qdrant": "ok", "langfuse": "ok", "llm": "ok"}</span>
+
+<span class="kw">await</span> lifecycle.shutdown()  <span class="cm"># flushes Langfuse, closes Redis connections</span></pre></div>
+
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Inject custom clients (e.g. in tests or multi-tenant setups)</span>
+<span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">Container</span>
+
+container = <span class="cls">Container</span>()
+container.<span class="fn">set_llm_client</span>(my_llm_client)
+container.<span class="fn">set_memory_client</span>(my_memory_client)
+container.<span class="fn">set_session_client</span>(my_session_client)
+
+runner = <span class="cls">AgentRunner</span>(container=container)</pre></div>
+
+  <a class="anchor" id="run-fastapi"></a>
+  <h2>FastAPI Server</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> fastapi <span class="kw">import</span> <span class="cls">FastAPI</span>
+<span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+
+app = <span class="cls">FastAPI</span>()
+runner = <span class="cls">AgentRunner</span>()
+agent = <span class="cls">BaseAgent</span>(name=<span class="str">"api-agent"</span>, instructions=<span class="str">"You are an API assistant."</span>)
+
+<span class="op">@</span>app.post(<span class="str">"/chat"</span>)
+<span class="kw">async def</span> <span class="fn">chat</span>(body: dict):
+    response = <span class="kw">await</span> runner.run(
+        agent,
+        body[<span class="str">"message"</span>],
+        user_id=body[<span class="str">"user_id"</span>],
+        session_id=body.get(<span class="str">"session_id"</span>),
+    )
+    <span class="kw">return</span> {<span class="str">"reply"</span>: response.content, <span class="str">"session_id"</span>: body.get(<span class="str">"session_id"</span>)}</pre></div>
+
+  <a class="anchor" id="run-temporal-deploy"></a>
+  <h2>Temporal Workers</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal <span class="kw">import</span> <span class="cls">WorkerManager</span>, <span class="cls">AgentRegistry</span>
+
+registry = <span class="cls">AgentRegistry</span>()
+registry.register(my_agent)
+
+worker_manager = <span class="cls">WorkerManager</span>(agent_registry=registry)
+<span class="kw">await</span> worker_manager.start_worker()  <span class="cm"># connects to TEMPORAL_HOST</span></pre></div>
+
+  <a class="anchor" id="run-safety"></a>
+  <h2>Input / Output Scanning</h2>
+  <p>Attach scanner callables to <code>AgentConfig</code> to detect prompt injection, PII, or unsafe content before/after the LLM call.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">def</span> <span class="fn">pii_scanner</span>(text: str) -> str:
+    <span class="cm"># Replace detected emails with [REDACTED]</span>
+    <span class="kw">import</span> re
+    <span class="kw">return</span> re.<span class="fn">sub</span>(<span class="str">r'\S+@\S+'</span>, <span class="str">'[REDACTED]'</span>, text)
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"safe-agent"</span>,
+    instructions=<span class="str">"..."</span>,
+    config=<span class="cls">AgentConfig</span>(
+        input_scanners=[pii_scanner],
+        output_scanners=[pii_scanner],
+        injection_detection=<span class="cls">True</span>,
+    ),
+)</pre></div>
+
+
+  <a class="anchor" id="run-testing"></a>
+  <h2>Testing Guide</h2>
+  <p>Continuum favors integration tests over mocks. The <code>[dev]</code> extra ships <code>fakeredis</code>, <code>respx</code>, and <code>pytest-asyncio</code>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># conftest.py</span>
+<span class="kw">import</span> pytest
+<span class="kw">import</span> fakeredis.aioredis <span class="kw">as</span> fakeredis
+<span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">Container</span>
+
+<span class="op">@</span>pytest.fixture
+<span class="kw">async def</span> <span class="fn">container</span>():
+    c = <span class="cls">Container</span>()
+    c.set_session_client(<span class="cls">SessionClient</span>(redis=<span class="fn">fakeredis.FakeRedis</span>()))
+    <span class="kw">return</span> c</pre></div>
+
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># test_agent.py</span>
+<span class="kw">import</span> pytest
+
+<span class="op">@</span>pytest.mark.asyncio
+<span class="kw">async def</span> <span class="fn">test_basic_response</span>(container, real_llm_client):
+    container.<span class="fn">set_llm_client</span>(real_llm_client)
+    runner = <span class="cls">AgentRunner</span>(container=container)
+    response = <span class="kw">await</span> runner.run(agent, <span class="str">"Say hello."</span>, user_id=<span class="str">"test-user"</span>)
+    <span class="kw">assert</span> response.status.value == <span class="str">"success"</span>
+    <span class="kw">assert</span> <span class="fn">len</span>(response.content) > <span class="num">0</span></pre></div>
+
+</section>
+
+
+<!-- ═══════════════════ COMPONENTS ═══════════════════ -->
+<section class="page-section" id="sec-components">
+
+  <h1>Components</h1>
+  <p class="section-intro">Continuum's building blocks — tools, memory, sessions, durable workflows.</p>
+
+  <a class="anchor" id="comp-mcp"></a>
+  <h2>MCP Servers</h2>
+  <p>Every tool is exposed via the Model Context Protocol. Three transport types are supported:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPServerStdio</span>, <span class="cls">MCPServerSse</span>, <span class="cls">MCPServerStreamableHttp</span>
+
+<span class="cm"># Spawn a subprocess (local Python script or shell command)</span>
+fs_server = <span class="cls">MCPServerStdio</span>(command=<span class="str">"python"</span>, args=[<span class="str">"-m"</span>, <span class="str">"mcp_filesystem"</span>])
+
+<span class="cm"># Server-Sent Events (remote server)</span>
+sse_server = <span class="cls">MCPServerSse</span>(url=<span class="str">"https://tools.example.com/mcp/sse"</span>)
+
+<span class="cm"># StreamableHTTP (recommended for production)</span>
+http_server = <span class="cls">MCPServerStreamableHttp</span>(url=<span class="str">"https://tools.example.com/mcp"</span>)
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"tool-agent"</span>,
+    instructions=<span class="str">"You have access to the filesystem."</span>,
+    mcp_servers=[fs_server],
+)</pre></div>
+
+  <h3>Passing tools explicitly with MCPUtil</h3>
+  <p>If you need the tool definitions as Python objects (e.g. to inspect, filter, or pass them manually), use <code>MCPUtil.get_function_tools()</code>:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPUtil</span>, <span class="cls">ToolExecutor</span>
+
+<span class="cm"># Get tool definitions from a connected server</span>
+tool_defs = <span class="kw">await</span> <span class="cls">MCPUtil</span>.<span class="fn">get_function_tools</span>(server)
+tools = [t.model_dump() <span class="kw">for</span> t <span class="kw">in</span> tool_defs]
+
+executor = <span class="cls">ToolExecutor</span>({server: <span class="cls">None</span>})   <span class="cm"># None = expose all tools</span>
+<span class="kw">await</span> executor.initialize()
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"agent"</span>,
+    instructions=<span class="str">"..."</span>,
+    tools=tools,
+    tool_executor=executor,
+)</pre></div>
+
+  <a class="anchor" id="comp-tool-filtering"></a>
+  <h2>Tool Filtering</h2>
+  <p>When you have many MCP tools, semantic tool filtering sends only the relevant subset to the LLM each turn — reducing token cost and noise.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ToolAttentionConfig</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"commerce-agent"</span>,
+    instructions=<span class="str">"..."</span>,
+    mcp_servers=[shop_server],    <span class="cm"># 50+ tools</span>
+    config=<span class="cls">AgentConfig</span>(
+        tool_attention=<span class="cls">ToolAttentionConfig</span>(
+            enabled=<span class="cls">True</span>,
+            max_tools=<span class="num">10</span>,        <span class="cm"># send at most 10 tools per turn</span>
+        )
+    ),
+)</pre></div>
+
+  <a class="anchor" id="comp-tool-context"></a>
+  <h2>Tool Context Injection</h2>
+  <p>Some tools return a value (e.g. <code>session_id</code>, <code>cart_token</code>) that subsequent tool calls need as input. <code>ToolContextState</code> captures these values automatically and injects them into later calls — no agent prompt changes required.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPServerStreamableHttp</span>
+
+<span class="cm"># Capture session_id from the login tool result, inject into every subsequent call</span>
+shop_server = <span class="cls">MCPServerStreamableHttp</span>(
+    url=<span class="str">"https://shop.example.com/mcp"</span>,
+    tool_context={
+        <span class="str">"capture"</span>: {<span class="str">"login"</span>: <span class="str">"session_id"</span>},   <span class="cm"># tool name → result field to capture</span>
+        <span class="str">"inject"</span>:  {<span class="str">"session_id"</span>: <span class="str">"session_id"</span>}, <span class="cm"># param name → captured key</span>
+    },
+)</pre></div>
+
+  <a class="anchor" id="comp-artifacts"></a>
+  <h2>Run Artifacts</h2>
+  <p>MCP tool responses can contain rich structured data (widgets, tables, charts). Access them via <code>response.run_artifacts</code>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>response = <span class="kw">await</span> runner.run(agent, <span class="str">"Show me the product catalog."</span>)
+
+<span class="kw">if</span> response.run_artifacts:
+    <span class="kw">for</span> artifact_id, artifact <span class="kw">in</span> response.run_artifacts.items():
+        widget_meta = artifact.get(<span class="str">"meta"</span>)       <span class="cm"># widget template</span>
+        structured  = artifact.get(<span class="str">"structured_content"</span>)
+        text        = artifact.get(<span class="str">"text_content"</span>)</pre></div>
+
+  <a class="anchor" id="comp-memory"></a>
+  <h2>Long-term Memory</h2>
+  <p>Continuum uses <a href="#int-langfuse">mem0</a> + Milvus(default) or Qdrant  for persistent semantic memory. Facts are automatically extracted from conversations and stored as embeddings.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
+<span class="kw">from</span> orchestrator.memory.scopes <span class="kw">import</span> <span class="cls">MemoryScope</span>
+
+agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"memory-agent"</span>,
+    instructions=<span class="str">"Remember user preferences."</span>,
+    memory_config=<span class="cls">AgentMemoryConfig</span>(
+        search_memories=<span class="cls">True</span>,
+        search_scope=<span class="cls">MemoryScope</span>.USER,
+        search_limit=<span class="num">5</span>,
+        store_memories=<span class="cls">True</span>,
+        store_scope=<span class="cls">MemoryScope</span>.USER,
+        broadcast_learnings=<span class="cls">True</span>,  <span class="cm"># share useful facts with other agents</span>
+    ),
+)</pre></div>
+
+  <h3>Controlling what gets stored</h3>
+  <p>Use <code>extraction_prompt</code> to tell mem0 exactly which facts to extract. Use <code>pre_store_filter</code> to remove PII or irrelevant facts <em>after</em> they are stored.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># extraction_prompt — override mem0's default extraction logic</span>
+<span class="cls">AgentMemoryConfig</span>(
+    store_memories=<span class="cls">True</span>,
+    extraction_prompt=(
+        <span class="str">"Only extract long-term facts about the user's pets, animal preferences, "</span>
+        <span class="str">"and dietary needs. Do NOT store transient actions like adding to cart or searches."</span>
+    ),
+)
+
+<span class="cm"># pre_store_filter — runs after storage; facts not returned are deleted</span>
+<span class="kw">def</span> <span class="fn">remove_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
+    <span class="kw">return</span> [f <span class="kw">for</span> f <span class="kw">in</span> facts <span class="kw">if</span> <span class="str">"credit card"</span> <span class="kw">not in</span> f]
+
+<span class="cls">AgentMemoryConfig</span>(store_memories=<span class="cls">True</span>, pre_store_filter=remove_pii)</pre></div>
+
+  <h3>Memory management API</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.core.container <span class="kw">import</span> get_container
+
+memory_client = <span class="fn">get_container</span>().memory_client
+
+<span class="cm"># View all memories for a user</span>
+memories = <span class="kw">await</span> memory_client.get_all(user_id=<span class="str">"user-123"</span>)
+<span class="kw">for</span> m <span class="kw">in</span> memories:
+    <span class="fn">print</span>(m.memory, m.id)
+
+<span class="cm"># Search by query</span>
+results = <span class="kw">await</span> memory_client.search(<span class="str">"pet preferences"</span>, user_id=<span class="str">"user-123"</span>)
+
+<span class="cm"># Delete a specific memory</span>
+<span class="kw">await</span> memory_client.delete(memory_id=<span class="str">"abc-123"</span>)
+
+<span class="cm"># Delete all memories for a user (GDPR right-to-forget)</span>
+<span class="kw">await</span> memory_client.delete_all(user_id=<span class="str">"user-123"</span>)</pre></div>
+
+  <div class="callout callout-tip">
+    <strong>Privacy tip:</strong> Consider exposing memory management in your frontend — let users view and delete what the AI remembers about them. This matters for GDPR compliance and user trust and experience.
+  </div>
+
+  <a class="anchor" id="comp-memory-scope"></a>
+  <h2>Memory Scopes</h2>
+  <table>
+    <tr><th>Scope</th><th>Isolation</th><th>Use case</th></tr>
+    <tr><td><code>USER</code></td><td>Per user_id</td><td>User preferences, personal context</td></tr>
+    <tr><td><code>AGENT</code></td><td>Per agent name</td><td>Agent-specific domain knowledge</td></tr>
+    <tr><td><code>SHARED</code></td><td>Cross-user, cross-agent</td><td>Global facts, product knowledge</td></tr>
+    <tr><td><code>CONVERSATION</code></td><td>Per conversation_id</td><td>Ephemeral conversation context</td></tr>
+  </table>
+
+  <a class="anchor" id="comp-intelligent-memory"></a>
+  <h2>IntelligentMemoryClient</h2>
+  <p>A drop-in replacement for <code>MemoryClient</code> that adds <strong>importance scoring</strong>, <strong>time-based decay</strong>, entity extraction, and user profiles. Low-relevance or stale memories are down-weighted before being injected into the prompt.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.memory <span class="kw">import</span> <span class="cls">IntelligentMemoryClient</span>, <span class="cls">IntelligenceConfig</span>
+
+memory = <span class="cls">IntelligentMemoryClient</span>(
+    intelligence_config=<span class="cls">IntelligenceConfig</span>(
+        enable_scoring=<span class="cls">True</span>,       <span class="cm"># LLM scores each memory at store time</span>
+        enable_decay=<span class="cls">True</span>,         <span class="cm"># recent memories get a relevance boost</span>
+        prune_threshold=<span class="num">0.15</span>,      <span class="cm"># delete memories below this score</span>
+    )
+)
+
+<span class="cm"># Accepts strings, list of strings, or message dicts</span>
+<span class="kw">await</span> memory.add(
+    [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"I prefer dark mode."</span>}],
+    user_id=<span class="str">"user-123"</span>,
+)
+
+results = <span class="kw">await</span> memory.search(<span class="str">"user preferences"</span>, user_id=<span class="str">"user-123"</span>)</pre></div>
+
+  <div class="callout callout-tip">
+    <strong><code>add()</code> accepts three forms:</strong> a plain string, a list of strings, or a list of <code>{"role", "content"}</code> message dicts. The messages-style form is recommended because it gives mem0 more context for fact extraction.
+  </div>
+
+  <a class="anchor" id="comp-session"></a>
+  <h2>Sessions (Redis)</h2>
+  <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically — you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.session <span class="kw">import</span> <span class="cls">SessionClient</span>
+
+session = <span class="cls">SessionClient</span>()
+
+<span class="cm"># Create or resume a session</span>
+session_id = <span class="kw">await</span> session.get_or_create_session(user_id=<span class="str">"user-123"</span>)
+
+<span class="cm"># Read history (e.g. to display in a chat UI)</span>
+messages = <span class="kw">await</span> session.get_conversation_history(session_id)
+
+<span class="cm"># Clear messages but keep the session</span>
+<span class="kw">await</span> session.clear_session(session_id)
+
+<span class="cm"># Delete the session entirely</span>
+<span class="kw">await</span> session.delete_session(session_id)</pre></div>
+
+  <a class="anchor" id="comp-temporal"></a>
+  <h2>Temporal Integration</h2>
+  <p>Build durable workflows that survive process restarts, with automatic retries and audit trails.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal <span class="kw">import</span> <span class="cls">TemporalClient</span>
+<span class="kw">from</span> orchestrator.temporal.workflows <span class="kw">import</span> <span class="cls">AgentWorkflow</span>
+<span class="kw">from</span> orchestrator.temporal.types <span class="kw">import</span> <span class="cls">AgentStep</span>, <span class="cls">ApprovalStep</span>, <span class="cls">ParallelStep</span>
+
+steps = [
+    <span class="cls">AgentStep</span>(agent_name=<span class="str">"researcher"</span>, input=<span class="str">"Analyze market trends"</span>),
+    <span class="cls">ApprovalStep</span>(
+        description=<span class="str">"Review analysis before proceeding"</span>,
+        approvers=[<span class="str">"manager@acme.com"</span>],
+        timeout=<span class="num">86400</span>,  <span class="cm"># 24 hours</span>
+    ),
+    <span class="cls">AgentStep</span>(agent_name=<span class="str">"writer"</span>),  <span class="cm"># receives researcher output</span>
+]
+
+client = <span class="cls">TemporalClient</span>()
+handle = <span class="kw">await</span> client.execute_workflow(<span class="cls">AgentWorkflow</span>, {<span class="str">"steps"</span>: steps})</pre></div>
+
+  <h3>Step Types</h3>
+  <table>
+    <tr><th>Step</th><th>Purpose</th></tr>
+    <tr><td><code>AgentStep</code></td><td>Run a registered agent</td></tr>
+    <tr><td><code>ApprovalStep</code></td><td>Pause for human approval (email notification)</td></tr>
+    <tr><td><code>ParallelStep</code></td><td>Run multiple agents concurrently</td></tr>
+    <tr><td><code>ConditionalStep</code></td><td>Branch based on a condition agent's output</td></tr>
+    <tr><td><code>WaitStep</code></td><td>Delay execution (1 second to 7 days)</td></tr>
+  </table>
+
+  <a class="anchor" id="comp-loop-workflow"></a>
+  <h2>Loop Workflow (Temporal)</h2>
+  <p>For iterative agentic work that must survive restarts, use <code>LoopAgentWorkflow</code>. The loop runs on Temporal and persists state between iterations.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal.workflows <span class="kw">import</span> <span class="cls">LoopAgentWorkflow</span>
+
+handle = <span class="kw">await</span> client.execute_workflow(
+    <span class="cls">LoopAgentWorkflow</span>,
+    {
+        <span class="str">"agent_name"</span>: <span class="str">"refinement-agent"</span>,
+        <span class="str">"initial_input"</span>: <span class="str">"Draft a product description."</span>,
+        <span class="str">"max_iterations"</span>: <span class="num">5</span>,
+        <span class="str">"termination_condition"</span>: <span class="str">"output_match"</span>,
+        <span class="str">"termination_pattern"</span>: <span class="str">"APPROVED"</span>,
+    },
+)</pre></div>
+
+  <a class="anchor" id="comp-hitl"></a>
+  <h2>Human-in-the-Loop</h2>
+  <p>Workflows pause at <code>ApprovalStep</code> and send a notification to approvers. The workflow resumes only when approved — or auto-approves after timeout.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cls">ApprovalStep</span>(
+    description=<span class="str">"Approve the generated email before sending to customers"</span>,
+    approvers=[<span class="str">"alice@company.com"</span>, <span class="str">"bob@company.com"</span>],
+    timeout=<span class="num">3600</span>,           <span class="cm"># 1 hour, then auto-expires</span>
+    auto_approve_if=<span class="str">"low_risk"</span>,  <span class="cm"># skip approval if condition agent returns this</span>
+)</pre></div>
+
+
+</section>
+
+
+<!-- ═══════════════════ INTEGRATIONS ═══════════════════ -->
+<section class="page-section" id="sec-integrations">
+
+  <h1>Integrations</h1>
+  <p class="section-intro">Continuum calls LLM providers directly via their official SDKs.</p>
+
+  <h2>Provider Routing</h2>
+  <p>Continuum routes to providers automatically based on the model string prefix — no configuration needed.</p>
+  <table>
+    <tr><th>Model name prefix</th><th>Provider</th><th>Examples</th></tr>
+    <tr><td><code>claude-…</code> or <code>anthropic/…</code></td><td>Anthropic</td><td><code>claude-sonnet-4-5</code>, <code>claude-opus-4-5</code></td></tr>
+    <tr><td><code>gemini/…</code></td><td>Google Gemini</td><td><code>gemini/gemini-2.0-flash</code>, <code>gemini/gemini-1.5-pro</code></td></tr>
+    <tr><td>anything else</td><td>OpenAI</td><td><code>gpt-4o</code>, <code>gpt-4o-mini</code>, <code>gpt-5</code>, <code>o3-mini</code></td></tr>
+  </table>
+
+  <a class="anchor" id="int-openai"></a>
+  <h2>OpenAI</h2>
+  <p>Default provider. Route by using any <code>gpt-*</code> model string.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(name=<span class="str">"gpt-agent"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>)</pre></div>
+  <table>
+    <tr><th>Model</th><th>Context</th><th>Notes</th></tr>
+    <tr><td><code>gpt-5</code></td><td>—</td><td>Latest, highest capability</td></tr>
+    <tr><td><code>gpt-4o</code></td><td>128k</td><td>Strong overall quality</td></tr>
+    <tr><td><code>gpt-4o-mini</code></td><td>128k</td><td>Default model, fast &amp; cheap</td></tr>
+    <tr><td><code>o3-mini</code></td><td>—</td><td>Reasoning model</td></tr>
+  </table>
+  <p>Required env: <code>OPENAI_API_KEY</code> — also used by mem0's default embedder.</p>
+
+  <a class="anchor" id="int-anthropic"></a>
+  <h2>Anthropic</h2>
+  <p>Route by using any <code>claude-*</code> or <code>anthropic/...</code> prefixed model string.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(name=<span class="str">"claude-agent"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"claude-sonnet-4-5"</span>)</pre></div>
+  <table>
+    <tr><th>Model</th><th>Notes</th></tr>
+    <tr><td><code>claude-sonnet-4-5</code></td><td>Recommended — best balance</td></tr>
+    <tr><td><code>claude-opus-4-5</code></td><td>Highest capability</td></tr>
+    <tr><td><code>claude-haiku-4-5</code></td><td>Fastest &amp; cheapest</td></tr>
+  </table>
+  <p>Required env: <code>ANTHROPIC_API_KEY</code></p>
+
+  <a class="anchor" id="int-gemini"></a>
+  <h2>Google Gemini</h2>
+  <p>Route by using a <code>gemini/</code>-prefixed model string.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(name=<span class="str">"gemini-agent"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gemini/gemini-2.5-flash"</span>)</pre></div>
+  <table>
+    <tr><th>Model</th><th>Notes</th></tr>
+    <tr><td><code>gemini/gemini-2.5-flash</code></td><td>Fast, cost-effective</td></tr>
+    <tr><td><code>gemini/gemini-2.0-pro</code></td><td>Best Gemini quality</td></tr>
+    <tr><td><code>gemini/gemini-1.5-pro</code></td><td>1M context window</td></tr>
+  </table>
+  <p>Required env: <code>GEMINI_API_KEY</code></p>
+
+  <a class="anchor" id="int-azure"></a>
+  <h2>Azure OpenAI</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.llm <span class="kw">import</span> <span class="cls">LLMConfig</span>
+<span class="kw">import</span> os
+
+config = <span class="cls">LLMConfig</span>(
+    model=<span class="str">"azure/gpt-4o"</span>,
+    api_key=os.environ[<span class="str">"AZURE_API_KEY"</span>],
+    api_base=os.environ[<span class="str">"AZURE_API_BASE"</span>],
+    api_version=os.environ[<span class="str">"AZURE_API_VERSION"</span>],
+)
+agent = <span class="cls">BaseAgent</span>(name=<span class="str">"azure-agent"</span>, instructions=<span class="str">"..."</span>, llm_config=config)</pre></div>
+  <p>The <code>azure/</code> prefix routes to OpenAI's SDK with your Azure endpoint. Required env: <code>AZURE_API_KEY</code>, <code>AZURE_API_BASE</code>, <code>AZURE_API_VERSION</code>.</p>
+
+  <a class="anchor" id="int-fallback"></a>
+  <h3>Automatic Fallback</h3>
+  <p>When <code>LLM_ENABLE_FALLBACK=true</code> (default), any provider error transparently retries on <code>FALLBACK_LLM_MODEL</code>. Set it to a different provider to get cross-provider resilience:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env — primary OpenAI, fallback to Gemini</span>
+DEFAULT_LLM_MODEL=gpt-4o
+FALLBACK_LLM_MODEL=gemini/gemini-1.5-flash
+LLM_ENABLE_FALLBACK=true</pre></div>
+
+  <a class="anchor" id="int-langfuse"></a>
+  <h2>Langfuse Tracing</h2>
+  <p>All agent runs, LLM calls, tool invocations, and memory operations are automatically traced to Langfuse. No code changes required.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># docker-compose.yml ships Langfuse at http://localhost:3000</span>
+<span class="cm"># .env</span>
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://localhost:3000</pre></div>
+
+  <p>Each <code>response.trace_id</code> is a direct Langfuse trace link for debugging.</p>
+
+  <a class="anchor" id="int-observe"></a>
+  <h2>Tracing Decorators</h2>
+  <p>Three decorators create Langfuse spans for custom functions — all imported from <code>orchestrator.observability</code>.</p>
+  <h3>@observe — generic span</h3>
+  <p>Add custom spans to any async function:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> observe
+
+<span class="op">@</span><span class="fn">observe</span>(<span class="str">"preprocess_input"</span>)
+<span class="kw">async def</span> <span class="fn">preprocess</span>(text: <span class="fn">str</span>) -> <span class="fn">str</span>:
+    <span class="kw">return</span> text.strip().lower()</pre></div>
+
+  <h3>@trace_tool — for tool / API functions</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> trace_tool
+
+<span class="op">@</span><span class="fn">trace_tool</span>(<span class="str">"search_products"</span>)
+<span class="kw">async def</span> <span class="fn">search_products</span>(query: <span class="fn">str</span>):
+    <span class="cm"># creates a tool-type span with input/output captured</span>
+    <span class="kw">return</span> <span class="kw">await</span> db.<span class="fn">search</span>(query)</pre></div>
+
+  <h3>@trace_agent — for custom agent wrappers</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> trace_agent
+
+<span class="op">@</span><span class="fn">trace_agent</span>(<span class="str">"my-specialist"</span>)
+<span class="kw">async def</span> <span class="fn">run_specialist</span>(input: <span class="fn">str</span>):
+    <span class="cm"># span tagged as agent-type in Langfuse</span>
+    ...</pre></div>
+
+  <table>
+    <tr><th>Decorator</th><th>Langfuse span type</th><th>Best for</th></tr>
+    <tr><td><code>@observe</code></td><td>span</td><td>Generic business logic</td></tr>
+    <tr><td><code>@trace_tool</code></td><td>tool</td><td>Tool / external API call functions</td></tr>
+    <tr><td><code>@trace_agent</code></td><td>agent</td><td>Custom agent wrapper functions</td></tr>
+  </table>
+
+  <a class="anchor" id="int-qdrant"></a>
+  <h2>Qdrant</h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env</span>
+VECTOR_STORE_PROVIDER=qdrant
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=orchestrator_memories</pre></div>
+  <p>For Qdrant Cloud, also set <code>QDRANT_API_KEY</code>.</p>
+
+  <a class="anchor" id="int-milvus"></a>
+  <h2>Milvus <span class="tag tag-new">default</span></h2>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env (default — no change needed if using docker compose)</span>
+VECTOR_STORE_PROVIDER=milvus
+MILVUS_HOST=localhost
+MILVUS_PORT=19530</pre></div>
+  <p>For Zilliz Cloud, set <code>MILVUS_TOKEN</code> and point <code>MILVUS_HOST</code> to your cloud endpoint.</p>
+
+</section>
+
+
+
+<!-- ═══════════════════ COMMUNITY ═══════════════════ -->
+<section class="page-section" id="sec-community">
+
+  <h1>Community</h1>
+  <p class="section-intro">Continuum is built at Shyftlabs. Contributions, examples, and feedback are welcome.</p>
+
+  <a class="anchor" id="com-contributing"></a>
+  <h2>Contributing</h2>
+  <ol class="steps">
+    <li><strong>Fork &amp; clone</strong> — work in a feature branch</li>
+    <li><strong>Install dev dependencies</strong>
+<pre>pip install -e <span class="str">".[dev,temporal,eval]"</span></pre>
+    </li>
+    <li><strong>Write tests</strong> — unit + integration, no mocking the database
+<pre>pytest tests/ -v</pre>
+    </li>
+    <li><strong>Lint &amp; type-check</strong>
+<pre>ruff check src/
+mypy src/</pre>
+    </li>
+    <li><strong>Submit a PR</strong> — describe what changed and why, reference the relevant docs section</li>
+  </ol>
+
+  <div class="callout callout-warn">
+    <strong>Integration tests over mocks:</strong> Continuum integration tests hit real services (Redis, Qdrant/Milvus). Run <code>docker compose up -d</code> before running the test suite.
+  </div>
+
+
+</section>
+
+</main>
+</div>
+
+<footer>
+  <span>Continuum v0.2.0 · Shyftlabs</span>
+  <span>Python 3.13+ · <a href="https://github.com/bhavik-shyftlabs/continuum">GitHub</a></span>
+</footer>
+
+<!-- ═══════════════════ JS ═══════════════════ -->
+<script>
+  const sections = ['home', 'build', 'run', 'components', 'integrations', 'reference', 'community'];
+
+  function showSection(name) {
+    // Hide all sections
+    sections.forEach(s => {
+      const sec = document.getElementById('sec-' + s);
+      if (sec) sec.classList.remove('active');
+      const sb = document.getElementById('sb-' + s);
+      if (sb) sb.style.display = 'none';
+    });
+
+    // Show target
+    const sec = document.getElementById('sec-' + name);
+    if (sec) sec.classList.add('active');
+    const sb = document.getElementById('sb-' + name);
+    if (sb) sb.style.display = 'block';
+
+    // Update nav tabs
+    document.querySelectorAll('.nav-tab').forEach((t, i) => {
+      t.classList.toggle('active', sections[i] === name);
+    });
+
+    // Scroll to top
+    document.getElementById('main').scrollTop = 0;
+    window.scrollTo(0, 0);
+
+    // Update sidebar active link
+    const links = document.querySelectorAll('#sb-' + name + ' .sidebar-link');
+    if (links.length > 0) {
+      links.forEach(l => l.classList.remove('active'));
+      links[0].classList.add('active');
+    }
+  }
+
+  function scrollToAnchor(anchorId) {
+    const el = document.getElementById(anchorId);
+    if (el) {
+      const y = el.getBoundingClientRect().top + window.scrollY - 70;
+      window.scrollTo({ top: y, behavior: 'smooth' });
+    }
+    // Update sidebar active
+    document.querySelectorAll('.sidebar-link').forEach(l => {
+      l.classList.remove('active');
+      if (l.getAttribute('onclick') && l.getAttribute('onclick').includes(anchorId)) {
+        l.classList.add('active');
+      }
+    });
+  }
+
+  function copyCode(btn) {
+    // after DOM rewrite, btn is sibling of pre inside .code-wrapper
+    const wrapper = btn.closest('.code-wrapper') || btn.parentElement;
+    const pre = wrapper.querySelector('pre') || btn.parentElement;
+    const text = pre.innerText.trim();
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'copied!';
+      setTimeout(() => btn.textContent = 'copy', 1500);
+    });
+  }
+
+  // Scrollspy — update sidebar as user scrolls
+  window.addEventListener('scroll', () => {
+    const anchors = document.querySelectorAll('.anchor');
+    let current = null;
+    anchors.forEach(a => {
+      if (window.scrollY >= a.offsetTop - 90) current = a.id;
+    });
+    if (current) {
+      document.querySelectorAll('.sidebar-link').forEach(l => {
+        const oc = l.getAttribute('onclick') || '';
+        l.classList.toggle('active', oc.includes(current));
+      });
+    }
+  });
+
+  // Show home sidebar on load
+  document.getElementById('sb-home').style.display = 'block';
+</script>
+</body>
+</html>

@@ -291,16 +291,18 @@ Current output:
 Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
 
         try:
+            from orchestrator.llm.config import LLMConfig
+
             llm_response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config={
-                    "model": self.agent.model if self.agent else settings.default_llm_model,
-                    "temperature": 0.1,
-                    "max_tokens": 20,
-                },
+                config=LLMConfig(
+                    model=self.agent.model if self.agent else settings.default_llm_model,
+                    temperature=0.1,
+                    max_tokens=20,
+                ),
             )
 
-            result = llm_response.content.strip().upper()
+            result = (llm_response.content or "").strip().upper()
             return "COMPLETE" in result
 
         except Exception as e:
