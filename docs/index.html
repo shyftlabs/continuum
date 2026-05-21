@@ -303,7 +303,7 @@
   <a class="anchor" id="home-intro"></a>
   <div class="hero">
     <h1>Build production AI agents,<br>not prototypes.</h1>
-    <p class="tagline">Continuum is a Python framework for building, running, and deploying reliable multi-agent systems at enterprise scale.</p>
+    <p class="tagline">Continuum is a Python framework for building, running, and deploying reliable agent systems at enterprise scale.</p>
     <div class="hero-badges">
       <span class="badge badge-blue">Python 3.13</span>
       <span class="badge badge-green">OpenAI · Anthropic · Gemini</span>
@@ -1119,14 +1119,14 @@ response = <span class="kw">await</span> runner.run(
   <a class="anchor" id="run-context"></a>
   <h2>Context Management</h2>
   <p>When a conversation approaches the model's context window, Continuum automatically compresses older messages.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ContextManagementConfig</span>, <span class="cls">CompressionStrategy</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ContextManagementConfig</span>, <span class="cls">CompressionStrategy</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"long-conv"</span>,
     instructions=<span class="str">"..."</span>,
     config=<span class="cls">AgentConfig</span>(
         context_management=<span class="cls">ContextManagementConfig</span>(
-            strategy=<span class="cls">CompressionStrategy</span>.MODERATE,  <span class="cm"># AGGRESSIVE / MODERATE / CONSERVATIVE / DISABLED</span>
+            compression_strategy=<span class="cls">CompressionStrategy</span>.SMART,  <span class="cm"># SMART / SUMMARIZE_OLD / TRUNCATE_OLDEST</span>
         )
     ),
 )</pre></div>

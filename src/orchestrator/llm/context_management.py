@@ -145,7 +145,7 @@ class SummaryCache:
         # Create hash of message content (excluding timestamps/metadata)
         content = []
         for msg in messages:
-            content.append(f"{msg.get('role')}:{msg.get('content', '')[:100]}")
+            content.append(f"{msg.get('role')}:{(msg.get('content') or '')[:100]}")
         content_str = "|".join(content)
         return hashlib.md5(content_str.encode()).hexdigest()
 
@@ -541,9 +541,31 @@ class ProgressiveContextManager:
                 latency_ms=0.0,
             )
 
-        # Split into older and recent
-        older_messages = conversation_messages[: -config.keep_recent_messages]
-        recent_messages = conversation_messages[-config.keep_recent_messages :]
+        # Split into older and recent, ensuring the cut never falls inside a tool call pair.
+        # Walk the cut backward until it lands before a user or plain assistant text message.
+        cut = max(0, len(conversation_messages) - config.keep_recent_messages)
+        while cut > 0:
+            msg = conversation_messages[cut]
+            role = msg.get("role")
+            if role == "user" or (role == "assistant" and not msg.get("tool_calls")):
+                break
+            cut -= 1
+
+        if cut == 0:
+            # No safe cut point found — entire conversation is tool calls, skip compression
+            return messages, CompressionResult(
+                original_token_count=0,
+                compressed_token_count=0,
+                messages_before=len(messages),
+                messages_after=len(messages),
+                was_compressed=False,
+                strategy_used="summarize_old",
+                compression_ratio=1.0,
+                latency_ms=0.0,
+            )
+
+        older_messages = conversation_messages[:cut]
+        recent_messages = conversation_messages[cut:]
 
         # Check cache
         summary_messages = None
@@ -599,6 +621,15 @@ class ProgressiveContextManager:
             strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT,
             response_buffer_percent=0.25,
         )
+
+        # Fix any broken tool call pairs at the truncation boundary.
+        # Remove leading tool messages and orphan assistant tool_calls messages.
+        while truncated and truncated[0].get("role") == "tool":
+            truncated = truncated[1:]
+        while truncated and (
+            truncated[0].get("role") == "assistant" and truncated[0].get("tool_calls")
+        ):
+            truncated = truncated[1:]
 
         compressed_tokens = self._context_window_manager.count_tokens(truncated, model)
         original_tokens = self._context_window_manager.count_tokens(messages, model)
@@ -719,7 +750,7 @@ SUMMARY:"""
         formatted = []
         for msg in messages:
             role = msg.get("role", "unknown")
-            content = msg.get("content", "")
+            content = msg.get("content") or ""
             if content:
                 formatted.append(f"{role.upper()}: {content[:500]}")  # Truncate long messages
         return "\n".join(formatted)
