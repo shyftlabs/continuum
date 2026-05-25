@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
-from orchestrator.agent.types import RunStatus
+from orchestrator.agent.types import ResponseStatus, RunStatus
 from orchestrator.logging import get_logger
 from orchestrator.observability.metrics import get_metrics_collector
 
@@ -85,10 +85,11 @@ class RunFinalizer:
 
         _, updated_context_state = self.track_mcp_session(agent, context)
 
-        await self.save_session_data(
-            agent, context, user_message_index,
-            tool_context_state, updated_context_state, messages,
-        )
+        if response.status != ResponseStatus.MAX_TURNS_REACHED:
+            await self.save_session_data(
+                agent, context, user_message_index,
+                tool_context_state, updated_context_state, messages,
+            )
 
         e2e_latency_ms = (time.time() - start_time) * 1000
         metrics.record_latency(

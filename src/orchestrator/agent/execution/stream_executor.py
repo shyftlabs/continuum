@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from orchestrator.agent.interfaces.executor_interface import IStreamExecutor
 from orchestrator.agent.types import AgentEvent, EventType, RunContext, RunState
+from orchestrator.agent.execution.executor import _enrich_config_for_gateway
+from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
 
 if TYPE_CHECKING:
@@ -100,9 +102,12 @@ class StreamExecutor(IStreamExecutor):
                 content_parts = []
                 tool_calls = []
 
+                llm_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
+
                 async for chunk in self.llm_client.chat_stream(
                     messages=messages,
                     tools=tools if tools else None,
+                    config=llm_config,
                     trace_metadata={"session_id": context.session_id}
                     if context.session_id
                     else None,

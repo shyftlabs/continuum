@@ -20,6 +20,7 @@ from orchestrator.agent.types import (
     ToolExecutionSummary,
 )
 from orchestrator.llm.config import LLMConfig
+from orchestrator.config import settings
 from orchestrator.logging import get_logger
 from orchestrator.observability.metrics import get_metrics_collector
 from orchestrator.observability.trace_context import SpanScope, truncate_data
@@ -31,6 +32,21 @@ if TYPE_CHECKING:
     from orchestrator.llm import LLMClient
 
 logger = get_logger(__name__)
+
+
+def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
+    """Inject gateway metadata into body.metadata when Smart Gateway is configured."""
+    if not settings.smart_gateway_url:
+        return config
+    return config.with_overrides(
+        extra_body={
+            "metadata": {
+                "session_id": context.session_id or context.run_id,
+                "trace_id": context.trace_id,
+            }
+        }
+    )
+
 
 
 class Executor(IExecutor):
@@ -157,7 +173,7 @@ class Executor(IExecutor):
                 # Make LLM call
                 try:
                     # Create LLMConfig for this agent (includes JSON mode if enabled)
-                    llm_config = LLMConfig.from_agent_config(agent)
+                    llm_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
 
                     # Log JSON mode status
                     if agent.enable_json_mode:
@@ -268,6 +284,8 @@ class Executor(IExecutor):
                 run_state.messages = [message_to_dict(m) for m in messages]
 
                 # Log LLM response details
+                if response.model and settings.smart_gateway_url:
+                    logger.info("🎯 Gateway selected model: %s", response.model)
                 if not response.tool_calls:
                     logger.debug(
                         f"💬 LLM response (no tool calls) on turn {turn}: "
@@ -640,7 +658,7 @@ class Executor(IExecutor):
             }
         ]
 
-        reasoning_config = LLMConfig.from_agent_config(agent)
+        reasoning_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
         reasoning_config.max_tokens = 512
 
         response = await self.llm_client.chat(
@@ -692,7 +710,7 @@ class Executor(IExecutor):
             turn += 1
             run_state.turn_count = turn
 
-            llm_config = LLMConfig.from_agent_config(agent)
+            llm_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
 
             # ReAct does NOT use function calling — LLM writes actions as plain text
             response = await self.llm_client.chat(

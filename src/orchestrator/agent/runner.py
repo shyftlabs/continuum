@@ -19,6 +19,7 @@ from orchestrator.agent.exceptions import (
     AgentConfigurationError,
     AgentError,
     AgentExecutionError,
+    MaxTurnsExceededError,
 )
 from orchestrator.agent.execution.executor import Executor
 from orchestrator.agent.execution.handoff_executor import HandoffExecutor
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
     from orchestrator.tools import ToolExecutor
 
 logger = get_logger(__name__)
+
 
 
 class AgentRunner:
@@ -468,6 +470,29 @@ class AgentRunner:
             return response
 
         except Exception as e:
+            if isinstance(e, MaxTurnsExceededError):
+                partial = AgentResponse(
+                    content="",
+                    agent_name=agent.name,
+                    status=ResponseStatus.MAX_TURNS_REACHED,
+                    error=str(e),
+                    messages=run_state.messages,
+                    run_artifacts={
+                        "stopped_reason": "max_turns",
+                        "turns_used": e.current_turn,
+                    },
+                    trace_id=ctx.trace_id,
+                )
+                if agent.on_end:
+                    agent.on_end(agent, {"context": ctx, "response": partial})
+                await self._finalizer.finalize(
+                    agent, ctx, run_state, partial,
+                    result.user_message_index, result.tool_context_state,
+                    start_time, run_state.messages,
+                )
+                e.partial_response = partial
+                raise
+
             self._circuit_breaker.record_failure()
             await self._finalizer.handle_error(agent, ctx, run_state, e, start_time)
 

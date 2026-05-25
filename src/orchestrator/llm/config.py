@@ -59,6 +59,10 @@ class LLMConfig(BaseModel):
     cache: bool = False
     cache_ttl: int | None = None
 
+    # Smart Gateway
+    extra_body: dict[str, Any] | None = None       # passed as extra_body to the OpenAI SDK call
+    gateway_router_mode: str | None = None         # value for x-portkey-router-mode header
+
     def to_kwargs(self) -> dict[str, Any]:
         """Convert config to kwargs for LLM completion call."""
         kwargs: dict[str, Any] = {
@@ -118,6 +122,9 @@ class LLMConfig(BaseModel):
         if self.metadata:
             kwargs["metadata"] = self.metadata
 
+        if self.extra_body is not None:
+            kwargs["extra_body"] = self.extra_body
+
         return kwargs
 
     def with_overrides(self, **kwargs: Any) -> "LLMConfig":
@@ -146,6 +153,7 @@ class LLMConfig(BaseModel):
             model=agent.model,
             temperature=agent.temperature,
             max_tokens=agent.max_tokens,
+            gateway_router_mode=getattr(agent, "gateway_mode", None),
         )
 
         if agent.enable_json_mode:
