@@ -54,6 +54,8 @@ print(resp.structured_output)           # populated if output_schema set
 | `instruction_modifiers` | `[]` | dynamic prompt rewriters |
 | `on_start` / `on_end` / `on_error` / `on_tool_call` / `on_handoff` | `None` | sync callables |
 | `config` | `AgentConfig()` | max_turns=25, react_mode, reasoning_mode, scanners, … |
+| `gateway_mode` | `None` | Smart Gateway routing: `"strict"` / `"modest"` / `"quality"` |
+| `policy_store` | `None` | Security policy store for request validation |
 
 ## Structured output
 
@@ -83,7 +85,7 @@ async for ev in runner.run_stream(agent, "..."):
 
 ```python
 from orchestrator.agent.types import MemoryScope
-# MemoryScope.SHARED / USER / AGENT / RUN  — string enum
+# MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION  — string enum
 ```
 
 ## ReAct + reasoning modes

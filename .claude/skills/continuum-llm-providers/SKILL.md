@@ -1,6 +1,6 @@
 ---
 name: continuum-llm-providers
-description: Pick the right LLM provider, configure structured outputs, control context-window compression, and use the LLMClient directly. Provider routing is by model-string prefix; LiteLLM has been removed. Invoke when the user asks about "switch to Claude", "Gemini structured output", "context length error", "rate limiting", "JSON schema", or "how does the LLM client work".
+description: Pick the right LLM provider, configure structured outputs, control context-window compression, and use the LLMClient directly. Provider routing is by model-string prefix; LiteLLM has been removed. Also covers Smart Gateway integration for multi-provider routing. Invoke when the user asks about "switch to Claude", "Gemini structured output", "context length error", "rate limiting", "JSON schema", "Smart Gateway", "gateway_mode", or "how does the LLM client work".
 ---
 
 # Continuum LLM Providers Skill
@@ -15,6 +15,8 @@ Authoritative source: [`docs/llm.md`](../../../docs/llm.md).
 
 ## Provider routing (by model-string prefix)
 
+When `SMART_GATEWAY_URL` is **not** set, routing is by model-string prefix:
+
 | Prefix | Provider | SDK |
 |---|---|---|
 | `gemini/...`, `google/...` | Gemini | OpenAI SDK against Gemini's OpenAI-compat endpoint |
@@ -25,6 +27,59 @@ Authoritative source: [`docs/llm.md`](../../../docs/llm.md).
 agent.model = "gpt-4o-mini"                           # OpenAI
 agent.model = "claude-sonnet-4-20250514"              # Anthropic
 agent.model = "gemini/gemini-2.5-flash"               # Gemini
+```
+
+---
+
+## Smart Gateway (multi-provider routing)
+
+When `SMART_GATEWAY_URL` is set, **all** agents automatically route through
+`GatewayProvider` regardless of the `model` field. The gateway speaks
+OpenAI-compatible API and translates to the upstream provider internally.
+
+```env
+SMART_GATEWAY_URL=http://localhost:8787/v1
+SMART_GATEWAY_API_KEY=your-key
+SMART_GATEWAY_DEFAULT_MODE=modest          # strict | modest | quality
+```
+
+No code changes needed — `get_provider()` detects the env var and switches
+automatically.
+
+### Per-agent routing mode
+
+Override the default mode on any agent:
+
+```python
+agent = BaseAgent(
+    name="high-quality-agent",
+    instructions="...",
+    model="gpt-4o-mini",                   # sent to gateway as hint
+    gateway_mode="quality",                # overrides SMART_GATEWAY_DEFAULT_MODE
+)
+```
+
+| `gateway_mode` | Gateway tier | Model category |
+|---|---|---|
+| `"strict"` | `cheap` | ultra-cheap / small models |
+| `"modest"` | `mid` | small / mid models (default) |
+| `"quality"` | `quality` | frontier models |
+
+### How the model field works with gateway
+
+The gateway re-encodes the model as `auto/<tier>` internally:
+- `"gpt-4o-mini"` → `"auto/mid"` (when mode is modest)
+- Pass `"openai/gpt-4o-mini"` to explicitly pin provider + model
+- Pass `"auto/quality"` to let the gateway choose the best quality model
+
+### Smart layer env vars (tier classifier)
+
+```env
+LLM_ROUTE_TIER_CLASSIFIER=qwen            # classifier backend
+LLM_ROUTE_ROUTER_MODEL=...                # classifier model id
+LLM_ROUTE_ROUTER_API_BASE=...             # classifier endpoint
+LLM_ROUTE_ROUTER_API_KEY=...              # classifier key
+LLM_ROUTE_FORCE_COMPLETION_MODEL=...      # bypass classifier, always use this
 ```
 
 ---
@@ -202,3 +257,7 @@ resp = await client.chat(messages, tools=tools, tool_choice="auto")
   one.
 - Don't hammer the API — use `LLMConfig.rate_limit_rpm=N` for predictable
   pacing under tier limits.
+- Don't pass bare model names like `"gpt-4o-mini"` when using the gateway
+  directly — use `"openai/gpt-4o-mini"` or `"auto/mid"` for proper routing.
+- Don't set `gateway_mode` without `SMART_GATEWAY_URL` — it has no effect
+  when the gateway is not configured.
