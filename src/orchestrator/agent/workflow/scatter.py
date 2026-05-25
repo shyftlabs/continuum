@@ -402,7 +402,7 @@ class ScatterAgent(BaseAgent):
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
                 config=LLMConfig(
-                    model=self.scatter_config.summary_model or settings.default_llm_model,
+                    model=self.scatter_config.summary_model or self.model,
                     temperature=0.3,
                 ),
                 auto_session=False,

@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # -------------------------------------------------------------------------
+    # Smart Gateway integration
+    # -------------------------------------------------------------------------
+    smart_gateway_url: str | None = None             # SMART_GATEWAY_URL
+    smart_gateway_api_key: str | None = None         # SMART_GATEWAY_API_KEY
+    smart_gateway_default_mode: str = "modest"       # SMART_GATEWAY_DEFAULT_MODE
+
+    # -------------------------------------------------------------------------
     # Smart layer (model_tier routing + tier classifiers)
     # -------------------------------------------------------------------------
     smart_layer_enabled: bool = True  # When False, RouterAgent model_tier falls back to llm routing

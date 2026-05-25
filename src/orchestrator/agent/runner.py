@@ -58,6 +58,7 @@ from orchestrator.agent.utils.message_utils import message_to_dict
 from orchestrator.agent.utils.validation_utils import validate_input
 from orchestrator.core.container import Container, get_container
 from orchestrator.llm.config import LLMConfig
+from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.logging import get_logger
 from orchestrator.config import settings as app_settings
 
@@ -690,7 +691,7 @@ class AgentRunner:
                 async for chunk in self.llm_client.chat_stream(
                     messages=llm_messages,
                     tools=tools if tools else None,
-                    config=LLMConfig.from_agent_config(agent),
+                    config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
                     trace_metadata={"session_id": session_id} if session_id else None,
                 ):
                     if chunk.content:
@@ -722,7 +723,7 @@ class AgentRunner:
                         async for chunk in self.llm_client.chat_stream(
                             messages=llm_messages,
                             tools=expanded_tools,
-                            config=LLMConfig.from_agent_config(agent),
+                            config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
                             trace_metadata={"session_id": session_id} if session_id else None,
                         ):
                             if chunk.content:

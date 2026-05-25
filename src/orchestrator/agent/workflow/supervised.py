@@ -343,7 +343,7 @@ class SupervisedSequentialAgent(BaseAgent):
 
         from orchestrator.llm.config import LLMConfig
 
-        model = self.supervised_config.supervisor_model or settings.default_llm_model
+        model = self.supervised_config.supervisor_model or self.model
         prompt = (
             f"You are a quality supervisor evaluating step {step_num} output from agent '{agent_name}'.\n\n"
             f"Original task:\n{original_input[:400]}\n\n"

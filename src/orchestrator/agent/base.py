@@ -102,6 +102,7 @@ class BaseAgent:
     model: str = field(default_factory=lambda: settings.default_llm_model)
     temperature: float = 0.7
     max_tokens: int | None = None
+    gateway_mode: str | None = None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE
 
     # Tools
     tools: list[ToolDefinition] | list[dict[str, Any]] = field(default_factory=list)
