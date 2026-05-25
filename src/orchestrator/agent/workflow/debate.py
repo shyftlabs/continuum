@@ -356,7 +356,7 @@ class DebateAgent(BaseAgent):
         """
         from orchestrator.llm.config import LLMConfig
 
-        model = self.debate_config.summarise_model or settings.default_llm_model
+        model = self.debate_config.summarise_model or self.model
         prompt = (
             f"You are summarising an argument that argues {stance} a position.\n\n"
             f"Argument:\n{content}\n\n"

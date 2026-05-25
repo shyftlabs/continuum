@@ -40,6 +40,7 @@ class OpenAIProvider(BaseProvider):
         organization: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         kwargs: dict[str, Any] = {}
         if api_key:
@@ -48,8 +49,14 @@ class OpenAIProvider(BaseProvider):
             kwargs["organization"] = organization
         if api_base:
             kwargs["base_url"] = api_base
+
+        default_headers: dict[str, str] = {}
         if api_version:
-            kwargs["default_headers"] = {"api-version": api_version}
+            default_headers["api-version"] = api_version
+        if extra_headers:
+            default_headers.update(extra_headers)
+        if default_headers:
+            kwargs["default_headers"] = default_headers
 
         self._client = OpenAI(**kwargs)
         self._async_client = AsyncOpenAI(**kwargs)
