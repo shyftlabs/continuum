@@ -110,6 +110,7 @@ class MaxTurnsExceededError(AgentError):
         super().__init__(msg, **kwargs)
         self.max_turns = max_turns
         self.current_turn = current_turn
+        self.partial_response: Any = None
         if max_turns is not None:
             self.context["max_turns"] = max_turns
         if current_turn is not None:
