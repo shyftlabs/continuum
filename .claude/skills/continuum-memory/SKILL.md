@@ -1,6 +1,6 @@
 ---
 name: continuum-memory
-description: Configure and use Continuum's two-tier memory system — mem0+Qdrant for long-term facts, Redis for short-term sessions, with multi-tenant scopes (USER / AGENT / SHARED / RUN). Invoke when the user asks about "remember", "user preferences", "long-term memory", "vector search over memories", "multi-tenant isolation", "PII filtering on memory writes", or memory-related errors.
+description: Configure and use Continuum's two-tier memory system — mem0+Qdrant/Milvus for long-term facts, Redis for short-term sessions, with multi-tenant scopes (USER / AGENT / SHARED / RUN / CONVERSATION). Invoke when the user asks about "remember", "user preferences", "long-term memory", "vector search over memories", "multi-tenant isolation", "PII filtering on memory writes", "Milvus", "Qdrant", or memory-related errors.
 ---
 
 # Continuum Memory Skill
@@ -15,10 +15,35 @@ Authoritative sources: [`docs/memory.md`](../../../docs/memory.md) and
 | Layer | Class | Backend | Purpose |
 |---|---|---|---|
 | Short-term | `SessionClient` | Redis (port 6380) | Conversation history this session |
-| Long-term | `MemoryClient` | mem0 + Qdrant (6333) | Facts extracted across sessions |
+| Long-term | `MemoryClient` | mem0 + Qdrant or Milvus | Facts extracted across sessions |
 
 `AgentRunner` uses both automatically when `user_id` and `session_id`
 are passed.
+
+### Vector store selection
+
+Default is **Milvus**. Switch via env var:
+
+```env
+VECTOR_STORE_PROVIDER=milvus      # default — Milvus (port 19530)
+VECTOR_STORE_PROVIDER=qdrant      # Qdrant (port 6333)
+```
+
+Milvus config:
+```env
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
+MILVUS_TOKEN=                     # for Zilliz Cloud
+MILVUS_COLLECTION=orchestrator_memories
+```
+
+Qdrant config:
+```env
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_API_KEY=                   # for Qdrant Cloud
+QDRANT_COLLECTION=orchestrator_memories
+```
 
 ---
 
@@ -81,7 +106,7 @@ Every async method has a `*_sync` counterpart.
 
 ```python
 from orchestrator.agent.types import MemoryScope     # str-Enum
-MemoryScope.SHARED / USER / AGENT / RUN
+MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION
 # Pass to AgentMemoryConfig
 ```
 
@@ -102,6 +127,7 @@ MemoryScope.run("run_abc")
 | `USER` | One user, all agents (default) |
 | `AGENT` | One agent, all users |
 | `RUN` | One run only — ephemeral |
+| `CONVERSATION` | One session only — scoped to session_id |
 
 ---
 

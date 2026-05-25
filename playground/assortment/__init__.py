@@ -1,1 +1,0 @@
-"""Assortment package."""
