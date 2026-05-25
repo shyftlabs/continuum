@@ -49,8 +49,7 @@ def make_cart_agent(tools: list[dict[str, Any]], tool_executor: Any, model: str,
         name="cart-agent",
         instructions=(
             "You are a pet shop cart specialist. "
-            "Use add_to_cart, view_cart, and checkout tools to manage the user's cart. "
-            "Always use the session_id provided in context for cart operations."
+            "Use add_to_cart, view_cart, and checkout tools to manage the user's cart."
         ),
         model=model,
         gateway_mode=gateway_mode,

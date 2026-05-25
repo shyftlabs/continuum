@@ -38,6 +38,7 @@ from orchestrator import (
     ToolExecutor,
     get_logger,
 )
+from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
 from orchestrator.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from orchestrator.agent.config import (
     ParallelConfig,
@@ -108,9 +109,19 @@ class _BaseWorkflow:
 
     async def _connect_mcp(self) -> None:
         logger.info(f"Connecting to MCP: {self.config.mcp_url}")
+        context_config = ToolContextConfig(
+            variables=[
+                ToolContextVariable(
+                    name="session_id",
+                    inject_into=["add_to_cart", "view_cart", "checkout"],
+                )
+            ],
+            auto_capture_common=False,
+        )
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
             client_session_timeout_seconds=self.config.mcp_timeout,
+            context_config=context_config,
         )
         await self._mcp_server.connect()
         tool_defs = await MCPUtil.get_function_tools(self._mcp_server)
@@ -129,6 +140,16 @@ class _BaseWorkflow:
                         "parameters": getattr(t, "parameters", {}),
                     },
                 })
+        # Strip injected parameters from schemas so the LLM never sees them
+        # as required fields and doesn't ask the user for values the executor provides.
+        _injected = {"session_id"}
+        for tool_def in self._tools:
+            fn = tool_def.get("function", {})
+            params = fn.get("parameters", {})
+            props = params.get("properties", {})
+            for p in _injected:
+                props.pop(p, None)
+            params["required"] = [r for r in params.get("required", []) if r not in _injected]
         self._tool_executor = ToolExecutor({self._mcp_server: None})
         await self._tool_executor.initialize()
         names = [t.get("function", {}).get("name", "?") for t in self._tools]
@@ -141,6 +162,11 @@ class _BaseWorkflow:
         if not self._initialized:
             await self.initialize()
 
+        namespace = self._mcp_server.name if self._mcp_server else "gateway-multi-agent-shop"
+        cart_session_id = f"{user_id}:{conversation_id}"
+        if self._tool_executor:
+            self._tool_executor.context_state.set(namespace, "session_id", cart_session_id)
+
         session_id = None
         if self._container and self.config.enable_session:
             sc = self._container.session_client
@@ -150,6 +176,10 @@ class _BaseWorkflow:
                         user_id=user_id,
                         conversation_id=conversation_id,
                     )
+                    if self._runner and hasattr(self._runner, "_session_service") and self._runner._session_service:
+                        existing = await self._runner._session_service.load_tool_context_state(session_id)
+                        existing.set(namespace, "session_id", cart_session_id)
+                        await self._runner._session_service.save_tool_context_state(session_id, existing)
                 except Exception as e:
                     logger.warning(f"Session init failed: {e}")
 
@@ -721,7 +751,6 @@ class HandoffShop(_BaseWorkflow):
             instructions=(
                 "You are a pet shop executor. "
                 "Use the available tools to search products, manage carts, and checkout. "
-                "Always use the session_id provided in context for cart operations. "
                 "Return a clear, complete result."
             ),
             model=m, gateway_mode=gm,
@@ -734,7 +763,6 @@ class HandoffShop(_BaseWorkflow):
             instructions=(
                 "You are a pet shop orchestrator. "
                 "Understand what the user wants, then hand off to the executor to perform the action. "
-                "Always include the session_id from context when handing off for cart operations. "
                 "After the executor returns, summarise the result clearly for the user."
             ),
             model=m, gateway_mode=gm,
@@ -744,8 +772,7 @@ class HandoffShop(_BaseWorkflow):
                 Handoff(
                     target_agent="handoff-executor",
                     description=(
-                        "Hand off to the executor to search products, add to cart, view cart, or checkout. "
-                        "Pass the session_id in the context field for any cart operations."
+                        "Hand off to the executor to search products, add to cart, view cart, or checkout."
                     ),
                     return_to_parent=True,
                 )
