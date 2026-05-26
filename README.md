@@ -9,7 +9,9 @@
  ╚═════╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝ ╚═╝  ╚═══╝  ╚═════╝   ╚═════╝  ╚═╝     ╚═╝
 ```
 
-#### by **`SHYFTLABS`**
+<img src="docs/assets/logo.jpeg" alt="ShyftLabs" width="44" height="44" />
+
+##### by **ShyftLabs**
 
 **The agent runtime for builders who ship.**
 
