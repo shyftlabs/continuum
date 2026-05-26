@@ -63,10 +63,8 @@ Markdown sources also live under [`docs/`](docs/) if you prefer reading on GitHu
 
 Proprietary. Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io) All rights reserved. See [LICENSE](LICENSE).
 
----
-
 <div align="center">
 
-Built by **Bhavik Ardeshna** · [bhavik@shyftlabs.io](mailto:bhavik@shyftlabs.io)
+<sub><sup>built by Bhavik Ardeshna · [bhavik@shyftlabs.io](mailto:bhavik@shyftlabs.io)</sup></sub>
 
 </div>
