@@ -9,7 +9,7 @@
  ╚═════╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝ ╚═╝  ╚═══╝  ╚═════╝   ╚═════╝  ╚═╝     ╚═╝
 ```
 
-#### · · ·   by   **S H Y F T L A B S**   · · ·
+#### by **`SHYFTLABS`**
 
 **The agent runtime for builders who ship.**
 
@@ -57,11 +57,14 @@ Open **[`docs/index.html`](docs/index.html)** in your browser for the full doc s
 
 Markdown sources also live under [`docs/`](docs/) if you prefer reading on GitHub.
 
-## Playgrounds
-
-- [`playground/gateway-local-shop/`](playground/gateway-local-shop/) — single agent, MCP-backed pet shop, ChatGPT-style web UI, Smart Inference routing.
-- [`playground/gateway-multi-agent-shop/`](playground/gateway-multi-agent-shop/) — multi-agent triage / specialist pattern over the same shop.
-
 ## License
 
 Proprietary. Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io) All rights reserved. See [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+Built by **Bhavik Ardeshna** · [bhavik@shyftlabs.io](mailto:bhavik@shyftlabs.io)
+
+</div>
