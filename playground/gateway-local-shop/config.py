@@ -17,9 +17,10 @@ class ShopConfig:
     agent_name: str = "shop-assistant"
     # Model name is sent as-is to the gateway — gateway routes to the provider.
     # Must be in the virtual key's allowed_models list (conf.json).
-    agent_model: str = "gpt-4o-mini"
+    # "auto" delegates model selection to the gateway based on gateway_mode.
+    agent_model: str = "auto"
     agent_temperature: float = 0.7
-    max_turns: int = 10
+    max_turns: int = 3
 
     # Per-agent gateway routing mode: "strict" | "modest" | "quality"
     # None → falls back to SMART_GATEWAY_DEFAULT_MODE env var (default "modest")
