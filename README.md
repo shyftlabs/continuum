@@ -39,7 +39,6 @@ pip install -e .
 cp .env.template .env       # add your provider keys
 docker compose up -d        # Redis · Milvus · Langfuse
 
-python playground/gateway-local-shop/web.py   # → http://localhost:8081
 ```
 
 ## Documentation
