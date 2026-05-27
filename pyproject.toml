@@ -77,10 +77,10 @@ eval = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bhavik-shyftlabs/shyftlabs-continuum"
-Documentation = "https://github.com/bhavik-shyftlabs/shyftlabs-continuum/docs"
-Repository = "https://github.com/bhavik-shyftlabs/shyftlabs-continuum"
-Issues = "https://github.com/bhavik-shyftlabs/shyftlabs-continuum/issues"
+Homepage = "https://github.com/shyftlabs/continuum"
+Documentation = "https://github.com/shyftlabs/continuum/tree/main/docs"
+Repository = "https://github.com/shyftlabs/continuum"
+Issues = "https://github.com/shyftlabs/continuum/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
