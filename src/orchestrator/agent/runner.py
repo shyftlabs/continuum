@@ -533,11 +533,19 @@ class AgentRunner:
             agent, input, session_id, conversation_id, user_id, None, max_turns, trace_id, metadata, None
         )
         if not result.success:
+            _run_id = generate_run_id()
             yield AgentEvent(
                 type=EventType.RUN_ERROR,
                 agent_name=agent.name,
-                run_id=generate_run_id(),
+                run_id=_run_id,
                 data={"error": "Input validation failed", "error_type": "ValidationError"},
+                trace_id=trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.RUN_END,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"content": "", "turn_count": 0},
                 trace_id=trace_id,
             )
             return
@@ -551,6 +559,7 @@ class AgentRunner:
             trace_id=ctx.trace_id,
         )
 
+        turn = 0
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -594,13 +603,6 @@ class AgentRunner:
                             )
                 except Exception as e_mt:
                     await self._finalizer.handle_error(agent, ctx, run_state, e_mt, start_time)
-                    yield AgentEvent(
-                        type=EventType.RUN_ERROR,
-                        agent_name=agent.name,
-                        run_id=ctx.run_id,
-                        data={"error": str(e_mt), "error_type": type(e_mt).__name__},
-                        trace_id=ctx.trace_id,
-                    )
                     if isinstance(e_mt, AgentError):
                         raise
                     raise AgentExecutionError(
@@ -702,6 +704,12 @@ class AgentRunner:
                         last_seen_model = chunk.model
                     if chunk.content:
                         content_parts.append(chunk.content)
+                        if "NEED_TOOL:" not in chunk.content:
+                            yield AgentEvent(
+                                type=EventType.CONTENT_DELTA, agent_name=agent.name,
+                                run_id=ctx.run_id, data={"content": chunk.content},
+                                trace_id=ctx.trace_id,
+                            )
                     if chunk.tool_calls:
                         tool_calls = chunk.tool_calls
 
@@ -757,12 +765,7 @@ class AgentRunner:
                             logger.info("🎯 Gateway selected model: %s", last_seen_model)
                         content = "".join(content_parts)
                 else:
-                    for part in content_parts:
-                        yield AgentEvent(
-                            type=EventType.CONTENT_DELTA, agent_name=agent.name,
-                            run_id=ctx.run_id, data={"content": part},
-                            trace_id=ctx.trace_id,
-                        )
+                    pass  # CONTENT_DELTA already yielded live in the streaming loop above
 
                 if content:
                     yield AgentEvent(
@@ -786,6 +789,7 @@ class AgentRunner:
 
                             if not self._handoff_executor:
                                 yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": "HandoffExecutor not available in streaming mode"}, trace_id=ctx.trace_id)
+                                yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
                                 return
 
                             handoff_result = await self._handoff_executor.execute_handoff(
@@ -799,6 +803,7 @@ class AgentRunner:
 
                             if not handoff_result.success:
                                 yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": handoff_result.error}, trace_id=ctx.trace_id)
+                                yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
                                 return
 
                             handoff_content = handoff_result.response.content if handoff_result.response else ""
@@ -819,6 +824,7 @@ class AgentRunner:
                             yield AgentEvent(type=EventType.TOOL_CALL_END, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name, "result": tool_result.get("content", "")[:500]}, trace_id=ctx.trace_id)
                         except Exception as e:
                             yield AgentEvent(type=EventType.TOOL_CALL_ERROR, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name, "error": str(e)}, trace_id=ctx.trace_id)
+                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"Error executing tool: {e}"})
 
                     continue
                 break
@@ -848,6 +854,7 @@ class AgentRunner:
             await self._finalizer.handle_error(agent, ctx, run_state, e, start_time)
 
             yield AgentEvent(type=EventType.RUN_ERROR, agent_name=agent.name, run_id=ctx.run_id, data={"error": str(e), "error_type": type(e).__name__}, trace_id=ctx.trace_id)
+            yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
 
             if isinstance(e, AgentError):
                 raise
