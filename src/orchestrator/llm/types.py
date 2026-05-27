@@ -248,7 +248,7 @@ class StreamChunk(BaseModel):
             tool_calls = [
                 ToolCall(
                     id=tc.id or "",
-                    type=getattr(tc, "type", "function"),
+                    type=tc.type or "function",
                     function=FunctionCall(
                         name=tc.function.name or "",
                         arguments=tc.function.arguments or "",

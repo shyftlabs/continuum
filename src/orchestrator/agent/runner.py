@@ -56,6 +56,7 @@ from orchestrator.agent.utils.circuit_breaker import CircuitBreaker, CircuitBrea
 from orchestrator.agent.utils.context_utils import create_run_context
 from orchestrator.agent.utils.message_utils import message_to_dict
 from orchestrator.agent.utils.validation_utils import validate_input
+from orchestrator.config import settings
 from orchestrator.core.container import Container, get_container
 from orchestrator.llm.config import LLMConfig
 from orchestrator.agent.execution.executor import _enrich_config_for_gateway
@@ -408,6 +409,7 @@ class AgentRunner:
                         agent,
                         self._llm_client,
                         user_text=user_text,
+                        ctx=ctx,
                     )
                 except Exception as e_mt:
                     self._circuit_breaker.record_failure()
@@ -570,6 +572,7 @@ class AgentRunner:
                         agent,
                         self._llm_client,
                         user_text=user_text,
+                        ctx=ctx,
                     ):
                         if ev.kind == "routing" and ev.routing:
                             last_routing = ev.routing
@@ -687,6 +690,7 @@ class AgentRunner:
 
                 content_parts: list[str] = []
                 tool_calls: list = []
+                last_seen_model: str | None = None
 
                 async for chunk in self.llm_client.chat_stream(
                     messages=llm_messages,
@@ -694,17 +698,28 @@ class AgentRunner:
                     config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
                     trace_metadata={"session_id": session_id} if session_id else None,
                 ):
+                    if chunk.model:
+                        last_seen_model = chunk.model
                     if chunk.content:
                         content_parts.append(chunk.content)
-                        yield AgentEvent(
-                            type=EventType.CONTENT_DELTA, agent_name=agent.name,
-                            run_id=ctx.run_id, data={"content": chunk.content},
-                            trace_id=ctx.trace_id,
-                        )
                     if chunk.tool_calls:
                         tool_calls = chunk.tool_calls
 
+                if last_seen_model and settings.smart_gateway_url:
+                    logger.info("🎯 Gateway selected model: %s", last_seen_model)
+
                 content = "".join(content_parts)
+
+                # Warn if JSON mode was requested but the streamed response is not JSON.
+                _cfg = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx)
+                if content and (_cfg.json_mode or _cfg.response_format):
+                    stripped = content.strip()
+                    if not ((stripped.startswith("{") and stripped.endswith("}")) or
+                            (stripped.startswith("[") and stripped.endswith("]"))):
+                        logger.warning(
+                            "Streamed response is not JSON despite json_mode being set",
+                            extra={"model": _cfg.model, "preview": stripped[:100]},
+                        )
 
                 # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry.
                 if content and "NEED_TOOL:" in content and not tool_calls:
@@ -720,12 +735,15 @@ class AgentRunner:
                             ctx.metadata["_filtered_tools"] = expanded_tools
                         content_parts = []
                         tool_calls = []
+                        last_seen_model = None
                         async for chunk in self.llm_client.chat_stream(
                             messages=llm_messages,
                             tools=expanded_tools,
                             config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
                             trace_metadata={"session_id": session_id} if session_id else None,
                         ):
+                            if chunk.model:
+                                last_seen_model = chunk.model
                             if chunk.content:
                                 content_parts.append(chunk.content)
                                 yield AgentEvent(
@@ -735,7 +753,16 @@ class AgentRunner:
                                 )
                             if chunk.tool_calls:
                                 tool_calls = chunk.tool_calls
+                        if last_seen_model and settings.smart_gateway_url:
+                            logger.info("🎯 Gateway selected model: %s", last_seen_model)
                         content = "".join(content_parts)
+                else:
+                    for part in content_parts:
+                        yield AgentEvent(
+                            type=EventType.CONTENT_DELTA, agent_name=agent.name,
+                            run_id=ctx.run_id, data={"content": part},
+                            trace_id=ctx.trace_id,
+                        )
 
                 if content:
                     yield AgentEvent(

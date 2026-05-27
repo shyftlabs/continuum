@@ -172,6 +172,8 @@ class AnthropicProvider(BaseProvider):
             "messages": anthropic_messages,
             "max_tokens": config.max_tokens or 4096,
         }
+        if config.json_mode or config.response_format:
+            system = (system + "\nRespond with valid JSON only.").strip()
         if system:
             kwargs["system"] = system
         if config.temperature is not None:

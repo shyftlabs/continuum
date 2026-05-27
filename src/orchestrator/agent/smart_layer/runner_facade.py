@@ -15,6 +15,7 @@ from orchestrator.agent.smart_layer.completion import (
 )
 from orchestrator.agent.smart_layer.resolve import effective_completion_model, resolve_model_for_tier
 from orchestrator.agent.smart_layer.types import ModelTierResult, ProductTier, StreamYield, tier_dispatch_priority
+from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.config import settings
 from orchestrator.agent.workflow.router import RouterAgent
 from orchestrator.llm.config import LLMConfig
@@ -22,6 +23,7 @@ from orchestrator.logging import get_logger
 
 if TYPE_CHECKING:
     from orchestrator.llm import LLMClient
+    from orchestrator.agent.utils.context_utils import RunContext
 
 logger = get_logger(__name__)
 
@@ -74,6 +76,7 @@ async def run_model_tier_turn(
     *,
     user_text: str,
     forced_tier: ProductTier | None = None,
+    ctx: RunContext | None = None,
 ) -> ModelTierResult:
     """Non-streaming: aggregate streaming internally if needed, or direct completion."""
     rc = agent.router_config
@@ -100,6 +103,8 @@ async def run_model_tier_turn(
     t_llm = time.perf_counter()
     parts: list[str] = []
     cfg = LLMConfig(model=execution_model, temperature=temp, max_tokens=max_tok)
+    if ctx is not None:
+        cfg = _enrich_config_for_gateway(cfg, ctx)
 
     async for chunk in llm_client.chat_stream(
         messages=messages,
@@ -148,6 +153,7 @@ async def stream_model_tier_turn(
     *,
     user_text: str,
     forced_tier: ProductTier | None = None,
+    ctx: RunContext | None = None,
 ) -> AsyncIterator[StreamYield]:
     """Emit routing (partial + final), content deltas, then done routing snapshot."""
     rc = agent.router_config
@@ -187,6 +193,8 @@ async def stream_model_tier_turn(
     t_llm = time.perf_counter()
     parts: list[str] = []
     cfg = LLMConfig(model=execution_model, temperature=temp, max_tokens=max_tok)
+    if ctx is not None:
+        cfg = _enrich_config_for_gateway(cfg, ctx)
 
     async for chunk in llm_client.chat_stream(messages=messages, config=cfg):
         if chunk.content:
