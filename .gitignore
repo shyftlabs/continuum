@@ -127,9 +127,8 @@ dmypy.json
 .idea/
 
 # Tool-generated
-.claude/
-!.claude/skills/
-!.claude/skills/**
+.claude/settings.local.json
+.claude/worktrees/
 .claude-flow/
 .deepeval/
 *.swp
