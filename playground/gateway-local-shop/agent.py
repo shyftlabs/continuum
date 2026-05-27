@@ -8,6 +8,7 @@ but against a local MCP server instead of the remote one.
 import json
 import os
 import sys
+from collections.abc import AsyncGenerator
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -27,7 +28,7 @@ from orchestrator import (
 )
 from orchestrator.tools.tool_attention.config import ToolAttentionConfig
 from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-from orchestrator.agent.types import generate_run_id
+from orchestrator.agent.types import EventType, generate_run_id
 from orchestrator.core.container import Container, get_container
 from orchestrator.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
 
@@ -244,6 +245,60 @@ class LocalShopAgent:
         except Exception as e:
             logger.error(f"Chat error: {e}")
             return f"Error: {str(e)}"
+
+    async def chat_stream(
+        self, message: str, user_id: str, conversation_id: str
+    ) -> AsyncGenerator[str, None]:
+        if not self._initialized:
+            await self.initialize()
+
+        namespace = self._mcp_server.name if self._mcp_server else "local-shop"
+        cart_session_id = f"{user_id}:{conversation_id}"
+
+        if self._tool_executor:
+            self._tool_executor.context_state.set(namespace, "session_id", cart_session_id)
+
+        session_id = None
+        if self._container:
+            session_client = self._container.session_client
+            if session_client and session_client.is_enabled:
+                try:
+                    session_id = await session_client.get_or_create_session(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                    )
+                    existing = await self._runner._session_service.load_tool_context_state(session_id)
+                    existing.set(namespace, "session_id", cart_session_id)
+                    await self._runner._session_service.save_tool_context_state(session_id, existing)
+                except Exception as e:
+                    logger.warning(f"Session init failed for user {user_id}: {e}")
+
+        yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'user_id': user_id})}\n\n"
+
+        try:
+            async for event in self._runner.run_stream(
+                agent=self._agent,
+                input=message,
+                session_id=session_id,
+                user_id=user_id,
+            ):
+                if event.type == EventType.CONTENT_DELTA:
+                    content = event.data.get("content", "")
+                    if content:
+                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+
+                elif event.type == EventType.TOOL_CALL_START:
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'start'})}\n\n"
+
+                elif event.type == EventType.TOOL_CALL_END:
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'end'})}\n\n"
+
+                elif event.type == EventType.RUN_END:
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     async def close(self) -> None:
         if self._mcp_server:

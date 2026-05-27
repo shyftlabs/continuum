@@ -23,7 +23,7 @@ from orchestrator.llm.exceptions import (
     LLMTimeoutError,
 )
 from orchestrator.llm.providers.base import BaseProvider
-from orchestrator.llm.types import LLMResponse, StreamChunk
+from orchestrator.llm.types import FunctionCall, LLMResponse, StreamChunk, ToolCall
 from orchestrator.logging import get_logger
 
 logger = get_logger(__name__)
@@ -101,6 +101,8 @@ class OpenAIProvider(BaseProvider):
             kwargs["tools"] = tools
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
+        if config.extra_body is not None:
+            kwargs["extra_body"] = config.extra_body
 
         return kwargs
 
@@ -152,6 +154,33 @@ class OpenAIProvider(BaseProvider):
             self._handle_exception(e, config.model)
             raise
 
+    @staticmethod
+    def _accumulate_tool_call(
+        acc: dict[int, dict[str, str]], raw_tc: Any
+    ) -> None:
+        """Merge one raw OpenAI tool-call delta into the accumulator dict."""
+        idx = raw_tc.index
+        if idx not in acc:
+            acc[idx] = {"id": "", "name": "", "arguments": ""}
+        if raw_tc.id:
+            acc[idx]["id"] = raw_tc.id
+        if raw_tc.function:
+            if raw_tc.function.name:
+                acc[idx]["name"] += raw_tc.function.name
+            if raw_tc.function.arguments:
+                acc[idx]["arguments"] += raw_tc.function.arguments
+
+    @staticmethod
+    def _build_tool_calls_from_acc(acc: dict[int, dict[str, str]]) -> list[ToolCall]:
+        return [
+            ToolCall(
+                id=acc[i]["id"],
+                type="function",
+                function=FunctionCall(name=acc[i]["name"], arguments=acc[i]["arguments"]),
+            )
+            for i in sorted(acc)
+        ]
+
     def stream(
         self,
         messages: list[dict[str, Any]],
@@ -163,8 +192,27 @@ class OpenAIProvider(BaseProvider):
         kwargs["stream"] = True
         try:
             response = self._client.chat.completions.create(messages=messages, **kwargs)
+            tc_acc: dict[int, dict[str, str]] = {}
+            finish_reason: str | None = None
             for chunk in response:
-                yield StreamChunk.from_openai_chunk(chunk)
+                choice = chunk.choices[0] if chunk.choices else None
+                delta = choice.delta if choice else None
+                if choice and choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                if delta and delta.tool_calls:
+                    for raw_tc in delta.tool_calls:
+                        self._accumulate_tool_call(tc_acc, raw_tc)
+                if delta and delta.content:
+                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
+                                      role=delta.role, is_finished=False)
+            if tc_acc:
+                yield StreamChunk(
+                    tool_calls=self._build_tool_calls_from_acc(tc_acc),
+                    finish_reason=finish_reason or "tool_calls",
+                    is_finished=True,
+                )
+            elif finish_reason:
+                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
@@ -180,8 +228,27 @@ class OpenAIProvider(BaseProvider):
         kwargs["stream"] = True
         try:
             response = await self._async_client.chat.completions.create(messages=messages, **kwargs)
+            tc_acc: dict[int, dict[str, str]] = {}
+            finish_reason: str | None = None
             async for chunk in response:
-                yield StreamChunk.from_openai_chunk(chunk)
+                choice = chunk.choices[0] if chunk.choices else None
+                delta = choice.delta if choice else None
+                if choice and choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                if delta and delta.tool_calls:
+                    for raw_tc in delta.tool_calls:
+                        self._accumulate_tool_call(tc_acc, raw_tc)
+                if delta and delta.content:
+                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
+                                      role=delta.role, is_finished=False)
+            if tc_acc:
+                yield StreamChunk(
+                    tool_calls=self._build_tool_calls_from_acc(tc_acc),
+                    finish_reason=finish_reason or "tool_calls",
+                    is_finished=True,
+                )
+            elif finish_reason:
+                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise

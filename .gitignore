@@ -130,6 +130,7 @@ dmypy.json
 .claude/
 !.claude/skills/
 !.claude/skills/**
+.claude-flow/
 .deepeval/
 *.swp
 *.swo
