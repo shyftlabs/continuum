@@ -97,6 +97,7 @@ async def chat_stream(req: ChatRequest):
     return StreamingResponse(
         _agent.chat_stream(req.message, user_id=req.user_id, conversation_id=req.conversation_id),
         media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

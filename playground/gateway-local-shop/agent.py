@@ -293,8 +293,13 @@ class LocalShopAgent:
                 elif event.type == EventType.TOOL_CALL_END:
                     yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'end'})}\n\n"
 
+                elif event.type == EventType.RUN_ERROR:
+                    yield f"data: {json.dumps({'type': 'error', 'error': event.data.get('error', 'Unknown error')})}\n\n"
+                    break
+
                 elif event.type == EventType.RUN_END:
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    break
 
         except Exception as e:
             logger.error(f"Stream error: {e}")

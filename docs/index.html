@@ -823,11 +823,12 @@
   <h2>Quickstart</h2>
   <ol class="steps">
     <li>
-      <strong>Install</strong>
+      <strong>Install</strong><br>
+      git clone continuum(<a href="https://github.com/shyftlabs/continuum" target="_blank">https://github.com/shyftlabs/continuum</a>) into your local computer, enter the project, then:
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
 python3.13 -m venv .venv    
 source .venv/bin/activate
-pip install shyftlabs-continuum </pre></div>
+pip install -e ".[dev]" </div>
     </li>
     <li>
       <strong>Setup environment and spin up infrastructure</strong>
@@ -845,7 +846,7 @@ DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
 FALLBACK_LLM_MODEL=gpt-4o-mini
 DEFAULT_LLM_TEMPERATURE=0.7
 DEFAULT_LLM_MAX_TOKENS=4096
-LLM_REQUEST_TIMEOUT=60
+LLM_REQUEST_TIMEOUT=300
 LLM_MAX_RETRIES=3
 LLM_ENABLE_FALLBACK=true
 
@@ -857,6 +858,9 @@ EMBEDDING_DIMS=1536
 <span class="cm"># ── Memory (mem0 + Milvus) ───────────────────────────────────────────────────</span>
 MEMORY_ENABLED=true
 VECTOR_STORE_PROVIDER=milvus
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=orchestrator_memories_openai
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 MILVUS_TOKEN=
@@ -884,7 +888,7 @@ LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
 LANGFUSE_SECRET_KEY=your-langfuse-secret-key
 LANGFUSE_HOST=http://localhost:3000
 LANGFUSE_BASE_URL=http://localhost:3000
-NEXTAUTH_SECRET=your-nextauth-secret
+NEXTAUTH_SECRET=your-nextauth-secret-here
 LANGFUSE_SAMPLE_RATE=1.0
 LANGFUSE_FLUSH_INTERVAL=1
 LANGFUSE_FLUSH_AT=15
@@ -900,6 +904,10 @@ TEMPORAL_APPROVAL_TIMEOUT_SECONDS=86400
 TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT=604800
 TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
 TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
+
+<span class="cm"># ── Smart Gateway ─────────────────────────────────────────────────────────────</span>
+SMART_GATEWAY_URL=http://localhost:8787/v1
+SMART_GATEWAY_API_KEY=your-smart-gateway-api-key
 
 <span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
 ENVIRONMENT=development
@@ -953,17 +961,17 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
   <p>Each module has a detailed markdown reference in the repository:</p>
   <table>
     <tr><th>Doc</th><th>Covers</th></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
   </table>
 
 </section>
@@ -978,10 +986,10 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
 
   <div style="display:flex; gap:12px; margin: 16px 0 0;">
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
     </div>
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>.
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>.
     </div>
   </div>
 
@@ -1430,10 +1438,10 @@ triage = <span class="cls">BaseAgent</span>(
 
   <div style="display:flex; gap:12px; margin: 16px 0 0;">
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
     </div>
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>
     </div>
   </div>
 
@@ -2315,6 +2323,10 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
     <tr><td>NEED_TOOL fallback</td><td>—</td><td>auto</td><td>If the LLM signals a missing tool, expand the candidate set and retry</td></tr>
   </table>
 
+  <div class="callout callout-tip">
+    <strong>Optional dependency.</strong> Tool Attention requires <code>sentence-transformers</code>, which is not installed by default. Install it with <code>pip install -e ".[embeddings]"</code> or <code>pip install sentence-transformers</code>. If not installed, tool-attention is silently disabled and all tools are loaded instead.
+  </div>
+
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
 
 agent = <span class="cls">BaseAgent</span>(
@@ -2466,7 +2478,7 @@ dataset = <span class="kw">await</span> <span class="fn">build_golden_dataset</s
   </div>
 
   <div class="callout callout-tip">
-    <strong>Source.</strong> The complete code lives at <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
+    <strong>Source.</strong> The complete code lives at <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
   </div>
 
   <a class="anchor" id="ex-arch"></a>
@@ -2709,7 +2721,7 @@ mypy src/</pre>
 
 <footer>
   <span>Continuum v0.2.0 · Shyftlabs</span>
-  <span>Python 3.13+ · <a href="https://github.com/bhavik-shyftlabs/continuum">GitHub</a></span>
+  <span>Python 3.13+ · <a href="https://github.com/shyftlabs/continuum">GitHub</a></span>
 </footer>
 
 <!-- ═══════════════════ JS ═══════════════════ -->

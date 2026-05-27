@@ -310,17 +310,22 @@ class HandoffManager:
                         tc.get("function", {}).get("name")
                         for tc in m["tool_calls"]
                     }
-                    if called_tools.issubset(target_tool_names):
-                        # Target has these tools — keep the pair
+                    keep = called_tools.issubset(target_tool_names)
+                    if keep:
                         filtered.append(m)
-                    # else: skip this message and let the tool results be skipped below
                     i += 1
+                    # Grab all tool results for this assistant together
+                    while i < len(handoff_data.history):
+                        next_m = handoff_data.history[i]
+                        if next_m.get("role") != "tool":
+                            break
+                        if keep:
+                            filtered.append(next_m)
+                        i += 1
                     continue
 
                 if role == "tool":
-                    # Only keep if the previous filtered message was a tool_calls assistant
-                    if filtered and filtered[-1].get("role") == "assistant" and filtered[-1].get("tool_calls"):
-                        filtered.append(m)
+                    # Stray tool result not consumed above — skip it
                     i += 1
                     continue
 
