@@ -16,7 +16,7 @@
 **The agent runtime for builders who ship.**
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-0a0a0a.svg?style=for-the-badge)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Proprietary-0a0a0a.svg?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache_2.0-0a0a0a.svg?style=for-the-badge)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-0a0a0a.svg?style=for-the-badge)](https://github.com/shyftlabs/continuum)
 
 [**Documentation**](docs/index.html) · [**Smart Inference**](docs/index.html#sec-smart) · [**Examples**](docs/index.html#sec-examples) · [**Research**](docs/index.html#sec-research) · [shyftlabs.io](https://shyftlabs.io)
@@ -60,10 +60,12 @@ Markdown sources also live under [`docs/`](docs/) if you prefer reading on GitHu
 
 ## License
 
-Proprietary. Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io) All rights reserved. See [LICENSE](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE). Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io)
+
+For commercial / enterprise inquiries — SLAs, indemnification, hosted offerings, custom features — contact **[continuum@shyftlabs.io](mailto:continuum@shyftlabs.io)**.
 
 <div align="center">
 
-<sub><sup>built by Bhavik Ardeshna · [bhavik@shyftlabs.io](mailto:bhavik@shyftlabs.io)</sup></sub>
+<sub><sup>built by Bhavik Ardeshna · [continuum@shyftlabs.io](mailto:continuum@shyftlabs.io)</sup></sub>
 
 </div>

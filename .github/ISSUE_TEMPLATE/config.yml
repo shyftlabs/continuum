@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Usage question / discussion
+    url: https://github.com/shyftlabs/continuum/discussions
+    about: Ask the community — best place for how-do-I questions and design back-and-forth.
+  - name: Security vulnerability
+    url: https://github.com/shyftlabs/continuum/security/advisories/new
+    about: Report privately via GitHub Security Advisory. Do NOT file security issues in public.
+  - name: Commercial / enterprise inquiry
+    url: mailto:continuum@shyftlabs.io
+    about: SLAs, indemnification, hosted offerings, or custom features.

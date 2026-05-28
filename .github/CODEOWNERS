@@ -1,0 +1,27 @@
+# CODEOWNERS — automatic review requests
+# Each line is a glob pattern followed by GitHub handles or teams.
+# Last matching pattern wins. See: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner — every PR
+*                               @bhavik-shyftlabs
+
+# Source
+/src/                           @bhavik-shyftlabs
+
+# Tests
+/tests/                         @bhavik-shyftlabs
+
+# Docs
+/docs/                          @bhavik-shyftlabs
+*.md                            @bhavik-shyftlabs
+
+# Build & dependency manifests
+/pyproject.toml                 @bhavik-shyftlabs
+/requirements.txt               @bhavik-shyftlabs
+/docker-compose.yml             @bhavik-shyftlabs
+
+# CI / governance
+/.github/                       @bhavik-shyftlabs
+/CODEOWNERS                     @bhavik-shyftlabs
+/SECURITY.md                    @bhavik-shyftlabs
+/MAINTAINERS.md                 @bhavik-shyftlabs

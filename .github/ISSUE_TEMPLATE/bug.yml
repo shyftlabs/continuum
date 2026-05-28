@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a defect — something broken or behaving unexpectedly.
+title: "bug: <short description>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+
+        **Before submitting** — please search [existing issues](https://github.com/shyftlabs/continuum/issues?q=is%3Aissue) to avoid duplicates.
+
+        > **Security issues do not belong here.** See [`SECURITY.md`](../../SECURITY.md) for the private disclosure channel.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing what's broken.
+      placeholder: "AgentRunner.run_stream() hangs when memory backend is unreachable."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal, runnable steps that reproduce the bug. Issues without a reproduction are auto-closed after 14 days.
+      placeholder: |
+        1. `pip install continuum==0.2.0`
+        2. Run the snippet below…
+        3. Observe …
+
+        ```python
+        # minimal repro
+        ```
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: "Run should raise a connection error within 5s."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the full traceback or relevant log output (use code fences).
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Continuum version
+      description: "Output of `pip show continuum | grep Version` or the git SHA."
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.13.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+        - Windows (native)
+        - Other / container
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Relevant environment details
+      description: |
+        LLM provider, memory backend (Milvus / Qdrant / Redis), Temporal, Langfuse, Docker vs bare-metal — anything that might matter.
+      placeholder: |
+        - Provider: Anthropic (claude-sonnet-4-6)
+        - Memory: Milvus 2.4 via docker compose
+        - Temporal: disabled
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I confirmed this is not a security vulnerability (those go to `continuum@shyftlabs.io`).
+          required: true
+        - label: I am running a supported version (Python 3.13+, latest Continuum release or `main`).
+          required: true

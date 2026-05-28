@@ -1,0 +1,89 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "feat: <short description>"
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an idea.
+
+        For larger proposals (new public API, new component, architectural change), please open a [GitHub Discussion](https://github.com/shyftlabs/continuum/discussions) **before** writing code, so we can align on direction.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve? Describe the use case, not the solution.
+      placeholder: "When routing requests across multiple providers, I can't pin a specific model for a single agent without overriding the global config…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Continuum do? Sketch the API or behaviour if you can.
+      placeholder: |
+        Add a `model_override` field to `BaseAgent`:
+
+        ```python
+        class MyAgent(BaseAgent):
+            model_override = "claude-sonnet-4-6"
+        ```
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you ruled out, and why.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected surface
+      multiple: true
+      options:
+        - Agents (BaseAgent / AgentRunner)
+        - Workflows (Sequential / Parallel / Loop / Router / Planner / etc.)
+        - Memory (mem0 · Milvus · Qdrant · Redis)
+        - Tools / MCP
+        - LLM providers / Smart Inference
+        - Temporal workflows
+        - Observability (Langfuse / metrics)
+        - Streaming
+        - Evaluation (EvaluatorAgent / DeepEval / RAGAS)
+        - CLI / packaging
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Who benefits?
+      description: Roughly which users / scenarios benefit, and how much.
+      placeholder: "Anyone running multi-tenant agents where different tenants need different model tiers — currently requires forking the runner."
+
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Are you willing to contribute?
+      options:
+        - label: I'd like to open a PR for this if it's accepted.
+        - label: I'd like to help design it but cannot implement.
+        - label: I'm only requesting — no bandwidth to contribute.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and discussions and this is not a duplicate.
+          required: true
+        - label: I described the **problem** before proposing a solution.
+          required: true
