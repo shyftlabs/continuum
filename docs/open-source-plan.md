@@ -62,6 +62,46 @@ No license can force someone to email you before they self-host internally. The 
 1. The license making them legally ineligible to use it that way without a Commercial Agreement.
 2. ShyftLabs offering tangible enterprise value they want — SLAs, security audits, indemnification, priority fixes, custom features, training — bundled into that Commercial Agreement.
 
+### Reference — pure open-source licenses
+
+Captured here for completeness and for future debate. **None of these fit ShyftLabs's current three properties** (no hosting / no resale / commercial contact required) because every OSI-approved license explicitly grants the right to host, sell, and redistribute. If priorities ever shift toward maximum adoption with no moat, these are the options to revisit.
+
+| License | SPDX id | Type | Allows | Requires | Notable users |
+|---|---|---|---|---|---|
+| **MIT** | `MIT` | Permissive | Use · modify · sublicense · sell · host · sublicense closed | Keep the copyright + license notice | React · Rails · jQuery · Node.js |
+| **Apache 2.0** | `Apache-2.0` | Permissive (with patent grant) | Same as MIT, plus explicit patent grant | Notice + state changes in modified files; cannot use trademarks | Kubernetes · Android · Swift · Kafka · Spark |
+| **BSD-3-Clause** | `BSD-3-Clause` | Permissive | Same as MIT | Notice + "no endorsement" clause (no using author's name to promote derivatives) | Go · FreeBSD · Postgres-style |
+| **BSD-2-Clause** | `BSD-2-Clause` | Permissive | Same as MIT | Notice only — shortest practical license | NetBSD · FreeBSD ports |
+| **MPL-2.0** | `MPL-2.0` | Weak copyleft (file-level) | Use in closed-source products if MPL files stay MPL | Modified MPL files must be released under MPL; can combine with proprietary code | Firefox · LibreOffice · Eigen |
+| **LGPL-3.0** | `LGPL-3.0-only` | Weak copyleft (library) | Linking from closed-source apps | Modifications to the library itself must be LGPL; consumers can re-link | glibc · GTK · Qt-on-Linux |
+| **GPL-3.0** | `GPL-3.0-only` | Strong copyleft | Use · modify · distribute | Any redistribution of the work or derivatives must also be GPL — including commercial products that link it | Linux kernel (GPLv2) · GCC · Bash · Inkscape |
+| **AGPL-3.0** | `AGPL-3.0-only` | Network copyleft | Same as GPL | If you offer the software as a network service, you must publish your source to users — closes the "SaaS loophole" | MongoDB (pre-SSPL) · Nextcloud · Mastodon · Grafana (pre-AGPL→Apache) |
+| **Unlicense** | `Unlicense` | Public domain dedication | Anything | Nothing | Some small CLI tools |
+| **CC0 1.0** | `CC0-1.0` | Public domain dedication | Anything | Nothing | SQLite (license-equivalent) · most CC-zero assets |
+
+### When each pure-OSS license would actually make sense for Continuum
+
+| Scenario | Pick |
+|---|---|
+| Maximum adoption, no moat, zero overhead | **MIT** |
+| Maximum adoption + patent protection (corporate-friendly) | **Apache 2.0** |
+| Want competitors who host it to have to release their server code | **AGPL-3.0** (note: blacklisted by Google, AWS, many enterprises) |
+| Want forks to stay open but allow commercial linking | **MPL-2.0** |
+| Maximum freedom — public-domain dedication | **CC0 1.0** or **Unlicense** |
+
+For Continuum specifically, **AGPL-3.0** is the only OSI license that gets close to blocking SaaS reselling — but the enterprise backlash against AGPL is severe, and it still permits commercial production use without contacting ShyftLabs. BSL 1.1 with the Additional Use Grant remains the cleaner fit.
+
+### Hybrid models worth knowing
+
+| Model | How it works | Real-world example |
+|---|---|---|
+| **Open core** | Core engine under permissive OSS (MIT/Apache), advanced features in a paid proprietary repo | GitLab · Sentry · Mattermost |
+| **Dual license** | Same code shipped under two licenses — copyleft for community, commercial for those who can't accept copyleft | MySQL · Qt · Sidekiq |
+| **OSS + Cloud only** | Code under OSS, the paid offering is a hosted service (no licensing change) | PostgreSQL + AWS RDS pattern · Redis Cloud (pre-SSPL) |
+| **Delayed open source (DOSP)** | Source-available now, becomes OSS after N years — BSL and FSL are formal DOSP licenses | HashiCorp BSL → Apache · Sentry FSL → Apache |
+
+ShyftLabs can layer any of these *on top of* the BSL 1.1 base — e.g. ship Continuum core under BSL, and an "Enterprise" package (audit logs, RBAC, SSO, support) under a proprietary commercial license sold separately.
+
 ### Files to update at the flip
 
 - Replace `LICENSE` with the BSL 1.1 template from <https://mariadb.com/bsl11/>, filling in the parameters above.
