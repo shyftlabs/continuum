@@ -41,18 +41,21 @@
 ## Build & Test
 
 ```bash
-# Build
-npm run build
+# Install (editable, with dev extras)
+pip install -e ".[dev]"
 
 # Test
-npm test
+pytest
 
 # Lint
-npm run lint
+ruff check .
+
+# Type-check
+mypy src/orchestrator
 ```
 
 - ALWAYS run tests after making code changes
-- ALWAYS verify build succeeds before committing
+- ALWAYS verify lint and type-check pass before committing
 
 ## Security Rules
 
