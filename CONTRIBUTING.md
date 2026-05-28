@@ -47,14 +47,14 @@ Both `main` and `dev` are protected. Configure under **Settings → Branches →
 | Required approving reviews | 1 (from a maintainer) | 1 |
 | Dismiss stale approvals on new commits | ✅ | ✅ |
 | Require status checks to pass | ✅ | ✅ |
-| Required checks | `Lint & type-check`, `Tests (3.13)`, `Secret scan (gitleaks)` | same |
+| Required checks | `Lint`, `Tests (3.13)` | same |
 | Require branches up to date before merging | ✅ | ✅ |
 | Require signed-off commits (DCO) | ✅ | ✅ |
 | Require linear history | ✅ | ✅ |
 | Restrict who can push | maintainers only | maintainers only |
 | Allow force pushes / deletions | ❌ | ❌ |
 
-`pip-audit` and `bandit` run as **advisory** checks (non-blocking) — review their output, but they will not gate a merge. Direct pushes to `main`/`dev` are disabled; all changes land through PRs.
+Security is handled out of band, not as a gating check: Dependabot vulnerability **alerts** surface in the **Security** tab (no automated PRs). Direct pushes to `main`/`dev` are disabled; all changes land through PRs.
 
 ## Commit messages
 
