@@ -62,7 +62,7 @@ Targets are measured from the moment severity is confirmed, not from initial sub
 
 In-scope:
 
-- Code in this repository under `src/`, `scripts/`, `examples/`, and the published Python package `shyftlabs-continuum`.
+- Code in this repository under `src/`, `scripts/`, `playground/`, and the published Python package `shyftlabs-continuum`.
 - Default configurations shipped in `.env.template`, `docker-compose.yml`, and `pyproject.toml`.
 - Documentation under `docs/` that recommends an insecure pattern or configuration.
 
@@ -73,15 +73,12 @@ Out of scope (please do **not** report):
 - Social-engineering attacks against maintainers or contributors.
 - Self-XSS, missing security headers on non-authenticated marketing pages, or theoretical issues without a working reproduction.
 
-## CI security gates
+## Automated security
 
-The following checks run on every pull request and block merge if they trip:
-
-- `gitleaks` — secret scanning on the diff and full history of the PR branch.
-- `pip-audit` — Python dependency vulnerabilities against the resolved environment.
-- `bandit` — Python AST security lint on `src/`.
-
-Dependabot opens monthly PRs for `pip`, `github-actions`, and `docker` ecosystems against the `dev` branch.
+- **CI gate** — every pull request must pass `ruff` (lint) and the unit test suite before it can merge to `dev`/`main`.
+- **Dependency vulnerabilities** — Dependabot vulnerability **alerts** are enabled; vulnerable dependencies are surfaced in the repository **Security** tab. Automated dependency-bump PRs are intentionally disabled to keep PR noise low — maintainers triage alerts and bump versions as needed.
+- **Secret scanning** — GitHub secret scanning and push protection apply on the public repository, and the project history is scanned for committed credentials.
+- **Code scanning** — static analysis (e.g. CodeQL) may be enabled as the project matures and infrastructure allows.
 
 ## Hardening recommendations for operators
 
