@@ -1,8 +1,15 @@
 import os
+from pathlib import Path
 
-# Point Continuum at the Smart Gateway running via docker compose.
-# Must be set before orchestrator settings are imported (they are cached on first import).
-# os.environ.setdefault("SMART_GATEWAY_URL", "https://continuum.shyftops.io/v1")
+from dotenv import load_dotenv
+
+# Load the project root .env first so hosted gateway settings (SMART_GATEWAY_URL,
+# SMART_GATEWAY_API_KEY) take precedence over shell env vars and the localhost
+# fallbacks below. override=True is required because the shell may already have
+# stale localhost values exported from a previous session.
+# Must be done before orchestrator settings are imported (they are cached on first import).
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+
 os.environ.setdefault("SMART_GATEWAY_URL", "http://localhost:8787/v1")
 os.environ.setdefault("SMART_GATEWAY_API_KEY", "your-smart-gateway-api-key")
 
