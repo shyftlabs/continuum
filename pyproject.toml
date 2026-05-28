@@ -123,6 +123,8 @@ known-first-party = ["orchestrator"]
 # Tests commonly importorskip/guard before imports, use dict() fixtures, and
 # deliberately assert on broad exceptions.
 "tests/**" = ["E402", "C408", "B017"]
+# Playground demos set gateway env vars before importing orchestrator.
+"playground/**/config.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.13"

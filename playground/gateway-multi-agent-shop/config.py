@@ -1,6 +1,12 @@
 import os
+from pathlib import Path
 
-# Must be set before orchestrator settings are imported (they are cached on first import).
+from dotenv import load_dotenv
+
+# Load project root .env before orchestrator settings are imported (they are cached on first import).
+# override=True ensures .env wins over stale shell exports.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+
 os.environ.setdefault("SMART_GATEWAY_URL", "http://localhost:8787/v1")
 os.environ.setdefault("SMART_GATEWAY_API_KEY", "your-smart-gateway-api-key")
 
