@@ -47,7 +47,7 @@ Both `main` and `dev` are protected. Configure under **Settings → Branches →
 | Required approving reviews | 1 (from a maintainer) | 1 |
 | Dismiss stale approvals on new commits | ✅ | ✅ |
 | Require status checks to pass | ✅ | ✅ |
-| Required checks | `Lint & type-check`, `Tests`, `Secret scan (gitleaks)` | same |
+| Required checks | `Lint & type-check`, `Tests (3.13)`, `Secret scan (gitleaks)` | same |
 | Require branches up to date before merging | ✅ | ✅ |
 | Require signed-off commits (DCO) | ✅ | ✅ |
 | Require linear history | ✅ | ✅ |
