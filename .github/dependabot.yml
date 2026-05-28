@@ -1,54 +1,30 @@
 version: 2
+# Security-only policy.
+#
+# Routine version-update PRs are DISABLED via `open-pull-requests-limit: 0`.
+# Dependabot SECURITY updates (PRs that patch a known vulnerability) are NOT
+# affected by this limit — they are enabled at the repository level under
+# Settings -> Code security, and will still open PRs for vulnerable deps.
+#
+# To re-enable routine version bumps later, raise the limit and (optionally)
+# restore grouping.
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "monday"
-      time: "09:00"
-      timezone: "Etc/UTC"
     target-branch: "dev"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "chore"
-      include: "scope"
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
-      - "python"
-    groups:
-      python-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      - "security"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
-      day: "monday"
-      time: "09:00"
-      timezone: "Etc/UTC"
     target-branch: "dev"
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: "ci"
-      include: "scope"
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
-      - "github-actions"
-
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-      day: "monday"
-      time: "09:00"
-      timezone: "Etc/UTC"
-    target-branch: "dev"
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    labels:
-      - "dependencies"
-      - "docker"
+      - "security"
