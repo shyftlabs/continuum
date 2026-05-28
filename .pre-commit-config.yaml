@@ -1,0 +1,48 @@
+# Pre-commit hooks for Continuum.
+#
+#   pip install -e ".[dev]"
+#   pre-commit install            # ruff + hygiene hooks run on `git commit`
+#   pre-commit install --hook-type pre-push   # mypy runs on `git push`
+#
+# Run against everything:  pre-commit run --all-files
+# Bump pinned versions:    pre-commit autoupdate
+#
+# Ruff reads its config from [tool.ruff] in pyproject.toml.
+default_language_version:
+  python: python3.13
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        args: ["--fix"]
+      - id: ruff-format
+        name: ruff (format)
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (src/orchestrator)
+        entry: mypy src/orchestrator
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
