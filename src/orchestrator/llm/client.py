@@ -12,16 +12,12 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-from orchestrator.config import settings
 from orchestrator.llm.callbacks import (
     get_langfuse_metadata,
     setup_langfuse,
 )
 from orchestrator.llm.config import LLMConfig
 from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
-from orchestrator.llm.exceptions import (
-    LLMError,
-)
 from orchestrator.llm.providers import get_provider
 from orchestrator.llm.types import (
     ChatMessage,
@@ -297,7 +293,9 @@ class LLMClient:
                 else:
                     messages_dict = self._convert_messages(messages)
             except Exception as e:
-                logger.warning(f"Failed to load session history: {e}, continuing with provided messages")
+                logger.warning(
+                    f"Failed to load session history: {e}, continuing with provided messages"
+                )
                 messages_dict = self._convert_messages(messages)
         else:
             messages_dict = self._convert_messages(messages)
@@ -334,17 +332,23 @@ class LLMClient:
         if self._dispatcher is not None:
             if isinstance(self._dispatcher, TwoLevelDispatcher):
                 llm_response = await self._dispatcher.dispatch(
-                    lambda: provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice),
+                    lambda: provider.acomplete(
+                        messages_dict, effective_config, tools_dict, tool_choice
+                    ),
                     stage_priority=stage_priority,
                     request_priority=priority,
                 )
             else:
                 llm_response = await self._dispatcher.dispatch(
-                    lambda: provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice),
+                    lambda: provider.acomplete(
+                        messages_dict, effective_config, tools_dict, tool_choice
+                    ),
                     priority=priority,
                 )
         else:
-            llm_response = await provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice)
+            llm_response = await provider.acomplete(
+                messages_dict, effective_config, tools_dict, tool_choice
+            )
         self._validate_json_response(llm_response.content, effective_config)
 
         # Save messages to session
@@ -428,7 +432,9 @@ class LLMClient:
         provider = get_provider(effective_config)
         logger.debug(f"Async stream: model={effective_config.model}")
 
-        async for chunk in provider.astream(messages_dict, effective_config, tools_dict, tool_choice):
+        async for chunk in provider.astream(
+            messages_dict, effective_config, tools_dict, tool_choice
+        ):
             yield chunk
 
     # =========================================================================
@@ -452,11 +458,18 @@ class LLMClient:
         """Return the list of known supported models."""
         return [
             # OpenAI
-            "gpt-4o", "gpt-4o-mini", "gpt-4o-turbo", "gpt-3.5-turbo",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4o-turbo",
+            "gpt-3.5-turbo",
             # Anthropic
-            "claude-haiku-4.5", "claude-sonnet-4.5", "claude-opus-4.5",
+            "claude-haiku-4.5",
+            "claude-sonnet-4.5",
+            "claude-opus-4.5",
             # Gemini
-            "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash", "gemini/gemini-2.5-flash-lite",
+            "gemini/gemini-2.5-pro",
+            "gemini/gemini-2.5-flash",
+            "gemini/gemini-2.5-flash-lite",
         ]
 
     @observe(name="llm_count_tokens", capture_output=True)

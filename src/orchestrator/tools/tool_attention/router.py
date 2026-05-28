@@ -46,7 +46,7 @@ def _tool_one_liner(tool: Any) -> str:
 def _build_summary_text(all_tools: list[Any]) -> str:
     """One-liner per tool — stable across turns for prompt caching."""
     lines = [_tool_one_liner(t) for t in all_tools]
-    body = "\n".join(f"- {l}" for l in lines if l)
+    body = "\n".join(f"- {ln}" for ln in lines if ln)
     return (
         "[Available tools]\n" + body + "\n\n"
         "If a tool you need is listed above but its parameters are not available, "
@@ -196,13 +196,19 @@ async def apply_tool_attention(
             phase1_injected = True
 
     # Update debug snapshot for playground inspection
-    _last_run_debug.update({
-        "router_active": filtered is not None,
-        "total_tools": len(all_tools),
-        "promoted_tools": sorted(t.get("function", {}).get("name", "") for t in (filtered or [])),
-        "phase1_injected": phase1_injected,
-        "phase1_preview": (context.metadata or {}).get("tool_summary_text", "")[:300] if phase1_injected else "",
-        "phase1_has_cache_control": _is_anthropic(getattr(agent, "model", "") or ""),
-    })
+    _last_run_debug.update(
+        {
+            "router_active": filtered is not None,
+            "total_tools": len(all_tools),
+            "promoted_tools": sorted(
+                t.get("function", {}).get("name", "") for t in (filtered or [])
+            ),
+            "phase1_injected": phase1_injected,
+            "phase1_preview": (context.metadata or {}).get("tool_summary_text", "")[:300]
+            if phase1_injected
+            else "",
+            "phase1_has_cache_control": _is_anthropic(getattr(agent, "model", "") or ""),
+        }
+    )
 
     return filtered

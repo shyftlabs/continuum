@@ -17,11 +17,18 @@ from orchestrator.agent.workflow.debate import DebateAgent, create_debate_agent
 from orchestrator.agent.workflow.loop import LoopAgent
 from orchestrator.agent.workflow.parallel import ParallelAgent
 from orchestrator.agent.workflow.planner import PlannerAgent, create_planner_agent
-from orchestrator.agent.workflow.reflection import ReflectionAgent, create_reflection_agent, generate_critique_prompt
+from orchestrator.agent.workflow.reflection import (
+    ReflectionAgent,
+    create_reflection_agent,
+    generate_critique_prompt,
+)
 from orchestrator.agent.workflow.router import RouterAgent
-from orchestrator.agent.workflow.sequential import SequentialAgent, create_sequential_agent
 from orchestrator.agent.workflow.scatter import ScatterAgent, create_scatter_agent
-from orchestrator.agent.workflow.supervised import SupervisedSequentialAgent, create_supervised_agent
+from orchestrator.agent.workflow.sequential import SequentialAgent, create_sequential_agent
+from orchestrator.agent.workflow.supervised import (
+    SupervisedSequentialAgent,
+    create_supervised_agent,
+)
 
 __all__ = [
     "DAGAgent",

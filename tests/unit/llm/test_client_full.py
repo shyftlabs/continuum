@@ -1,12 +1,12 @@
 """Comprehensive tests for llm/client.py."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from orchestrator.llm.client import LLMClient
 from orchestrator.llm.types import ChatMessage, LLMResponse
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +87,15 @@ class TestLLMClientChat:
     async def test_chat_basic(self, mock_get_provider, mock_setup):
         logger.info("LLMClientChat: chat basic")
         from orchestrator.llm.types import Usage
+
         mock_provider = MagicMock()
-        mock_provider.acomplete = AsyncMock(return_value=LLMResponse(
-            model="gpt-4o", content="Hello!",
-            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        ))
+        mock_provider.acomplete = AsyncMock(
+            return_value=LLMResponse(
+                model="gpt-4o",
+                content="Hello!",
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            )
+        )
         mock_get_provider.return_value = mock_provider
 
         client = LLMClient(enable_langfuse=False)
@@ -106,11 +110,15 @@ class TestLLMClientChat:
     async def test_chat_with_model_override(self, mock_get_provider, mock_setup):
         logger.info("LLMClientChat: chat with model override")
         from orchestrator.llm.types import Usage
+
         mock_provider = MagicMock()
-        mock_provider.acomplete = AsyncMock(return_value=LLMResponse(
-            model="gpt-4", content="response",
-            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        ))
+        mock_provider.acomplete = AsyncMock(
+            return_value=LLMResponse(
+                model="gpt-4",
+                content="response",
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            )
+        )
         mock_get_provider.return_value = mock_provider
 
         client = LLMClient(enable_langfuse=False)

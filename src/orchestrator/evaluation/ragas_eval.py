@@ -55,13 +55,13 @@ _ALL_METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "c
 
 def _require_ragas() -> None:
     try:
-        import ragas  # noqa: F401
         import datasets  # noqa: F401
+        import ragas  # noqa: F401
     except ImportError:
         raise ImportError(
             "ragas and/or datasets are not installed.\n"
             "Install them with:  pip install ragas datasets langchain-openai"
-        )
+        ) from None
 
 
 def _build_metrics(metric_names: list[str], openai_api_key: str) -> list[Any]:
@@ -74,15 +74,15 @@ def _build_metrics(metric_names: list[str], openai_api_key: str) -> list[Any]:
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        from ragas.llms import LangchainLLMWrapper
         from ragas.metrics import (  # noqa: F401
             answer_relevancy,
             context_precision,
             context_recall,
             faithfulness,
         )
-        from ragas.llms import LangchainLLMWrapper
-        from ragas.embeddings import LangchainEmbeddingsWrapper
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
     lc_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=openai_api_key)
     lc_emb = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=openai_api_key)
@@ -155,7 +155,9 @@ class RagasEvaluator:
         """
         import time
         import warnings
+
         from datasets import Dataset
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             from ragas import evaluate as ragas_evaluate
@@ -224,7 +226,9 @@ class RagasEvaluator:
         for metric in metrics:
             metric_name = getattr(metric, "name", type(metric).__name__)
             raw = result_row.get(metric_name, 0.0)
-            raw_score = 0.0 if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else float(raw)
+            raw_score = (
+                0.0 if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else float(raw)
+            )
             # Use per-metric threshold if configured, otherwise fall back to global
             threshold = self.metric_thresholds.get(metric_name, self.pass_threshold)
             scores.append(

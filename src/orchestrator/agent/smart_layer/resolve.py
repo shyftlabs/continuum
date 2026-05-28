@@ -7,7 +7,9 @@ from orchestrator.agent.smart_layer.defaults import default_model_for_tier
 from orchestrator.agent.smart_layer.types import ProductTier
 
 
-def resolve_model_for_tier(tier: ProductTier, router_config: RouterConfig, default_llm_model: str) -> str:
+def resolve_model_for_tier(
+    tier: ProductTier, router_config: RouterConfig, default_llm_model: str
+) -> str:
     """
     Per-tier override fields, legacy light/heavy slots, then gap-fill with default_llm_model.
 
@@ -35,7 +37,9 @@ def resolve_model_for_tier(tier: ProductTier, router_config: RouterConfig, defau
     return default_llm_model or "gpt-4o-mini"
 
 
-def effective_completion_model(tier: ProductTier, router_config: RouterConfig, default_llm_model: str) -> str:
+def effective_completion_model(
+    tier: ProductTier, router_config: RouterConfig, default_llm_model: str
+) -> str:
     """If tier_force_completion_model is set, use it for every tier (cheap testing)."""
     forced = (router_config.tier_force_completion_model or "").strip()
     if forced:

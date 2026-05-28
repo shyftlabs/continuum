@@ -95,9 +95,9 @@ class EventType(str, Enum):
 class MemoryScope(str, Enum):
     """Scope for memory operations."""
 
-    SHARED = "shared"        # Shared across all users/agents
-    USER = "user"            # Scoped to user
-    AGENT = "agent"          # Scoped to agent
+    SHARED = "shared"  # Shared across all users/agents
+    USER = "user"  # Scoped to user
+    AGENT = "agent"  # Scoped to agent
     CONVERSATION = "conversation"  # Scoped to conversation (replaces RUN)
 
 
@@ -576,7 +576,8 @@ class AgentResponse:
             run_id=run_id,
             status=ResponseStatus.ERROR,
             error=error_str,
-            error_type=error_type or (type(error).__name__ if isinstance(error, Exception) else "Error"),
+            error_type=error_type
+            or (type(error).__name__ if isinstance(error, Exception) else "Error"),
             trace_id=trace_id,
         )
 
@@ -956,7 +957,7 @@ class RunContext:
             "priority": self.priority,
         }
 
-    def branch_copy(self) -> "RunContext":
+    def branch_copy(self) -> RunContext:
         """
         Create an isolated copy of this context for use in a parallel branch.
 
@@ -973,15 +974,18 @@ class RunContext:
             ]
         """
         from dataclasses import replace  # local import — types.py has no circular dep here
+
         return replace(
             self,
-            metadata=dict(self.metadata),             # isolate — branches may write pipeline_context
-            retrieved_memories=[],                    # isolate — each branch does its own mem retrieval
-            agent_stack=list(self.agent_stack),       # isolate — branch handoffs shouldn't affect parent stack
-            handoff_chain=list(self.handoff_chain),   # isolate — same reason
-            tags=list(self.tags),                     # isolate — defensive copy
-            data_labels=set(self.data_labels),        # isolate — defensive copy
-            usage=TokenUsage(),                       # isolate — each branch tracks its own token usage
+            metadata=dict(self.metadata),  # isolate — branches may write pipeline_context
+            retrieved_memories=[],  # isolate — each branch does its own mem retrieval
+            agent_stack=list(
+                self.agent_stack
+            ),  # isolate — branch handoffs shouldn't affect parent stack
+            handoff_chain=list(self.handoff_chain),  # isolate — same reason
+            tags=list(self.tags),  # isolate — defensive copy
+            data_labels=set(self.data_labels),  # isolate — defensive copy
+            usage=TokenUsage(),  # isolate — each branch tracks its own token usage
         )
 
 

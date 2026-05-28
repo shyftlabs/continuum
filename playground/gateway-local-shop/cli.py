@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from agent import create_shop_agent
+
 from orchestrator import LogLevel, setup_logging
 
 
@@ -80,7 +81,7 @@ async def main():
                         print(f"\nAvailable Tools ({len(agent.tools)}):")
                         for t in agent.tools:
                             f = t.get("function", {})
-                            print(f"  • {f.get('name','?')} — {f.get('description','')[:80]}")
+                            print(f"  • {f.get('name', '?')} — {f.get('description', '')[:80]}")
                         print()
                     elif cmd == "/session":
                         print(f"\n  User ID:    {agent.user_id}")
@@ -93,9 +94,7 @@ async def main():
 
                 print("\nThinking...")
                 # Pass session_id so the agent can use it for cart operations
-                response = await agent.chat(
-                    f"[session_id={agent.session_id}] {user_input}"
-                )
+                response = await agent.chat(f"[session_id={agent.session_id}] {user_input}")
                 print(f"\nAssistant: {response}\n")
 
             except KeyboardInterrupt:

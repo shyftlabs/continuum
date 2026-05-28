@@ -8,7 +8,6 @@ All tests use real Qdrant vector store — no mocks.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 import pytest
@@ -247,9 +246,7 @@ class TestAgentIsolation:
         aid_a = f"agent-a-{uuid.uuid4().hex[:6]}"
         aid_b = f"agent-b-{uuid.uuid4().hex[:6]}"
 
-        await memory_client.add(
-            "The refund policy is 30 days.", user_id=uid, agent_id=aid_a
-        )
+        await memory_client.add("The refund policy is 30 days.", user_id=uid, agent_id=aid_a)
         await memory_client.add(
             "The server is hosted on AWS us-east-1.", user_id=uid, agent_id=aid_b
         )

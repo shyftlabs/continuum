@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from orchestrator.config import settings
 from orchestrator.logging import get_logger
-
 from orchestrator.protocols import ILLMClient, IMemoryClient, ISessionClient
 
 if TYPE_CHECKING:

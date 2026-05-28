@@ -8,7 +8,6 @@ agent reasoning with tool results through real LLM calls.
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
@@ -20,7 +19,6 @@ pytestmark = pytest.mark.e2e
 
 from tests.e2e.conftest import skip_if_no_api_key as _skip_if_no_api_key
 from tests.e2e.conftest import skip_on_api_error as _skip_on_api_error
-
 
 # ---------------------------------------------------------------------------
 # Fake MCP servers for different tool scenarios
@@ -111,10 +109,12 @@ class CalculatorMCPServer:
 
     async def list_prompts(self):
         from mcp.types import ListPromptsResult
+
         return ListPromptsResult(prompts=[])
 
     async def get_prompt(self, name, arguments=None):
         from mcp.types import GetPromptResult
+
         return GetPromptResult(messages=[])
 
 
@@ -142,7 +142,10 @@ class WeatherAndTimeMCPServer:
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "timezone": {"type": "string", "description": "Timezone like UTC, EST, PST"},
+                        "timezone": {
+                            "type": "string",
+                            "description": "Timezone like UTC, EST, PST",
+                        },
                     },
                     "required": ["timezone"],
                 },
@@ -176,12 +179,16 @@ class WeatherAndTimeMCPServer:
                 "london": {"temp": 58, "condition": "cloudy", "humidity": 78},
                 "tokyo": {"temp": 85, "condition": "humid", "humidity": 90},
             }
-            data = weather_data.get(city.lower(), {"temp": 65, "condition": "partly cloudy", "humidity": 50})
+            data = weather_data.get(
+                city.lower(), {"temp": 65, "condition": "partly cloudy", "humidity": 50}
+            )
             return CallToolResult(
-                content=[TextContent(
-                    type="text",
-                    text=f"Weather in {city}: {data['temp']}°F, {data['condition']}, humidity {data['humidity']}%"
-                )],
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"Weather in {city}: {data['temp']}°F, {data['condition']}, humidity {data['humidity']}%",
+                    )
+                ],
                 isError=False,
             )
 
@@ -201,10 +208,12 @@ class WeatherAndTimeMCPServer:
 
     async def list_prompts(self):
         from mcp.types import ListPromptsResult
+
         return ListPromptsResult(prompts=[])
 
     async def get_prompt(self, name, arguments=None):
         from mcp.types import GetPromptResult
+
         return GetPromptResult(messages=[])
 
 
@@ -252,10 +261,12 @@ class FailingToolMCPServer:
 
     async def list_prompts(self):
         from mcp.types import ListPromptsResult
+
         return ListPromptsResult(prompts=[])
 
     async def get_prompt(self, name, arguments=None):
         from mcp.types import GetPromptResult
+
         return GetPromptResult(messages=[])
 
 
@@ -349,10 +360,12 @@ class DataLookupMCPServer:
 
     async def list_prompts(self):
         from mcp.types import ListPromptsResult
+
         return ListPromptsResult(prompts=[])
 
     async def get_prompt(self, name, arguments=None):
         from mcp.types import GetPromptResult
+
         return GetPromptResult(messages=[])
 
 
@@ -417,7 +430,9 @@ class TestAgentToolCalling:
         response = await runner.run(
             agent,
             "What is 137 multiplied by 29?",
-            context=__import__("orchestrator.agent.types", fromlist=["RunContext"]).RunContext(run_id="e2e-calc"),
+            context=__import__("orchestrator.agent.types", fromlist=["RunContext"]).RunContext(
+                run_id="e2e-calc"
+            ),
         )
 
         assert response.content is not None
@@ -447,7 +462,9 @@ class TestAgentToolCalling:
         assert response.content is not None
         # Agent should explain the error, not crash
         content_lower = response.content.lower()
-        assert any(word in content_lower for word in ["zero", "undefined", "cannot", "error", "impossible"])
+        assert any(
+            word in content_lower for word in ["zero", "undefined", "cannot", "error", "impossible"]
+        )
 
     @_skip_on_api_error
     async def test_agent_chains_multiple_tool_calls(self):
@@ -571,7 +588,9 @@ class TestAgentToolFailure:
         assert response.status.value == "success"  # Agent itself succeeds
         # Agent should communicate the failure to user
         content_lower = response.content.lower()
-        assert any(word in content_lower for word in ["unavailable", "error", "fail", "unable", "sorry"])
+        assert any(
+            word in content_lower for word in ["unavailable", "error", "fail", "unable", "sorry"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +626,11 @@ class TestAgentMultiStepReasoning:
         assert response.content is not None
         # Should contain Alice's department (Engineering) and its budget ($5M)
         assert "engineering" in response.content.lower() or "Engineering" in response.content
-        assert "5000000" in response.content or "5,000,000" in response.content or "5 million" in response.content.lower()
+        assert (
+            "5000000" in response.content
+            or "5,000,000" in response.content
+            or "5 million" in response.content.lower()
+        )
 
     @_skip_on_api_error
     async def test_agent_handles_not_found_data(self):
@@ -630,4 +653,7 @@ class TestAgentMultiStepReasoning:
 
         assert response.content is not None
         content_lower = response.content.lower()
-        assert any(word in content_lower for word in ["not found", "no employee", "couldn't find", "does not exist", "no record"])
+        assert any(
+            word in content_lower
+            for word in ["not found", "no employee", "couldn't find", "does not exist", "no record"]
+        )

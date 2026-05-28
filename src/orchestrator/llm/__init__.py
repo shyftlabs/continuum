@@ -18,7 +18,6 @@ from orchestrator.llm.callbacks import (
 )
 from orchestrator.llm.client import LLMClient
 from orchestrator.llm.config import LLMConfig
-from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
 from orchestrator.llm.context_management import (
     CompressionResult,
     CompressionStrategy,
@@ -33,6 +32,7 @@ from orchestrator.llm.context_window import (
     TruncationStrategy,
     get_context_window_manager,
 )
+from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
 from orchestrator.llm.exceptions import (
     LLMAuthenticationError,
     LLMContentFilterError,

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from orchestrator.agent.exceptions import HandoffError
 from orchestrator.agent.handoff.manager import HandoffManager
 from orchestrator.agent.interfaces.handler_interface import IHandoffExecutor
 from orchestrator.agent.types import HandoffResult, generate_handoff_id
@@ -248,10 +247,11 @@ class HandoffExecutor(IHandoffExecutor):
             logger.info(
                 f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
                 + "\n".join(
-                    f"[{m.get('role','?')}] {str(m.get('content',''))[:300]}"
+                    f"[{m.get('role', '?')}] {str(m.get('content', ''))[:300]}"
                     for m in target_messages
                 )
-                + "\n" + "=" * 30
+                + "\n"
+                + "=" * 30
             )
             _tools = target_agent.get_tools_for_llm()
             if _tools:

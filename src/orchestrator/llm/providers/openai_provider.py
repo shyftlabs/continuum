@@ -110,18 +110,30 @@ class OpenAIProvider(BaseProvider):
         provider = _PROVIDER
         ctx = {"model": model, "provider": provider}
         if isinstance(e, openai.AuthenticationError):
-            raise LLMAuthenticationError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
+            raise LLMAuthenticationError(
+                str(e), model=model, provider=provider, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.RateLimitError):
-            raise LLMRateLimitError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
+            raise LLMRateLimitError(
+                str(e), model=model, provider=provider, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.APITimeoutError):
-            raise LLMTimeoutError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
+            raise LLMTimeoutError(
+                str(e), model=model, provider=provider, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.BadRequestError):
             msg = str(e)
             if "context" in msg.lower() or "token" in msg.lower():
-                raise LLMContextLengthError(msg, model=model, provider=provider, original_error=e, context=ctx) from e
-            raise LLMInvalidRequestError(msg, model=model, provider=provider, original_error=e, context=ctx) from e
+                raise LLMContextLengthError(
+                    msg, model=model, provider=provider, original_error=e, context=ctx
+                ) from e
+            raise LLMInvalidRequestError(
+                msg, model=model, provider=provider, original_error=e, context=ctx
+            ) from e
         if isinstance(e, (openai.APIConnectionError, openai.InternalServerError)):
-            raise LLMServiceUnavailableError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
+            raise LLMServiceUnavailableError(
+                str(e), model=model, provider=provider, original_error=e, context=ctx
+            ) from e
         raise LLMError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
 
     def complete(
@@ -155,9 +167,7 @@ class OpenAIProvider(BaseProvider):
             raise
 
     @staticmethod
-    def _accumulate_tool_call(
-        acc: dict[int, dict[str, str]], raw_tc: Any
-    ) -> None:
+    def _accumulate_tool_call(acc: dict[int, dict[str, str]], raw_tc: Any) -> None:
         """Merge one raw OpenAI tool-call delta into the accumulator dict."""
         idx = raw_tc.index
         if idx not in acc:
@@ -203,8 +213,13 @@ class OpenAIProvider(BaseProvider):
                     for raw_tc in delta.tool_calls:
                         self._accumulate_tool_call(tc_acc, raw_tc)
                 if delta and delta.content:
-                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
-                                      role=delta.role, is_finished=False)
+                    yield StreamChunk(
+                        id=chunk.id,
+                        model=chunk.model,
+                        content=delta.content,
+                        role=delta.role,
+                        is_finished=False,
+                    )
             if tc_acc:
                 yield StreamChunk(
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
@@ -239,8 +254,13 @@ class OpenAIProvider(BaseProvider):
                     for raw_tc in delta.tool_calls:
                         self._accumulate_tool_call(tc_acc, raw_tc)
                 if delta and delta.content:
-                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
-                                      role=delta.role, is_finished=False)
+                    yield StreamChunk(
+                        id=chunk.id,
+                        model=chunk.model,
+                        content=delta.content,
+                        role=delta.role,
+                        is_finished=False,
+                    )
             if tc_acc:
                 yield StreamChunk(
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),

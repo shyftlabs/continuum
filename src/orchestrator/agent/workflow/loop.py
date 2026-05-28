@@ -185,7 +185,9 @@ class LoopAgent(BaseAgent):
             else:
                 # Max iterations reached without termination
                 if iteration >= self.termination.max_iterations:
-                    logger.warning(f"Loop reached max iterations ({self.termination.max_iterations})")
+                    logger.warning(
+                        f"Loop reached max iterations ({self.termination.max_iterations})"
+                    )
 
             # Return final response
             final_response = (

@@ -96,6 +96,7 @@ class EvaluatorAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("Agent name is required")
 
         # Ensure no memory / session overhead on the judge
@@ -260,7 +261,10 @@ class EvaluatorAgent(BaseAgent):
                         score=0.0,
                         passed=False,
                         reasoning=f"JSON parse error: {parse_exc}",
-                        metadata={"error": "json_parse_failure", "raw_response": (llm_response.content or "")[:500]},
+                        metadata={
+                            "error": "json_parse_failure",
+                            "raw_response": (llm_response.content or "")[:500],
+                        },
                     ),
                     usage,
                 )
@@ -296,13 +300,15 @@ class EvaluatorAgent(BaseAgent):
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "criteria": self.criteria,
-            "pass_threshold": self.pass_threshold,
-            "judge_model": self.judge_model,
-            "rubrics": self.rubrics,
-            "workflow_type": "evaluator",
-        })
+        base.update(
+            {
+                "criteria": self.criteria,
+                "pass_threshold": self.pass_threshold,
+                "judge_model": self.judge_model,
+                "rubrics": self.rubrics,
+                "workflow_type": "evaluator",
+            }
+        )
         return base
 
 
@@ -313,6 +319,7 @@ class EvaluatorAgent(BaseAgent):
 
 class _ParseError(Exception):
     """Raised when LLM response cannot be parsed as valid evaluation JSON."""
+
     pass
 
 

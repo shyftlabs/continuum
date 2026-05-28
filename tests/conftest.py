@@ -9,10 +9,23 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import uuid
 
 import pytest
 from dotenv import load_dotenv
+
+# Ensure THIS repo's src/ is imported as `orchestrator`, not a stale editable
+# install of another continuum checkout that may be ahead on sys.path. Several
+# `.pth` files in site-packages point `orchestrator` at unrelated working trees;
+# without this guard pytest imports their (older) sources and tests assert
+# against code that isn't in this repo.
+_REPO_SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+if _REPO_SRC not in sys.path:
+    sys.path.insert(0, _REPO_SRC)
+elif sys.path.index(_REPO_SRC) != 0:
+    sys.path.remove(_REPO_SRC)
+    sys.path.insert(0, _REPO_SRC)
 
 # Load .env before any orchestrator imports
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))

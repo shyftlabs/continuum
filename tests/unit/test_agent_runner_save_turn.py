@@ -2,9 +2,9 @@
 Tests for AgentRunner.save_turn() — the method used by workflow agents to write
 exactly one (user, assistant) pair to Redis after a multi-step pipeline finishes.
 """
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 

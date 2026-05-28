@@ -87,9 +87,6 @@ from orchestrator.memory.client import (
 # Configuration
 from orchestrator.memory.config import MemoryConfig
 
-# Intelligence layer
-from orchestrator.memory.intelligence import IntelligenceConfig, IntelligentMemoryClient
-
 # Exceptions
 from orchestrator.memory.exceptions import (
     MemoryAddError,
@@ -102,6 +99,9 @@ from orchestrator.memory.exceptions import (
     MemorySearchError,
     MemoryUpdateError,
 )
+
+# Intelligence layer
+from orchestrator.memory.intelligence import IntelligenceConfig, IntelligentMemoryClient
 
 # Provider utilities
 from orchestrator.memory.providers import (

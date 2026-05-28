@@ -153,9 +153,7 @@ class SummaryCache:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
         now = time.time()
         # Remove expired entries first
-        expired_keys = [
-            k for k, (_, ts) in self._cache.items() if now - ts >= self._ttl
-        ]
+        expired_keys = [k for k, (_, ts) in self._cache.items() if now - ts >= self._ttl]
         for k in expired_keys:
             del self._cache[k]
 

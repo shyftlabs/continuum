@@ -9,19 +9,21 @@ Covers:
 - circuit breaker is NOT penalised for a max-turns outcome
 - save_session_data is skipped (no dangling user message in Redis)
 """
+
 from __future__ import annotations
 
 import time
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from orchestrator.agent.exceptions import MaxTurnsExceededError
 from orchestrator.agent.types import AgentResponse, ResponseStatus, RunState
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_agent(name="test-agent", log_to_session=True):
     from orchestrator.agent.base import BaseAgent
@@ -44,9 +46,9 @@ def _make_run_state(messages=None):
 
 def _make_finalizer():
     from orchestrator.agent.execution.run_finalizer import RunFinalizer
-    from orchestrator.agent.services.session_service import SessionService
-    from orchestrator.agent.services.context_service import ContextService
     from orchestrator.agent.execution.run_lifecycle import RunLifecycle
+    from orchestrator.agent.services.context_service import ContextService
+    from orchestrator.agent.services.session_service import SessionService
 
     sess_svc = MagicMock(spec=SessionService)
     sess_svc.save_messages = AsyncMock()
@@ -142,6 +144,7 @@ def _make_noop_finalizer():
 # Tests for RunFinalizer session save guard
 # ---------------------------------------------------------------------------
 
+
 class TestFinalizerSessionGuard:
     async def test_skips_save_messages_on_max_turns_reached(self):
         finalizer, sess_svc, ctx_svc, _ = _make_finalizer()
@@ -165,8 +168,8 @@ class TestFinalizerSessionGuard:
     async def test_run_state_still_marked_completed_on_max_turns(self):
         finalizer, _, ctx_svc, _ = _make_finalizer()
         agent = _make_agent()
-        from orchestrator.agent.utils.context_utils import create_run_context
         from orchestrator.agent.types import RunStatus
+        from orchestrator.agent.utils.context_utils import create_run_context
 
         ctx = create_run_context(session_id="sess-1")
         rs = _make_run_state()
@@ -214,9 +217,16 @@ class TestFinalizerSessionGuard:
         )
 
         with _metrics_patch():
-            await finalizer.finalize(agent, ctx, rs, response, 0, None, time.time(),
-                                     [{"role": "user", "content": "q"},
-                                      {"role": "assistant", "content": "done"}])
+            await finalizer.finalize(
+                agent,
+                ctx,
+                rs,
+                response,
+                0,
+                None,
+                time.time(),
+                [{"role": "user", "content": "q"}, {"role": "assistant", "content": "done"}],
+            )
 
         sess_svc.save_messages.assert_called_once()
 
@@ -224,6 +234,7 @@ class TestFinalizerSessionGuard:
 # ---------------------------------------------------------------------------
 # Tests for AgentRunner.run() on MaxTurnsExceededError
 # ---------------------------------------------------------------------------
+
 
 class TestRunnerMaxTurnsExceededError:
     async def test_still_raises_max_turns_exceeded_error(self):

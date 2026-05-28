@@ -91,10 +91,12 @@ class PlannerAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("Agent name is required")
 
         if not self.agent and not self.agents:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError(
                 "PlannerAgent requires either 'agent' (single-agent mode) "
                 "or 'agents' (agent-pool mode)"
@@ -102,6 +104,7 @@ class PlannerAgent(BaseAgent):
 
         if self.agent and self.agents:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError(
                 "PlannerAgent accepts either 'agent' or 'agents', not both"
             )
@@ -150,7 +153,6 @@ class PlannerAgent(BaseAgent):
                 input={"goal": input_text[:500], "mode": self._mode},
                 metadata={"workflow_type": "planner", "mode": self._mode},
             ) as workflow_span:
-
                 # Step 1: Generate plan
                 plan_steps, plan_usage = await self._generate_plan(input_text, llm_client)
                 total_usage = total_usage.add(plan_usage)
@@ -163,8 +165,8 @@ class PlannerAgent(BaseAgent):
                 current_input = input_text
                 step_outputs: list[dict[str, str]] = []  # accumulated outputs for assembly
                 pipeline_history: list[str] = []
-                i = 0          # index into plan_steps
-                executed = 0   # actual agent executions (max_steps cap applies here only)
+                i = 0  # index into plan_steps
+                executed = 0  # actual agent executions (max_steps cap applies here only)
 
                 while i < len(plan_steps) and executed < self.planning_config.max_steps:
                     step = plan_steps[i]
@@ -180,7 +182,9 @@ class PlannerAgent(BaseAgent):
                         agent = self._find_agent(agent_name)
                         if not agent:
                             if self.planning_config.strict_agent_pool:
-                                workflow_span.set_error(f"Unknown agent '{agent_name}' at step {step_id}")
+                                workflow_span.set_error(
+                                    f"Unknown agent '{agent_name}' at step {step_id}"
+                                )
                                 raise PlannerWorkflowError(
                                     f"Step {step_id} references unknown agent '{agent_name}'. "
                                     f"Declare it in the agents list or disable strict_agent_pool.",
@@ -197,11 +201,10 @@ class PlannerAgent(BaseAgent):
                             continue
 
                     # For the last step, pass full accumulated history so assembly works correctly
-                    is_last_step = (i == len(plan_steps) - 1)
+                    is_last_step = i == len(plan_steps) - 1
                     if is_last_step and len(step_outputs) > 1:
                         history = "\n\n".join(
-                            f"[Step {s['step_id']} output]\n{s['output']}"
-                            for s in step_outputs
+                            f"[Step {s['step_id']} output]\n{s['output']}" for s in step_outputs
                         )
                         step_input = (
                             f"{instruction}\n\nAll previous step outputs:\n{history}"
@@ -215,9 +218,7 @@ class PlannerAgent(BaseAgent):
                             else current_input
                         )
 
-                    logger.info(
-                        f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}"
-                    )
+                    logger.info(f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}")
 
                     async with SpanScope(
                         f"workflow.planner.step.{step_id}",
@@ -247,23 +248,27 @@ class PlannerAgent(BaseAgent):
                                 context=context,
                             )
                             total_usage = total_usage.add(response.usage)
-                            completed.append({
-                                "step": step,
-                                "output": response.content or "",
-                                "success": True,
-                            })
+                            completed.append(
+                                {
+                                    "step": step,
+                                    "output": response.content or "",
+                                    "success": True,
+                                }
+                            )
                             current_input = response.content or current_input
                             step_outputs.append({"step_id": step_id, "output": current_input})
                             pipeline_history.append(f"{agent_name}: {current_input[:300]}")
 
-                            step_span.set_output({
-                                "success": True,
-                                "output_preview": (response.content or "")[:200],
-                            })
+                            step_span.set_output(
+                                {
+                                    "success": True,
+                                    "output_preview": (response.content or "")[:200],
+                                }
+                            )
 
                             # Optional: replan after successful step.
                             # Uses a separate counter so replan checks do not consume max_steps.
-                            remaining = plan_steps[i + 1:]
+                            remaining = plan_steps[i + 1 :]
                             if self.planning_config.enable_replanning and remaining:
                                 new_remaining, replan_usage = await self._maybe_replan(
                                     goal=input_text,
@@ -284,18 +289,18 @@ class PlannerAgent(BaseAgent):
                             executed += 1
 
                         except Exception as e:
-                            logger.error(
-                                f"PlannerAgent step {step_id} ({agent_name}) failed: {e}"
-                            )
+                            logger.error(f"PlannerAgent step {step_id} ({agent_name}) failed: {e}")
                             step_span.set_error(str(e))
-                            completed.append({
-                                "step": step,
-                                "output": str(e),
-                                "success": False,
-                            })
+                            completed.append(
+                                {
+                                    "step": step,
+                                    "output": str(e),
+                                    "success": False,
+                                }
+                            )
 
                             if self.planning_config.replan_on_failure:
-                                remaining = plan_steps[i + 1:]
+                                remaining = plan_steps[i + 1 :]
                                 new_plan, replan_usage = await self._replan_on_failure(
                                     goal=input_text,
                                     completed=completed,
@@ -325,10 +330,12 @@ class PlannerAgent(BaseAgent):
                             i += 1
                             executed += 1
 
-                workflow_span.set_output({
-                    "steps_executed": len(completed),
-                    "total_tokens": total_usage.total_tokens,
-                })
+                workflow_span.set_output(
+                    {
+                        "steps_executed": len(completed),
+                        "total_tokens": total_usage.total_tokens,
+                    }
+                )
 
             final_content = current_input
             result = AgentResponse(
@@ -337,7 +344,11 @@ class PlannerAgent(BaseAgent):
                 status=ResponseStatus.SUCCESS,
                 usage=total_usage,
                 turn_count=len(completed),
-                agents_used=[c["step"].get("agent_name", self.agent.name if self.agent else "") for c in completed if c["success"]],
+                agents_used=[
+                    c["step"].get("agent_name", self.agent.name if self.agent else "")
+                    for c in completed
+                    if c["success"]
+                ],
             )
 
             if context.session_id and completed:
@@ -433,8 +444,7 @@ class PlannerAgent(BaseAgent):
     ) -> tuple[list[dict[str, Any]] | None, TokenUsage]:
         """Lightweight check after a successful step — returns new remaining or None."""
         remaining_str = "\n".join(
-            f"  {s['step_id']}: {s.get('agent_name', '')} — {s['instruction']}"
-            for s in remaining
+            f"  {s['step_id']}: {s.get('agent_name', '')} — {s['instruction']}" for s in remaining
         )
         agent_hint = (
             f"Available agents: {', '.join(a.name for a in self.agents)}\n\n"
@@ -447,18 +457,20 @@ class PlannerAgent(BaseAgent):
             else '{"step_id": "...", "instruction": "..."}'
         )
 
-        messages = [{
-            "role": "user",
-            "content": (
-                f"Goal: {goal}\n\n"
-                f"Last step output: {last_output[:400]}\n\n"
-                f"Remaining planned steps:\n{remaining_str}\n\n"
-                f"{agent_hint}"
-                f"Does the remaining plan still make sense given the last output?\n"
-                f'Reply ONLY with "CONTINUE" if valid, or a JSON object if replanning needed:\n'
-                f'  {{"steps": [{step_format}]}}'
-            ),
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"Goal: {goal}\n\n"
+                    f"Last step output: {last_output[:400]}\n\n"
+                    f"Remaining planned steps:\n{remaining_str}\n\n"
+                    f"{agent_hint}"
+                    f"Does the remaining plan still make sense given the last output?\n"
+                    f'Reply ONLY with "CONTINUE" if valid, or a JSON object if replanning needed:\n'
+                    f'  {{"steps": [{step_format}]}}'
+                ),
+            }
+        ]
 
         model = self.planning_config.planning_model or self.model
         try:
@@ -501,21 +513,24 @@ class PlannerAgent(BaseAgent):
         )
         completed_str = "\n".join(
             f"  ✅ {c['step'].get('agent_name', '')} — {str(c['output'])[:100]}"
-            for c in completed if c["success"]
+            for c in completed
+            if c["success"]
         )
 
-        messages = [{
-            "role": "user",
-            "content": (
-                f"Goal: {goal}\n\n"
-                f"Completed steps:\n{completed_str or '  (none)'}\n\n"
-                f"Failed step: {failed_step.get('agent_name', '')} — {failed_step['instruction']}\n"
-                f"Error: {error}\n\n"
-                f"{agent_hint}"
-                f"Generate a new plan for the remaining work (replacing the failed step).\n"
-                f'Output JSON only: {{"steps": [{step_format}]}}'
-            ),
-        }]
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"Goal: {goal}\n\n"
+                    f"Completed steps:\n{completed_str or '  (none)'}\n\n"
+                    f"Failed step: {failed_step.get('agent_name', '')} — {failed_step['instruction']}\n"
+                    f"Error: {error}\n\n"
+                    f"{agent_hint}"
+                    f"Generate a new plan for the remaining work (replacing the failed step).\n"
+                    f'Output JSON only: {{"steps": [{step_format}]}}'
+                ),
+            }
+        ]
 
         model = self.planning_config.planning_model or self.model
         try:
@@ -556,7 +571,7 @@ class PlannerAgent(BaseAgent):
                     elif ch == "}":
                         brace -= 1
                         if brace == 0 and start != -1:
-                            content = content[start: idx + 1]
+                            content = content[start : idx + 1]
                             break
             data = json.loads(content)
             return data.get("steps", [])
@@ -575,13 +590,15 @@ class PlannerAgent(BaseAgent):
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "mode": self._mode,
-            "agent": self.agent.name if self.agent else None,
-            "agents": [a.name for a in self.agents],
-            "planning_config": self.planning_config.to_dict(),
-            "workflow_type": "planner",
-        })
+        base.update(
+            {
+                "mode": self._mode,
+                "agent": self.agent.name if self.agent else None,
+                "agents": [a.name for a in self.agents],
+                "planning_config": self.planning_config.to_dict(),
+                "workflow_type": "planner",
+            }
+        )
         return base
 
 
@@ -643,9 +660,7 @@ def create_planner_agent(
             "or 'agents' (agent-pool mode)"
         )
     if agent and agents:
-        raise ValueError(
-            "create_planner_agent accepts either 'agent' or 'agents', not both"
-        )
+        raise ValueError("create_planner_agent accepts either 'agent' or 'agents', not both")
 
     return PlannerAgent(
         name=name,

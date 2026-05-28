@@ -16,8 +16,7 @@ try:
     from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. "
-        "Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 with workflow.unsafe.imports_passed_through():
@@ -148,7 +147,11 @@ class AgentWorkflow:
                     if not approved:
                         # Use self._status which is already set to "timed_out"
                         # or "rejected" by _run_approval_step
-                        final_status = self._status if self._status in ("timed_out", "cancelled") else "rejected"
+                        final_status = (
+                            self._status
+                            if self._status in ("timed_out", "cancelled")
+                            else "rejected"
+                        )
                         self._status = final_status
                         return WorkflowResult(
                             status=final_status,
@@ -185,9 +188,7 @@ class AgentWorkflow:
     # Step handlers
     # ------------------------------------------------------------------
 
-    async def _run_agent_step(
-        self, step: AgentStep, wf_input: WorkflowInput
-    ) -> None:
+    async def _run_agent_step(self, step: AgentStep, wf_input: WorkflowInput) -> None:
         agent_input = step.input or self._last_output
 
         raw = await workflow.execute_activity(
@@ -209,7 +210,9 @@ class AgentWorkflow:
             heartbeat_timeout=timedelta(seconds=60),
             result_type=AgentActivityResult,
         )
-        result = raw if isinstance(raw, AgentActivityResult) else AgentActivityResult.model_validate(raw)
+        result = (
+            raw if isinstance(raw, AgentActivityResult) else AgentActivityResult.model_validate(raw)
+        )
 
         self._step_results.append(result)
         if result.content:
@@ -259,7 +262,7 @@ class AgentWorkflow:
                 lambda: self._pending_decision is not None or self._cancelled,
                 timeout=timedelta(seconds=step.timeout),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending_approvals = [
                 a for a in self._pending_approvals if a["request_id"] != request_id
             ]
@@ -290,9 +293,7 @@ class AgentWorkflow:
 
         return False
 
-    async def _run_parallel_step(
-        self, step: ParallelStep, wf_input: WorkflowInput
-    ) -> None:
+    async def _run_parallel_step(self, step: ParallelStep, wf_input: WorkflowInput) -> None:
         """Run multiple agents concurrently and merge results."""
         handles = []
         for agent_step in step.agents:
@@ -333,6 +334,7 @@ class AgentWorkflow:
                     break
         elif step.merge_strategy == "structured":
             import json as _json
+
             # Use indexed keys to prevent collision when agents share a name
             parts = {}
             for i, r in enumerate(results):
@@ -349,9 +351,7 @@ class AgentWorkflow:
         else:
             self._last_output = "\n\n".join(r.content for r in results if r.content)
 
-    async def _run_conditional_step(
-        self, step: ConditionalStep, wf_input: WorkflowInput
-    ) -> None:
+    async def _run_conditional_step(self, step: ConditionalStep, wf_input: WorkflowInput) -> None:
         """Run condition agent and branch.
 
         The condition agent must return exactly "true" or "false" (case-insensitive).
@@ -378,7 +378,11 @@ class AgentWorkflow:
             heartbeat_timeout=timedelta(seconds=60),
             result_type=AgentActivityResult,
         )
-        condition_result = raw_cond if isinstance(raw_cond, AgentActivityResult) else AgentActivityResult.model_validate(raw_cond)
+        condition_result = (
+            raw_cond
+            if isinstance(raw_cond, AgentActivityResult)
+            else AgentActivityResult.model_validate(raw_cond)
+        )
         self._step_results.append(condition_result)
 
         # Deterministic evaluation: only accept explicit true/false values
@@ -396,9 +400,7 @@ class AgentWorkflow:
             if isinstance(parsed, AgentStep):
                 await self._run_agent_step(parsed, wf_input)
             elif isinstance(parsed, ApprovalStep):
-                approved = await self._run_approval_step(
-                    parsed, self._current_step_index, wf_input
-                )
+                approved = await self._run_approval_step(parsed, self._current_step_index, wf_input)
                 if not approved:
                     self._status = "rejected"
                     return

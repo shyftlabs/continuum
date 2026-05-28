@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from orchestrator import AgentConfig, AgentMemoryConfig, AgentMemoryScope, BaseAgent
+from orchestrator import AgentConfig, AgentMemoryConfig, BaseAgent
 
 
-def make_search_agent(tools: list[dict[str, Any]], tool_executor: Any, model: str, gateway_mode: str | None = None) -> BaseAgent:
+def make_search_agent(
+    tools: list[dict[str, Any]], tool_executor: Any, model: str, gateway_mode: str | None = None
+) -> BaseAgent:
     return BaseAgent(
         name="search-agent",
         instructions=(
@@ -44,7 +46,9 @@ def make_recommend_agent(model: str, gateway_mode: str | None = None) -> BaseAge
     )
 
 
-def make_cart_agent(tools: list[dict[str, Any]], tool_executor: Any, model: str, gateway_mode: str | None = None) -> BaseAgent:
+def make_cart_agent(
+    tools: list[dict[str, Any]], tool_executor: Any, model: str, gateway_mode: str | None = None
+) -> BaseAgent:
     return BaseAgent(
         name="cart-agent",
         instructions=(

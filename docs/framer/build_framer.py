@@ -14,7 +14,9 @@ Re-run after editing index.html:
 
     python3 docs/framer/build_framer.py
 """
+
 from __future__ import annotations
+
 import re
 from pathlib import Path
 
@@ -28,6 +30,7 @@ html = HTML_PATH.read_text(encoding="utf-8")
 style_m = re.search(r"<style>(.*?)</style>", html, re.DOTALL)
 assert style_m, "no <style> block found"
 CSS = style_m.group(1).strip()
+
 
 # 1a. In the Framer build, @media queries fire against the browser
 #     viewport — but the component is rendered inside a frame that can
@@ -133,8 +136,9 @@ BODY = BODY.replace(
 # 5. Build the TSX. Use String.raw with our own delimiter so the raw template
 #    literal in JS code can contain backticks ("`") and ${ } unescaped.
 DELIM = "===END==="
-assert DELIM not in CSS and DELIM not in BODY and DELIM not in JS, \
+assert DELIM not in CSS and DELIM not in BODY and DELIM not in JS, (
     "delimiter collision — pick a different DELIM"
+)
 
 
 def raw(s: str) -> str:

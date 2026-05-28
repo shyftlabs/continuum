@@ -7,11 +7,11 @@ from typing import Any
 
 # Zero-width and invisible unicode characters used in prompt injection attacks
 _INVISIBLE_UNICODE_RE = re.compile(
-    r'[\u200b\u200c\u200d\u200e\u200f'   # zero-width spaces/joiners/marks
-    r'\u202a-\u202e'                       # directional formatting characters
-    r'\u2060-\u2064'                       # word joiner, invisible separators
-    r'\ufeff'                              # BOM / zero-width no-break space
-    r'\u00ad]'                             # soft hyphen
+    r"[\u200b\u200c\u200d\u200e\u200f"  # zero-width spaces/joiners/marks
+    r"\u202a-\u202e"  # directional formatting characters
+    r"\u2060-\u2064"  # word joiner, invisible separators
+    r"\ufeff"  # BOM / zero-width no-break space
+    r"\u00ad]"  # soft hyphen
 )
 
 INJECTION_PATTERNS = [

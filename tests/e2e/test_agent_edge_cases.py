@@ -8,7 +8,6 @@ conversation context, multi-message input, and agent lifecycle hooks.
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 from pydantic import BaseModel, Field
@@ -18,7 +17,6 @@ pytestmark = pytest.mark.e2e
 
 from tests.e2e.conftest import skip_if_no_api_key as _skip_if_no_api_key
 from tests.e2e.conftest import skip_on_api_error as _skip_on_api_error
-
 
 # ---------------------------------------------------------------------------
 # Test: Max turns limit
@@ -75,25 +73,28 @@ class TestMaxTurnsLimit:
             async def call_tool(self, tool_name, arguments):
                 self.call_count += 1
                 return CallToolResult(
-                    content=[TextContent(
-                        type="text",
-                        text=f"Status: PENDING. Task not complete yet. Check {self.call_count} done. Please check again."
-                    )],
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=f"Status: PENDING. Task not complete yet. Check {self.call_count} done. Please check again.",
+                        )
+                    ],
                     isError=False,
                 )
 
             async def list_prompts(self):
                 from mcp.types import ListPromptsResult
+
                 return ListPromptsResult(prompts=[])
 
             async def get_prompt(self, name, arguments=None):
                 from mcp.types import GetPromptResult
+
                 return GetPromptResult(messages=[])
 
         from orchestrator.agent.base import BaseAgent
         from orchestrator.agent.config import AgentConfig, AgentMemoryConfig
         from orchestrator.agent.runner import AgentRunner
-        from orchestrator.agent.types import RunContext
         from orchestrator.tools.executor import ToolExecutor
         from orchestrator.tools.util import MCPUtil
 
@@ -243,7 +244,10 @@ class TestStructuredOutput:
             parsed = json.loads(response.content)
             assert parsed["name"].lower() == "john smith"
             assert parsed["age"] == 35
-            assert "engineer" in parsed["occupation"].lower() or "software" in parsed["occupation"].lower()
+            assert (
+                "engineer" in parsed["occupation"].lower()
+                or "software" in parsed["occupation"].lower()
+            )
         except (json.JSONDecodeError, KeyError):
             assert "john" in response.content.lower() and "35" in response.content
 
@@ -641,9 +645,15 @@ class TestMultiAgentRunner:
 
         runner = AgentRunner()
 
-        resp_poet = await runner.run(poet, "Tell me about the sun", context=RunContext(run_id="e2e-poet"))
-        resp_sci = await runner.run(scientist, "Tell me about the sun", context=RunContext(run_id="e2e-scientist"))
-        resp_trans = await runner.run(translator, "Hello, how are you?", context=RunContext(run_id="e2e-translator"))
+        resp_poet = await runner.run(
+            poet, "Tell me about the sun", context=RunContext(run_id="e2e-poet")
+        )
+        resp_sci = await runner.run(
+            scientist, "Tell me about the sun", context=RunContext(run_id="e2e-scientist")
+        )
+        resp_trans = await runner.run(
+            translator, "Hello, how are you?", context=RunContext(run_id="e2e-translator")
+        )
 
         # Poet should rhyme or have verse-like structure
         assert resp_poet.content is not None

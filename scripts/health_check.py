@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root / "src"))
 # Load environment variables
 try:
     from dotenv import load_dotenv
+
     load_dotenv(project_root / ".env")
 except ImportError:
     pass  # dotenv not installed, rely on system env vars
@@ -59,9 +60,9 @@ def print_check_result(check: dict, verbose: bool = False):
     status = check["status"].upper()
     message = check["message"]
     latency = check.get("latency_ms", 0)
-    
+
     print(f"  {icon} {name:12} │ {status:10} │ {latency:>7.1f}ms │ {message}")
-    
+
     if verbose and check.get("details"):
         for key, value in check["details"].items():
             if key not in ("enabled", "configured"):
@@ -75,19 +76,19 @@ async def run_health_check(
 ) -> dict:
     """
     Run health checks on SDK dependencies.
-    
+
     Args:
         timeout: Timeout for all checks in seconds
         service: Specific service to check (redis, qdrant, langfuse, llm)
         verbose: Show detailed output
-        
+
     Returns:
         Health check results dictionary
     """
-    from orchestrator.core.health import get_health_checker, HealthStatus
-    
+    from orchestrator.core.health import get_health_checker
+
     checker = get_health_checker()
-    
+
     if service:
         # Check specific service
         check_methods = {
@@ -98,15 +99,15 @@ async def run_health_check(
             "langfuse": checker.check_langfuse,
             "llm": checker.check_llm,
         }
-        
+
         if service.lower() not in check_methods:
             print(f"Unknown service: {service}")
             print(f"Available services: {', '.join(check_methods.keys())}")
             sys.exit(1)
-        
+
         check_fn = check_methods[service.lower()]
         result = await asyncio.wait_for(check_fn(), timeout=timeout)
-        
+
         return {
             "status": result.status.value,
             "total_latency_ms": result.latency_ms,
@@ -133,43 +134,48 @@ Examples:
   python scripts/health_check.py -t 30        # 30 second timeout
         """,
     )
-    
+
     parser.add_argument(
-        "-s", "--service",
+        "-s",
+        "--service",
         choices=["redis", "vector_store", "qdrant", "milvus", "langfuse", "llm"],
         help="Check specific service only (vector_store dispatches to configured provider)",
     )
     parser.add_argument(
-        "-t", "--timeout",
+        "-t",
+        "--timeout",
         type=float,
         default=10.0,
         help="Timeout in seconds (default: 10)",
     )
     parser.add_argument(
-        "-j", "--json",
+        "-j",
+        "--json",
         action="store_true",
         help="Output as JSON",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Show detailed output",
     )
     parser.add_argument(
-        "-q", "--quiet",
+        "-q",
+        "--quiet",
         action="store_true",
         help="Only show failures (exit code indicates status)",
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         result = await run_health_check(
             timeout=args.timeout,
             service=args.service,
             verbose=args.verbose,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         if args.json:
             print(json.dumps({"status": "unhealthy", "error": "Health check timed out"}))
         else:
@@ -181,43 +187,43 @@ Examples:
         else:
             print(f"❌ Health check failed: {e}")
         sys.exit(1)
-    
+
     # Output results
     if args.json:
         print(json.dumps(result, indent=2))
     elif not args.quiet:
         print_banner()
-        
+
         # Summary
         status = result["status"]
         icon = print_status_icon(status)
         total_latency = result.get("total_latency_ms", 0)
-        
+
         print(f"  Status: {icon} {status.upper()}")
         print(f"  Time:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  Latency: {total_latency:.1f}ms total")
         print()
-        
+
         # Individual checks
         print("  " + "-" * 56)
         print(f"  {'SERVICE':14} │ {'STATUS':10} │ {'LATENCY':>9} │ MESSAGE")
         print("  " + "-" * 56)
-        
-        for name, check in result.get("checks", {}).items():
+
+        for _name, check in result.get("checks", {}).items():
             print_check_result(check, verbose=args.verbose)
-        
+
         print("  " + "-" * 56)
         print()
-        
+
         # Summary counts
         checks = result.get("checks", {})
         healthy = sum(1 for c in checks.values() if c["status"] == "healthy")
         unhealthy = sum(1 for c in checks.values() if c["status"] == "unhealthy")
         degraded = sum(1 for c in checks.values() if c["status"] == "degraded")
-        
+
         print(f"  Summary: {healthy} healthy, {degraded} degraded, {unhealthy} unhealthy")
         print()
-        
+
         # Recommendations
         if unhealthy > 0:
             print("  💡 Recommendations:")
@@ -225,7 +231,7 @@ Examples:
                 if check["status"] == "unhealthy":
                     _print_recommendation(name, check)
             print()
-    
+
     # Exit code based on status
     if result["status"] == "healthy":
         if not args.quiet:
@@ -265,7 +271,7 @@ def _print_recommendation(service: str, check: dict):
             "  • Test API key with provider's dashboard",
         ],
     }
-    
+
     if service in recommendations:
         print(f"\n  {service.upper()}:")
         for rec in recommendations[service]:
@@ -274,4 +280,3 @@ def _print_recommendation(service: str, check: dict):
 
 if __name__ == "__main__":
     asyncio.run(main())
-

@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from orchestrator.agent.exceptions import MaxTurnsExceededError
-from orchestrator.tools.tool_attention.router import _tool_name
 from orchestrator.agent.interfaces.executor_interface import IExecutor
 from orchestrator.agent.types import (
     AgentResponse,
@@ -19,11 +18,12 @@ from orchestrator.agent.types import (
     TokenUsage,
     ToolExecutionSummary,
 )
-from orchestrator.llm.config import LLMConfig
 from orchestrator.config import settings
+from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
 from orchestrator.observability.metrics import get_metrics_collector
 from orchestrator.observability.trace_context import SpanScope, truncate_data
+from orchestrator.tools.tool_attention.router import _tool_name
 
 if TYPE_CHECKING:
     from orchestrator.agent.base import BaseAgent
@@ -46,7 +46,6 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
             }
         }
     )
-
 
 
 class Executor(IExecutor):
@@ -173,7 +172,9 @@ class Executor(IExecutor):
                 # Make LLM call
                 try:
                     # Create LLMConfig for this agent (includes JSON mode if enabled)
-                    llm_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
+                    llm_config = _enrich_config_for_gateway(
+                        LLMConfig.from_agent_config(agent), context
+                    )
 
                     # Log JSON mode status
                     if agent.enable_json_mode:
@@ -217,7 +218,9 @@ class Executor(IExecutor):
 
                     # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry once.
                     if response.content and "NEED_TOOL:" in response.content:
-                        needed = response.content.split("NEED_TOOL:")[1].strip().split()[0].rstrip(".,;")
+                        needed = (
+                            response.content.split("NEED_TOOL:")[1].strip().split()[0].rstrip(".,;")
+                        )
                         all_tools = agent.get_tools_for_llm()
                         extra = [t for t in all_tools if _tool_name(t) == needed]
                         if extra:
@@ -233,7 +236,9 @@ class Executor(IExecutor):
                                 tools=expanded_tools,
                                 config=llm_config,
                                 session_id=context.session_id,
-                                trace_metadata={"session_id": context.session_id} if context.session_id else None,
+                                trace_metadata={"session_id": context.session_id}
+                                if context.session_id
+                                else None,
                                 auto_session=False,
                                 priority=context.priority,
                                 stage_priority=agent.config.stage_priority if agent.config else 5,
@@ -335,23 +340,28 @@ class Executor(IExecutor):
                     # Handle think tool calls inline (ReAct reasoning step)
                     # think() is a no-op that logs the LLM's reasoning and returns immediately
                     think_calls = [
-                        tc for tc in regular_tool_calls
+                        tc
+                        for tc in regular_tool_calls
                         if (
                             tc.function.name
                             if hasattr(tc, "function")
                             else tc.get("function", {}).get("name", "")
-                        ) == "think"
+                        )
+                        == "think"
                     ]
                     regular_tool_calls = [
-                        tc for tc in regular_tool_calls
+                        tc
+                        for tc in regular_tool_calls
                         if (
                             tc.function.name
                             if hasattr(tc, "function")
                             else tc.get("function", {}).get("name", "")
-                        ) != "think"
+                        )
+                        != "think"
                     ]
                     for tc in think_calls:
                         import json as _json
+
                         tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                         args_str = (
                             tc.function.arguments
@@ -363,11 +373,13 @@ class Executor(IExecutor):
                         except Exception:
                             thought = str(args_str)
                         logger.info(f"💭 Agent thought: {thought}")
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": "Thought recorded.",
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "content": "Thought recorded.",
+                            }
+                        )
 
                     # Execute regular tools
                     if regular_tool_calls and self._tool_handler:
@@ -386,9 +398,12 @@ class Executor(IExecutor):
                         if not turn_tool_summary.is_empty():
                             if len(all_tool_summaries) >= _MAX_TOOL_SUMMARIES:
                                 # Merge oldest into the second-oldest to keep the list bounded
-                                all_tool_summaries[0] = self._merge_tool_summaries(
-                                    [all_tool_summaries[0], all_tool_summaries.pop(1)]
-                                ) or all_tool_summaries[0]
+                                all_tool_summaries[0] = (
+                                    self._merge_tool_summaries(
+                                        [all_tool_summaries[0], all_tool_summaries.pop(1)]
+                                    )
+                                    or all_tool_summaries[0]
+                                )
                             all_tool_summaries.append(turn_tool_summary)
 
                     # Execute handoffs sequentially (they may return early)
@@ -405,7 +420,9 @@ class Executor(IExecutor):
 
                             if handoff_result.success and handoff_result.response:
                                 handoff_config = agent.get_handoff(target)
-                                return_to_parent = handoff_config and handoff_config.return_to_parent
+                                return_to_parent = (
+                                    handoff_config and handoff_config.return_to_parent
+                                )
 
                                 if return_to_parent:
                                     # Add executor's result as a tool result so the
@@ -413,39 +430,55 @@ class Executor(IExecutor):
                                     # final user-facing response.
                                     tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
                                     executor_content = handoff_result.response.content or ""
-                                    messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": tc_id,
-                                        "content": executor_content,
-                                    })
+                                    messages.append(
+                                        {
+                                            "role": "tool",
+                                            "tool_call_id": tc_id,
+                                            "content": executor_content,
+                                        }
+                                    )
                                     logger.info(
                                         f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
-                                        f"[tool] {executor_content[:500]}\n"
-                                        + "=" * 30
+                                        f"[tool] {executor_content[:500]}\n" + "=" * 30
                                     )
                                     total_usage = total_usage.add(handoff_result.response.usage)
                                     # Pop the target agent so the parent can hand off
                                     # to the same target again on the next turn.
                                     run_state.pop_agent()
                                     run_state.current_agent = agent.name
-                                    turn_span.set_output({"handoff_to": target, "success": True, "return_to_parent": True})
+                                    turn_span.set_output(
+                                        {
+                                            "handoff_to": target,
+                                            "success": True,
+                                            "return_to_parent": True,
+                                        }
+                                    )
                                     logger.info(
                                         f"===== RETURN TURN PROMPT [{agent.name}] =====\n"
                                         + "\n".join(
                                             f"[{m.get('role', '?')}] {str(m.get('content', '') or '')[:300]}"
                                             for m in messages
                                         )
-                                        + "\n" + "=" * 30
+                                        + "\n"
+                                        + "=" * 30
                                     )
                                     continue
                                 else:
                                     # No return_to_parent — return executor's response directly.
                                     if handoff_result.response.content:
-                                        messages.append({
-                                            "role": "assistant",
-                                            "content": handoff_result.response.content,
-                                        })
-                                    turn_span.set_output({"handoff_to": target, "success": True, "return_to_parent": False})
+                                        messages.append(
+                                            {
+                                                "role": "assistant",
+                                                "content": handoff_result.response.content,
+                                            }
+                                        )
+                                    turn_span.set_output(
+                                        {
+                                            "handoff_to": target,
+                                            "success": True,
+                                            "return_to_parent": False,
+                                        }
+                                    )
                                     return AgentResponse(
                                         content=handoff_result.response.content,
                                         agent_name=handoff_result.response.agent_name,
@@ -525,6 +558,7 @@ class Executor(IExecutor):
                         content_stripped = response.content.strip()
                         if content_stripped.startswith("```"):
                             import re as _re
+
                             content_stripped = _re.sub(r"^```[a-z]*\n?", "", content_stripped)
                             content_stripped = content_stripped.rstrip("`").rstrip()
 
@@ -558,7 +592,9 @@ class Executor(IExecutor):
                             f"✅ Successfully parsed JSON response for agent {agent.name}",
                             extra={
                                 "agent_name": agent.name,
-                                "json_keys": list(parsed_json.keys()) if isinstance(parsed_json, dict) else None,
+                                "json_keys": list(parsed_json.keys())
+                                if isinstance(parsed_json, dict)
+                                else None,
                             },
                         )
 
@@ -576,7 +612,9 @@ class Executor(IExecutor):
                             f"❌ Failed to parse JSON response for agent {agent.name}: {e}",
                             extra={
                                 "agent_name": agent.name,
-                                "content_preview": response.content[:200] if response.content else None,
+                                "content_preview": response.content[:200]
+                                if response.content
+                                else None,
                                 "error": str(e),
                             },
                         )
@@ -585,7 +623,9 @@ class Executor(IExecutor):
                             f"❌ Failed to validate structured output against schema for agent {agent.name}: {e}",
                             extra={
                                 "agent_name": agent.name,
-                                "output_schema": agent.output_schema.__name__ if agent.output_schema else None,
+                                "output_schema": agent.output_schema.__name__
+                                if agent.output_schema
+                                else None,
                                 "error": str(e),
                             },
                         )
@@ -600,7 +640,9 @@ class Executor(IExecutor):
                             f"✅ JSON mode enabled: Response is valid JSON for agent {agent.name}",
                             extra={
                                 "agent_name": agent.name,
-                                "json_keys": list(parsed_json.keys()) if isinstance(parsed_json, dict) else None,
+                                "json_keys": list(parsed_json.keys())
+                                if isinstance(parsed_json, dict)
+                                else None,
                             },
                         )
                     except json.JSONDecodeError as e:
@@ -608,7 +650,9 @@ class Executor(IExecutor):
                             f"⚠️ JSON mode enabled but response is not valid JSON for agent {agent.name}: {e}",
                             extra={
                                 "agent_name": agent.name,
-                                "content_preview": content_stripped[:200] if response.content else None,
+                                "content_preview": content_stripped[:200]
+                                if response.content
+                                else None,
                             },
                         )
 
@@ -623,7 +667,11 @@ class Executor(IExecutor):
                     messages=messages,
                 )
                 # Store tool summary in metadata for session storage
-                if merged_tool_summary and not merged_tool_summary.is_empty() and context.metadata is not None:
+                if (
+                    merged_tool_summary
+                    and not merged_tool_summary.is_empty()
+                    and context.metadata is not None
+                ):
                     context.metadata["tool_execution_summary"] = merged_tool_summary.to_dict()
 
                 return agent_response
@@ -639,7 +687,7 @@ class Executor(IExecutor):
     async def _run_reasoning_pass(
         self,
         messages: list[dict[str, Any]],
-        agent: "BaseAgent",
+        agent: BaseAgent,
         context: RunContext,
     ) -> tuple[str, TokenUsage]:
         """
@@ -682,7 +730,7 @@ class Executor(IExecutor):
 
     async def _execute_react_loop(
         self,
-        agent: "BaseAgent",
+        agent: BaseAgent,
         messages: list[dict[str, Any]],
         context: RunContext,
         run_state: RunState,
@@ -843,7 +891,7 @@ class Executor(IExecutor):
 
     async def _execute_react_tool(
         self,
-        agent: "BaseAgent",
+        agent: BaseAgent,
         tool_name: str,
         tool_args: dict[str, Any],
         context: RunContext,

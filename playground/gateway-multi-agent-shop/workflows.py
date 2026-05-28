@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
-
-from config import WorkflowShopConfig, default_config
 
 from agents import (
     make_analyst_agent,
@@ -25,6 +23,8 @@ from agents import (
     make_support_agent,
     make_writer_agent,
 )
+from config import WorkflowShopConfig, default_config
+
 from orchestrator import (
     AgentConfig,
     AgentMemoryConfig,
@@ -38,8 +38,6 @@ from orchestrator import (
     ToolExecutor,
     get_logger,
 )
-from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-from orchestrator.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from orchestrator.agent.config import (
     ParallelConfig,
     PlanningConfig,
@@ -48,13 +46,14 @@ from orchestrator.agent.config import (
     SequentialConfig,
 )
 from orchestrator.agent.types import (
+    AgentResponse,
     MergeStrategy,
+    ResponseStatus,
     Route,
     TerminationConfig,
     TerminationType,
 )
 from orchestrator.agent.workflow.debate import DebateAgent
-from orchestrator.agent.workflow.supervised import SupervisedConfig
 from orchestrator.agent.workflow.loop import LoopAgent
 from orchestrator.agent.workflow.parallel import ParallelAgent
 from orchestrator.agent.workflow.planner import PlannerAgent
@@ -62,9 +61,10 @@ from orchestrator.agent.workflow.reflection import ReflectionAgent
 from orchestrator.agent.workflow.router import RouterAgent
 from orchestrator.agent.workflow.scatter import ScatterAgent
 from orchestrator.agent.workflow.sequential import SequentialAgent
-from orchestrator.agent.workflow.supervised import SupervisedSequentialAgent
+from orchestrator.agent.workflow.supervised import SupervisedConfig, SupervisedSequentialAgent
 from orchestrator.core.container import get_container
 from orchestrator.core.lifecycle import get_lifecycle_manager
+from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
 
 logger = get_logger(__name__)
 
@@ -72,6 +72,7 @@ logger = get_logger(__name__)
 # =============================================================================
 # Base — shared init/teardown logic for every mode
 # =============================================================================
+
 
 class _BaseWorkflow:
     _use_direct_execute: bool = True
@@ -105,7 +106,9 @@ class _BaseWorkflow:
             config=RunnerConfig(persist_state=False, default_max_turns=self.config.max_turns),
         )
         self._initialized = True
-        logger.info(f"✓ {self.__class__.__name__} ready (gateway_mode={self.config.gateway_mode!r})")
+        logger.info(
+            f"✓ {self.__class__.__name__} ready (gateway_mode={self.config.gateway_mode!r})"
+        )
 
     async def _connect_mcp(self) -> None:
         logger.info(f"Connecting to MCP: {self.config.mcp_url}")
@@ -132,14 +135,16 @@ class _BaseWorkflow:
             elif hasattr(t, "model_dump"):
                 self._tools.append(t.model_dump())
             else:
-                self._tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": getattr(t, "name", str(t)),
-                        "description": getattr(t, "description", ""),
-                        "parameters": getattr(t, "parameters", {}),
-                    },
-                })
+                self._tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": getattr(t, "name", str(t)),
+                            "description": getattr(t, "description", ""),
+                            "parameters": getattr(t, "parameters", {}),
+                        },
+                    }
+                )
         # Strip injected parameters from schemas so the LLM never sees them
         # as required fields and doesn't ask the user for values the executor provides.
         _injected = {"session_id"}
@@ -176,16 +181,25 @@ class _BaseWorkflow:
                         user_id=user_id,
                         conversation_id=conversation_id,
                     )
-                    if self._runner and hasattr(self._runner, "_session_service") and self._runner._session_service:
-                        existing = await self._runner._session_service.load_tool_context_state(session_id)
+                    if (
+                        self._runner
+                        and hasattr(self._runner, "_session_service")
+                        and self._runner._session_service
+                    ):
+                        existing = await self._runner._session_service.load_tool_context_state(
+                            session_id
+                        )
                         existing.set(namespace, "session_id", cart_session_id)
-                        await self._runner._session_service.save_tool_context_state(session_id, existing)
+                        await self._runner._session_service.save_tool_context_state(
+                            session_id, existing
+                        )
                 except Exception as e:
                     logger.warning(f"Session init failed: {e}")
 
         try:
             if self._use_direct_execute:
                 from orchestrator.agent.utils.context_utils import create_run_context
+
                 ctx = create_run_context(
                     session_id=session_id,
                     user_id=user_id,
@@ -223,6 +237,7 @@ class _BaseWorkflow:
 # 1. Sequential
 # =============================================================================
 
+
 class SequentialShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
@@ -245,12 +260,15 @@ class SequentialShop(_BaseWorkflow):
 # 2. Parallel
 # =============================================================================
 
+
 @dataclass
 class ParallelCoordinatorAgent(BaseAgent):
     synthesiser: BaseAgent | None = None
     parallel: ParallelAgent | None = None
 
-    async def execute(self, input_text: str, runner: Any, context: Any, llm_client: Any = None) -> AgentResponse:
+    async def execute(
+        self, input_text: str, runner: Any, context: Any, llm_client: Any = None
+    ) -> AgentResponse:
         from orchestrator.agent.utils.context_utils import create_run_context
 
         context.suppress_session_log = True
@@ -292,7 +310,9 @@ class ParallelShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
         memory_client = self._container.memory_client if self._container else None
-        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        memory_enabled = (
+            self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        )
 
         dog_searcher = BaseAgent(
             name="dog-search-agent",
@@ -301,8 +321,10 @@ class ParallelShop(_BaseWorkflow):
                 "Use search_products with animal='dog'. "
                 "Return a clear list of results with IDs and prices."
             ),
-            model=m, gateway_mode=gm,
-            tools=self._tools, tool_executor=self._tool_executor,
+            model=m,
+            gateway_mode=gm,
+            tools=self._tools,
+            tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=False, session_history_turns=0),
         )
@@ -313,8 +335,10 @@ class ParallelShop(_BaseWorkflow):
                 "Use search_products with animal='cat'. "
                 "Return a clear list of results with IDs and prices."
             ),
-            model=m, gateway_mode=gm,
-            tools=self._tools, tool_executor=self._tool_executor,
+            model=m,
+            gateway_mode=gm,
+            tools=self._tools,
+            tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=False, session_history_turns=0),
         )
@@ -339,7 +363,8 @@ class ParallelShop(_BaseWorkflow):
                 "Given search results and the user's request, write a clear, concise response "
                 "grouped by animal type. Use product IDs and prices."
             ),
-            model=m, gateway_mode=gm,
+            model=m,
+            gateway_mode=gm,
             memory_config=AgentMemoryConfig(
                 search_memories=memory_enabled,
                 store_memories=memory_enabled,
@@ -360,6 +385,7 @@ class ParallelShop(_BaseWorkflow):
 # 3. Loop
 # =============================================================================
 
+
 class LoopShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
@@ -371,8 +397,10 @@ class LoopShop(_BaseWorkflow):
                 "start your response with 'FOUND:' followed by the product details. "
                 "If not found yet, describe what you tried and suggest a refined search."
             ),
-            model=m, gateway_mode=gm,
-            tools=self._tools, tool_executor=self._tool_executor,
+            model=m,
+            gateway_mode=gm,
+            tools=self._tools,
+            tool_executor=self._tool_executor,
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=True),
         )
@@ -391,24 +419,29 @@ class LoopShop(_BaseWorkflow):
 # 4. Scatter
 # =============================================================================
 
+
 @dataclass
 class ScatterCoordinatorAgent(BaseAgent):
     coordinator: BaseAgent | None = None
     scatter: ScatterAgent | None = None
 
-    async def execute(self, input_text: str, runner: Any, context: Any, llm_client: Any = None) -> AgentResponse:
+    async def execute(
+        self, input_text: str, runner: Any, context: Any, llm_client: Any = None
+    ) -> AgentResponse:
         from orchestrator.agent.utils.context_utils import create_run_context
-        from orchestrator.llm.config import LLMConfig
         from orchestrator.config import settings
+        from orchestrator.llm.config import LLMConfig
 
         if llm_client is None:
             try:
                 from orchestrator.core.container import get_container
+
                 llm_client = get_container().llm_client
             except Exception:
                 llm_client = None
 
         import json as _json
+
         n_agents = len(self.scatter.agents)
         resolved_task = input_text
         input_slices: list[str] | None = None
@@ -416,7 +449,11 @@ class ScatterCoordinatorAgent(BaseAgent):
         if llm_client:
             try:
                 history_msgs: list[dict] = []
-                if context.session_id and hasattr(runner, '_session_service') and runner._session_service:
+                if (
+                    context.session_id
+                    and hasattr(runner, "_session_service")
+                    and runner._session_service
+                ):
                     history = await runner._session_service.get_conversation_history(
                         context.session_id, limit=6
                     )
@@ -444,7 +481,9 @@ class ScatterCoordinatorAgent(BaseAgent):
                     *history_msgs,
                     {"role": "user", "content": input_text},
                 ]
-                model = (self.coordinator.model if self.coordinator else None) or settings.default_llm_model
+                model = (
+                    self.coordinator.model if self.coordinator else None
+                ) or settings.default_llm_model
                 response = await llm_client.chat(
                     messages=messages,
                     config=LLMConfig(model=model, max_tokens=800),
@@ -496,7 +535,9 @@ class ScatterShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
         memory_client = self._container.memory_client if self._container else None
-        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        memory_enabled = (
+            self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        )
 
         analysts = [make_analyst_agent(m, gm) for _ in range(3)]
         for i, a in enumerate(analysts, 1):
@@ -517,7 +558,8 @@ class ScatterShop(_BaseWorkflow):
                 "3. If products have prices in the message, include them. "
                 "4. Output exactly one sentence — nothing else."
             ),
-            model=m, gateway_mode=gm,
+            model=m,
+            gateway_mode=gm,
             memory_config=AgentMemoryConfig(
                 search_memories=memory_enabled,
                 store_memories=memory_enabled,
@@ -538,6 +580,7 @@ class ScatterShop(_BaseWorkflow):
 # 5. Supervised
 # =============================================================================
 
+
 class SupervisedShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
@@ -556,6 +599,7 @@ class SupervisedShop(_BaseWorkflow):
 # =============================================================================
 # 6. Planner
 # =============================================================================
+
 
 class PlannerShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
@@ -580,6 +624,7 @@ class PlannerShop(_BaseWorkflow):
 # 7. Debate
 # =============================================================================
 
+
 class DebateShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
@@ -597,8 +642,10 @@ class DebateShop(_BaseWorkflow):
                     "Make a strong case: better nutrition, longer life, fewer vet bills. "
                     "Be persuasive and specific."
                 ),
-                model=m, gateway_mode=gm,
-                memory_config=no_memory, config=cfg,
+                model=m,
+                gateway_mode=gm,
+                memory_config=no_memory,
+                config=cfg,
             ),
             con_agent=BaseAgent(
                 name="pro-budget",
@@ -607,8 +654,10 @@ class DebateShop(_BaseWorkflow):
                     "Make a strong case: meets nutritional standards, costs less, dogs are happy. "
                     "Be persuasive and specific."
                 ),
-                model=m, gateway_mode=gm,
-                memory_config=no_memory, config=cfg,
+                model=m,
+                gateway_mode=gm,
+                memory_config=no_memory,
+                config=cfg,
             ),
             judge_agent=BaseAgent(
                 name="food-judge",
@@ -617,8 +666,10 @@ class DebateShop(_BaseWorkflow):
                     "Read both arguments and give the owner a clear, practical recommendation "
                     "that acknowledges their budget and their dog's needs."
                 ),
-                model=m, gateway_mode=gm,
-                memory_config=no_memory, config=cfg,
+                model=m,
+                gateway_mode=gm,
+                memory_config=no_memory,
+                config=cfg,
             ),
         )
 
@@ -626,6 +677,7 @@ class DebateShop(_BaseWorkflow):
 # =============================================================================
 # 8. Reflection
 # =============================================================================
+
 
 class ReflectionShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
@@ -649,6 +701,7 @@ class ReflectionShop(_BaseWorkflow):
 # =============================================================================
 # 9. Router
 # =============================================================================
+
 
 class RouterShop(_BaseWorkflow):
     def _build_workflow(self) -> None:
@@ -683,7 +736,11 @@ class RouterShop(_BaseWorkflow):
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=True),
         )
-        self._specialist_agents = {"search-agent": search, "cart-agent": cart, "support-agent": support}
+        self._specialist_agents = {
+            "search-agent": search,
+            "cart-agent": cart,
+            "support-agent": support,
+        }
 
     async def chat(self, message: str, user_id: str, conversation_id: str) -> str:
         if not self._initialized:
@@ -703,6 +760,7 @@ class RouterShop(_BaseWorkflow):
 
         try:
             from orchestrator.core.container import get_container as _gc
+
             llm = _gc().llm_client
             agent_name = await self._agent.route(message, llm_client=llm)
             if not agent_name:
@@ -730,13 +788,16 @@ class RouterShop(_BaseWorkflow):
 # 10. Handoff
 # =============================================================================
 
+
 class HandoffShop(_BaseWorkflow):
     _use_direct_execute = False
 
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
         memory_client = self._container.memory_client if self._container else None
-        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        memory_enabled = (
+            self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        )
         user_memory = AgentMemoryConfig(
             search_memories=memory_enabled,
             store_memories=memory_enabled,
@@ -753,8 +814,10 @@ class HandoffShop(_BaseWorkflow):
                 "Use the available tools to search products, manage carts, and checkout. "
                 "Return a clear, complete result."
             ),
-            model=m, gateway_mode=gm,
-            tools=self._tools, tool_executor=self._tool_executor,
+            model=m,
+            gateway_mode=gm,
+            tools=self._tools,
+            tool_executor=self._tool_executor,
             memory_config=no_memory,
         )
 
@@ -765,7 +828,8 @@ class HandoffShop(_BaseWorkflow):
                 "Understand what the user wants, then hand off to the executor to perform the action. "
                 "After the executor returns, summarise the result clearly for the user."
             ),
-            model=m, gateway_mode=gm,
+            model=m,
+            gateway_mode=gm,
             tools=[],
             tool_executor=self._tool_executor,
             handoffs=[
@@ -793,15 +857,15 @@ class HandoffShop(_BaseWorkflow):
 
 MODES: dict[str, type[_BaseWorkflow]] = {
     "sequential": SequentialShop,
-    "parallel":   ParallelShop,
-    "loop":       LoopShop,
-    "scatter":    ScatterShop,
+    "parallel": ParallelShop,
+    "loop": LoopShop,
+    "scatter": ScatterShop,
     "supervised": SupervisedShop,
-    "planner":    PlannerShop,
-    "debate":     DebateShop,
+    "planner": PlannerShop,
+    "debate": DebateShop,
     "reflection": ReflectionShop,
-    "router":     RouterShop,
-    "handoff":    HandoffShop,
+    "router": RouterShop,
+    "handoff": HandoffShop,
 }
 
 
