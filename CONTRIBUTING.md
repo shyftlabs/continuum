@@ -70,7 +70,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org):
 | `perf:` | Performance improvement |
 | `ci:` | CI / build config |
 
-Conventional Commit history powers automated changelogs and version bumps via [`release-please`](https://github.com/googleapis/release-please).
+A consistent [Conventional Commits](https://www.conventionalcommits.org/) history keeps the changelog and version history clear and makes future release automation straightforward.
 
 ## Pull request checklist
 

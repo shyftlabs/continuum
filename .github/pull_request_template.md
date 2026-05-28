@@ -33,7 +33,7 @@ PRs target `dev` (not `main`). See CONTRIBUTING.md for the branch model.
 - [ ] Every commit is signed off (`git commit -s`) per the [DCO](https://developercertificate.org)
 - [ ] `pytest` passes locally
 - [ ] `ruff check .` passes
-- [ ] `mypy src/orchestrator` passes
+- [ ] `mypy src/orchestrator` clean for the code you changed (not yet a CI gate — repo-wide type debt tracked separately)
 - [ ] Tests added or updated for the change
 - [ ] Docs updated if user-facing
 - [ ] `CHANGELOG.md` entry added under `## [Unreleased]` if user-facing
