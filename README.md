@@ -1,15 +1,13 @@
 <div align="center">
 
-```
- ██████╗  ██████╗  ███╗   ██╗ ████████╗ ██╗ ███╗   ██╗ ██╗   ██╗ ██╗   ██╗ ███╗   ███╗
-██╔════╝ ██╔═══██╗ ████╗  ██║ ╚══██╔══╝ ██║ ████╗  ██║ ██║   ██║ ██║   ██║ ████╗ ████║
-██║      ██║   ██║ ██╔██╗ ██║    ██║    ██║ ██╔██╗ ██║ ██║   ██║ ██║   ██║ ██╔████╔██║
-██║      ██║   ██║ ██║╚██╗██║    ██║    ██║ ██║╚██╗██║ ██║   ██║ ██║   ██║ ██║╚██╔╝██║
-╚██████╗ ╚██████╔╝ ██║ ╚████║    ██║    ██║ ██║ ╚████║ ╚██████╔╝ ╚██████╔╝ ██║ ╚═╝ ██║
- ╚═════╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝ ╚═╝  ╚═══╝  ╚═════╝   ╚═════╝  ╚═╝     ╚═╝
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/continuum-logo-dark.png" />
+  <img src="docs/assets/continuum-logo.png" alt="Continuum" width="460" />
+</picture>
 
-<img src="docs/assets/logo.jpeg" alt="ShyftLabs" width="44" height="44" />
+<br />
+
+<img src="docs/assets/logo.jpeg" alt="ShyftLabs" width="40" height="40" />
 
 ##### by **[ShyftLabs](https://shyftlabs.io/)**
 
