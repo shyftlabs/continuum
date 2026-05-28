@@ -59,7 +59,7 @@ dev = [
     "pytest-xdist>=3.5.0",
     "fakeredis>=2.21.0",
     "respx>=0.21.0",
-    "ruff>=0.8.0",
+    "ruff==0.14.10",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
 ]
