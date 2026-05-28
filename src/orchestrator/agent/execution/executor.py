@@ -577,7 +577,8 @@ class Executor(IExecutor):
                             )
                             # Try to extract a JSON object/array embedded in prose or markdown
                             import re as _re
-                            _json_match = _re.search(r'\{[\s\S]*\}|\[[\s\S]*\]', content_stripped)
+
+                            _json_match = _re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content_stripped)
                             if _json_match:
                                 content_stripped = _json_match.group(0)
                                 logger.info(

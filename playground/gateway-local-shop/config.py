@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 os.environ.setdefault("SMART_GATEWAY_URL", "http://localhost:8787/v1")
-os.environ.setdefault("SMART_GATEWAY_API_KEY", "ck-prod-2026-05-19")
+os.environ.setdefault("SMART_GATEWAY_API_KEY", "your-smart-gateway-api-key")
 
 from dataclasses import dataclass
 
