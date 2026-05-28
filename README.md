@@ -19,6 +19,9 @@
 [![License](https://img.shields.io/badge/license-Apache_2.0-0a0a0a.svg?style=for-the-badge)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-0a0a0a.svg?style=for-the-badge)](https://github.com/shyftlabs/continuum)
 
+[![CI](https://github.com/shyftlabs/continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/shyftlabs/continuum/actions/workflows/ci.yml)
+[![Security](https://github.com/shyftlabs/continuum/actions/workflows/security.yml/badge.svg)](https://github.com/shyftlabs/continuum/actions/workflows/security.yml)
+
 [**Documentation**](docs/index.html) · [**Smart Inference**](docs/index.html#sec-smart) · [**Examples**](docs/index.html#sec-examples) · [**Research**](docs/index.html#sec-research) · [shyftlabs.io](https://shyftlabs.io)
 
 </div>

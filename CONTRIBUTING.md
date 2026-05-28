@@ -37,6 +37,25 @@ main          ← stable, tagged releases (what users `pip install`)
 - **Squash-merge into `dev`** (one PR = one commit).
 - **Long-lived branches are deleted after merge.**
 
+### Branch protection (maintainers)
+
+Both `main` and `dev` are protected. Configure under **Settings → Branches → Branch protection rules** (or `gh api`):
+
+| Setting | `main` | `dev` |
+|---|---|---|
+| Require a pull request before merging | ✅ | ✅ |
+| Required approving reviews | 1 (from a maintainer) | 1 |
+| Dismiss stale approvals on new commits | ✅ | ✅ |
+| Require status checks to pass | ✅ | ✅ |
+| Required checks | `Lint & type-check`, `Tests`, `Secret scan (gitleaks)` | same |
+| Require branches up to date before merging | ✅ | ✅ |
+| Require signed-off commits (DCO) | ✅ | ✅ |
+| Require linear history | ✅ | ✅ |
+| Restrict who can push | maintainers only | maintainers only |
+| Allow force pushes / deletions | ❌ | ❌ |
+
+`pip-audit` and `bandit` run as **advisory** checks (non-blocking) — review their output, but they will not gate a merge. Direct pushes to `main`/`dev` are disabled; all changes land through PRs.
+
 ## Commit messages
 
 Use [Conventional Commits](https://www.conventionalcommits.org):
