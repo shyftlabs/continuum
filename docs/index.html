@@ -840,9 +840,9 @@ pip install -e '.[temporal]' </div>
       
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Next, configure your <code>.env</code> file:</p>
       <div class="code-wrapper" style="max-height: 400px; overflow-y: auto;"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># ── LLM Provider Keys ────────────────────────────────────────────────────────</span>
-OPENAI_API_KEY=your-openai-api-key        <span class="cm"># required (also used for embeddings)</span>
-GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># if using Gemini</span>
-<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # if using Claude</span>
+OPENAI_API_KEY=your-openai-api-key        <span class="cm"># optional </span>
+GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional </span>
+<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional </span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
@@ -857,6 +857,9 @@ LLM_ENABLE_FALLBACK=true
 EMBEDDER_PROVIDER=openai
 EMBEDDER_MODEL=text-embedding-3-small
 EMBEDDING_DIMS=1536
+<span class="cm"># Route embeddings through the gateway (no OPENAI_API_KEY needed for embeddings):</span>
+<span class="cm"># EMBEDDER_API_BASE=https://continuum.shyftops.io/v1</span>
+<span class="cm"># EMBEDDER_API_KEY is optional — auto-inferred from SMART_GATEWAY_API_KEY when EMBEDDER_API_BASE is set</span>
 
 <span class="cm"># ── Memory (mem0 + Milvus) ───────────────────────────────────────────────────</span>
 MEMORY_ENABLED=true
@@ -908,9 +911,9 @@ TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT=604800
 TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
 TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
 
-<span class="cm"># ── Smart Gateway ─────────────────────────────────────────────────────────────</span>
-SMART_GATEWAY_URL=http://localhost:8787/v1
-SMART_GATEWAY_API_KEY=ck-prod-2026-05-19
+<span class="cm"># ── Smart Gateway  ─</span>
+SMART_GATEWAY_URL=https://continuum.shyftops.io/v1
+SMART_GATEWAY_API_KEY=&lt;your-hosted-api-key&gt;
 
 <span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
 ENVIRONMENT=development
@@ -2003,7 +2006,7 @@ handle = <span class="kw">await</span> client.execute_workflow(
     <tr><td><code>gpt-4o-mini</code></td><td>128k</td><td>Default model, fast &amp; cheap</td></tr>
     <tr><td><code>o3-mini</code></td><td>—</td><td>Reasoning model</td></tr>
   </table>
-  <p>Required env: <code>OPENAI_API_KEY</code> — also used by mem0's default embedder.</p>
+  <p>Required env: <code>OPENAI_API_KEY</code>. To route embeddings through the gateway instead, set <code>EMBEDDER_API_BASE</code> — the gateway key is then inferred from <code>SMART_GATEWAY_API_KEY</code> automatically.</p>
 
   <a class="anchor" id="int-anthropic"></a>
   <h2>Anthropic</h2>
@@ -2177,9 +2180,13 @@ client ◄┘</pre></div>
 
   <a class="anchor" id="smart-env"></a>
   <h3>Environment variables</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env</span>
-SMART_GATEWAY_URL=http://localhost:8787/v1     <span class="cm"># gateway base URL</span>
-SMART_GATEWAY_API_KEY=ck-prod-2026-05-19       <span class="cm"># bearer (matches a virtual key)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env (pick one option, or omit both for no gateway)</span>
+<span class="cm"># Option A — local gateway:</span>
+<span class="cm"># SMART_GATEWAY_URL=http://localhost:8787/v1</span>
+<span class="cm"># SMART_GATEWAY_API_KEY=ck-prod-2026-05-19</span>
+<span class="cm"># Option B — hosted gateway:</span>
+<span class="cm"># SMART_GATEWAY_URL=https://continuum.shyftops.io/v1</span>
+<span class="cm"># SMART_GATEWAY_API_KEY=&lt;your-hosted-api-key&gt;</span>
 SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modest | quality</span></pre></div>
 
   <a class="anchor" id="smart-virtualkey"></a>

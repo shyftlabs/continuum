@@ -6,8 +6,7 @@ Usage:
   Terminal 1: python server.py   (MCP server on :8888)
   Terminal 2: python web.py      (Web UI on :8081)
 
-Smart Gateway URL is read from SMART_GATEWAY_URL in the project root .env
-(defaults to http://localhost:8787/v1 if not set).
+Gateway URL is read from SMART_GATEWAY_URL in the root .env (omit for direct provider).
 """
 
 import asyncio
@@ -455,7 +454,11 @@ function appendMsg(role, text) {
 """
 
 if __name__ == "__main__":
+    _gateway_url = os.environ.get("SMART_GATEWAY_URL")
     print("Gateway Shop Web UI at http://localhost:8081")
     print("Make sure MCP server is running:  python server.py")
-    print(f"Smart Gateway URL: {os.environ.get('SMART_GATEWAY_URL', 'http://localhost:8787/v1')}")
+    if _gateway_url:
+        print(f"Smart Gateway: {_gateway_url}")
+    else:
+        print("No gateway configured — using direct LLM provider")
     uvicorn.run(app, host="0.0.0.0", port=8081)
