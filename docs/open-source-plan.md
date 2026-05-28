@@ -6,22 +6,69 @@ Single source of truth for releasing Continuum as an OSS project owned by **Shyf
 
 ## 1 · License
 
-**Recommended: Apache License 2.0.**
+ShyftLabs wants three properties at once:
 
-| Option | Pros | Cons | Verdict |
+1. Anyone can read, fork, learn from, and build on Continuum.
+2. **No one can host Continuum as a paid service or embed it in a commercial product they sell.**
+3. **Production commercial use by a for-profit organisation requires a Commercial Agreement with ShyftLabs.**
+
+That rules out pure-OSS licenses (MIT, Apache 2.0, BSD, GPL) — they all explicitly permit hosting and resale. The right category is **source-available**.
+
+### Options that fit
+
+| License | What it blocks | What it allows | Notable users |
 |---|---|---|---|
-| **Apache 2.0** | Permissive, enterprise-friendly, explicit patent grant, copyright stays with ShyftLabs via NOTICE | Allows competitors to host as-a-service | ✅ Use this |
-| MIT | Shortest, very permissive | No patent grant, weaker IP protection | Acceptable but Apache is stricter and clearer for enterprise users |
-| BSL 1.1 (Business Source License) → Apache after 4 yr | Blocks hosted competitors short-term | Not OSI-approved, smaller community, signals distrust | Use only if you actively fear AWS/Azure hosting |
-| AGPL-3.0 | Forces network users to share modifications | Many enterprises ban it outright (Google, Apple) — kills adoption | Avoid |
+| **Business Source License (BSL) 1.1** | Whatever you write into the *Additional Use Grant* (e.g. no SaaS, no resale, no production by for-profits above $X revenue) | Reading, modifying, building, internal eval; auto-converts to Apache 2.0 after a Change Date you pick (typically 3–4 yr) | HashiCorp · MariaDB · CockroachDB · Sentry (historically) |
+| **Functional Source License (FSL)** | "Competing use" — hosting, reselling, rebranding — for 2 years | Everything else; auto-converts to MIT or Apache after 2 yr | Sentry (current) · Keygen |
+| **Elastic License v2 (ELv2)** | Offering as a hosted/managed service to third parties; removing license keys; bypassing notices | Internal production use, modification, redistribution as long as you don't host-for-others | Elasticsearch · Kibana · Logstash |
+| **PolyForm Strict** | All commercial production use without a separate agreement | Personal, educational, evaluation, internal dev/test only | Smaller projects |
 
-**Decision:**
-- Replace the current proprietary `LICENSE` with Apache 2.0.
-- Add a `NOTICE` file: `Continuum © 2025–2026 ShyftLabs Inc. — Licensed under the Apache License, Version 2.0.`
-- For enterprise support / SLA / managed offering, ship a **separate commercial agreement** (not a license restriction) at <enterprise@shyftlabs.io>. This is the Confluent / Elastic-cloud / MongoDB-Atlas pattern: OSS code + paid service.
+### Recommendation: **Business Source License 1.1**
 
-Add to `README.md`:
-> Continuum is open source under Apache 2.0. For enterprise support, SLA, custom features, or indemnification, contact **enterprise@shyftlabs.io**.
+Most flexible, most enterprise-recognised, and you write the exact restriction. Use these parameters:
+
+| BSL parameter | Value |
+|---|---|
+| **Licensor** | ShyftLabs Inc. |
+| **Licensed Work** | Continuum |
+| **Change Date** | 2030-01-01 *(every release becomes Apache 2.0 four years after its publication date)* |
+| **Change License** | Apache License, Version 2.0 |
+| **Additional Use Grant** | (see below) |
+
+**Additional Use Grant** — paste into the `LICENSE` file verbatim:
+
+> You may use the Licensed Work for any non-production purpose, including evaluation, development, testing, internal demos, and contributions back to the Licensed Work, without limitation.
+>
+> You may also use the Licensed Work in production, **except** that you may not:
+> (a) offer the Licensed Work or any derivative of it as a hosted, managed, or "as-a-service" offering to third parties;
+> (b) embed the Licensed Work into a commercial product that you sell, sublicense, or otherwise distribute for value; or
+> (c) use the Licensed Work in a production environment within a for-profit organisation with more than ten (10) employees or annual revenue above five hundred thousand US dollars (USD 500,000), whichever is reached first.
+>
+> For any use that falls under (a), (b), or (c), you must obtain a Commercial Agreement from ShyftLabs Inc. at **enterprise@shyftlabs.io**.
+
+Tune the thresholds in clause (c) to your sales target. Common settings: 10 employees / $500k ARR (early-stage friendly) up to 250 employees / $10M ARR (enterprise-only restriction). Smaller numbers = more sales conversations; larger = more permissive.
+
+### What this gives you
+
+- **Adoption** — individuals, students, OSS projects, and small startups can use Continuum without ever talking to you.
+- **Moat** — AWS, Azure, GCP, and competitors cannot offer "Continuum-as-a-service" without a contract.
+- **Sales pipeline** — every for-profit team above the threshold has a legal reason to email enterprise@shyftlabs.io.
+- **Community trust** — every version eventually becomes Apache 2.0 on its Change Date. You're not pulling the rug; you're holding the moat for four years per release.
+
+### What this *cannot* do
+
+No license can force someone to email you before they self-host internally. The restriction triggers when their use crosses one of clauses (a)–(c). The "must contact us" outcome is enforced by:
+
+1. The license making them legally ineligible to use it that way without a Commercial Agreement.
+2. ShyftLabs offering tangible enterprise value they want — SLAs, security audits, indemnification, priority fixes, custom features, training — bundled into that Commercial Agreement.
+
+### Files to update at the flip
+
+- Replace `LICENSE` with the BSL 1.1 template from <https://mariadb.com/bsl11/>, filling in the parameters above.
+- Add a `NOTICE` file:
+  > Continuum © 2025–2026 ShyftLabs Inc. Licensed under the Business Source License 1.1. After the Change Date for each release, that release is also available under the Apache License, Version 2.0.
+- Add to `README.md`:
+  > Continuum is source-available under the **Business Source License 1.1** — free for non-production use and for small teams in production. For production use at scale, hosted offerings, or commercial embedding, contact **enterprise@shyftlabs.io**.
 
 ---
 
@@ -157,8 +204,8 @@ Escalation path: contributor → maintainer → **steering committee** (3 ShyftL
 
 Checklist before the public flip:
 
-- [ ] `LICENSE` — Apache 2.0 (replace existing)
-- [ ] `NOTICE` — ShyftLabs copyright + Apache attribution
+- [ ] `LICENSE` — BSL 1.1 template (replace existing), with Additional Use Grant from §1
+- [ ] `NOTICE` — ShyftLabs copyright + BSL summary + post-Change-Date Apache attribution
 - [ ] `CONTRIBUTING.md` — branch model + PR template summary, links here
 - [ ] `CODE_OF_CONDUCT.md` — Contributor Covenant v2.1 verbatim
 - [ ] `SECURITY.md` — disclosure channel + severity SLAs
