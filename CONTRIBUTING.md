@@ -117,6 +117,18 @@ Use [`.github/ISSUE_TEMPLATE/bug.yml`](.github/ISSUE_TEMPLATE/bug.yml) — inclu
 
 Use [`.github/ISSUE_TEMPLATE/feature.yml`](.github/ISSUE_TEMPLATE/feature.yml) — describe the problem first, then the proposed solution. For larger proposals, open a [GitHub Discussion](https://github.com/shyftlabs/continuum/discussions) before writing code.
 
+## Issue labels
+
+Issues are organized along three axes. The issue templates auto-apply a **type** label plus `needs-triage`; maintainers add **area** and **status** labels during triage.
+
+| Axis | Labels | Meaning |
+|---|---|---|
+| **Type** | `bug`, `feature`, `question`, `documentation`, `research` | What kind of issue it is. `research` = investigation / design exploration, not a concrete bug or feature yet. |
+| **Area** | `area:agents`, `area:workflows`, `area:memory`, `area:session`, `area:tools-mcp`, `area:llm`, `area:temporal`, `area:observability`, `area:streaming`, `area:evaluation`, `area:cli` | Which part of Continuum is affected — mirrors the "Affected surface" field in the feature template. An issue may carry more than one. |
+| **Status** | `needs-triage`, `needs-repro`, `blocked`, `good first issue`, `help wanted`, `duplicate`, `invalid`, `wontfix` | Where the issue stands. Newly filed issues start at `needs-triage`. |
+
+Triage convention (maintainers): replace `needs-triage` with the right `area:*` label(s) and, if applicable, a status label. A bug without a reproduction gets `needs-repro` and is auto-closed after 14 days if none is provided. **There is no public `security` label** — security reports go through the private advisory channel below, never a public issue.
+
 ## Security issues
 
 **Do not file security issues in public.** See [`SECURITY.md`](SECURITY.md) for the private disclosure channel.
