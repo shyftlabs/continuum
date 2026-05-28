@@ -26,13 +26,21 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 
     if settings.smart_gateway_url:
         from orchestrator.llm.providers.gateway_provider import GatewayProvider
+
         mode = config.gateway_router_mode or settings.smart_gateway_default_mode
         from orchestrator.llm.providers.gateway_provider import _MODE_TO_TIER
+
         tier = _MODE_TO_TIER.get(mode, "mid")
-        routed_model = config.model if ("/" in config.model or config.model.startswith("auto")) else f"auto/{tier}"
+        routed_model = (
+            config.model
+            if ("/" in config.model or config.model.startswith("auto"))
+            else f"auto/{tier}"
+        )
         _log.info(
             "🔀 Smart Gateway routing: model=%s mode=%s url=%s",
-            routed_model, mode, settings.smart_gateway_url,
+            routed_model,
+            mode,
+            settings.smart_gateway_url,
         )
         return GatewayProvider(
             gateway_url=settings.smart_gateway_url,
@@ -44,14 +52,17 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 
     if any(model.startswith(p) for p in ("gemini/", "google/")):
         from orchestrator.llm.providers.gemini_provider import GeminiProvider
+
         return GeminiProvider(api_key=settings.gemini_api_key)
 
     if any(model.startswith(p) for p in ("claude/", "anthropic/", "claude-")):
         from orchestrator.llm.providers.anthropic_provider import AnthropicProvider
+
         return AnthropicProvider(api_key=settings.anthropic_api_key)
 
     # Default: OpenAI (handles gpt-*, azure/, openai/, etc.)
     from orchestrator.llm.providers.openai_provider import OpenAIProvider
+
     return OpenAIProvider(
         api_key=config.api_key or settings.openai_api_key,
         organization=settings.openai_organization,

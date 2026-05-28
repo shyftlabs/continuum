@@ -7,7 +7,6 @@ Supports max iterations and optional approval per iteration.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -17,8 +16,7 @@ try:
     from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. "
-        "Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 with workflow.unsafe.imports_passed_through():
@@ -129,7 +127,11 @@ class LoopAgentWorkflow:
                 heartbeat_timeout=timedelta(seconds=60),
                 result_type=AgentActivityResult,
             )
-            result = raw if isinstance(raw, AgentActivityResult) else AgentActivityResult.model_validate(raw)
+            result = (
+                raw
+                if isinstance(raw, AgentActivityResult)
+                else AgentActivityResult.model_validate(raw)
+            )
             self._step_results.append(result)
 
             if result.content:
@@ -184,7 +186,7 @@ class LoopAgentWorkflow:
                 lambda: self._pending_decision is not None or self._cancelled,
                 timeout=timedelta(seconds=timeout),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending_approvals = [
                 a for a in self._pending_approvals if a["request_id"] != request_id
             ]

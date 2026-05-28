@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import time
 import threading
+import time
 from enum import Enum
 
 
@@ -18,9 +18,7 @@ class CircuitBreakerOpen(Exception):
 
     def __init__(self, remaining_cooldown: float):
         self.remaining_cooldown = remaining_cooldown
-        super().__init__(
-            f"Circuit breaker is open. Retry after {remaining_cooldown:.1f}s"
-        )
+        super().__init__(f"Circuit breaker is open. Retry after {remaining_cooldown:.1f}s")
 
 
 class CircuitBreaker:

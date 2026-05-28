@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Agentic Framework for Enterprise-Wide Execution with multi-LLM provider support, observability, and error tracking"
 readme = "README.md"
 requires-python = ">=3.13"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "Bhavik Ardeshna", email = "continuum@shyftlabs.io"}
@@ -26,7 +26,6 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -60,8 +59,9 @@ dev = [
     "pytest-xdist>=3.5.0",
     "fakeredis>=2.21.0",
     "respx>=0.21.0",
-    "ruff>=0.8.0",
+    "ruff==0.14.10",
     "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
 ]
 embeddings = [
     "sentence-transformers>=2.2.0",
@@ -116,6 +116,13 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["orchestrator"]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-export hubs, plus modules that must configure logging before importing deps.
+"__init__.py" = ["F401", "E402"]
+# Tests commonly importorskip/guard before imports, use dict() fixtures, and
+# deliberately assert on broad exceptions.
+"tests/**" = ["E402", "C408", "B017"]
 
 [tool.mypy]
 python_version = "3.13"

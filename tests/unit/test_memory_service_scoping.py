@@ -3,9 +3,9 @@ Tests for MemoryService.retrieve_memories() isolation mode scoping.
 Verifies each mode (user, agent, conversation, shared) passes the correct
 identifier to memory_client.search().
 """
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from orchestrator.agent.utils.context_utils import create_run_context
@@ -44,6 +44,7 @@ def _make_agent(search_memories=True, search_limit=5):
 
 def _make_service(memory_client, session_client=None):
     from orchestrator.agent.services.memory_service import MemoryService
+
     return MemoryService(memory_client=memory_client, session_client=session_client)
 
 
@@ -173,6 +174,7 @@ class TestSkipWhenDisabled:
 
     async def test_returns_empty_when_no_memory_client(self):
         from orchestrator.agent.services.memory_service import MemoryService
+
         svc = MemoryService(memory_client=None)
         agent = _make_agent()
         ctx = create_run_context(user_id="user-1")

@@ -9,8 +9,9 @@ Tests the handoff branch inside run_stream:
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from orchestrator.agent.types import (
     AgentEvent,
@@ -25,7 +26,6 @@ from orchestrator.agent.types import (
     generate_run_id,
 )
 from orchestrator.llm.types import FunctionCall, StreamChunk, ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,6 +68,18 @@ def _make_agent(name: str = "source-agent", handoff_target: str = "target-agent"
     agent.name = name
     agent.get_tools_for_llm = MagicMock(return_value=[])
     agent.on_end = None
+
+    # Real values for everything LLMConfig.from_agent_config() feeds into pydantic
+    # on the streaming-handoff path. The mock predates the Smart-Gateway
+    # `gateway_mode` field, so these must be concrete (not auto-MagicMock).
+    agent.model = "gpt-4o-mini"
+    agent.temperature = 0.7
+    agent.max_tokens = 1024
+    agent.gateway_mode = None
+    agent.enable_json_mode = False
+    agent.json_schema = None
+    agent.json_strict = False
+
     agent.is_handoff_tool_call = MagicMock(
         side_effect=lambda tool_name: (
             (True, handoff_target)
@@ -117,6 +129,7 @@ def _make_runner(handoff_executor=None):
     runner._config.circuit_breaker_cooldown = 60
 
     from orchestrator.agent.utils.circuit_breaker import CircuitBreaker
+
     runner._circuit_breaker = CircuitBreaker(threshold=5, cooldown=60)
 
     runner._handoff_executor = handoff_executor
@@ -258,9 +271,7 @@ class TestStreamingHandoffSuccess:
     @pytest.mark.asyncio
     async def test_yields_handoff_end_with_success_true(self):
         mock_executor = MagicMock()
-        mock_executor.execute_handoff = AsyncMock(
-            return_value=self._make_success_result()
-        )
+        mock_executor.execute_handoff = AsyncMock(return_value=self._make_success_result())
 
         runner = _make_runner(handoff_executor=mock_executor)
         _patch_prepare_run(runner, _make_prepare_run_result())
@@ -308,9 +319,7 @@ class TestStreamingHandoffSuccess:
 
         events = await _run_stream_events(runner, agent, "hello")
 
-        content_complete = next(
-            (e for e in events if e.type == EventType.CONTENT_COMPLETE), None
-        )
+        content_complete = next((e for e in events if e.type == EventType.CONTENT_COMPLETE), None)
         assert content_complete is not None
         assert content_complete.data.get("content") == "final answer"
 
@@ -318,9 +327,7 @@ class TestStreamingHandoffSuccess:
     async def test_event_order_on_success(self):
         """Events must arrive in the correct order on successful handoff."""
         mock_executor = MagicMock()
-        mock_executor.execute_handoff = AsyncMock(
-            return_value=self._make_success_result("done")
-        )
+        mock_executor.execute_handoff = AsyncMock(return_value=self._make_success_result("done"))
 
         runner = _make_runner(handoff_executor=mock_executor)
         _patch_prepare_run(runner, _make_prepare_run_result())

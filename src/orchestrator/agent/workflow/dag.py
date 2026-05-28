@@ -143,6 +143,7 @@ class DAGAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("DAGAgent name is required")
 
     # ------------------------------------------------------------------
@@ -197,6 +198,7 @@ class DAGAgent(BaseAgent):
     ) -> AgentResponse:
         if not self._stages:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError(f"DAGAgent '{self.name}' has no stages")
 
         self._validate_no_cycles()
@@ -210,7 +212,6 @@ class DAGAgent(BaseAgent):
             },
             metadata={"workflow_type": "dag"},
         ) as workflow_span:
-
             context.suppress_session_log = True
             results = await self._run_dag(input_text, runner, context)
 
@@ -236,26 +237,29 @@ class DAGAgent(BaseAgent):
             for s in self._stages.values():
                 all_successor_deps.update(s.depends_on)
             terminal_ids = [
-                sid for sid in self._stages
-                if sid not in all_successor_deps and sid in successful
+                sid for sid in self._stages if sid not in all_successor_deps and sid in successful
             ]
 
             if len(terminal_ids) == 1:
                 content = successful[terminal_ids[0]].content or ""
             else:
-                terminal_results = {sid: successful[sid] for sid in terminal_ids if sid in successful}
+                terminal_results = {
+                    sid: successful[sid] for sid in terminal_ids if sid in successful
+                }
                 content = self._merge({sid: r.content or "" for sid, r in terminal_results.items()})
 
             total_usage = TokenUsage()
             for resp in successful.values():
                 total_usage = total_usage.add(resp.usage)
 
-            workflow_span.set_output({
-                "success": True,
-                "stages_executed": list(successful.keys()),
-                "stages_failed": list(errors.keys()),
-                "total_tokens": total_usage.total_tokens if total_usage else 0,
-            })
+            workflow_span.set_output(
+                {
+                    "success": True,
+                    "stages_executed": list(successful.keys()),
+                    "stages_failed": list(errors.keys()),
+                    "total_tokens": total_usage.total_tokens if total_usage else 0,
+                }
+            )
 
             if context.session_id:
                 await runner.save_turn(
@@ -354,7 +358,7 @@ class DAGAgent(BaseAgent):
     def _validate_no_cycles(self) -> None:
         """DFS cycle detection. Raises DAGCycleError if a cycle exists."""
         WHITE, GRAY, BLACK = 0, 1, 2
-        color: dict[str, int] = {sid: WHITE for sid in self._stages}
+        color: dict[str, int] = dict.fromkeys(self._stages, WHITE)
         path: list[str] = []
 
         def dfs(sid: str) -> None:
@@ -375,15 +379,17 @@ class DAGAgent(BaseAgent):
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "stages": [
-                {"stage_id": s.stage_id, "agent": s.agent.name, "depends_on": s.depends_on}
-                for s in self._stages.values()
-            ],
-            "merge_strategy": self.merge_strategy.value,
-            "fail_strategy": self.fail_strategy.value,
-            "workflow_type": "dag",
-        })
+        base.update(
+            {
+                "stages": [
+                    {"stage_id": s.stage_id, "agent": s.agent.name, "depends_on": s.depends_on}
+                    for s in self._stages.values()
+                ],
+                "merge_strategy": self.merge_strategy.value,
+                "fail_strategy": self.fail_strategy.value,
+                "workflow_type": "dag",
+            }
+        )
         return base
 
 

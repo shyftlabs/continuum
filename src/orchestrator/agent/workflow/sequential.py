@@ -156,7 +156,11 @@ class SequentialAgent(BaseAgent):
                             # it is already passed as the [user] input — injecting it here too
                             # would be pure duplication. Context only carries steps 1..N-2.
                             background = pipeline_history[:-1]
-                            if background and not self.sequential_config.pass_full_history and context.metadata is not None:
+                            if (
+                                background
+                                and not self.sequential_config.pass_full_history
+                                and context.metadata is not None
+                            ):
                                 context.metadata["pipeline_context"] = (
                                     "Prior pipeline steps in this request:\n"
                                     + "\n".join(background)
@@ -216,7 +220,9 @@ class SequentialAgent(BaseAgent):
                                 ) from e
 
                             # Continue with error message
-                            current_input = f"Previous step failed: {e}. Please handle this gracefully."
+                            current_input = (
+                                f"Previous step failed: {e}. Please handle this gracefully."
+                            )
 
                 # Return final response
                 final_response = (

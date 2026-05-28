@@ -7,8 +7,6 @@ and response generation through real services.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -41,7 +39,9 @@ class TestFullAgentRun:
         runner = AgentRunner()
         context = RunContext(run_id="e2e-simple-run")
 
-        response = await runner.run(agent, "What is 2+2? Reply with just the number.", context=context)
+        response = await runner.run(
+            agent, "What is 2+2? Reply with just the number.", context=context
+        )
 
         assert response is not None
         assert response.content is not None
@@ -61,8 +61,7 @@ class TestFullAgentRun:
         agent = BaseAgent(
             name="test-pirate-agent",
             instructions=(
-                "You are a pirate. Always respond in pirate speak. "
-                "Keep responses under 20 words."
+                "You are a pirate. Always respond in pirate speak. Keep responses under 20 words."
             ),
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=False),

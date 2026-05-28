@@ -28,6 +28,7 @@ from orchestrator.tools.util import MCPUtil
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
+    from orchestrator.llm.types import ToolDefinition
     from orchestrator.security.policy import PolicyStore
     from orchestrator.tools.mcp import MCPServer
 
@@ -518,9 +519,7 @@ class ToolExecutor:
                     # Otherwise, only include tools in the allowed list
                     if allowed_tools is None or tool.name in allowed_tools:
                         registry_key = (
-                            f"{server.name}__{tool.name}"
-                            if self._namespace_tools
-                            else tool.name
+                            f"{server.name}__{tool.name}" if self._namespace_tools else tool.name
                         )
                         if registry_key in dest:
                             logger.warning(f"Tool '{registry_key}' already registered, overwriting")
@@ -819,7 +818,7 @@ class ToolExecutor:
         Builds into a temporary dict first, then swaps it in so concurrent
         tool calls keep hitting the old registry until the new one is ready.
         """
-        temp: dict[str, tuple["MCPServer", "MCPTool"]] = {}
+        temp: dict[str, tuple[MCPServer, MCPTool]] = {}
         try:
             await self._build_registry(tool_registry, target=temp)
         except Exception:

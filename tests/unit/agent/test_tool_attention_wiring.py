@@ -23,14 +23,16 @@ from orchestrator.agent.types import PrepareRunResult
 from orchestrator.tools.tool_attention.config import ToolAttentionConfig
 from orchestrator.tools.tool_attention.router import ToolAttentionRouter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _make_dict_tool(name: str) -> dict:
-    return {"type": "function", "function": {"name": name, "description": f"Does {name}", "parameters": {}}}
+    return {
+        "type": "function",
+        "function": {"name": name, "description": f"Does {name}", "parameters": {}},
+    }
 
 
 def _make_agent(tool_attention=None, num_tools: int = 5):
@@ -116,11 +118,14 @@ class TestExecutorToolAttentionWiring:
         agent.get_tools_for_llm.return_value = all_tools
         messages = [{"role": "user", "content": "find dog food"}]
 
-        with patch(
-            "orchestrator.tools.tool_attention.router.apply_tool_attention",
-            new_callable=AsyncMock,
-            return_value=None,  # router decided not to filter
-        ), patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig:
+        with (
+            patch(
+                "orchestrator.tools.tool_attention.router.apply_tool_attention",
+                new_callable=AsyncMock,
+                return_value=None,  # router decided not to filter
+            ),
+            patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig,
+        ):
             MockConfig.from_agent_config.return_value = MagicMock()
             await executor.execute_loop(agent, messages, _make_context(), _make_run_state(messages))
 
@@ -138,11 +143,14 @@ class TestExecutorToolAttentionWiring:
         all_tools = agent.get_tools_for_llm.return_value
         messages = [{"role": "user", "content": "hello"}]
 
-        with patch(
-            "orchestrator.tools.tool_attention.router.apply_tool_attention",
-            new_callable=AsyncMock,
-            return_value=None,  # simulate disabled — returns None so fallback triggers
-        ), patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig:
+        with (
+            patch(
+                "orchestrator.tools.tool_attention.router.apply_tool_attention",
+                new_callable=AsyncMock,
+                return_value=None,  # simulate disabled — returns None so fallback triggers
+            ),
+            patch("orchestrator.agent.execution.executor.LLMConfig") as MockConfig,
+        ):
             MockConfig.from_agent_config.return_value = MagicMock()
             await executor.execute_loop(agent, messages, _make_context(), _make_run_state(messages))
 
@@ -220,6 +228,13 @@ class TestMultiTurnPromotedSet:
 def _make_stream_agent(tool_attention=None, num_tools: int = 5):
     agent = MagicMock()
     agent.name = "stream_agent"
+    agent.model = "gpt-4o-mini"
+    agent.temperature = 0.7
+    agent.max_tokens = 1024
+    agent.gateway_mode = None
+    agent.enable_json_mode = False
+    agent.json_schema = None
+    agent.json_strict = False
     agent.metadata = {}
     agent.config.tool_attention = tool_attention
     agent.on_end = None
@@ -319,9 +334,7 @@ class TestRunStreamToolAttentionWiring:
 class TestAgentConfigToDict:
     def test_to_dict_includes_tool_attention_when_configured(self):
         """AgentConfig.to_dict() serialises tool_attention fields when set."""
-        cfg = AgentConfig(
-            tool_attention=ToolAttentionConfig(k=3, min_tools=5, threshold=0.1)
-        )
+        cfg = AgentConfig(tool_attention=ToolAttentionConfig(k=3, min_tools=5, threshold=0.1))
         d = cfg.to_dict()
 
         assert d["tool_attention"] is not None

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,6 @@ import pytest
 
 from orchestrator.observability.metrics import (
     CompositeExporter,
-    ErrorMetric,
     JSONFileExporter,
     LatencyMetric,
     MetricsCollector,
@@ -24,7 +24,6 @@ from orchestrator.observability.metrics import (
     initialize_metrics_collector,
     reset_metrics,
 )
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +40,7 @@ class TestLatencyMetric:
     def test_stop_method(self):
         logger.info("LatencyMetric: stop method")
         import time
+
         m = LatencyMetric(name="op", start_time=time.perf_counter())
         time.sleep(0.005)
         duration = m.stop()
@@ -51,7 +51,9 @@ class TestLatencyMetric:
 class TestTokenUsageMetric:
     def test_creation(self):
         logger.info("TokenUsageMetric: creation")
-        m = TokenUsageMetric(name="llm", prompt_tokens=100, completion_tokens=50, total_tokens=150, model="gpt-4")
+        m = TokenUsageMetric(
+            name="llm", prompt_tokens=100, completion_tokens=50, total_tokens=150, model="gpt-4"
+        )
         assert m.total_tokens == 150
 
     def test_cost_estimate_no_model(self):
@@ -208,14 +210,18 @@ class TestMetricsCollectorReportToTrace:
         mc = MetricsCollector()
         mc.record_metric("quality", 0.9)
         mock_trace = MagicMock()
-        mc.report_to_trace(mock_trace, include_latency=False, include_tokens=False, include_errors=False)
+        mc.report_to_trace(
+            mock_trace, include_latency=False, include_tokens=False, include_errors=False
+        )
 
     def test_report_to_trace_selective(self):
         logger.info("MetricsCollectorReportToTrace: report to trace selective")
         mc = MetricsCollector()
         mc.record_latency("op", 50.0)
         mock_trace = MagicMock()
-        mc.report_to_trace(mock_trace, include_tokens=False, include_errors=False, include_custom=False)
+        mc.report_to_trace(
+            mock_trace, include_tokens=False, include_errors=False, include_custom=False
+        )
 
 
 class TestMetricsCollectorReportToProviders:
@@ -231,7 +237,7 @@ class TestMetricsCollectorReportToProviders:
         mc.track_tokens("llm", prompt_tokens=100, completion_tokens=50)
         mc.track_error("op", ValueError("err"))
 
-        with patch("orchestrator.observability.metrics.MetricsCollector.report_to_providers") as mock_method:
+        with patch("orchestrator.observability.metrics.MetricsCollector.report_to_providers"):
             mc.report_to_providers("trace-123")
 
     def test_report_to_providers_basic(self):
@@ -258,6 +264,7 @@ class TestGlobalFunctions:
     def test_get_metrics_collector_singleton(self):
         logger.info("GlobalFunctions: get metrics collector singleton")
         import orchestrator.observability.metrics as mod
+
         old = mod._global_metrics_collector
         mod._global_metrics_collector = None
         try:
@@ -270,6 +277,7 @@ class TestGlobalFunctions:
     def test_initialize_metrics_collector(self):
         logger.info("GlobalFunctions: initialize metrics collector")
         import orchestrator.observability.metrics as mod
+
         old = mod._global_metrics_collector
         try:
             mc = initialize_metrics_collector()
@@ -280,6 +288,7 @@ class TestGlobalFunctions:
     def test_reset_metrics_func(self):
         logger.info("GlobalFunctions: reset metrics func")
         import orchestrator.observability.metrics as mod
+
         old = mod._global_metrics_collector
         mod._global_metrics_collector = None
         try:
@@ -316,8 +325,10 @@ class TestPrometheusExporter:
         metrics = {
             "latency": {"count": 2, "mean_ms": 50.0, "p95_ms": 90.0, "p99_ms": 95.0},
             "tokens": {
-                "total_tokens": 150, "total_prompt_tokens": 100,
-                "total_completion_tokens": 50, "estimated_cost_usd": 0.001,
+                "total_tokens": 150,
+                "total_prompt_tokens": 100,
+                "total_completion_tokens": 50,
+                "estimated_cost_usd": 0.001,
                 "by_model": {"gpt-4": {"total_tokens": 150, "cost_usd": 0.001}},
             },
             "errors": {"total_errors": 1, "by_type": {"ValueError": 1}},
@@ -332,7 +343,9 @@ class TestPrometheusExporter:
     def test_format_empty_metrics(self):
         logger.info("PrometheusExporter: format empty metrics")
         exp = PrometheusExporter(gateway_url="http://localhost:9091")
-        formatted = exp._format_prometheus_metrics({"latency": {}, "tokens": {}, "errors": {}, "custom": {}})
+        formatted = exp._format_prometheus_metrics(
+            {"latency": {}, "tokens": {}, "errors": {}, "custom": {}}
+        )
         assert "orchestrator_errors_total 0" in formatted
 
 

@@ -7,14 +7,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.agent.config import RouterConfig
-from orchestrator.agent.smart_layer.heuristics import heuristic_tier
+from orchestrator.agent.smart_layer import classifier as classifier_mod
+from orchestrator.agent.smart_layer.classifier import classify_product_tier
 from orchestrator.agent.smart_layer.errors import TierClassifierError
-from orchestrator.agent.smart_layer.json_parse import parse_classifier_json, parse_classifier_tier_strict
+from orchestrator.agent.smart_layer.heuristics import heuristic_tier
+from orchestrator.agent.smart_layer.json_parse import (
+    parse_classifier_json,
+    parse_classifier_tier_strict,
+)
 from orchestrator.agent.smart_layer.resolve import resolve_model_for_tier
 from orchestrator.agent.smart_layer.types import ProductTier
 from orchestrator.llm.types import LLMResponse
-from orchestrator.agent.smart_layer import classifier as classifier_mod
-from orchestrator.agent.smart_layer.classifier import classify_product_tier
 
 
 class TestJsonParse:

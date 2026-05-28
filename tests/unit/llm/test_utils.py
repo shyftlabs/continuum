@@ -1,8 +1,7 @@
 """Unit tests for LLM utils."""
 
+import logging
 from unittest.mock import MagicMock, patch  # patch used in TestValidateJsonSchemaConfig
-
-import pytest
 
 from orchestrator.llm.utils import (
     check_json_schema_support,
@@ -10,7 +9,6 @@ from orchestrator.llm.utils import (
     supports_tools_with_json_mode,
     validate_json_schema_config,
 )
-import logging
 
 logger = logging.getLogger(__name__)
 

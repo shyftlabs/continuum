@@ -13,7 +13,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Step types
 # ---------------------------------------------------------------------------
@@ -124,9 +123,7 @@ class AgentActivityResult(BaseModel):
             content=resp.content or "",
             status=resp.status.value if hasattr(resp.status, "value") else str(resp.status),
             structured_output=(
-                resp.structured_output.model_dump()
-                if resp.structured_output
-                else None
+                resp.structured_output.model_dump() if resp.structured_output else None
             ),
             usage=usage,
             agents_used=list(resp.agents_used) if resp.agents_used else [],

@@ -1,9 +1,9 @@
 """
 Tests for SessionService.save_messages() with the new user_message_index parameter.
 """
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -117,7 +117,10 @@ class TestToolExecutionSummary:
         messages = _msgs(("user", "q"), ("assistant", "done"))
         summary = {"tool_count": 2, "latency_ms": 300}
         await svc.save_messages(
-            agent, messages, user_message_index=0, session_id="s1",
+            agent,
+            messages,
+            user_message_index=0,
+            session_id="s1",
             tool_execution_summary=summary,
         )
         calls = {c.kwargs["message"].role: c for c in sc.add_message.call_args_list}

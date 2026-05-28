@@ -22,7 +22,7 @@ from config import default_config
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from workflows import MODES, create_workflow, _BaseWorkflow
+from workflows import MODES, _BaseWorkflow, create_workflow
 
 from orchestrator import LogLevel, setup_logging
 
@@ -78,7 +78,9 @@ async def chat(req: ChatRequest):
         return {"response": f"Unknown mode '{req.mode}'. Choose from: {', '.join(MODES)}"}
     wf, error = await get_workflow(req.mode)
     if error:
-        return {"response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"}
+        return {
+            "response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"
+        }
     response = await wf.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
     return {"response": response}
 
@@ -96,7 +98,8 @@ async def status():
 
 MODE_DESCRIPTIONS = default_config.mode_descriptions
 
-HTML_PAGE = """<!DOCTYPE html>
+HTML_PAGE = (
+    """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -199,7 +202,9 @@ HTML_PAGE = """<!DOCTYPE html>
 </div>
 
 <script>
-const MODE_DESCRIPTIONS = """ + str({k: v for k, v in MODE_DESCRIPTIONS.items()}).replace("'", '"') + """;
+const MODE_DESCRIPTIONS = """
+    + str(dict(MODE_DESCRIPTIONS)).replace("'", '"')
+    + """;
 
 const MODE_SUGGESTIONS = {
   sequential:  ["buy dog food", "get me a cat toy", "I need a dog leash"],
@@ -325,6 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>
 """
+)
 
 if __name__ == "__main__":
     print("Gateway Multi-Agent Shop Web UI at http://localhost:8082")

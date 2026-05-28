@@ -76,13 +76,13 @@ from orchestrator.logging import (
 from orchestrator.memory import (
     # Base class (for custom providers)
     BaseMemoryProvider,
+    # Intelligence layer
+    IntelligenceConfig,
+    IntelligentMemoryClient,
     # Types
     MemoryAddResult,
     # Client
     MemoryClient,
-    # Intelligence layer
-    IntelligenceConfig,
-    IntelligentMemoryClient,
     # Config
     MemoryConfig,
     MemoryEntry,
@@ -171,16 +171,6 @@ except ImportError:
     pass  # temporalio not installed
 
 # Evaluation (always available — deepeval/ragas are optional within the module)
-from orchestrator.evaluation import (
-    CriterionScore,
-    EvalCase,
-    EvalResult,
-    EvalStatus,
-    EvaluatorAgent,
-    LangfuseDatasetClient,
-    create_evaluator_agent,
-)
-
 # Session
 # Agent Orchestration
 from orchestrator.agent import (
@@ -231,14 +221,23 @@ from orchestrator.agent import (
     create_parallel_agent,
     create_planner_agent,
     create_reflection_agent,
-    generate_critique_prompt,
     # Factory Functions
     create_router_agent,
     create_sequential_agent,
+    generate_critique_prompt,
     get_global_state_manager,
 )
 from orchestrator.agent import (
     MemoryScope as AgentMemoryScope,
+)
+from orchestrator.evaluation import (
+    CriterionScore,
+    EvalCase,
+    EvalResult,
+    EvalStatus,
+    EvaluatorAgent,
+    LangfuseDatasetClient,
+    create_evaluator_agent,
 )
 from orchestrator.session import (
     SessionClient,

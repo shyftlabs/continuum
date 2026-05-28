@@ -13,13 +13,15 @@ Covers:
 from __future__ import annotations
 
 import json
-import sys
 import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "playground", "local-shop"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "..", "playground", "gateway-local-shop")
+)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 
@@ -30,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 class TestServerResourceFunctions:
     def test_catalogue_returns_all_products(self):
-        from server import get_catalogue, PRODUCTS
+        from server import PRODUCTS, get_catalogue
 
         result = json.loads(get_catalogue())
         assert isinstance(result, list)
@@ -84,7 +86,7 @@ class TestServerResourceFunctions:
         assert "error" in result
 
     def test_get_product_resource_all_products_accessible(self):
-        from server import get_product_resource, PRODUCTS
+        from server import PRODUCTS, get_product_resource
 
         for product in PRODUCTS:
             result = json.loads(get_product_resource(product["id"]))
@@ -126,15 +128,15 @@ class TestAgentFetchResources:
 
     @pytest.mark.asyncio
     async def test_fetch_resources_sets_resource_context(self):
-        from agent import LocalShopAgent
-
         instance = self._make_agent_instance()
 
         mock_server = AsyncMock()
-        mock_server.read_resource = AsyncMock(side_effect=[
-            '[{"id":"p1","name":"Dog Food"}]',  # catalogue
-            '{"categories":["food"],"animals":["dog"]}',  # categories
-        ])
+        mock_server.read_resource = AsyncMock(
+            side_effect=[
+                '[{"id":"p1","name":"Dog Food"}]',  # catalogue
+                '{"categories":["food"],"animals":["dog"]}',  # categories
+            ]
+        )
         instance._mcp_server = mock_server
 
         await instance._fetch_resources()
@@ -145,8 +147,6 @@ class TestAgentFetchResources:
 
     @pytest.mark.asyncio
     async def test_fetch_resources_calls_both_uris(self):
-        from agent import LocalShopAgent
-
         instance = self._make_agent_instance()
 
         mock_server = AsyncMock()
@@ -161,8 +161,6 @@ class TestAgentFetchResources:
 
     @pytest.mark.asyncio
     async def test_fetch_resources_handles_server_error_gracefully(self):
-        from agent import LocalShopAgent
-
         instance = self._make_agent_instance()
 
         mock_server = AsyncMock()
@@ -176,8 +174,6 @@ class TestAgentFetchResources:
 
     @pytest.mark.asyncio
     async def test_fetch_resources_empty_response_still_sets_context(self):
-        from agent import LocalShopAgent
-
         instance = self._make_agent_instance()
 
         mock_server = AsyncMock()
@@ -196,6 +192,14 @@ class TestAgentFetchResources:
 
 
 class TestAgentCreateAgentResourceInjection:
+    """Verify how ``_create_agent`` builds the instructions passed to ``BaseAgent``.
+
+    The current source fetches ``_resource_context`` in ``_fetch_resources`` but
+    ``_create_agent`` always uses ``config.system_instructions`` verbatim — the
+    resource context is *not* injected into the agent instructions. These tests
+    lock in that real behavior.
+    """
+
     def _make_agent_instance_with_mocks(self, resource_context: str = ""):
         from agent import LocalShopAgent
         from config import default_config
@@ -209,72 +213,51 @@ class TestAgentCreateAgentResourceInjection:
         instance._tools = []
         return instance
 
-    def test_create_agent_injects_resource_context_into_instructions(self):
-        instance = self._make_agent_instance_with_mocks(
-            resource_context="Product catalogue:\n[]\n\nCategories:\n{}"
-        )
+    def _build_instructions(self, resource_context: str) -> str:
+        instance = self._make_agent_instance_with_mocks(resource_context=resource_context)
 
         with patch("agent.BaseAgent") as MockBaseAgent:
             MockBaseAgent.return_value = MagicMock()
             with patch("agent.AgentMemoryConfig"), patch("agent.AgentConfig"):
                 instance._create_agent()
 
-        call_kwargs = MockBaseAgent.call_args[1]
-        instructions = call_kwargs["instructions"]
-        assert "Product catalogue:" in instructions
-        assert "Categories:" in instructions
+        return MockBaseAgent.call_args[1]["instructions"]
 
     def test_create_agent_uses_base_instructions_when_no_resources(self):
         instance = self._make_agent_instance_with_mocks(resource_context="")
-
-        with patch("agent.BaseAgent") as MockBaseAgent:
-            MockBaseAgent.return_value = MagicMock()
-            with patch("agent.AgentMemoryConfig"), patch("agent.AgentConfig"):
-                instance._create_agent()
-
-        call_kwargs = MockBaseAgent.call_args[1]
-        instructions = call_kwargs["instructions"]
+        instructions = self._build_instructions(resource_context="")
         assert instructions == instance.config.system_instructions
 
-    def test_create_agent_base_instructions_not_duplicated(self):
-        resource_ctx = "Product catalogue:\n[]"
-        instance = self._make_agent_instance_with_mocks(resource_context=resource_ctx)
-        base = instance.config.system_instructions
+    def test_create_agent_does_not_inject_resource_context(self):
+        # Current source never appends _resource_context to the instructions.
+        instructions = self._build_instructions(
+            resource_context="Product catalogue:\n[]\n\nCategories:\n{}"
+        )
+        assert "Product catalogue:" not in instructions
+        assert "Categories:" not in instructions
 
-        with patch("agent.BaseAgent") as MockBaseAgent:
-            MockBaseAgent.return_value = MagicMock()
-            with patch("agent.AgentMemoryConfig"), patch("agent.AgentConfig"):
-                instance._create_agent()
+    def test_create_agent_instructions_equal_base_regardless_of_resources(self):
+        from config import default_config
 
-        call_kwargs = MockBaseAgent.call_args[1]
-        instructions = call_kwargs["instructions"]
+        base = default_config.system_instructions
+        instructions = self._build_instructions(
+            resource_context='Product catalogue:\n[{"id": "p1", "name": "Dog Food"}]'
+        )
+        # Instructions are exactly the base config — resource context is ignored.
+        assert instructions == base
+
+    def test_create_agent_base_instructions_present_once(self):
+        from config import default_config
+
+        base = default_config.system_instructions
+        instructions = self._build_instructions(resource_context="Product catalogue:\n[]")
         assert instructions.count(base) == 1
 
-    def test_create_agent_escapes_json_braces_in_resource_context(self):
-        resource_ctx = 'Product catalogue:\n[{"id": "p1", "name": "Dog Food"}]'
-        instance = self._make_agent_instance_with_mocks(resource_context=resource_ctx)
-
-        with patch("agent.BaseAgent") as MockBaseAgent:
-            MockBaseAgent.return_value = MagicMock()
-            with patch("agent.AgentMemoryConfig"), patch("agent.AgentConfig"):
-                instance._create_agent()
-
-        call_kwargs = MockBaseAgent.call_args[1]
-        instructions = call_kwargs["instructions"]
-        # Curly braces must be doubled so format_map doesn't choke on JSON
-        assert '{{"id"' in instructions   # { escaped to {{
-        assert '"Dog Food"}}]' in instructions  # } escaped to }}
-
-    def test_create_agent_resource_context_appended_after_base(self):
-        resource_ctx = "Product catalogue:\n[]"
-        instance = self._make_agent_instance_with_mocks(resource_context=resource_ctx)
-        base = instance.config.system_instructions
-
-        with patch("agent.BaseAgent") as MockBaseAgent:
-            MockBaseAgent.return_value = MagicMock()
-            with patch("agent.AgentMemoryConfig"), patch("agent.AgentConfig"):
-                instance._create_agent()
-
-        call_kwargs = MockBaseAgent.call_args[1]
-        instructions = call_kwargs["instructions"]
-        assert instructions.index(base) < instructions.index(resource_ctx)
+    def test_create_agent_does_not_escape_json_braces(self):
+        # Since the resource context is not injected, JSON braces from the
+        # catalogue never appear (escaped or otherwise) in the instructions.
+        instructions = self._build_instructions(
+            resource_context='Product catalogue:\n[{"id": "p1", "name": "Dog Food"}]'
+        )
+        assert '{{"id"' not in instructions
+        assert '"Dog Food"' not in instructions

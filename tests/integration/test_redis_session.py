@@ -6,9 +6,6 @@ Tests add_message, get_messages, sliding window, JSON error handling.
 
 from __future__ import annotations
 
-import json
-import uuid
-
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -47,17 +44,11 @@ class TestRedisSessionIntegration:
     async def test_add_and_retrieve_messages(self, session_provider, test_id):
         from orchestrator.llm.types import ChatMessage
 
-        sid = await session_provider.get_or_create_session(
-            session_id=f"msg-sess-{test_id}"
-        )
+        sid = await session_provider.get_or_create_session(session_id=f"msg-sess-{test_id}")
 
         # Add messages
-        await session_provider.add_message(
-            sid, ChatMessage(role="user", content="Hello")
-        )
-        await session_provider.add_message(
-            sid, ChatMessage(role="assistant", content="Hi there!")
-        )
+        await session_provider.add_message(sid, ChatMessage(role="user", content="Hello"))
+        await session_provider.add_message(sid, ChatMessage(role="assistant", content="Hi there!"))
 
         messages = await session_provider.get_messages(sid)
         assert len(messages) == 2
@@ -83,18 +74,14 @@ class TestRedisSessionIntegration:
         await session_provider.get_or_create_session(session_id=sid)
 
         # Add a valid message first
-        await session_provider.add_message(
-            sid, ChatMessage(role="user", content="Valid message")
-        )
+        await session_provider.add_message(sid, ChatMessage(role="user", content="Valid message"))
 
         # Inject corrupt JSON directly into Redis using the provider's internal sync client
         messages_key = f"orchestrator:session:{sid}:messages"
         await session_provider._redis.rpush(messages_key, "THIS IS NOT JSON {{{")
 
         # Add another valid message
-        await session_provider.add_message(
-            sid, ChatMessage(role="assistant", content="Also valid")
-        )
+        await session_provider.add_message(sid, ChatMessage(role="assistant", content="Also valid"))
 
         # Should get 2 valid messages, skipping the corrupt one
         messages = await session_provider.get_messages(sid)

@@ -11,11 +11,10 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - GitHub issue templates (`bug.yml`, `feature.yml`, `question.yml`) and a chooser config that disables blank issues and routes security reports to a private advisory.
 - Pull request template with Conventional-Commits typing, DCO checkbox, and lint/type/test gates.
 - `CODEOWNERS` for automatic review routing.
-- Dependabot configured for security-only updates (`pip`, `github-actions`); routine version-bump PRs are disabled.
+- Dependabot vulnerability **alerts** (surfaced in the Security tab); automated dependency PRs are disabled.
 - `MAINTAINERS.md` with the current maintainer list, tone rules, and escalation path.
 - `SECURITY.md` with the private disclosure channel and severity SLAs.
-- CI workflow (`ruff`, `mypy`, `pytest`) and security scan workflow (`gitleaks`, `pip-audit`, `bandit`).
-- `release-please` workflow for automated version bumps and changelog updates.
+- Minimal CI workflow: ruff lint + format check and unit tests on `main`/`dev`.
 
 ### Changed
 - _Nothing yet._

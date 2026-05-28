@@ -7,23 +7,31 @@ import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.agent.smart_layer.classifier import classify_product_tier
 from orchestrator.agent.smart_layer.completion import (
     build_model_tier_messages,
     complete_non_stream,
     temperature_for_tier,
 )
-from orchestrator.agent.smart_layer.resolve import effective_completion_model, resolve_model_for_tier
-from orchestrator.agent.smart_layer.types import ModelTierResult, ProductTier, StreamYield, tier_dispatch_priority
-from orchestrator.agent.execution.executor import _enrich_config_for_gateway
-from orchestrator.config import settings
+from orchestrator.agent.smart_layer.resolve import (
+    effective_completion_model,
+    resolve_model_for_tier,
+)
+from orchestrator.agent.smart_layer.types import (
+    ModelTierResult,
+    ProductTier,
+    StreamYield,
+    tier_dispatch_priority,
+)
 from orchestrator.agent.workflow.router import RouterAgent
+from orchestrator.config import settings
 from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
 
 if TYPE_CHECKING:
-    from orchestrator.llm import LLMClient
     from orchestrator.agent.utils.context_utils import RunContext
+    from orchestrator.llm import LLMClient
 
 logger = get_logger(__name__)
 
@@ -82,7 +90,9 @@ async def run_model_tier_turn(
     rc = agent.router_config
 
     if os.environ.get("ROUTER_SHADOW_MODE"):
-        logger.info("ROUTER_SHADOW_MODE set: shadow dual-path is not implemented; running model_tier normally")
+        logger.info(
+            "ROUTER_SHADOW_MODE set: shadow dual-path is not implemented; running model_tier normally"
+        )
 
     classify_out = await classify_product_tier(
         user_text=user_text,
@@ -159,7 +169,9 @@ async def stream_model_tier_turn(
     rc = agent.router_config
 
     if os.environ.get("ROUTER_SHADOW_MODE"):
-        logger.info("ROUTER_SHADOW_MODE set: shadow dual-path is not implemented; running model_tier normally")
+        logger.info(
+            "ROUTER_SHADOW_MODE set: shadow dual-path is not implemented; running model_tier normally"
+        )
 
     classify_out = await classify_product_tier(
         user_text=user_text,

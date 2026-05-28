@@ -170,7 +170,12 @@ class MemoryConfig(BaseModel):
 
     def is_configured(self) -> bool:
         """Check if memory is properly configured with basic requirements."""
-        if not (self.enabled and self.memory_llm_model and self.embedder_model and self.embedding_dims > 0):
+        if not (
+            self.enabled
+            and self.memory_llm_model
+            and self.embedder_model
+            and self.embedding_dims > 0
+        ):
             return False
         if self.vector_store_provider == "milvus":
             return bool(self.milvus_host)

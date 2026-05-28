@@ -1,8 +1,7 @@
 """Unit tests for LLM types."""
 
+import logging
 from unittest.mock import MagicMock
-
-import pytest
 
 from orchestrator.llm.types import (
     ChatMessage,
@@ -14,7 +13,6 @@ from orchestrator.llm.types import (
     ToolDefinition,
     Usage,
 )
-import logging
 
 logger = logging.getLogger(__name__)
 
