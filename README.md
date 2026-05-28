@@ -34,20 +34,20 @@ Build, run, and deploy reliable AI agents at enterprise scale — multi-LLM rout
 
 ---
 
-**Continuum** is a Python framework for building, running, and deploying reliable AI agents at enterprise scale. It gives you a clean agent abstraction, cost-aware multi-provider model routing through **Smart Inference**, persistent two-tier memory, MCP-native tooling, **Temporal**-durable workflows, and **Langfuse**-traced observability — all behind a small, typed API.
+**Continuum** is a production-grade Python framework for building, orchestrating, and shipping autonomous AI agents at enterprise scale. It unifies a clean, typed agent core with cost-aware multi-model inference, stateful long- and short-term memory, open standards-based tool calling, durable execution, and end-to-end observability — all behind one small, composable, type-safe API.
 
 ## ✨ Features
 
-- 🤖 **Agents & workflows** — a typed `BaseAgent` + `AgentRunner`, lifecycle hooks, structured outputs, and nine composable workflow patterns (Sequential, Parallel, Loop, Router, Planner, Reflection, Debate, Scatter, SupervisedSequential).
-- 🔀 **Smart Inference** — cost-aware routing that classifies each request and sends it to the cheapest capable model, with automatic fallback across providers.
-- 🧠 **Two-tier memory** — long-term semantic memory (mem0 + Qdrant/Milvus) and short-term sessions (Redis), with multi-tenant scopes (user / agent / shared / run / conversation) and PII filtering.
-- 🔌 **MCP-native tools** — connect any Model Context Protocol server (Stdio / SSE / StreamableHTTP), with tool filtering, context capture/injection, and UI-widget artifacts.
-- 🔁 **Durable workflows** — long-running, restart-safe orchestration on Temporal, including human-in-the-loop approval gates.
-- 🔭 **Observability** — first-class Langfuse tracing, latency/token/error metrics, and `@observe` instrumentation.
-- 🌐 **Provider-agnostic** — OpenAI, Anthropic, Gemini, Azure, AWS Bedrock, and more, selected by a simple model string.
-- 🤝 **Handoffs & multi-agent** — agent-to-agent transfers with history summarization, cycle detection, and depth tracking.
-- 📡 **Streaming** — token-, tool-, handoff-, and memory-level events streamed in real time.
-- ✅ **Evaluation** — golden datasets from traces plus DeepEval / RAGAS metrics to regression-test agent quality.
+- 🤖 **Agentic core & orchestration** — a strongly-typed agent primitive with full lifecycle hooks, schema-validated structured outputs, and nine composable multi-agent patterns (sequential, parallel, loop, routing, planning, reflection, debate, scatter, supervised).
+- 🔀 **Smart Inference** — cost-aware inference routing that classifies every request by complexity and dispatches it to the cheapest capable model, with seamless cross-provider failover and zero lock-in.
+- 🧠 **Stateful memory** — persistent semantic long-term recall plus low-latency working memory, with multi-tenant isolation scopes and built-in PII redaction for privacy-by-default agents.
+- 🔌 **Open tool calling** — plug into any standards-based tool ecosystem (Model Context Protocol) across multiple transports, with fine-grained capability scoping, context capture/injection, and rich generative-UI artifacts.
+- 🔁 **Durable execution** — long-running, crash- and restart-safe agent workflows with human-in-the-loop approval gates and exactly-once guarantees.
+- 🔭 **Full observability** — first-class distributed tracing, token/latency/error telemetry, and one-line function instrumentation for complete run transparency.
+- 🌐 **Model-agnostic** — target frontier or open-weight models through a single model string; swap providers without touching agent code.
+- 🤝 **Multi-agent handoffs** — context-preserving agent-to-agent delegation with history summarization, cycle detection, and depth control.
+- 📡 **Real-time streaming** — token-, tool-, handoff-, and memory-level events streamed the moment they happen.
+- ✅ **Built-in evaluation** — turn live production traces into golden datasets and regression-test agent quality with standard LLM-evaluation metrics.
 
 ## 🚀 Quick start
 
