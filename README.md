@@ -5,10 +5,6 @@
   <img src="docs/assets/continuum-logo.png" alt="Continuum" width="460" />
 </picture>
 
-<br />
-
-<img src="docs/assets/logo.jpeg" alt="ShyftLabs" width="40" height="40" />
-
 ##### by **[ShyftLabs](https://shyftlabs.io/)**
 
 ### The agent runtime for builders who ship.
