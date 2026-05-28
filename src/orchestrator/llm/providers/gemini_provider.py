@@ -83,19 +83,33 @@ class GeminiProvider(BaseProvider):
     def _handle_exception(self, e: Exception, model: str) -> None:
         ctx = {"model": model, "provider": _PROVIDER}
         if isinstance(e, openai.AuthenticationError):
-            raise LLMAuthenticationError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMAuthenticationError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.RateLimitError):
-            raise LLMRateLimitError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMRateLimitError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.APITimeoutError):
-            raise LLMTimeoutError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMTimeoutError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, openai.BadRequestError):
             msg = str(e)
             if "context" in msg.lower() or "token" in msg.lower():
-                raise LLMContextLengthError(msg, model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
-            raise LLMInvalidRequestError(msg, model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+                raise LLMContextLengthError(
+                    msg, model=model, provider=_PROVIDER, original_error=e, context=ctx
+                ) from e
+            raise LLMInvalidRequestError(
+                msg, model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, (openai.APIConnectionError, openai.InternalServerError)):
-            raise LLMServiceUnavailableError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
-        raise LLMError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMServiceUnavailableError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
+        raise LLMError(
+            str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+        ) from e
 
     def complete(
         self,
@@ -173,8 +187,13 @@ class GeminiProvider(BaseProvider):
                     for raw_tc in delta.tool_calls:
                         self._accumulate_tool_call(tc_acc, raw_tc)
                 if delta and delta.content:
-                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
-                                      role=delta.role, is_finished=False)
+                    yield StreamChunk(
+                        id=chunk.id,
+                        model=chunk.model,
+                        content=delta.content,
+                        role=delta.role,
+                        is_finished=False,
+                    )
             if tc_acc:
                 yield StreamChunk(
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
@@ -209,8 +228,13 @@ class GeminiProvider(BaseProvider):
                     for raw_tc in delta.tool_calls:
                         self._accumulate_tool_call(tc_acc, raw_tc)
                 if delta and delta.content:
-                    yield StreamChunk(id=chunk.id, model=chunk.model, content=delta.content,
-                                      role=delta.role, is_finished=False)
+                    yield StreamChunk(
+                        id=chunk.id,
+                        model=chunk.model,
+                        content=delta.content,
+                        role=delta.role,
+                        is_finished=False,
+                    )
             if tc_acc:
                 yield StreamChunk(
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),

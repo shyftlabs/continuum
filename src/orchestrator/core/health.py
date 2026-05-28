@@ -562,7 +562,6 @@ class HealthCheck:
                 },
             )
 
-
     async def check_temporal(self) -> HealthCheckResult:
         """Check Temporal connectivity."""
         return await self._check_temporal()

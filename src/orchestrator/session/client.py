@@ -356,13 +356,17 @@ class SessionClient:
                                 allowed = set(fact_texts)
                             filtered_out = [(t, i) for t, i in stored_pairs if t not in allowed]
                             if filtered_out:
-                                logger.info(f"🚫 PII filter blocked {len(filtered_out)} fact(s): {[t for t, _ in filtered_out]}")
-                            for fact_text, fact_id in filtered_out:
+                                logger.info(
+                                    f"🚫 PII filter blocked {len(filtered_out)} fact(s): {[t for t, _ in filtered_out]}"
+                                )
+                            for _fact_text, fact_id in filtered_out:
                                 if fact_id:
                                     try:
                                         await self.memory_client.delete(fact_id)
                                     except Exception as de:
-                                        logger.warning(f"Failed to delete filtered fact {fact_id}: {de}")
+                                        logger.warning(
+                                            f"Failed to delete filtered fact {fact_id}: {de}"
+                                        )
                             stored_pairs = [(t, i) for t, i in stored_pairs if t in allowed]
 
                         if stored_pairs:

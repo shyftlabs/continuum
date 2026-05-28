@@ -4,9 +4,9 @@ Tests for MessageBuilder.prepare_messages() refactored behaviors:
 - Injects pipeline_context from context.metadata as a system message
 - Skips Redis session history when context.is_handoff=True
 """
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from orchestrator.agent.utils.context_utils import create_run_context
@@ -103,7 +103,8 @@ class TestPipelineContextInjection:
 
         # Should not inject any pipeline context message
         pipeline_msgs = [
-            m for m in messages
+            m
+            for m in messages
             if m["role"] == "system" and "Prior pipeline" in (m.get("content") or "")
         ]
         assert len(pipeline_msgs) == 0
@@ -118,7 +119,8 @@ class TestPipelineContextInjection:
             messages, index = await builder.prepare_messages(agent, "q", ctx)
 
         pipeline_idx = next(
-            i for i, m in enumerate(messages)
+            i
+            for i, m in enumerate(messages)
             if m["role"] == "system" and "step context" in (m.get("content") or "")
         )
         assert pipeline_idx < index

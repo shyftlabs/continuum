@@ -8,11 +8,9 @@ EvalCase context coercion, secrets redaction, registry thread safety.
 
 from __future__ import annotations
 
-import json
 import threading
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # 04-#3: Retry policy has explicit backoff
@@ -115,13 +113,13 @@ class TestEvaluatorJsonParsing:
         assert result["score"] == 0.5
 
     def test_invalid_json_raises_parse_error(self):
-        from orchestrator.evaluation.evaluator_agent import _ParseError, _parse_json_response
+        from orchestrator.evaluation.evaluator_agent import _parse_json_response, _ParseError
 
         with pytest.raises(_ParseError, match="Could not extract valid JSON"):
             _parse_json_response("This is not JSON at all")
 
     def test_empty_string_raises_parse_error(self):
-        from orchestrator.evaluation.evaluator_agent import _ParseError, _parse_json_response
+        from orchestrator.evaluation.evaluator_agent import _parse_json_response, _ParseError
 
         with pytest.raises(_ParseError):
             _parse_json_response("")

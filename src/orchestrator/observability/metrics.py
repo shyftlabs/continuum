@@ -83,13 +83,13 @@ class TokenUsageMetric:
 
         try:
             model_lower = self.model.lower().split("/")[-1]
-            pricing = next(
-                (v for k, v in PRICING.items() if k in model_lower), None
-            )
+            pricing = next((v for k, v in PRICING.items() if k in model_lower), None)
             if not pricing:
                 return None
             input_cost_per_token, output_cost_per_token = pricing
-            total = (self.prompt_tokens * input_cost_per_token) + (self.completion_tokens * output_cost_per_token)
+            total = (self.prompt_tokens * input_cost_per_token) + (
+                self.completion_tokens * output_cost_per_token
+            )
             return total if total > 0 else None
         except Exception as e:
             logger.warning(f"Could not calculate cost for model {self.model}: {e}")

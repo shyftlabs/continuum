@@ -26,9 +26,7 @@ class ApprovalNotificationConfig:
     timeout_seconds: int = 86400
     escalation_timeout: int = 7200
     escalation_handler: Callable[[ApprovalRequest], Awaitable[None]] | None = None
-    auto_approve_conditions: list[Callable[[ApprovalRequest], bool]] = field(
-        default_factory=list
-    )
+    auto_approve_conditions: list[Callable[[ApprovalRequest], bool]] = field(default_factory=list)
 
 
 class HumanInLoopManager:
@@ -80,9 +78,7 @@ class HumanInLoopManager:
         )
         await self.submit_decision(workflow_id, decision)
 
-    async def submit_decision(
-        self, workflow_id: str, decision: ApprovalDecision
-    ) -> None:
+    async def submit_decision(self, workflow_id: str, decision: ApprovalDecision) -> None:
         """Submit any approval decision."""
         handle = await self._client.get_workflow_handle(workflow_id)
         await handle.signal(AgentWorkflow.submit_approval, decision)
@@ -123,6 +119,7 @@ class HumanInLoopManager:
                     break
             if not matched:
                 import logging
+
                 logging.getLogger(__name__).warning(
                     f"Escalation: request_id '{request_id}' not found in pending "
                     f"approvals for workflow '{workflow_id}'. "

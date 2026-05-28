@@ -101,12 +101,16 @@ class AnthropicProvider(BaseProvider):
                             input_data = json.loads(args_str)
                         except json.JSONDecodeError:
                             input_data = {}
-                        content_blocks.append({
-                            "type": "tool_use",
-                            "id": tc.get("id", "") if isinstance(tc, dict) else tc.id,
-                            "name": func.get("name", "") if isinstance(func, dict) else func.name,
-                            "input": input_data,
-                        })
+                        content_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc.get("id", "") if isinstance(tc, dict) else tc.id,
+                                "name": func.get("name", "")
+                                if isinstance(func, dict)
+                                else func.name,
+                                "input": input_data,
+                            }
+                        )
                     anthropic_messages.append({"role": "assistant", "content": content_blocks})
                 else:
                     anthropic_messages.append({"role": "assistant", "content": content or ""})
@@ -130,17 +134,24 @@ class AnthropicProvider(BaseProvider):
         for tool in tools:
             if isinstance(tool, dict):
                 func = tool.get("function", {})
-                result.append({
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
-                })
+                result.append(
+                    {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get(
+                            "parameters", {"type": "object", "properties": {}}
+                        ),
+                    }
+                )
             else:
-                result.append({
-                    "name": tool.function.name,
-                    "description": tool.function.description or "",
-                    "input_schema": tool.function.parameters or {"type": "object", "properties": {}},
-                })
+                result.append(
+                    {
+                        "name": tool.function.name,
+                        "description": tool.function.description or "",
+                        "input_schema": tool.function.parameters
+                        or {"type": "object", "properties": {}},
+                    }
+                )
         return result
 
     def _convert_tool_choice(
@@ -198,19 +209,33 @@ class AnthropicProvider(BaseProvider):
     def _handle_exception(self, e: Exception, model: str) -> None:
         ctx = {"model": model, "provider": _PROVIDER}
         if isinstance(e, anthropic.AuthenticationError):
-            raise LLMAuthenticationError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMAuthenticationError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, anthropic.RateLimitError):
-            raise LLMRateLimitError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMRateLimitError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, anthropic.APITimeoutError):
-            raise LLMTimeoutError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMTimeoutError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, anthropic.BadRequestError):
             msg = str(e)
             if "context" in msg.lower() or "token" in msg.lower():
-                raise LLMContextLengthError(msg, model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
-            raise LLMInvalidRequestError(msg, model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+                raise LLMContextLengthError(
+                    msg, model=model, provider=_PROVIDER, original_error=e, context=ctx
+                ) from e
+            raise LLMInvalidRequestError(
+                msg, model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
         if isinstance(e, (anthropic.APIConnectionError, anthropic.InternalServerError)):
-            raise LLMServiceUnavailableError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
-        raise LLMError(str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx) from e
+            raise LLMServiceUnavailableError(
+                str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+            ) from e
+        raise LLMError(
+            str(e), model=model, provider=_PROVIDER, original_error=e, context=ctx
+        ) from e
 
     def complete(
         self,

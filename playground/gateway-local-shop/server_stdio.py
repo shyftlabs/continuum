@@ -26,13 +26,55 @@ _carts: dict[str, list[dict]] = {}
 
 PRODUCTS = [
     {"id": "p1", "name": "Dog Food (Dry) 5kg", "price": 29.99, "category": "food", "animal": "dog"},
-    {"id": "p2", "name": "Cat Food (Wet) 12-pack", "price": 18.99, "category": "food", "animal": "cat"},
-    {"id": "p3", "name": "Dog Leash (Nylon)", "price": 12.99, "category": "accessories", "animal": "dog"},
-    {"id": "p4", "name": "Cat Toy - Feather Wand", "price": 8.99, "category": "toys", "animal": "cat"},
-    {"id": "p5", "name": "Dog Toy - Tennis Ball 3-pack", "price": 6.99, "category": "toys", "animal": "dog"},
-    {"id": "p6", "name": "Pet Shampoo (All breeds)", "price": 11.99, "category": "grooming", "animal": "all"},
-    {"id": "p7", "name": "Cat Litter (Clumping) 10L", "price": 15.99, "category": "litter", "animal": "cat"},
-    {"id": "p8", "name": "Dog Collar (Adjustable)", "price": 9.99, "category": "accessories", "animal": "dog"},
+    {
+        "id": "p2",
+        "name": "Cat Food (Wet) 12-pack",
+        "price": 18.99,
+        "category": "food",
+        "animal": "cat",
+    },
+    {
+        "id": "p3",
+        "name": "Dog Leash (Nylon)",
+        "price": 12.99,
+        "category": "accessories",
+        "animal": "dog",
+    },
+    {
+        "id": "p4",
+        "name": "Cat Toy - Feather Wand",
+        "price": 8.99,
+        "category": "toys",
+        "animal": "cat",
+    },
+    {
+        "id": "p5",
+        "name": "Dog Toy - Tennis Ball 3-pack",
+        "price": 6.99,
+        "category": "toys",
+        "animal": "dog",
+    },
+    {
+        "id": "p6",
+        "name": "Pet Shampoo (All breeds)",
+        "price": 11.99,
+        "category": "grooming",
+        "animal": "all",
+    },
+    {
+        "id": "p7",
+        "name": "Cat Litter (Clumping) 10L",
+        "price": 15.99,
+        "category": "litter",
+        "animal": "cat",
+    },
+    {
+        "id": "p8",
+        "name": "Dog Collar (Adjustable)",
+        "price": 9.99,
+        "category": "accessories",
+        "animal": "dog",
+    },
 ]
 
 
@@ -70,8 +112,14 @@ def add_to_cart(session_id: str, product_id: str, quantity: int = 1) -> dict:
         if item["product_id"] == product_id:
             item["quantity"] += quantity
             return {"message": f"Updated quantity for {product['name']}", "cart_size": len(cart)}
-    cart.append({"product_id": product_id, "name": product["name"],
-                 "price": product["price"], "quantity": quantity})
+    cart.append(
+        {
+            "product_id": product_id,
+            "name": product["name"],
+            "price": product["price"],
+            "quantity": quantity,
+        }
+    )
     return {"message": f"Added {product['name']} to cart", "cart_size": len(cart)}
 
 

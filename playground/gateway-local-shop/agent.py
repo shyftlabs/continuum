@@ -26,11 +26,11 @@ from orchestrator import (
     ToolExecutor,
     get_logger,
 )
-from orchestrator.tools.tool_attention.config import ToolAttentionConfig
-from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-from orchestrator.agent.types import EventType, generate_run_id
+from orchestrator.agent.types import EventType
 from orchestrator.core.container import Container, get_container
 from orchestrator.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
+from orchestrator.tools.tool_attention.config import ToolAttentionConfig
+from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
 
 logger = get_logger(__name__)
 
@@ -53,8 +53,11 @@ class CartDebugToolExecutor(ToolExecutor):
             # Log cart item count and sample price fields
             items = sc.get("items") or sc.get("cart_items")
             if isinstance(items, list) and items:
-                sample = {k: v for k, v in items[0].items()
-                          if "price" in k.lower() or "total" in k.lower()}
+                sample = {
+                    k: v
+                    for k, v in items[0].items()
+                    if "price" in k.lower() or "total" in k.lower()
+                }
                 logger.info(
                     f"🛒 {tool_name} cart: items_count={len(items)}, "
                     f"sample_price_fields={sample}, "
@@ -64,10 +67,15 @@ class CartDebugToolExecutor(ToolExecutor):
         # Extra detail for known cart tools
         if tool_name in _CART_TOOLS:
             if sc:
-                llm_totals = {k: v for k, v in sc.items()
-                              if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()}
+                llm_totals = {
+                    k: v
+                    for k, v in sc.items()
+                    if "total" in k.lower() or "subtotal" in k.lower() or "tax" in k.lower()
+                }
                 if llm_totals:
-                    logger.info(f"📤 {tool_name} sending to LLM (structuredContent): totals={llm_totals}")
+                    logger.info(
+                        f"📤 {tool_name} sending to LLM (structuredContent): totals={llm_totals}"
+                    )
                 else:
                     logger.warning(
                         f"⚠️ {tool_name} structuredContent has NO totals for LLM! "
@@ -93,9 +101,7 @@ class LocalShopAgent:
             return
 
         self._lifecycle = get_lifecycle_manager(
-            fail_on_unhealthy=False, 
-            verify_connections=True,
-            enable_signal_handlers=False
+            fail_on_unhealthy=False, verify_connections=True, enable_signal_handlers=False
         )
         await self._lifecycle.initialize()
 
@@ -156,16 +162,16 @@ class LocalShopAgent:
         try:
             catalogue = await self._mcp_server.read_resource("shop://catalogue")
             categories = await self._mcp_server.read_resource("shop://categories")
-            self._resource_context = (
-                f"Product catalogue:\n{catalogue}\n\nCategories:\n{categories}"
-            )
+            self._resource_context = f"Product catalogue:\n{catalogue}\n\nCategories:\n{categories}"
             logger.info("✓ Loaded shop resources (catalogue + categories)")
         except Exception as e:
             logger.warning(f"Could not load shop resources: {e}")
 
     def _create_agent(self) -> None:
         memory_client = self._container.memory_client if self._container else None
-        memory_enabled = self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        memory_enabled = (
+            self.config.enable_memory and memory_client is not None and memory_client.is_enabled
+        )
 
         instructions = self.config.system_instructions
 
@@ -248,7 +254,7 @@ class LocalShopAgent:
 
     async def chat_stream(
         self, message: str, user_id: str, conversation_id: str
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str]:
         if not self._initialized:
             await self.initialize()
 
@@ -267,9 +273,13 @@ class LocalShopAgent:
                         user_id=user_id,
                         conversation_id=conversation_id,
                     )
-                    existing = await self._runner._session_service.load_tool_context_state(session_id)
+                    existing = await self._runner._session_service.load_tool_context_state(
+                        session_id
+                    )
                     existing.set(namespace, "session_id", cart_session_id)
-                    await self._runner._session_service.save_tool_context_state(session_id, existing)
+                    await self._runner._session_service.save_tool_context_state(
+                        session_id, existing
+                    )
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 

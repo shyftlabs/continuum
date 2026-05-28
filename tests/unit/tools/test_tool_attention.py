@@ -12,13 +12,10 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
-import json
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-import sys
 
 from orchestrator.tools.tool_attention.config import ToolAttentionConfig
 from orchestrator.tools.tool_attention.registry import ToolSummaryRegistry, _tool_summary
@@ -28,7 +25,6 @@ from orchestrator.tools.tool_attention.router import (
     _tool_name,
     apply_tool_attention,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -131,7 +127,10 @@ class TestToolSummary:
         assert "noop" in summary
 
     def test_dict_tool_with_none_parameters_does_not_crash(self):
-        tool = {"type": "function", "function": {"name": "broken", "description": "x", "parameters": None}}
+        tool = {
+            "type": "function",
+            "function": {"name": "broken", "description": "x", "parameters": None},
+        }
         name, summary = _tool_summary(tool)
         assert name == "broken"
 
@@ -161,10 +160,13 @@ class TestToolSummaryRegistry:
         mock_st = MagicMock()
         mock_st.SentenceTransformer = MagicMock(return_value=mock_encoder or MagicMock())
 
-        return patch.dict(sys.modules, {
-            "pymilvus": mock_pymilvus,
-            "sentence_transformers": mock_st,
-        })
+        return patch.dict(
+            sys.modules,
+            {
+                "pymilvus": mock_pymilvus,
+                "sentence_transformers": mock_st,
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_initialize_creates_collection_and_upserts(self):
@@ -177,8 +179,10 @@ class TestToolSummaryRegistry:
         mock_encoder.encode.return_value = MagicMock()
         mock_encoder.encode.return_value.tolist.return_value = [[0.1] * 384, [0.2] * 384]
 
-        with self._mock_modules(mock_client, mock_encoder), \
-             patch("orchestrator.config.settings") as mock_settings:
+        with (
+            self._mock_modules(mock_client, mock_encoder),
+            patch("orchestrator.config.settings") as mock_settings,
+        ):
             mock_settings.milvus_host = "localhost"
             mock_settings.milvus_port = 19530
             mock_settings.milvus_token = None
@@ -199,8 +203,10 @@ class TestToolSummaryRegistry:
         mock_encoder.encode.return_value = MagicMock()
         mock_encoder.encode.return_value.tolist.return_value = [[0.1] * 384]
 
-        with self._mock_modules(mock_client, mock_encoder), \
-             patch("orchestrator.config.settings") as mock_settings:
+        with (
+            self._mock_modules(mock_client, mock_encoder),
+            patch("orchestrator.config.settings") as mock_settings,
+        ):
             mock_settings.milvus_host = "localhost"
             mock_settings.milvus_port = 19530
             mock_settings.milvus_token = None
@@ -218,8 +224,10 @@ class TestToolSummaryRegistry:
         mock_pymilvus.MilvusClient = MagicMock(side_effect=Exception("conn refused"))
         mock_pymilvus.DataType = MagicMock()
 
-        with patch.dict(sys.modules, {"pymilvus": mock_pymilvus}), \
-             patch("orchestrator.config.settings") as mock_settings:
+        with (
+            patch.dict(sys.modules, {"pymilvus": mock_pymilvus}),
+            patch("orchestrator.config.settings") as mock_settings,
+        ):
             mock_settings.milvus_host = "localhost"
             mock_settings.milvus_port = 19530
             mock_settings.milvus_token = None
@@ -238,10 +246,12 @@ class TestToolSummaryRegistry:
         mock_encoder = MagicMock()
         mock_encoder.encode.return_value = MagicMock()
         mock_encoder.encode.return_value.tolist.return_value = [[0.1] * 384]
-        mock_client.search.return_value = [[
-            {"entity": {"tool_name": "search_products"}},
-            {"entity": {"tool_name": "add_to_cart"}},
-        ]]
+        mock_client.search.return_value = [
+            [
+                {"entity": {"tool_name": "search_products"}},
+                {"entity": {"tool_name": "add_to_cart"}},
+            ]
+        ]
         registry._client = mock_client
         registry._encoder = mock_encoder
 
@@ -450,7 +460,9 @@ class TestToolAttentionRouterRoute:
 
     def test_always_promote_config_respected(self):
         tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
-        router = _make_router_with_mock_registry(["search"], min_tools=3, always_promote=["get_cart"])
+        router = _make_router_with_mock_registry(
+            ["search"], min_tools=3, always_promote=["get_cart"]
+        )
         result = router.route(self._messages(), tools, _make_context())
         names = [_tool_name(t) for t in result]
         assert "get_cart" in names

@@ -228,7 +228,9 @@ class ContextWindowManager:
             if limits:
                 max_input_tokens, max_output_tokens = limits
                 max_tokens = max_input_tokens  # total context = input limit
-                logger.info(f"Fetched Gemini limits for {model}: input={max_input_tokens}, output={max_output_tokens}")
+                logger.info(
+                    f"Fetched Gemini limits for {model}: input={max_input_tokens}, output={max_output_tokens}"
+                )
 
         # 3. Conservative fallback
         if max_tokens is None:
@@ -265,12 +267,10 @@ class ContextWindowManager:
         bare = model.lower()
         for prefix in ("gemini/", "google/"):
             if bare.startswith(prefix):
-                bare = bare[len(prefix):]
+                bare = bare[len(prefix) :]
                 break
 
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/{bare}?key={api_key}"
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{bare}?key={api_key}"
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
                 data = json.loads(resp.read())
@@ -311,7 +311,9 @@ class ContextWindowManager:
                 elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict):
-                            total += len(enc.encode(str(block.get("text") or block.get("content") or "")))
+                            total += len(
+                                enc.encode(str(block.get("text") or block.get("content") or ""))
+                            )
                 total += len(enc.encode(msg.get("role", "")))
             total += 2  # priming tokens
             return total

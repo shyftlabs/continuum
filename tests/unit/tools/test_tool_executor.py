@@ -7,11 +7,8 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
-
 from orchestrator.tools.executor import ToolExecutor
 from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-
 
 # ---------------------------------------------------------------------------
 # _resolve_json_path
@@ -23,14 +20,13 @@ class TestResolveJsonPath:
         assert ToolExecutor._resolve_json_path({"a": 1}, "a") == 1
 
     def test_nested_two_levels(self):
-        assert ToolExecutor._resolve_json_path(
-            {"result": {"session_id": "abc"}}, "result.session_id"
-        ) == "abc"
+        assert (
+            ToolExecutor._resolve_json_path({"result": {"session_id": "abc"}}, "result.session_id")
+            == "abc"
+        )
 
     def test_nested_three_levels(self):
-        assert ToolExecutor._resolve_json_path(
-            {"a": {"b": {"c": 42}}}, "a.b.c"
-        ) == 42
+        assert ToolExecutor._resolve_json_path({"a": {"b": {"c": 42}}}, "a.b.c") == 42
 
     def test_missing_top_level_key_returns_none(self):
         assert ToolExecutor._resolve_json_path({"a": 1}, "b") is None
@@ -60,6 +56,7 @@ def _make_executor_with_config(config: ToolContextConfig) -> ToolExecutor:
 
 def _make_server(config: ToolContextConfig, name: str = "test-server"):
     from unittest.mock import MagicMock
+
     server = MagicMock()
     server.name = name
     server.context_config = config

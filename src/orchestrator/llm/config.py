@@ -60,8 +60,8 @@ class LLMConfig(BaseModel):
     cache_ttl: int | None = None
 
     # Smart Gateway
-    extra_body: dict[str, Any] | None = None       # passed as extra_body to the OpenAI SDK call
-    gateway_router_mode: str | None = None         # value for x-portkey-router-mode header
+    extra_body: dict[str, Any] | None = None  # passed as extra_body to the OpenAI SDK call
+    gateway_router_mode: str | None = None  # value for x-portkey-router-mode header
 
     def to_kwargs(self) -> dict[str, Any]:
         """Convert config to kwargs for LLM completion call."""
@@ -96,7 +96,9 @@ class LLMConfig(BaseModel):
             kwargs["response_format"] = {"type": "json_object"}
         elif self.response_format is not None:
             # Handle Pydantic models
-            if isinstance(self.response_format, type) and issubclass(self.response_format, BaseModel):
+            if isinstance(self.response_format, type) and issubclass(
+                self.response_format, BaseModel
+            ):
                 kwargs["response_format"] = self.response_format
             elif isinstance(self.response_format, dict):
                 # Already a dict format (json_object or json_schema)

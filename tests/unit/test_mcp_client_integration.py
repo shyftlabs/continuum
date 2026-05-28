@@ -18,10 +18,10 @@ import json
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_server(name: str = "test-server"):
     """In-process MCP server with two simple tools."""
@@ -89,8 +89,8 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_unknown_tool_raises(self):
-        from orchestrator.tools.exceptions import MCPToolError
         from orchestrator.llm.types import FunctionCall, ToolCall
+        from orchestrator.tools.exceptions import MCPToolError
 
         server = _make_server()
         executor = await _make_executor(server)
@@ -278,10 +278,10 @@ class TestToolContextConfig:
 
     @pytest.mark.asyncio
     async def test_captures_session_id_from_tool_result(self):
+        from orchestrator.llm.types import FunctionCall, ToolCall
         from orchestrator.tools.executor import ToolExecutor
         from orchestrator.tools.mcp import MCPServerFunction
         from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-        from orchestrator.llm.types import FunctionCall, ToolCall
 
         def create_session() -> dict:
             """Create a session and return session_id."""
@@ -308,10 +308,10 @@ class TestToolContextConfig:
 
     @pytest.mark.asyncio
     async def test_injects_captured_value_into_next_call(self):
+        from orchestrator.llm.types import FunctionCall, ToolCall
         from orchestrator.tools.executor import ToolExecutor
         from orchestrator.tools.mcp import MCPServerFunction
         from orchestrator.tools.types import ToolContextConfig, ToolContextVariable
-        from orchestrator.llm.types import FunctionCall, ToolCall
 
         received_args = {}
 

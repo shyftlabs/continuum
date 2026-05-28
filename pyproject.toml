@@ -118,6 +118,13 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["orchestrator"]
 
+[tool.ruff.lint.per-file-ignores]
+# Re-export hubs, plus modules that must configure logging before importing deps.
+"__init__.py" = ["F401", "E402"]
+# Tests commonly importorskip/guard before imports, use dict() fixtures, and
+# deliberately assert on broad exceptions.
+"tests/**" = ["E402", "C408", "B017"]
+
 [tool.mypy]
 python_version = "3.13"
 warn_return_any = true

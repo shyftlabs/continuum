@@ -56,9 +56,8 @@ def _require_deepeval() -> None:
         import deepeval  # noqa: F401
     except ImportError:
         raise ImportError(
-            "deepeval is not installed.\n"
-            "Install it with:  pip install deepeval"
-        )
+            "deepeval is not installed.\nInstall it with:  pip install deepeval"
+        ) from None
 
 
 @dataclass
@@ -96,6 +95,7 @@ class DeepEvalEvaluator:
             EvalResult with one CriterionScore per metric.
         """
         import time
+
         from deepeval import evaluate as _deepeval_evaluate
         from deepeval.test_case import LLMTestCase
 
@@ -110,6 +110,7 @@ class DeepEvalEvaluator:
 
         try:
             from deepeval.evaluate.configs import DisplayConfig
+
             loop = asyncio.get_event_loop()
             eval_result = await loop.run_in_executor(
                 None,

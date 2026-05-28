@@ -113,14 +113,14 @@ class TestPreferenceChange:
         combined = all_text + " " + search_text
 
         food_mems = [
-            m for m in all_mems
+            m
+            for m in all_mems
             if any(kw in m.memory.lower() for kw in ("food", "sushi", "pasta", "favorite"))
         ]
 
         pasta_present = "pasta" in combined
         sushi_demoted = not any(
-            "favorite" in m.memory.lower() and "sushi" in m.memory.lower()
-            for m in food_mems
+            "favorite" in m.memory.lower() and "sushi" in m.memory.lower() for m in food_mems
         )
 
         assert pasta_present or sushi_demoted, (
@@ -134,7 +134,9 @@ class TestPreferenceChange:
         uid = _uid()
 
         await memory_client.add("I work as a teacher at a high school.", user_id=uid)
-        await memory_client.add("I recently changed careers — I now work as a software engineer.", user_id=uid)
+        await memory_client.add(
+            "I recently changed careers — I now work as a software engineer.", user_id=uid
+        )
 
         result = await memory_client.search("what is the user's job", user_id=uid, limit=3)
         all_text = " ".join(r.memory.lower() for r in result.results)
@@ -171,13 +173,25 @@ class TestLongConversationExtraction:
         conversation = [
             {"role": "user", "content": "Hi, I've been having a rough week."},
             {"role": "assistant", "content": "I'm sorry to hear that. What's been going on?"},
-            {"role": "user", "content": "Work has been stressful. I'm a nurse and we're understaffed."},
-            {"role": "assistant", "content": "That sounds very challenging. How long have you been a nurse?"},
+            {
+                "role": "user",
+                "content": "Work has been stressful. I'm a nurse and we're understaffed.",
+            },
+            {
+                "role": "assistant",
+                "content": "That sounds very challenging. How long have you been a nurse?",
+            },
             {"role": "user", "content": "About 8 years now. I work night shifts mostly."},
-            {"role": "assistant", "content": "Night shifts are tough. Do you have any hobbies to unwind?"},
+            {
+                "role": "assistant",
+                "content": "Night shifts are tough. Do you have any hobbies to unwind?",
+            },
             {"role": "user", "content": "I paint watercolors on my days off. It really helps."},
             {"role": "assistant", "content": "That's a lovely hobby. What do you usually paint?"},
-            {"role": "user", "content": "Mostly landscapes. I grew up near the mountains in Colorado."},
+            {
+                "role": "user",
+                "content": "Mostly landscapes. I grew up near the mountains in Colorado.",
+            },
             {"role": "assistant", "content": "Colorado is beautiful. Do you still visit?"},
             {"role": "user", "content": "Yes, every summer. I now live in Chicago though."},
             {"role": "assistant", "content": "Chicago is great! Do you have family there?"},
@@ -186,24 +200,39 @@ class TestLongConversationExtraction:
             {"role": "user", "content": "My older one does — she's really talented."},
             {"role": "assistant", "content": "That's lovely. What grade is she in?"},
             {"role": "user", "content": "Third grade. She wants to be an architect."},
-            {"role": "assistant", "content": "How inspiring! Do you have any health concerns we should keep in mind?"},
-            {"role": "user", "content": "Yes, I'm diabetic — Type 2. I manage it with diet and metformin."},
-            {"role": "assistant", "content": "Thank you for sharing. I'll keep that in mind for future conversations."},
+            {
+                "role": "assistant",
+                "content": "How inspiring! Do you have any health concerns we should keep in mind?",
+            },
+            {
+                "role": "user",
+                "content": "Yes, I'm diabetic — Type 2. I manage it with diet and metformin.",
+            },
+            {
+                "role": "assistant",
+                "content": "Thank you for sharing. I'll keep that in mind for future conversations.",
+            },
         ]
 
         result = await memory_client.add(conversation, user_id=uid)
         assert result.message is not None
 
         # Test key facts are retrievable
-        job_result = await memory_client.search("what is the user's profession", user_id=uid, limit=3)
+        job_result = await memory_client.search(
+            "what is the user's profession", user_id=uid, limit=3
+        )
         job_text = " ".join(r.memory.lower() for r in job_result.results)
         assert "nurse" in job_text, "Profession (nurse) not extracted from conversation"
 
-        location_result = await memory_client.search("where does the user live", user_id=uid, limit=3)
+        location_result = await memory_client.search(
+            "where does the user live", user_id=uid, limit=3
+        )
         location_text = " ".join(r.memory.lower() for r in location_result.results)
         assert "chicago" in location_text, "Location (Chicago) not extracted from conversation"
 
-        medical_result = await memory_client.search("medical conditions or health", user_id=uid, limit=3)
+        medical_result = await memory_client.search(
+            "medical conditions or health", user_id=uid, limit=3
+        )
         medical_text = " ".join(r.memory.lower() for r in medical_result.results)
         assert "diabet" in medical_text or "metformin" in medical_text, (
             "Medical condition (diabetes) not extracted from conversation"
@@ -355,7 +384,9 @@ class TestForgetting:
         remaining = await memory_client.get_all(user_id=uid)
         assert len(remaining) == 0
 
-        result = await memory_client.search("SSN or bank account or password", user_id=uid, limit=10)
+        result = await memory_client.search(
+            "SSN or bank account or password", user_id=uid, limit=10
+        )
         assert result.total_results == 0, "Sensitive data still accessible after full wipe"
 
 
@@ -373,12 +404,17 @@ class TestDeduplicationAcrossPhrasings:
 
         await memory_client.add("I don't eat meat.", user_id=uid)
         await memory_client.add("I am a vegetarian.", user_id=uid)
-        await memory_client.add("I follow a vegetarian diet and avoid all meat products.", user_id=uid)
+        await memory_client.add(
+            "I follow a vegetarian diet and avoid all meat products.", user_id=uid
+        )
 
         all_mems = await memory_client.get_all(user_id=uid)
         diet_mems = [
-            m for m in all_mems
-            if "vegetarian" in m.memory.lower() or "meat" in m.memory.lower() or "diet" in m.memory.lower()
+            m
+            for m in all_mems
+            if "vegetarian" in m.memory.lower()
+            or "meat" in m.memory.lower()
+            or "diet" in m.memory.lower()
         ]
 
         # mem0 should consolidate these — expect at most 3 (ideally 1-2)
@@ -406,18 +442,17 @@ class TestMedicalDataRetention:
         uid = _uid()
 
         await memory_client.add(
-            "I have a severe anaphylactic allergy to penicillin. "
-            "I carry an EpiPen at all times.",
+            "I have a severe anaphylactic allergy to penicillin. I carry an EpiPen at all times.",
             user_id=uid,
         )
 
-        result = await memory_client.search("allergies or medications to avoid", user_id=uid, limit=5)
+        result = await memory_client.search(
+            "allergies or medications to avoid", user_id=uid, limit=5
+        )
         all_text = " ".join(r.memory.lower() for r in result.results)
 
         assert "penicillin" in all_text, "Critical allergy (penicillin) not found in memory"
-        assert "allerg" in all_text or "anaphylactic" in all_text, (
-            "Allergy severity not preserved"
-        )
+        assert "allerg" in all_text or "anaphylactic" in all_text, "Allergy severity not preserved"
 
     async def test_medication_list_accurate(self, memory_client):
         """Current medication list must be stored and retrieved correctly."""
@@ -430,7 +465,9 @@ class TestMedicalDataRetention:
             user_id=uid,
         )
 
-        result = await memory_client.search("what medications does the user take", user_id=uid, limit=5)
+        result = await memory_client.search(
+            "what medications does the user take", user_id=uid, limit=5
+        )
         all_text = " ".join(r.memory.lower() for r in result.results)
 
         assert "metformin" in all_text, "Medication (metformin) not found"
@@ -453,8 +490,7 @@ class TestMedicalDataRetention:
 
         await memory_client.add("I take aspirin 81mg daily.", user_id=uid)
         await memory_client.add(
-            "My doctor told me to stop taking aspirin. "
-            "I no longer take aspirin as of this week.",
+            "My doctor told me to stop taking aspirin. I no longer take aspirin as of this week.",
             user_id=uid,
         )
 
@@ -468,7 +504,9 @@ class TestMedicalDataRetention:
         if aspirin_mems:
             # Still present — must reflect the discontinuation
             combined = " ".join(m.memory.lower() for m in aspirin_mems)
-            assert any(kw in combined for kw in ("no longer", "stop", "discontinu", "doctor", "stopped")), (
+            assert any(
+                kw in combined for kw in ("no longer", "stop", "discontinu", "doctor", "stopped")
+            ), (
                 f"Aspirin memory present but discontinuation not reflected: "
                 f"{[m.memory for m in aspirin_mems]}"
             )

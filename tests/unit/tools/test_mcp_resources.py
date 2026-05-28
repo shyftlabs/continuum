@@ -10,14 +10,13 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import AnyUrl
 
-from orchestrator.tools.mcp import MCPServerFunction, MCPServerStreamableHttp, function_tool
 from orchestrator.tools.exceptions import MCPError
-
+from orchestrator.tools.mcp import MCPServerFunction, MCPServerStreamableHttp, function_tool
 
 # ---------------------------------------------------------------------------
 # MCPServerFunction stubs
@@ -144,9 +143,7 @@ class TestMCPServerReadResource:
 
         mock_session = AsyncMock()
         mock_result = MagicMock()
-        mock_result.contents = [
-            TextResourceContents(uri=AnyUrl("shop://catalogue"), text=payload)
-        ]
+        mock_result.contents = [TextResourceContents(uri=AnyUrl("shop://catalogue"), text=payload)]
         mock_session.read_resource = AsyncMock(return_value=mock_result)
         server.session = mock_session
 
@@ -186,8 +183,9 @@ class TestMCPServerReadResource:
 
     @pytest.mark.asyncio
     async def test_read_resource_skips_blob_returns_empty(self):
-        from mcp.types import BlobResourceContents
         import base64
+
+        from mcp.types import BlobResourceContents
 
         server = _make_streamable_http_server()
 
@@ -222,9 +220,7 @@ class TestMCPServerReadResource:
 
         mock_session = AsyncMock()
         mock_result = MagicMock()
-        mock_result.contents = [
-            TextResourceContents(uri=AnyUrl("shop://categories"), text="{}")
-        ]
+        mock_result.contents = [TextResourceContents(uri=AnyUrl("shop://categories"), text="{}")]
         mock_session.read_resource = AsyncMock(return_value=mock_result)
         server.session = mock_session
 

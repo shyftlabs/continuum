@@ -137,7 +137,9 @@ class MessageBuilder(IMessageBuilder):
         if tool_context_state and not tool_context_state.is_empty():
             # Validate tool context state before injection
             try:
-                if not hasattr(tool_context_state, "to_prompt_context") or not hasattr(tool_context_state, "get_all_namespaces"):
+                if not hasattr(tool_context_state, "to_prompt_context") or not hasattr(
+                    tool_context_state, "get_all_namespaces"
+                ):
                     logger.warning(
                         "Tool context state missing required methods (to_prompt_context, get_all_namespaces). "
                         "Skipping injection."
@@ -202,7 +204,9 @@ class MessageBuilder(IMessageBuilder):
                         context.session_id, limit=history_turns
                     )
                     if history:
-                        logger.debug(f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}")
+                        logger.debug(
+                            f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}"
+                        )
                     messages.extend(history)
             except Exception as e:
                 logger.warning(f"Failed to load session history: {e}")
@@ -210,15 +214,17 @@ class MessageBuilder(IMessageBuilder):
         # Inject RAG context last (closest to current question for maximum recency effect)
         rag_context = agent.config.rag_context if agent.config else None
         if rag_context:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "--- PROVIDED CONTEXT (use for new factual/analytical questions; "
-                    "for references to this conversation use the conversation history above) ---\n\n"
-                    + rag_context
-                    + "\n\n--- END CONTEXT ---"
-                ),
-            })
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "--- PROVIDED CONTEXT (use for new factual/analytical questions; "
+                        "for references to this conversation use the conversation history above) ---\n\n"
+                        + rag_context
+                        + "\n\n--- END CONTEXT ---"
+                    ),
+                }
+            )
 
         # Sanitize user input if enabled via agent config
         should_sanitize = not agent.config or agent.config.input_sanitization
@@ -239,13 +245,15 @@ class MessageBuilder(IMessageBuilder):
         # catches this and returns a blocked response without invoking the LLM.
         if isinstance(input, str) and agent.config and agent.config.input_scanners:
             from orchestrator.exceptions import InputBlockedError
+
             for scanner in agent.config.input_scanners:
                 try:
                     input, is_safe, reason = scanner(input)
                     if not is_safe:
                         logger.warning(
                             "Input scanner blocked request — agent=%s scanner=%s",
-                            agent.name, reason,
+                            agent.name,
+                            reason,
                         )
                         raise InputBlockedError(
                             f"Input blocked by scanner: {reason}",
@@ -256,7 +264,8 @@ class MessageBuilder(IMessageBuilder):
                 except Exception as e:
                     logger.warning(
                         "Input scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)), e,
+                        getattr(scanner, "__name__", repr(scanner)),
+                        e,
                     )
 
         # Record the index where user input begins — used by save_messages to know
@@ -305,7 +314,10 @@ class MessageBuilder(IMessageBuilder):
                     # Compression may have shortened the list, so find the user message
                     # by scanning backward from the end (it was the last message appended).
                     user_message_index = len(messages) - 1
-                    while user_message_index > 0 and messages[user_message_index].get("role") != "user":
+                    while (
+                        user_message_index > 0
+                        and messages[user_message_index].get("role") != "user"
+                    ):
                         user_message_index -= 1
         except Exception as e:
             logger.warning(
@@ -314,11 +326,15 @@ class MessageBuilder(IMessageBuilder):
 
         # Run tool-attention routing: filters tools and produces Phase 1 summary.
         from orchestrator.tools.tool_attention.router import apply_tool_attention
-        filtered_tools = await apply_tool_attention(agent, messages, context) or agent.get_tools_for_llm()
+
+        filtered_tools = (
+            await apply_tool_attention(agent, messages, context) or agent.get_tools_for_llm()
+        )
         if context.metadata is not None:
             context.metadata["_filtered_tools"] = filtered_tools
 
         import os
+
         _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
         _limit = None if _full else 2000
 
@@ -336,19 +352,23 @@ class MessageBuilder(IMessageBuilder):
             display_messages = messages
 
         formatted = "\n".join(
-            f"[{m.get('role','?')}] {str(m.get('content', ''))[:_limit]}"
-            for m in display_messages
+            f"[{m.get('role', '?')}] {str(m.get('content', ''))[:_limit]}" for m in display_messages
         )
-        logger.info("===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted)
+        logger.info(
+            "===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted
+        )
 
         if filtered_tools:
             _tool_limit = None if _full else 200
             _tools_formatted = "\n".join(
                 f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
-                if isinstance(t, dict) else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
+                if isinstance(t, dict)
+                else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
                 for t in filtered_tools
             )
-            logger.info("===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted)
+            logger.info(
+                "===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted
+            )
 
         return messages, user_message_index
 

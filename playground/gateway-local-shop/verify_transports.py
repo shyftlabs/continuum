@@ -48,9 +48,9 @@ def _search_tool_call() -> ToolCall:
 
 
 async def _verify(label: str, server) -> bool:
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"  {label}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     try:
         await server.connect()
         executor = ToolExecutor(tool_registry={server: None})
@@ -68,7 +68,7 @@ async def _verify(label: str, server) -> bool:
         # 2. Tool execution
         result = await executor.execute_tool_call(_search_tool_call())
         if not result.content:
-            print(f"  ✗ search_products returned empty content")
+            print("  ✗ search_products returned empty content")
             return False
         parsed = json.loads(result.content)
         if not isinstance(parsed, list) or len(parsed) == 0:
@@ -82,7 +82,9 @@ async def _verify(label: str, server) -> bool:
             type="function",
             function=FunctionCall(
                 name="add_to_cart",
-                arguments=json.dumps({"session_id": "verify-session", "product_id": "p5", "quantity": 1}),
+                arguments=json.dumps(
+                    {"session_id": "verify-session", "product_id": "p5", "quantity": 1}
+                ),
             ),
         )
         cart_result = await executor.execute_tool_call(cart_call)
@@ -92,12 +94,12 @@ async def _verify(label: str, server) -> bool:
             return False
         print(f"  ✓ add_to_cart succeeded: {cart_data.get('message', '')}")
 
-        print(f"  PASS")
+        print("  PASS")
         return True
 
     except (Exception, asyncio.CancelledError) as e:
         print(f"  ✗ Error: {type(e).__name__}: {e}")
-        print(f"  FAIL")
+        print("  FAIL")
         return False
     finally:
         try:
@@ -110,11 +112,41 @@ def _make_function_server() -> MCPServerFunction:
     """In-process server — same shop logic as Python functions."""
     _carts: dict[str, list] = {}
     PRODUCTS = [
-        {"id": "p1", "name": "Dog Food (Dry) 5kg", "price": 29.99, "category": "food", "animal": "dog"},
-        {"id": "p2", "name": "Cat Food (Wet) 12-pack", "price": 18.99, "category": "food", "animal": "cat"},
-        {"id": "p3", "name": "Dog Leash (Nylon)", "price": 12.99, "category": "accessories", "animal": "dog"},
-        {"id": "p4", "name": "Cat Toy - Feather Wand", "price": 8.99, "category": "toys", "animal": "cat"},
-        {"id": "p5", "name": "Dog Toy - Tennis Ball 3-pack", "price": 6.99, "category": "toys", "animal": "dog"},
+        {
+            "id": "p1",
+            "name": "Dog Food (Dry) 5kg",
+            "price": 29.99,
+            "category": "food",
+            "animal": "dog",
+        },
+        {
+            "id": "p2",
+            "name": "Cat Food (Wet) 12-pack",
+            "price": 18.99,
+            "category": "food",
+            "animal": "cat",
+        },
+        {
+            "id": "p3",
+            "name": "Dog Leash (Nylon)",
+            "price": 12.99,
+            "category": "accessories",
+            "animal": "dog",
+        },
+        {
+            "id": "p4",
+            "name": "Cat Toy - Feather Wand",
+            "price": 8.99,
+            "category": "toys",
+            "animal": "cat",
+        },
+        {
+            "id": "p5",
+            "name": "Dog Toy - Tennis Ball 3-pack",
+            "price": 6.99,
+            "category": "toys",
+            "animal": "dog",
+        },
     ]
 
     def search_products(query: str, animal: str = "", category: str = "") -> list:
@@ -139,8 +171,14 @@ def _make_function_server() -> MCPServerFunction:
         if not product:
             return {"error": f"Product {product_id!r} not found"}
         cart = _carts.setdefault(session_id, [])
-        cart.append({"product_id": product_id, "name": product["name"],
-                     "price": product["price"], "quantity": quantity})
+        cart.append(
+            {
+                "product_id": product_id,
+                "name": product["name"],
+                "price": product["price"],
+                "quantity": quantity,
+            }
+        )
         return {"message": f"Added {product['name']} to cart", "cart_size": len(cart)}
 
     def view_cart(session_id: str) -> dict:
@@ -221,9 +259,9 @@ def main():
     )
 
     # Summary
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("  SUMMARY")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     for transport, passed in results.items():
         status = "PASS" if passed else "FAIL"
         print(f"  {status}  {transport}")

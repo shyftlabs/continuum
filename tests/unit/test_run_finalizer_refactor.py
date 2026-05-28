@@ -2,10 +2,10 @@
 Tests for RunFinalizer.finalize() with the new user_message_index parameter
 and updated save_session_data() behavior.
 """
+
 from __future__ import annotations
 
 import time
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from orchestrator.agent.types import AgentResponse, ResponseStatus, RunState
@@ -26,9 +26,9 @@ def _make_agent(name="finalizer-agent", log_to_session=True):
 
 def _make_finalizer(save_messages_mock=None):
     from orchestrator.agent.execution.run_finalizer import RunFinalizer
-    from orchestrator.agent.services.session_service import SessionService
-    from orchestrator.agent.services.context_service import ContextService
     from orchestrator.agent.execution.run_lifecycle import RunLifecycle
+    from orchestrator.agent.services.context_service import ContextService
+    from orchestrator.agent.services.session_service import SessionService
 
     sess_svc = MagicMock(spec=SessionService)
     sess_svc.save_messages = save_messages_mock or AsyncMock()
@@ -82,9 +82,13 @@ class TestUserMessageIndexPassthrough:
             {"role": "assistant", "content": "final answer"},
         ]
 
-        with patch("orchestrator.observability.metrics.get_metrics_collector", return_value=MagicMock(
-            record_latency=MagicMock(), track_tokens=MagicMock(),
-        )):
+        with patch(
+            "orchestrator.observability.metrics.get_metrics_collector",
+            return_value=MagicMock(
+                record_latency=MagicMock(),
+                track_tokens=MagicMock(),
+            ),
+        ):
             await finalizer.finalize(agent, ctx, rs, response, 2, None, time.time(), messages)
 
         sess_svc.save_messages.assert_called_once()
@@ -99,9 +103,13 @@ class TestUserMessageIndexPassthrough:
         response = _make_response()
         messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
 
-        with patch("orchestrator.observability.metrics.get_metrics_collector", return_value=MagicMock(
-            record_latency=MagicMock(), track_tokens=MagicMock(),
-        )):
+        with patch(
+            "orchestrator.observability.metrics.get_metrics_collector",
+            return_value=MagicMock(
+                record_latency=MagicMock(),
+                track_tokens=MagicMock(),
+            ),
+        ):
             await finalizer.finalize(agent, ctx, rs, response, 0, None, time.time(), messages)
 
         call_kwargs = sess_svc.save_messages.call_args.kwargs
@@ -116,9 +124,13 @@ class TestSaveSessionDataGuards:
         rs = _make_run_state()
         response = _make_response()
 
-        with patch("orchestrator.observability.metrics.get_metrics_collector", return_value=MagicMock(
-            record_latency=MagicMock(), track_tokens=MagicMock(),
-        )):
+        with patch(
+            "orchestrator.observability.metrics.get_metrics_collector",
+            return_value=MagicMock(
+                record_latency=MagicMock(),
+                track_tokens=MagicMock(),
+            ),
+        ):
             await finalizer.finalize(agent, ctx, rs, response, 0, None, time.time(), [])
 
         sess_svc.save_messages.assert_not_called()
@@ -130,9 +142,13 @@ class TestSaveSessionDataGuards:
         rs = _make_run_state()
         response = _make_response()
 
-        with patch("orchestrator.observability.metrics.get_metrics_collector", return_value=MagicMock(
-            record_latency=MagicMock(), track_tokens=MagicMock(),
-        )):
+        with patch(
+            "orchestrator.observability.metrics.get_metrics_collector",
+            return_value=MagicMock(
+                record_latency=MagicMock(),
+                track_tokens=MagicMock(),
+            ),
+        ):
             await finalizer.finalize(agent, ctx, rs, response, 0, None, time.time(), [])
 
         sess_svc.save_messages.assert_not_called()
@@ -144,11 +160,23 @@ class TestSaveSessionDataGuards:
         rs = _make_run_state()
         response = _make_response()
 
-        with patch("orchestrator.observability.metrics.get_metrics_collector", return_value=MagicMock(
-            record_latency=MagicMock(), track_tokens=MagicMock(),
-        )):
-            await finalizer.finalize(agent, ctx, rs, response, 1, None, time.time(),
-                                     [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}])
+        with patch(
+            "orchestrator.observability.metrics.get_metrics_collector",
+            return_value=MagicMock(
+                record_latency=MagicMock(),
+                track_tokens=MagicMock(),
+            ),
+        ):
+            await finalizer.finalize(
+                agent,
+                ctx,
+                rs,
+                response,
+                1,
+                None,
+                time.time(),
+                [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}],
+            )
 
         call_kwargs = sess_svc.save_messages.call_args.kwargs
         assert call_kwargs["session_id"] == "my-session"

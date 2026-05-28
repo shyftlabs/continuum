@@ -6,7 +6,10 @@ import cycles with ``RouterAgent``.
 
 from __future__ import annotations
 
-from orchestrator.agent.smart_layer.defaults import CLASSIFIER_SYSTEM_PROMPT, MODEL_TIER_DEFAULT_INSTRUCTIONS
+from orchestrator.agent.smart_layer.defaults import (
+    CLASSIFIER_SYSTEM_PROMPT,
+    MODEL_TIER_DEFAULT_INSTRUCTIONS,
+)
 from orchestrator.agent.smart_layer.types import (
     ClassifyOutcome,
     ModelTierResult,

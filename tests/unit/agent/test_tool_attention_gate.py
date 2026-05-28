@@ -12,13 +12,12 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from orchestrator.agent.services.tool_service import ToolService
 from orchestrator.llm.types import FunctionCall, ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,9 +64,11 @@ class TestGateAllowsPromotedTool:
     async def test_promoted_tool_reaches_executor(self):
         mock_executor = AsyncMock()
         mock_executor.tool_registry = {}
-        mock_executor.execute_tool_calls = AsyncMock(return_value=[
-            {"role": "tool", "tool_call_id": "call_abc", "content": "results here"},
-        ])
+        mock_executor.execute_tool_calls = AsyncMock(
+            return_value=[
+                {"role": "tool", "tool_call_id": "call_abc", "content": "results here"},
+            ]
+        )
 
         agent = _make_agent(tool_executor=mock_executor)
         service = ToolService(tool_executor=None)
@@ -85,9 +86,11 @@ class TestGateAllowsPromotedTool:
     async def test_all_tools_allowed_when_no_promoted_set(self):
         mock_executor = AsyncMock()
         mock_executor.tool_registry = {}
-        mock_executor.execute_tool_calls = AsyncMock(return_value=[
-            {"role": "tool", "tool_call_id": "call_abc", "content": "ok"},
-        ])
+        mock_executor.execute_tool_calls = AsyncMock(
+            return_value=[
+                {"role": "tool", "tool_call_id": "call_abc", "content": "ok"},
+            ]
+        )
 
         agent = _make_agent(tool_executor=mock_executor)
         service = ToolService(tool_executor=None)
@@ -105,9 +108,11 @@ class TestGateAllowsPromotedTool:
     async def test_gate_inactive_when_metadata_is_none(self):
         mock_executor = AsyncMock()
         mock_executor.tool_registry = {}
-        mock_executor.execute_tool_calls = AsyncMock(return_value=[
-            {"role": "tool", "tool_call_id": "call_abc", "content": "ok"},
-        ])
+        mock_executor.execute_tool_calls = AsyncMock(
+            return_value=[
+                {"role": "tool", "tool_call_id": "call_abc", "content": "ok"},
+            ]
+        )
 
         agent = _make_agent(tool_executor=mock_executor)
         service = ToolService(tool_executor=None)

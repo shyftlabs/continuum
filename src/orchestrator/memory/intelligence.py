@@ -51,8 +51,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from orchestrator.logging import get_logger
@@ -73,15 +73,15 @@ class IntelligenceConfig:
     """Configuration for IntelligentMemoryClient features."""
 
     # Feature toggles
-    enable_entity_memory: bool = True    # Extract and store named entities
-    enable_user_profiles: bool = True    # Build structured user knowledge per user
-    enable_scoring: bool = True          # LLM importance score at store time
-    enable_decay: bool = True            # Time-weighted relevance modifier at search time
+    enable_entity_memory: bool = True  # Extract and store named entities
+    enable_user_profiles: bool = True  # Build structured user knowledge per user
+    enable_scoring: bool = True  # LLM importance score at store time
+    enable_decay: bool = True  # Time-weighted relevance modifier at search time
 
     # Retrieval score weights (must sum to 1.0)
-    semantic_weight: float = 0.6         # Weight for vector semantic similarity
-    importance_weight: float = 0.3       # Weight for stored importance score
-    decay_weight: float = 0.1            # Weight for recency boost/penalty
+    semantic_weight: float = 0.6  # Weight for vector semantic similarity
+    importance_weight: float = 0.3  # Weight for stored importance score
+    decay_weight: float = 0.1  # Weight for recency boost/penalty
 
     # LLM model for scoring, extraction (defaults to container default)
     intelligence_model: str | None = None
@@ -136,7 +136,7 @@ class IntelligentMemoryClient(MemoryClient):
         llm = self._get_llm()
         text = self._to_text(messages)
         enriched_meta: dict[str, Any] = dict(metadata or {})
-        enriched_meta["stored_at"] = datetime.now(timezone.utc).isoformat()
+        enriched_meta["stored_at"] = datetime.now(UTC).isoformat()
 
         # 1. Importance scoring
         if self._intel.enable_scoring and llm:
@@ -221,10 +221,7 @@ class IntelligentMemoryClient(MemoryClient):
         """
         # Fetch more than needed so we can filter to entity-tagged entries only
         results = await super().search(query, user_id=user_id, limit=limit * 4)
-        entities = [
-            e for e in results.results
-            if e.metadata.get("memory_type") == "entity"
-        ]
+        entities = [e for e in results.results if e.metadata.get("memory_type") == "entity"]
         out = []
         for e in entities[:limit]:
             rec: dict[str, Any] = {
@@ -235,8 +232,13 @@ class IntelligentMemoryClient(MemoryClient):
             }
             # Merge any extra attributes stored in metadata
             for k, v in e.metadata.items():
-                if k not in ("memory_type", "entity_name", "entity_type",
-                             "importance", "stored_at"):
+                if k not in (
+                    "memory_type",
+                    "entity_name",
+                    "entity_type",
+                    "importance",
+                    "stored_at",
+                ):
                     rec[k] = v
             out.append(rec)
         return out
@@ -269,8 +271,7 @@ class IntelligentMemoryClient(MemoryClient):
             limit=10,
         )
         profile_entries = [
-            e for e in results.results
-            if e.metadata.get("memory_type") == "user_profile"
+            e for e in results.results if e.metadata.get("memory_type") == "user_profile"
         ]
         if not profile_entries:
             return None
@@ -316,7 +317,7 @@ class IntelligentMemoryClient(MemoryClient):
         """
         cutoff = threshold if threshold is not None else self._intel.prune_threshold
         entries = await self.get_all(user_id=user_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pruned = 0
 
         for entry in entries:
@@ -339,9 +340,7 @@ class IntelligentMemoryClient(MemoryClient):
                 except Exception as e:
                     logger.warning(f"Failed to prune memory '{entry.id}': {e}")
 
-        logger.info(
-            f"IntelligentMemoryClient: pruned {pruned} memories for user '{user_id}'"
-        )
+        logger.info(f"IntelligentMemoryClient: pruned {pruned} memories for user '{user_id}'")
         return pruned
 
     # -------------------------------------------------------------------------
@@ -350,7 +349,7 @@ class IntelligentMemoryClient(MemoryClient):
 
     def _rerank(self, result: MemorySearchResult) -> MemorySearchResult:
         """Re-rank search results by blending semantic similarity, importance, and decay."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for entry in result.results:
             sem = entry.score if entry.score is not None else 0.5
             importance = float(entry.metadata.get("importance", 0.5))
@@ -388,9 +387,9 @@ class IntelligentMemoryClient(MemoryClient):
 
             # Make both timezone-aware or both naive
             if stored.tzinfo is None:
-                stored = stored.replace(tzinfo=timezone.utc)
+                stored = stored.replace(tzinfo=UTC)
             if now.tzinfo is None:
-                now = now.replace(tzinfo=timezone.utc)
+                now = now.replace(tzinfo=UTC)
 
             age_days = (now - stored).days
         except Exception:
@@ -500,7 +499,7 @@ class IntelligentMemoryClient(MemoryClient):
                 "entity_name": name,
                 "entity_type": etype,
                 "importance": 0.8,
-                "stored_at": datetime.now(timezone.utc).isoformat(),
+                "stored_at": datetime.now(UTC).isoformat(),
             }
             entity_meta.update(attrs)
 
@@ -540,12 +539,15 @@ class IntelligentMemoryClient(MemoryClient):
             "Keys: preferences (list), employer (string), expertise_level (string), "
             "communication_style (string), last_topics (list)\n\n"
             "Reply with a single compact JSON object containing only updated keys. "
-            "Example: {\"employer\":\"Stripe\",\"preferences\":[\"Python\",\"Go\"]}\n"
+            'Example: {"employer":"Stripe","preferences":["Python","Go"]}\n'
             "Return {} if nothing new."
         )
         try:
             import asyncio as _asyncio
-            await _asyncio.sleep(1.5)  # pause to avoid rate-limiting after rapid scoring + entity calls
+
+            await _asyncio.sleep(
+                1.5
+            )  # pause to avoid rate-limiting after rapid scoring + entity calls
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
                 config=LLMConfig(model=model, temperature=0.1, max_tokens=300),
@@ -584,7 +586,7 @@ class IntelligentMemoryClient(MemoryClient):
         profile_meta: dict[str, Any] = {
             "memory_type": "user_profile",
             "importance": 1.0,
-            "stored_at": datetime.now(timezone.utc).isoformat(),
+            "stored_at": datetime.now(UTC).isoformat(),
             # Store the full JSON in metadata so it survives mem0's fact extraction.
             # mem0 rewrites the memory text through LLM, but passes metadata through
             # unchanged — so we read back from metadata["profile_json"], not memory text.
@@ -598,12 +600,18 @@ class IntelligentMemoryClient(MemoryClient):
         if updated.get("expertise_level"):
             summary_parts.append(f"expertise: {updated['expertise_level']}")
         if updated.get("preferences"):
-            summary_parts.append(f"preferences: {', '.join(str(p) for p in updated['preferences'])}")
+            summary_parts.append(
+                f"preferences: {', '.join(str(p) for p in updated['preferences'])}"
+            )
         if updated.get("communication_style"):
             summary_parts.append(f"communication style: {updated['communication_style']}")
         if updated.get("last_topics"):
-            summary_parts.append(f"recent topics: {', '.join(str(t) for t in updated['last_topics'])}")
-        profile_summary = "User profile — " + ("; ".join(summary_parts) if summary_parts else "updated")
+            summary_parts.append(
+                f"recent topics: {', '.join(str(t) for t in updated['last_topics'])}"
+            )
+        profile_summary = "User profile — " + (
+            "; ".join(summary_parts) if summary_parts else "updated"
+        )
 
         try:
             # infer=False bypasses mem0's LLM fact extraction so the profile
@@ -624,12 +632,14 @@ class IntelligentMemoryClient(MemoryClient):
         """Lazy-load LLM client from the container."""
         try:
             from orchestrator.core.container import get_container
+
             return get_container().llm_client
         except Exception:
             return None
 
     def _get_default_model(self) -> str:
         from orchestrator.config import settings
+
         return settings.default_llm_model
 
     @staticmethod
@@ -657,15 +667,15 @@ class IntelligentMemoryClient(MemoryClient):
         depth = 0
         start = -1
         for i, ch in enumerate(stripped):
-            if ch == '{':
+            if ch == "{":
                 if start == -1:
                     start = i
                 depth += 1
-            elif ch == '}':
+            elif ch == "}":
                 depth -= 1
                 if depth == 0 and start != -1:
                     try:
-                        return json.loads(stripped[start:i + 1])
+                        return json.loads(stripped[start : i + 1])
                     except json.JSONDecodeError:
                         break
 
@@ -755,15 +765,15 @@ class IntelligentMemoryClient(MemoryClient):
         depth = 0
         start = -1
         for i, ch in enumerate(stripped):
-            if ch == '[':
+            if ch == "[":
                 if start == -1:
                     start = i
                 depth += 1
-            elif ch == ']':
+            elif ch == "]":
                 depth -= 1
                 if depth == 0 and start != -1:
                     try:
-                        return json.loads(stripped[start:i + 1])
+                        return json.loads(stripped[start : i + 1])
                     except json.JSONDecodeError:
                         break
 

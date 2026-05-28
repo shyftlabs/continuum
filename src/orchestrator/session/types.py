@@ -5,7 +5,7 @@ Provides Pydantic models for session management and conversation history.
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
