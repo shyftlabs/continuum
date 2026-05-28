@@ -103,10 +103,24 @@ cd continuum
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
+pre-commit install                          # ruff lint+format on commit
+pre-commit install --hook-type pre-push     # mypy on push
+
 cp .env.template .env       # add your provider keys
 docker compose up -d        # Redis · Milvus · Langfuse
 
 pytest                      # run the test suite
+```
+
+### Code quality
+
+`ruff` (lint + format) and `mypy` run automatically via [pre-commit](https://pre-commit.com) once installed — `ruff` on every commit, `mypy` on push. They read their config from `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`). The same checks run in CI on every PR. Run them manually anytime:
+
+```bash
+ruff check .            # lint
+ruff format .           # format
+mypy src/orchestrator   # type-check
+pre-commit run --all-files   # everything, across the whole repo
 ```
 
 ## Reporting bugs
