@@ -138,6 +138,7 @@ class Mem0Provider(BaseMemoryProvider):
                     "qdrant_host": self._config.qdrant_host,
                     "embedder_provider": self._config.embedder_provider,
                     "embedder_model": self._config.embedder_model,
+                    "embedder_api_base": self._config.embedder_api_base,
                     "isolation": self._config.memory_isolation,
                 },
             )

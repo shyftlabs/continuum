@@ -840,9 +840,9 @@ pip install -e '.[temporal]' </div>
       
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Next, configure your <code>.env</code> file:</p>
       <div class="code-wrapper" style="max-height: 400px; overflow-y: auto;"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># ── LLM Provider Keys ────────────────────────────────────────────────────────</span>
-OPENAI_API_KEY=your-openai-api-key        <span class="cm"># required (also used for embeddings)</span>
-GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># if using Gemini</span>
-<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # if using Claude</span>
+OPENAI_API_KEY=your-openai-api-key        <span class="cm"># optional </span>
+GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional</span>
+<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional</span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
@@ -855,8 +855,10 @@ LLM_ENABLE_FALLBACK=true
 
 <span class="cm"># ── Embeddings ────────────────────────────────────────────────────────────────</span>
 EMBEDDER_PROVIDER=openai
-EMBEDDER_MODEL=text-embedding-3-small
+EMBEDDER_MODEL=openai/text-embedding-3-small  <span class="cm"># use provider/model prefix when routing through gateway</span>
 EMBEDDING_DIMS=1536
+<span class="cm"># EMBEDDER_API_KEY=  # explicit key (falls back to SMART_GATEWAY_API_KEY when EMBEDDER_API_BASE is set)</span>
+EMBEDDER_API_BASE=https://continuum.shyftops.io/v1
 
 <span class="cm"># ── Memory (mem0 + Milvus) ───────────────────────────────────────────────────</span>
 MEMORY_ENABLED=true
@@ -909,7 +911,7 @@ TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
 TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
 
 <span class="cm"># ── Smart Gateway ─────────────────────────────────────────────────────────────</span>
-SMART_GATEWAY_URL=http://localhost:8787/v1
+SMART_GATEWAY_URL=https://continuum.shyftops.io/v1
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key
 
 <span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
@@ -2178,7 +2180,7 @@ client ◄┘</pre></div>
   <a class="anchor" id="smart-env"></a>
   <h3>Environment variables</h3>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env</span>
-SMART_GATEWAY_URL=http://localhost:8787/v1     <span class="cm"># gateway base URL</span>
+SMART_GATEWAY_URL=https://continuum.shyftops.io/v1     <span class="cm"># gateway base URL</span>
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key       <span class="cm"># bearer (matches a virtual key)</span>
 SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modest | quality</span></pre></div>
 
