@@ -10,6 +10,9 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+
+
 # ---------------------------------------------------------------------------
 # 02-#1: count_tokens returns conservative estimate instead of 0
 # ---------------------------------------------------------------------------

@@ -116,9 +116,7 @@ class ParallelAgent(BaseAgent):
         # Create tasks for all agents
         tasks = []
         for agent in self.agents:
-            task = asyncio.create_task(
-                self._run_agent_safe(agent, input_text, runner, context.branch_copy())
-            )
+            task = asyncio.create_task(self._run_agent_safe(agent, input_text, runner, context.branch_copy()))
             tasks.append((agent.name, task))
 
         # Wait for all tasks with timeout
@@ -279,14 +277,9 @@ Here are their responses:
 
 Please synthesize these responses into a single coherent answer that captures the key information from all sources."""
 
-            logger.info(
-                "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
-                self.name,
-                prompt,
-            )
+            logger.info("===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================", self.name, prompt)
             try:
                 from orchestrator.llm.config import LLMConfig
-
                 response = await llm_client.chat(
                     messages=[{"role": "user", "content": prompt}],
                     config=LLMConfig(

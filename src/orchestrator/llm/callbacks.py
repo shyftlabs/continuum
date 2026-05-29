@@ -223,6 +223,7 @@ def get_langfuse_metadata(
     return metadata
 
 
+
 def flush_langfuse() -> None:
     """
     Flush any pending observability events.

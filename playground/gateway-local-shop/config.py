@@ -1,17 +1,29 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
-# Load the project root .env first so hosted gateway settings (SMART_GATEWAY_URL,
-# SMART_GATEWAY_API_KEY) take precedence over shell env vars and the localhost
-# fallbacks below. override=True is required because the shell may already have
-# stale localhost values exported from a previous session.
-# Must be done before orchestrator settings are imported (they are cached on first import).
-load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
+# Load the project root .env. override=True ensures .env values win over any
+# stale shell exports. Must run before orchestrator settings are imported
+# (they are module-level singletons, cached on first import).
+#
+# Gateway mode is controlled entirely by the root .env:
+#   Local gateway:  SMART_GATEWAY_URL=http://localhost:8787/v1
+#                   SMART_GATEWAY_API_KEY=ck-prod-2026-05-19
+#   Hosted gateway: SMART_GATEWAY_URL=https://continuum.shyftops.io/v1
+#                   SMART_GATEWAY_API_KEY=<hosted-key>
+#   No gateway:     omit both vars — orchestrator routes directly to the provider
+_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(_ENV_PATH, override=True)
 
-os.environ.setdefault("SMART_GATEWAY_URL", "http://localhost:8787/v1")
-os.environ.setdefault("SMART_GATEWAY_API_KEY", "your-smart-gateway-api-key")
+# load_dotenv(override=True) sets vars that ARE in .env, but does not clear vars
+# that are absent from .env yet still live in os.environ as stale shell exports.
+# Explicitly remove gateway vars when they are not present in the .env file so
+# that a previous shell session can never accidentally activate the gateway.
+_file_env = dotenv_values(_ENV_PATH)
+for _var in ("SMART_GATEWAY_URL", "SMART_GATEWAY_API_KEY"):
+    if _var not in _file_env:
+        os.environ.pop(_var, None)
 
 from dataclasses import dataclass
 

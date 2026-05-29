@@ -7,6 +7,7 @@ Optionally inserts approval gates between steps.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -15,7 +16,8 @@ try:
     from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 with workflow.unsafe.imports_passed_through():
@@ -28,7 +30,7 @@ with workflow.unsafe.imports_passed_through():
     )
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -117,11 +119,7 @@ class SequentialAgentWorkflow:
                 heartbeat_timeout=timedelta(seconds=60),
                 result_type=AgentActivityResult,
             )
-            result = (
-                raw
-                if isinstance(raw, AgentActivityResult)
-                else AgentActivityResult.model_validate(raw)
-            )
+            result = raw if isinstance(raw, AgentActivityResult) else AgentActivityResult.model_validate(raw)
             self._step_results.append(result)
             if result.content:
                 last_output = result.content
@@ -170,7 +168,7 @@ class SequentialAgentWorkflow:
                 lambda: self._pending_decision is not None or self._cancelled,
                 timeout=timedelta(seconds=timeout),
             )
-        except TimeoutError:
+        except asyncio.TimeoutError:
             self._pending_approvals = [
                 a for a in self._pending_approvals if a["request_id"] != request_id
             ]

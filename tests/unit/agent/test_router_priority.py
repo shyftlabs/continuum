@@ -2,8 +2,9 @@
 Tests for RouterAgent._stamp_priority — ensures RunContext.priority is set
 from the matched route's dispatch_priority after routing.
 """
-
 from __future__ import annotations
+
+import pytest
 
 from orchestrator.agent.types import Route, RunContext
 from orchestrator.agent.workflow.router import RouterAgent

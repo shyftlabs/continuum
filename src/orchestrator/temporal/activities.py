@@ -13,7 +13,8 @@ try:
     from temporalio import activity
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. "
+        "Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 from orchestrator.temporal.registry import get_agent_registry
@@ -82,4 +83,6 @@ async def send_notification_activity(params: NotificationParams) -> None:
     if handler:
         await handler(params)
     else:
-        activity.logger.warning("No notification handler configured; approval notification dropped")
+        activity.logger.warning(
+            "No notification handler configured; approval notification dropped"
+        )

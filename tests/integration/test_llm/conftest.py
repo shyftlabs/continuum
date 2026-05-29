@@ -2,17 +2,16 @@
 Pytest fixtures for LLM module tests.
 """
 
-import asyncio
 import os
-
 import pytest
+import asyncio
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-from orchestrator.config import settings
 from orchestrator.llm import LLMClient, LLMConfig
+from orchestrator.config import settings
 
 
 # Override pytest-asyncio's event_loop fixture to be session-scoped
@@ -41,7 +40,7 @@ def test_max_tokens() -> int:
 def llm_client(test_model: str, test_max_tokens: int) -> LLMClient:
     """
     Create an LLMClient for testing.
-
+    
     Note: Cleanup of async clients is handled by the session-scoped
     event_loop fixture, so no per-test cleanup is needed here.
     """
@@ -59,7 +58,7 @@ def llm_client(test_model: str, test_max_tokens: int) -> LLMClient:
 def llm_client_with_langfuse(test_model: str, test_max_tokens: int) -> LLMClient:
     """
     Create an LLMClient with Langfuse enabled for testing.
-
+    
     Note: Cleanup of async clients is handled by the session-scoped
     event_loop fixture, so no per-test cleanup is needed here.
     """

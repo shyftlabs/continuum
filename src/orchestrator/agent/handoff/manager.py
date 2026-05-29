@@ -291,7 +291,8 @@ class HandoffManager:
             # Orphaned tool messages (result without preceding tool_calls) cause 400
             # errors from both OpenAI and Gemini.
             target_tool_names = {
-                t.get("function", {}).get("name") for t in (target_agent.get_tools_for_llm() or [])
+                t.get("function", {}).get("name")
+                for t in (target_agent.get_tools_for_llm() or [])
             }
 
             filtered = []
@@ -305,7 +306,10 @@ class HandoffManager:
                     continue
 
                 if role == "assistant" and m.get("tool_calls"):
-                    called_tools = {tc.get("function", {}).get("name") for tc in m["tool_calls"]}
+                    called_tools = {
+                        tc.get("function", {}).get("name")
+                        for tc in m["tool_calls"]
+                    }
                     keep = called_tools.issubset(target_tool_names)
                     if keep:
                         filtered.append(m)

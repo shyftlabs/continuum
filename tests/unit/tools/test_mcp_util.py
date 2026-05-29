@@ -8,6 +8,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from mcp.types import TextContent, Tool
 
 from orchestrator.tools.types import ToolContextConfig
 from orchestrator.tools.util import MCPUtil
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,7 +77,9 @@ class TestUseStructuredContentFlag:
             )
         )
 
-        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(server, _fake_tool(), "{}")
+        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(
+            server, _fake_tool(), "{}"
+        )
 
         assert "from_content" in text
         assert "from_structured" not in text
@@ -95,7 +99,9 @@ class TestUseStructuredContentFlag:
             )
         )
 
-        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(server, _fake_tool(), "{}")
+        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(
+            server, _fake_tool(), "{}"
+        )
 
         assert "from_structured" in text
         assert "from_content" not in text
@@ -115,7 +121,9 @@ class TestUseStructuredContentFlag:
             )
         )
 
-        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(server, _fake_tool(), "{}")
+        text, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(
+            server, _fake_tool(), "{}"
+        )
 
         assert "only_content" in text
 
@@ -134,7 +142,9 @@ class TestUseStructuredContentFlag:
             )
         )
 
-        _, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(server, _fake_tool(), "{}")
+        _, artifact = await MCPUtil.invoke_mcp_tool_with_artifact(
+            server, _fake_tool(), "{}"
+        )
 
         assert artifact.structured_content == {"key": "val"}
 
@@ -168,7 +178,9 @@ class TestNamespaceTools:
         server_a = _make_list_tools_server("server-a", ["search", "get"])
         server_b = _make_list_tools_server("server-b", ["list"])
 
-        tools = await MCPUtil.get_all_function_tools([server_a, server_b], namespace_tools=True)
+        tools = await MCPUtil.get_all_function_tools(
+            [server_a, server_b], namespace_tools=True
+        )
 
         names = {t.function.name for t in tools}
         assert "server-a__search" in names
@@ -181,7 +193,9 @@ class TestNamespaceTools:
         server_a = _make_list_tools_server("server-a", ["search"])
         server_b = _make_list_tools_server("server-b", ["search"])
 
-        tools = await MCPUtil.get_all_function_tools([server_a, server_b], namespace_tools=True)
+        tools = await MCPUtil.get_all_function_tools(
+            [server_a, server_b], namespace_tools=True
+        )
 
         names = {t.function.name for t in tools}
         assert "server-a__search" in names
@@ -219,7 +233,9 @@ class TestNamespaceTools:
 
         server = MCPServerFunction(
             name="my-server",
-            tools=[{"name": "echo", "fn": lambda args: "ok", "description": "Echo"}],
+            tools=[
+                {"name": "echo", "fn": lambda args: "ok", "description": "Echo"}
+            ],
         )
         await server.connect()
 
@@ -240,7 +256,9 @@ class TestNamespaceTools:
 
         server = MCPServerFunction(
             name="my-server",
-            tools=[{"name": "echo", "fn": lambda args: "ok", "description": "Echo"}],
+            tools=[
+                {"name": "echo", "fn": lambda args: "ok", "description": "Echo"}
+            ],
         )
         await server.connect()
 

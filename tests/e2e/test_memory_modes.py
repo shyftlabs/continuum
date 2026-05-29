@@ -13,6 +13,7 @@ Tests agent behavior with different memory configurations:
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -123,7 +124,6 @@ class TestLongTermMemory:
         )
 
         import asyncio
-
         await asyncio.sleep(2)
 
         agent = BaseAgent(
@@ -177,7 +177,6 @@ class TestLongTermMemory:
         await mem_client.add("I work at SpaceX as a rocket engineer.", user_id=uid)
 
         import asyncio
-
         await asyncio.sleep(2)
 
         agent = BaseAgent(
@@ -199,11 +198,15 @@ class TestLongTermMemory:
         runner = AgentRunner()
 
         try:
-            resp_allergy = await runner.run(agent, "Do I have any food allergies?", user_id=uid)
+            resp_allergy = await runner.run(
+                agent, "Do I have any food allergies?", user_id=uid
+            )
             assert resp_allergy.content is not None
             assert "shellfish" in resp_allergy.content.lower()
 
-            resp_job = await runner.run(agent, "Where do I work and what do I do?", user_id=uid)
+            resp_job = await runner.run(
+                agent, "Where do I work and what do I do?", user_id=uid
+            )
             assert resp_job.content is not None
             content_lower = resp_job.content.lower()
             assert "spacex" in content_lower or "rocket" in content_lower
@@ -320,17 +323,11 @@ class TestShortTermSessionMemory:
 
         try:
             # Fill up session with many turns to push out early messages
-            await runner.run(
-                agent, "My secret code is ALPHA-7.", session_id=sid, user_id="limit-user"
-            )
+            await runner.run(agent, "My secret code is ALPHA-7.", session_id=sid, user_id="limit-user")
             await runner.run(agent, "What is 2+2?", session_id=sid, user_id="limit-user")
             await runner.run(agent, "Tell me a joke.", session_id=sid, user_id="limit-user")
-            await runner.run(
-                agent, "What's the weather like?", session_id=sid, user_id="limit-user"
-            )
-            await runner.run(
-                agent, "Name a famous scientist.", session_id=sid, user_id="limit-user"
-            )
+            await runner.run(agent, "What's the weather like?", session_id=sid, user_id="limit-user")
+            await runner.run(agent, "Name a famous scientist.", session_id=sid, user_id="limit-user")
 
             # Now ask about the secret code — it should have been pushed out
             resp = await runner.run(
@@ -395,7 +392,6 @@ class TestMemoryUserIsolationE2E:
             await runner.run(agent, "My password hint is 'blue ocean'.", user_id=uid_a)
 
             import asyncio
-
             await asyncio.sleep(2)
 
             # User B asks about it — should NOT know
@@ -440,7 +436,6 @@ class TestCombinedMemory:
         await mem_client.add("User's favorite cuisine is Italian.", user_id=uid)
 
         import asyncio
-
         await asyncio.sleep(2)
 
         agent = BaseAgent(
@@ -490,9 +485,7 @@ class TestCombinedMemory:
             content_lower = resp.content.lower()
             # Should reference Rome (from session) and/or Italian food (from memory)
             has_rome = "rome" in content_lower
-            has_italian = (
-                "italian" in content_lower or "pasta" in content_lower or "pizza" in content_lower
-            )
+            has_italian = "italian" in content_lower or "pasta" in content_lower or "pizza" in content_lower
             assert has_rome or has_italian, (
                 f"Expected references to Rome or Italian food, got: {resp.content[:200]}"
             )
@@ -532,7 +525,6 @@ class TestContradictingMemories:
         )
 
         import asyncio
-
         await asyncio.sleep(2)
 
         agent = BaseAgent(
@@ -553,7 +545,9 @@ class TestContradictingMemories:
         runner = AgentRunner()
 
         try:
-            resp = await runner.run(agent, "What is my favorite color?", user_id=uid)
+            resp = await runner.run(
+                agent, "What is my favorite color?", user_id=uid
+            )
             assert resp.content is not None
             content_lower = resp.content.lower()
             # Should mention green (the latest) or blue — both are valid
@@ -595,7 +589,6 @@ class TestMemoryWithToolAgent:
         await mem_client.add("The user's budget is under $1000.", user_id=uid)
 
         import asyncio
-
         await asyncio.sleep(2)
 
         # Simple lookup tool
@@ -640,12 +633,10 @@ class TestMemoryWithToolAgent:
 
             async def list_prompts(self):
                 from mcp.types import ListPromptsResult
-
                 return ListPromptsResult(prompts=[])
 
             async def get_prompt(self, name, arguments=None):
                 from mcp.types import GetPromptResult
-
                 return GetPromptResult(messages=[])
 
         server = LookupServer()
@@ -719,7 +710,6 @@ class TestMemoryEvaluation:
         await mem_client.add("The user is allergic to nuts.", user_id=uid)
 
         import asyncio
-
         await asyncio.sleep(2)
 
         # Agent WITH memory

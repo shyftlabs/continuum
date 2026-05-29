@@ -72,7 +72,6 @@ class LangfuseDatasetClient:
             return self._lf
         try:
             from orchestrator.core.container import get_container
-
             self._lf = get_container().langfuse_client
         except Exception as exc:
             logger.debug(f"LangfuseDatasetClient: could not get container: {exc}")
@@ -320,7 +319,9 @@ class LangfuseDatasetClient:
         try:
             dataset = client.get_dataset(self._dataset_name)
             if dataset is None:
-                logger.warning(f"LangfuseDatasetClient: dataset '{self._dataset_name}' not found")
+                logger.warning(
+                    f"LangfuseDatasetClient: dataset '{self._dataset_name}' not found"
+                )
                 return []
 
             items = dataset.items

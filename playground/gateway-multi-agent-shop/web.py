@@ -6,7 +6,7 @@ Usage:
   Terminal 1: python server.py   (MCP server on :8890)
   Terminal 2: python web.py      (Web UI on :8082)
 
-Requires Smart Gateway running at http://localhost:8787/v1
+Gateway URL is read from SMART_GATEWAY_URL in the root .env (omit for direct provider).
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from config import default_config
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from workflows import MODES, _BaseWorkflow, create_workflow
+from workflows import MODES, create_workflow, _BaseWorkflow
 
 from orchestrator import LogLevel, setup_logging
 
@@ -78,9 +78,7 @@ async def chat(req: ChatRequest):
         return {"response": f"Unknown mode '{req.mode}'. Choose from: {', '.join(MODES)}"}
     wf, error = await get_workflow(req.mode)
     if error:
-        return {
-            "response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"
-        }
+        return {"response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"}
     response = await wf.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
     return {"response": response}
 
@@ -98,8 +96,7 @@ async def status():
 
 MODE_DESCRIPTIONS = default_config.mode_descriptions
 
-HTML_PAGE = (
-    """<!DOCTYPE html>
+HTML_PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -202,9 +199,7 @@ HTML_PAGE = (
 </div>
 
 <script>
-const MODE_DESCRIPTIONS = """
-    + str(dict(MODE_DESCRIPTIONS)).replace("'", '"')
-    + """;
+const MODE_DESCRIPTIONS = """ + str({k: v for k, v in MODE_DESCRIPTIONS.items()}).replace("'", '"') + """;
 
 const MODE_SUGGESTIONS = {
   sequential:  ["buy dog food", "get me a cat toy", "I need a dog leash"],
@@ -330,10 +325,13 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>
 """
-)
 
 if __name__ == "__main__":
+    _gateway_url = os.environ.get("SMART_GATEWAY_URL")
     print("Gateway Multi-Agent Shop Web UI at http://localhost:8082")
     print("Make sure MCP server is running:  python server.py")
-    print("Make sure Smart Gateway is running: http://localhost:8787/v1")
+    if _gateway_url:
+        print(f"Smart Gateway: {_gateway_url}")
+    else:
+        print("No gateway configured — using direct LLM provider")
     uvicorn.run(app, host="0.0.0.0", port=8082)

@@ -4,7 +4,6 @@ Tests for PriorityDispatcher and TwoLevelDispatcher.
 Key invariant: higher-priority calls are served before lower-priority ones
 when workers are saturated.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +11,7 @@ import asyncio
 import pytest
 
 from orchestrator.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
+
 
 # ---------------------------------------------------------------------------
 # Helpers

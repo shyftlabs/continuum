@@ -66,18 +66,18 @@ RANDOM_SEED = 42
 # Max total chars of document context sent to GPT-4o-mini for Q&A generation.
 # Caps very long docs (SCOTUS opinions can be 400+ chunks).
 MAX_DOC_CHARS = 8000
-MAX_CHUNK_CHARS = 2000  # per individual chunk
-MAX_CHUNKS_PER_DOC = 6  # max chunks to include from a document
+MAX_CHUNK_CHARS = 2000   # per individual chunk
+MAX_CHUNKS_PER_DOC = 6   # max chunks to include from a document
 
 # Sampling targets per source type → total ~408 cases
 SAMPLE_TARGETS: dict[str, int] = {
-    "irc": 100,
-    "appellate": 100,
-    "tax_court": 50,
-    "fed_claims": 50,
-    "treasury_reg": 80,
-    "scotus": 15,  # all available
-    "treaty": 13,  # all available
+    "irc":          100,
+    "appellate":    100,
+    "tax_court":     50,
+    "fed_claims":    50,
+    "treasury_reg":  80,
+    "scotus":        15,   # all available
+    "treaty":        13,   # all available
 }
 
 
@@ -85,26 +85,12 @@ SAMPLE_TARGETS: dict[str, int] = {
 # pgvector queries via docker exec
 # ---------------------------------------------------------------------------
 
-
 def _psql(sql: str, timeout: int = 60) -> list[dict[str, str]]:
     """Run SQL via docker exec taxpilot_postgres, return list of row dicts."""
     result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            "taxpilot_postgres",
-            "psql",
-            "-U",
-            "taxpilot",
-            "-d",
-            "taxpilot",
-            "--csv",
-            "-c",
-            sql,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        ["docker", "exec", "taxpilot_postgres", "psql",
+         "-U", "taxpilot", "-d", "taxpilot", "--csv", "-c", sql],
+        capture_output=True, text=True, timeout=timeout,
     )
     if result.returncode != 0:
         raise RuntimeError(f"psql error: {result.stderr.strip()}")
@@ -189,7 +175,7 @@ def build_doc_context(chunks: list[dict]) -> tuple[str, list[dict]]:
             break
         parts.append(label)
         total += len(label)
-    return "\n\n".join(parts), included[: len(parts)]
+    return "\n\n".join(parts), included[:len(parts)]
 
 
 def generate_qa_from_document(
@@ -286,7 +272,6 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 # RAG API call
 # ---------------------------------------------------------------------------
 
-
 async def call_rag_api(question: str, client: httpx.AsyncClient) -> dict[str, Any]:
     payload = {"question": question, "force_research": True}
     headers = {}
@@ -303,7 +288,7 @@ async def call_rag_api(question: str, client: httpx.AsyncClient) -> dict[str, An
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
-                raw = line[len("data:") :].strip()
+                raw = line[len("data:"):].strip()
                 if not raw:
                     continue
                 try:
@@ -338,7 +323,6 @@ def _citations_to_context(citations: list[dict]) -> list[str]:
 # Save helpers
 # ---------------------------------------------------------------------------
 
-
 def save_cases(cases: list[EvalCase], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps([c.to_dict() for c in cases], indent=2, ensure_ascii=False))
@@ -366,23 +350,22 @@ def print_summary(results: list[EvalResult], label: str) -> None:
     for r in results:
         st = r.metadata.get("source_type", "unknown")
         source_scores.setdefault(st, []).append(r.overall_score or 0.0)
-    print("\n  Per-source breakdown:")
+    print(f"\n  Per-source breakdown:")
     for st, scores in sorted(source_scores.items()):
-        print(f"    {st:<20} avg={sum(scores) / len(scores):.3f}  n={len(scores)}")
+        print(f"    {st:<20} avg={sum(scores)/len(scores):.3f}  n={len(scores)}")
 
     criterion_scores: dict[str, list[float]] = {}
     for r in results:
         for s in r.scores:
             criterion_scores.setdefault(s.criterion, []).append(s.score)
-    print("\n  Per-criterion breakdown:")
+    print(f"\n  Per-criterion breakdown:")
     for criterion, scores in criterion_scores.items():
-        print(f"    {criterion:<30} avg={sum(scores) / len(scores):.3f}")
+        print(f"    {criterion:<30} avg={sum(scores)/len(scores):.3f}")
 
 
 # ---------------------------------------------------------------------------
 # RAGAS evaluation
 # ---------------------------------------------------------------------------
-
 
 async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
     from orchestrator.evaluation import RagasEvaluator
@@ -393,14 +376,14 @@ async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
     results = []
     for i, case in enumerate(cases):
         if not case.context:
-            print(f"  [RAGAS] Skipping case {i + 1} — no context retrieved")
+            print(f"  [RAGAS] Skipping case {i+1} — no context retrieved")
             continue
         answer = case.metadata.get("answer", "")
         if not answer:
-            print(f"  [RAGAS] Skipping case {i + 1} — empty answer")
+            print(f"  [RAGAS] Skipping case {i+1} — empty answer")
             continue
         src = case.metadata.get("source_type", "")
-        print(f"  [RAGAS] [{src}] Evaluating case {i + 1}/{len(cases)}: {case.input_text[:55]}...")
+        print(f"  [RAGAS] [{src}] Evaluating case {i+1}/{len(cases)}: {case.input_text[:55]}...")
         result = await evaluator.evaluate(case, answer)
         result.metadata["case_id"] = case.case_id
         result.metadata["source_type"] = src
@@ -412,11 +395,9 @@ async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
 # DeepEval evaluation
 # ---------------------------------------------------------------------------
 
-
 async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
     from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric, GEval
     from deepeval.test_case import LLMTestCaseParams
-
     from orchestrator.evaluation import DeepEvalEvaluator
 
     evaluator = DeepEvalEvaluator(
@@ -442,12 +423,10 @@ async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
     for i, case in enumerate(cases):
         answer = case.metadata.get("answer", "")
         if not answer:
-            print(f"  [DeepEval] Skipping case {i + 1} — empty answer")
+            print(f"  [DeepEval] Skipping case {i+1} — empty answer")
             continue
         src = case.metadata.get("source_type", "")
-        print(
-            f"  [DeepEval] [{src}] Evaluating case {i + 1}/{len(cases)}: {case.input_text[:55]}..."
-        )
+        print(f"  [DeepEval] [{src}] Evaluating case {i+1}/{len(cases)}: {case.input_text[:55]}...")
         result = await evaluator.evaluate(case, answer)
         result.metadata["case_id"] = case.case_id
         result.metadata["source_type"] = src
@@ -458,7 +437,6 @@ async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
 
 async def main(output_path: Path, run_eval: bool) -> None:
     print("=== TaxPilot Golden Dataset Builder ===\n")
@@ -471,6 +449,7 @@ async def main(output_path: Path, run_eval: bool) -> None:
     case_num = 0
 
     for source_type, target in SAMPLE_TARGETS.items():
+
         print(f"\n── {source_type.upper()} (target: {target}) ──")
 
         # Step 1: sample source_refs
@@ -479,7 +458,7 @@ async def main(output_path: Path, run_eval: bool) -> None:
         print(f"  Sampled {len(source_refs)} source_refs")
 
         # Step 2: fetch all chunks for sampled docs
-        print("  Fetching chunks from pgvector...")
+        print(f"  Fetching chunks from pgvector...")
         docs = get_chunks_for_refs(source_type, source_refs)
         print(f"  Fetched {sum(len(v) for v in docs.values())} chunks across {len(docs)} docs")
 
@@ -487,17 +466,17 @@ async def main(output_path: Path, run_eval: bool) -> None:
         for i, source_ref in enumerate(source_refs):
             chunks = docs.get(source_ref, [])
             if not chunks:
-                print(f"    [{i + 1}/{len(source_refs)}] SKIP — no chunks for '{source_ref}'")
+                print(f"    [{i+1}/{len(source_refs)}] SKIP — no chunks for '{source_ref}'")
                 continue
 
             section_title = chunks[0].get("section_title", source_ref)
             case_num += 1
-            print(f"    [{i + 1}/{len(source_refs)}] {source_ref[:60]} ({len(chunks)} chunks)...")
+            print(f"    [{i+1}/{len(source_refs)}] {source_ref[:60]} ({len(chunks)} chunks)...")
 
             # Generate Q&A from full document context
             qa = generate_qa_from_document(source_type, source_ref, section_title, chunks)
             if not qa:
-                print("      SKIP — Q&A generation failed")
+                print(f"      SKIP — Q&A generation failed")
                 case_num -= 1
                 continue
 
@@ -516,13 +495,14 @@ async def main(output_path: Path, run_eval: bool) -> None:
             rag_answer = rag_result["answer"]
             context = _citations_to_context(rag_result["citations"])
             retrieval_hit = any(
-                c.get("chunk_id") == qa["answer_chunk_id"] for c in rag_result["citations"]
+                c.get("chunk_id") == qa["answer_chunk_id"]
+                for c in rag_result["citations"]
             )
 
             case = EvalCase(
                 input_text=qa["question"],
-                expected_output=qa["answer"],  # real ground truth from chunk
-                context=context,  # what RAG actually retrieved
+                expected_output=qa["answer"],          # real ground truth from chunk
+                context=context,                        # what RAG actually retrieved
                 metadata={
                     "source_type": source_type,
                     "source_ref": source_ref,
@@ -543,11 +523,10 @@ async def main(output_path: Path, run_eval: bool) -> None:
                 save_cases(cases, PARTIAL_SAVE_PATH)
                 print(f"      [checkpoint] {len(cases)} cases saved so far")
 
-    print(f"\n{'─' * 50}")
+    print(f"\n{'─'*50}")
     print(f"Generated {len(cases)} golden EvalCases total.")
 
     from collections import Counter
-
     counts = Counter(c.metadata.get("source_type") for c in cases)
     for st, n in sorted(counts.items()):
         print(f"  {st:<20} {n} cases")
@@ -586,7 +565,7 @@ async def main(output_path: Path, run_eval: bool) -> None:
 
 async def eval_only(cases_path: Path) -> None:
     """Load existing golden_cases.json and run RAGAS + DeepEval without regenerating."""
-    print("=== TaxPilot Golden Dataset Evaluator ===\n")
+    print(f"=== TaxPilot Golden Dataset Evaluator ===\n")
     print(f"Loading cases from {cases_path}...")
     raw = json.loads(cases_path.read_text())
     cases = [EvalCase.from_dict(c) for c in raw]

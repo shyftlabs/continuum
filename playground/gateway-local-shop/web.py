@@ -6,8 +6,7 @@ Usage:
   Terminal 1: python server.py   (MCP server on :8888)
   Terminal 2: python web.py      (Web UI on :8081)
 
-Smart Gateway URL is read from SMART_GATEWAY_URL in the project root .env
-(defaults to http://localhost:8787/v1 if not set).
+Gateway URL is read from SMART_GATEWAY_URL in the root .env (omit for direct provider).
 """
 
 import asyncio
@@ -23,7 +22,7 @@ import uvicorn
 from agent import LocalShopAgent
 from config import default_config
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from orchestrator import LogLevel, setup_logging
@@ -81,7 +80,9 @@ async def chat(req: ChatRequest):
         msg = f"Agent not connected to MCP server. {_init_error or 'Start the MCP server with: python server.py'}"
         return {"response": msg}
     response = await _agent.chat(
-        req.message, user_id=req.user_id, conversation_id=req.conversation_id
+        req.message,
+        user_id=req.user_id,
+        conversation_id=req.conversation_id
     )
     return {"response": response}
 
@@ -90,10 +91,8 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     if not _agent or not _agent._initialized:
         msg = f"Agent not connected to MCP server. {_init_error or 'Start the MCP server with: python server.py'}"
-
         async def error_gen():
             yield f"data: {json.dumps({'type': 'error', 'error': msg})}\n\n"
-
         return StreamingResponse(error_gen(), media_type="text/event-stream")
     return StreamingResponse(
         _agent.chat_stream(req.message, user_id=req.user_id, conversation_id=req.conversation_id),
@@ -151,9 +150,7 @@ async def status():
     if _agent and _agent.tools:
         for t in _agent.tools:
             try:
-                tools.append(
-                    t.function.name if hasattr(t, "function") else t.get("function", {}).get("name")
-                )
+                tools.append(t.function.name if hasattr(t, "function") else t.get("function", {}).get("name"))
             except Exception:
                 pass
     return {
@@ -207,7 +204,7 @@ HTML_PAGE = """<!DOCTYPE html>
           border-radius: 16px; font-size: 12px; cursor: pointer; color: #555; }
   .chip:hover { border-color: #2c3e50; color: #2c3e50; }
   /* Login Screen */
-  #login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex;
+  #login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; 
                    align-items: center; justify-content: center; z-index: 1000; }
   .login-box { background: white; padding: 32px; border-radius: 12px; width: 350px;
                display: flex; flex-direction: column; gap: 16px; text-align: center; }
@@ -355,8 +352,8 @@ function changeUser() {
 }
 
 function startNewChat() {
-  currentConversationId = (window.crypto && window.crypto.randomUUID)
-    ? window.crypto.randomUUID()
+  currentConversationId = (window.crypto && window.crypto.randomUUID) 
+    ? window.crypto.randomUUID() 
     : 'chat_' + Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9);
   const chat = document.getElementById('chat');
   chat.innerHTML = '<div class="msg assistant">Hi! I\\'m your pet shop assistant. Ask me to search for products, add them to your cart, or checkout. 🐶🐱</div>';
@@ -457,7 +454,11 @@ function appendMsg(role, text) {
 """
 
 if __name__ == "__main__":
+    _gateway_url = os.environ.get("SMART_GATEWAY_URL")
     print("Gateway Shop Web UI at http://localhost:8081")
     print("Make sure MCP server is running:  python server.py")
-    print(f"Smart Gateway URL: {os.environ.get('SMART_GATEWAY_URL', 'http://localhost:8787/v1')}")
+    if _gateway_url:
+        print(f"Smart Gateway: {_gateway_url}")
+    else:
+        print("No gateway configured — using direct LLM provider")
     uvicorn.run(app, host="0.0.0.0", port=8081)

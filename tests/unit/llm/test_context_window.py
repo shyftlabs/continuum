@@ -1,6 +1,6 @@
 """Unit tests for LLM context window management."""
 
-import logging
+import pytest
 
 from orchestrator.llm.context_window import (
     ContextWindowManager,
@@ -8,6 +8,7 @@ from orchestrator.llm.context_window import (
     TruncationResult,
     TruncationStrategy,
 )
+import logging
 
 logger = logging.getLogger(__name__)
 

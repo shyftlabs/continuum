@@ -7,6 +7,8 @@ and multi-agent orchestration through real LLM calls.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -14,6 +16,7 @@ pytestmark = pytest.mark.e2e
 
 from tests.e2e.conftest import skip_if_no_api_key as _skip_if_no_api_key
 from tests.e2e.conftest import skip_on_api_error as _skip_on_api_error
+
 
 # ---------------------------------------------------------------------------
 # Test: Basic agent handoff

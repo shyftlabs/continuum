@@ -482,9 +482,11 @@ class OrchestratorLifecycle:
                     memory_isolation = memory_client.config.memory_isolation
                     embedder_provider = memory_client.config.embedder_provider
                     embedder_model = memory_client.config.embedder_model
+                    embedder_base = memory_client.config.embedder_api_base
+                    embedder_suffix = f" base_url={embedder_base}" if embedder_base else " (direct)"
                     logger.info(
                         f"  💾 Memory: enabled | isolation={memory_isolation} | "
-                        f"embedder={embedder_provider}/{embedder_model}"
+                        f"embedder={embedder_provider}/{embedder_model}{embedder_suffix}"
                     )
                 else:
                     logger.info("  💾 Memory: disabled or not initialized")

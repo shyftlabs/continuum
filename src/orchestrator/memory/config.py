@@ -170,12 +170,7 @@ class MemoryConfig(BaseModel):
 
     def is_configured(self) -> bool:
         """Check if memory is properly configured with basic requirements."""
-        if not (
-            self.enabled
-            and self.memory_llm_model
-            and self.embedder_model
-            and self.embedding_dims > 0
-        ):
+        if not (self.enabled and self.memory_llm_model and self.embedder_model and self.embedding_dims > 0):
             return False
         if self.vector_store_provider == "milvus":
             return bool(self.milvus_host)
@@ -188,10 +183,16 @@ class MemoryConfig(BaseModel):
 
         Priority:
         1. Explicit embedder_api_key setting
-        2. Provider-specific environment variable
+        2. SMART_GATEWAY_API_KEY — when embedder_api_base is set (embeddings routed
+           through the same gateway), reuse the gateway key automatically so users
+           don't need to set EMBEDDER_API_KEY separately.
+        3. Provider-specific environment variable
         """
         if self.embedder_api_key:
             return self.embedder_api_key
+
+        if self.embedder_api_base and settings.smart_gateway_api_key:
+            return settings.smart_gateway_api_key
 
         provider = self.embedder_provider.lower()
 

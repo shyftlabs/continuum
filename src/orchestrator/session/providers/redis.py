@@ -139,7 +139,7 @@ class RedisSessionProvider(BaseSessionProvider):
                     "socket_connect_timeout": 5,
                     "socket_timeout": 5,
                 }
-
+                
                 if self._config.redis_ssl:
                     conn_kwargs["ssl"] = True
 
@@ -259,9 +259,7 @@ class RedisSessionProvider(BaseSessionProvider):
                 metadata.last_accessed_at = datetime.now(UTC)
                 messages_key = self._get_session_key(resolved_session_id)
                 async with self._redis.pipeline(transaction=True) as pipe:
-                    pipe.setex(
-                        metadata_key, self._config.ttl_seconds, json.dumps(metadata.to_dict())
-                    )
+                    pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(metadata.to_dict()))
                     pipe.expire(messages_key, self._config.ttl_seconds)
                     await pipe.execute()
                 logger.debug(f"Retrieved existing session: {resolved_session_id}")
@@ -497,7 +495,7 @@ class RedisSessionProvider(BaseSessionProvider):
             # Then trim to the first user message as a safety net against
             # any orphaned assistant message from a prior partial save.
             if limit and limit > 0:
-                sliced = messages[-(limit * 2) :]
+                sliced = messages[-(limit * 2):]
                 first_user = next(
                     (i for i, m in enumerate(sliced) if m.role == "user"),
                     len(sliced),
@@ -511,9 +509,7 @@ class RedisSessionProvider(BaseSessionProvider):
             session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
             session_metadata.last_accessed_at = datetime.now(UTC)
             async with self._redis.pipeline(transaction=True) as pipe:
-                pipe.setex(
-                    metadata_key, self._config.ttl_seconds, json.dumps(session_metadata.to_dict())
-                )
+                pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(session_metadata.to_dict()))
                 pipe.expire(messages_key, self._config.ttl_seconds)
                 await pipe.execute()
 
@@ -655,11 +651,7 @@ class RedisSessionProvider(BaseSessionProvider):
                 # add_message cannot slip in and leave the count permanently wrong.
                 async with self._redis.pipeline(transaction=True) as pipe:
                     pipe.delete(messages_key)
-                    pipe.setex(
-                        metadata_key,
-                        self._config.ttl_seconds,
-                        json.dumps(session_metadata.to_dict()),
-                    )
+                    pipe.setex(metadata_key, self._config.ttl_seconds, json.dumps(session_metadata.to_dict()))
                     await pipe.execute()
             else:
                 await self._redis.delete(messages_key)

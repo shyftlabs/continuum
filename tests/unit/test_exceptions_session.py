@@ -3,7 +3,6 @@ Tests for exceptions added/fixed this session:
 - InputBlockedError: was never defined (live crash bug)
 - ValidationError: __init__ was accidentally deleted (silent bug)
 """
-
 from __future__ import annotations
 
 import pytest
