@@ -57,12 +57,8 @@ async def main() -> int:
     # Light end-to-end assertions on the conversation as a whole.
     joined = " ".join(transcript)
     checks = {
-        "mentions a dog toy product": any(
-            k in joined for k in ("tennis ball", "ball", "toy")
-        ),
-        "confirms cart / item added": any(
-            k in joined for k in ("cart", "added")
-        ),
+        "mentions a dog toy product": any(k in joined for k in ("tennis ball", "ball", "toy")),
+        "confirms cart / item added": any(k in joined for k in ("cart", "added")),
         "completes checkout (order/total)": any(
             k in joined for k in ("order", "ord-", "total", "checkout", "placed")
         ),

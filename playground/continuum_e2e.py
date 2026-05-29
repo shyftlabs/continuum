@@ -84,15 +84,19 @@ async def t2_instruction_enrichment() -> None:
     )
 
     # Deterministic assertion on the assembled system prompt.
-    ctx = SimpleNamespace(metadata={"tier": "enterprise"}, user_id="u1", session_id=None, run_id=None)
+    ctx = SimpleNamespace(
+        metadata={"tier": "enterprise"}, user_id="u1", session_id=None, run_id=None
+    )
     prompt = agent.resolve_system_prompt(ctx)
-    print(f"  resolved prompt:\n    " + prompt.replace("\n", "\n    "))
+    print("  resolved prompt:\n    " + prompt.replace("\n", "\n    "))
     rendered = "Alice" in prompt and "{user_name}" not in prompt
     examples_block = "Examples:" in prompt and "Hello Alice!" in prompt
     modifier_fired = "ENTERPRISE_SLA_NOTE" in prompt
 
     # And confirm the modifier is tier-gated (not applied for non-enterprise).
-    ctx_free = SimpleNamespace(metadata={"tier": "free"}, user_id="u1", session_id=None, run_id=None)
+    ctx_free = SimpleNamespace(
+        metadata={"tier": "free"}, user_id="u1", session_id=None, run_id=None
+    )
     not_for_free = "ENTERPRISE_SLA_NOTE" not in agent.resolve_system_prompt(ctx_free)
 
     check("template_vars rendered ({user_name}->Alice)", rendered)
@@ -104,19 +108,33 @@ async def t2_instruction_enrichment() -> None:
 # --------------------------------------------------------------------------
 async def t3_handoffs() -> None:
     print("\n=== T3: Agent handoffs (triage -> specialist) ===")
-    billing = BaseAgent(name="billing", instructions="Help with invoices and refunds. Answer briefly.", memory_config=NO_MEM)
-    technical = BaseAgent(name="technical", instructions="Help with bugs and outages. Answer briefly.", memory_config=NO_MEM)
+    billing = BaseAgent(
+        name="billing",
+        instructions="Help with invoices and refunds. Answer briefly.",
+        memory_config=NO_MEM,
+    )
+    technical = BaseAgent(
+        name="technical",
+        instructions="Help with bugs and outages. Answer briefly.",
+        memory_config=NO_MEM,
+    )
     triage = BaseAgent(
         name="triage",
         instructions="Route the customer to the right specialist via the handoff tools. Do not answer billing/technical questions yourself.",
         handoffs=[
             Handoff(target_agent="billing", description="Billing, payments, refunds, invoices"),
-            Handoff(target_agent="technical", description="Bugs, errors, outages, integration issues"),
+            Handoff(
+                target_agent="technical", description="Bugs, errors, outages, integration issues"
+            ),
         ],
         memory_config=NO_MEM,
     )
-    runner = AgentRunner(agent_registry={"triage": triage, "billing": billing, "technical": technical})
-    resp = await runner.run(triage, "I want a refund for invoice 1234.", user_id="t3", session_id="t3s")
+    runner = AgentRunner(
+        agent_registry={"triage": triage, "billing": billing, "technical": technical}
+    )
+    resp = await runner.run(
+        triage, "I want a refund for invoice 1234.", user_id="t3", session_id="t3s"
+    )
 
     def _to_name(h):
         if isinstance(h, dict):
@@ -142,7 +160,12 @@ async def t4_memory_via_gateway() -> None:
     uid = "t4-user"
     await p.delete_all(user_id=uid)
     add = await p.add(
-        [{"role": "user", "content": "I run a golden retriever rescue and only feed grain-free food."}],
+        [
+            {
+                "role": "user",
+                "content": "I run a golden retriever rescue and only feed grain-free food.",
+            }
+        ],
         user_id=uid,
     )
     facts = [r.get("memory") for r in add.results]
