@@ -83,7 +83,6 @@ def parse_classifier_tier_strict(raw: str | None) -> ProductTier:
     t = _coerce_classifier_tier_from_text(s)
     if t is None:
         raise TierClassifierError(
-            "Tier classifier output did not contain a valid tier (snippet): "
-            f"{s[:400]!r}"
+            f"Tier classifier output did not contain a valid tier (snippet): {s[:400]!r}"
         )
     return t

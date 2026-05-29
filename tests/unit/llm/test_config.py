@@ -1,12 +1,11 @@
 """Unit tests for LLM config."""
 
+import logging
 from unittest.mock import MagicMock
 
-import pytest
 from pydantic import BaseModel
 
 from orchestrator.llm.config import LLMConfig
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +47,10 @@ class TestLLMConfig:
 
     def test_config_response_format_pydantic(self):
         logger.info("LLMConfig: config response format pydantic")
+
         class MyModel(BaseModel):
             name: str
+
         c = LLMConfig(response_format=MyModel)
         kw = c.to_kwargs()
         assert kw["response_format"] is MyModel
@@ -64,7 +65,9 @@ class TestLLMConfig:
 
     def test_config_optional_params(self):
         logger.info("LLMConfig: config optional params")
-        c = LLMConfig(top_p=0.9, frequency_penalty=0.5, presence_penalty=0.3, stop=["END"], seed=42, user="u1")
+        c = LLMConfig(
+            top_p=0.9, frequency_penalty=0.5, presence_penalty=0.3, stop=["END"], seed=42, user="u1"
+        )
         kw = c.to_kwargs()
         assert kw["top_p"] == 0.9
         assert kw["frequency_penalty"] == 0.5
@@ -74,7 +77,12 @@ class TestLLMConfig:
 
     def test_config_custom_provider(self):
         logger.info("LLMConfig: config custom provider")
-        c = LLMConfig(api_base="http://localhost", api_key="key", api_version="v1", custom_llm_provider="azure")
+        c = LLMConfig(
+            api_base="http://localhost",
+            api_key="key",
+            api_version="v1",
+            custom_llm_provider="azure",
+        )
         kw = c.to_kwargs()
         assert kw["api_base"] == "http://localhost"
         assert kw["api_key"] == "key"
@@ -93,11 +101,16 @@ class TestLLMConfig:
         agent.model = "gpt-4"
         agent.temperature = 0.3
         agent.max_tokens = 200
+        agent.gateway_mode = None
         agent.enable_json_mode = False
         agent.json_schema = None
         c = LLMConfig.from_agent_config(agent)
         assert c.model == "gpt-4"
         assert c.temperature == 0.3
+        assert c.max_tokens == 200
+        assert c.gateway_router_mode is None
+        assert c.json_mode is False
+        assert c.response_format is None
 
     def test_config_from_agent_config_json_mode(self):
         logger.info("LLMConfig: config from agent config json mode")
@@ -105,23 +118,29 @@ class TestLLMConfig:
         agent.model = "gpt-4"
         agent.temperature = 0.7
         agent.max_tokens = 4096
+        agent.gateway_mode = None
         agent.enable_json_mode = True
         agent.json_schema = None
         c = LLMConfig.from_agent_config(agent)
         assert c.json_mode is True
+        assert c.response_format is None
 
     def test_config_from_agent_config_pydantic_schema(self):
         logger.info("LLMConfig: config from agent config pydantic schema")
+
         class MyModel(BaseModel):
             name: str
+
         agent = MagicMock()
         agent.model = "gpt-4"
         agent.temperature = 0.7
         agent.max_tokens = 4096
+        agent.gateway_mode = None
         agent.enable_json_mode = True
         agent.json_schema = MyModel
         c = LLMConfig.from_agent_config(agent)
         assert c.response_format is MyModel
+        assert c.json_mode is False
 
     def test_config_from_agent_config_dict_schema(self):
         logger.info("LLMConfig: config from agent config dict schema")
@@ -129,11 +148,14 @@ class TestLLMConfig:
         agent.model = "gpt-4"
         agent.temperature = 0.7
         agent.max_tokens = 4096
+        agent.gateway_mode = None
         agent.enable_json_mode = True
         agent.json_schema = {"name": "test", "schema": {}}
         agent.json_strict = True
         c = LLMConfig.from_agent_config(agent)
         assert c.response_format["type"] == "json_schema"
+        assert c.response_format["json_schema"] == {"name": "test", "schema": {}}
+        assert c.response_format["strict"] is True
 
     def test_config_metadata(self):
         logger.info("LLMConfig: config metadata")

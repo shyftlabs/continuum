@@ -10,10 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-# Type aliases for memory hooks
-MemoryPreStoreFilter = Callable[[list[str]], list[str]]
-MemoryOnStoredCallback = Callable[[list[str]], None]
-
 from orchestrator.agent.types import (
     FailStrategy,
     HistorySummarizationMode,
@@ -21,6 +17,10 @@ from orchestrator.agent.types import (
     MergeStrategy,
 )
 from orchestrator.config import settings
+
+# Type aliases for memory hooks
+MemoryPreStoreFilter = Callable[[list[str]], list[str]]
+MemoryOnStoredCallback = Callable[[list[str]], None]
 
 if TYPE_CHECKING:
     from orchestrator.llm.context_management import ContextManagementConfig
@@ -206,24 +206,32 @@ class AgentConfig:
     react_mode: bool = False  # ReAct: appends Thought/Action/Observation template to system prompt
 
     # Session history
-    session_history_turns: int | None = None  # None = use default (20 turns); number of complete request/response pairs to load
+    session_history_turns: int | None = (
+        None  # None = use default (20 turns); number of complete request/response pairs to load
+    )
 
     # Context requirement
-    require_context: bool = False  # if True, skip LLM and return no-knowledge message when no RAG context found
+    require_context: bool = (
+        False  # if True, skip LLM and return no-knowledge message when no RAG context found
+    )
 
     # RAG retrieval hints — products read these in their retrieve_context() call.
     # None means "use the product's own default".
-    retrieval_top_k: int | None = None      # how many chunks to return to the LLM
-    rerank_enabled: bool | None = None      # whether to run a cross-encoder reranker
-    rag_context: str | None = None          # RAG chunks injected after conversation history
+    retrieval_top_k: int | None = None  # how many chunks to return to the LLM
+    rerank_enabled: bool | None = None  # whether to run a cross-encoder reranker
+    rag_context: str | None = None  # RAG chunks injected after conversation history
 
     # Scanner hooks — products plug domain-specific scanners here instead of hardcoding in routers.
     # Input scanner signature:  (text: str) -> tuple[str, bool, str | None]
     #   returns (sanitized_text, is_safe, reason); is_safe=False → InputBlockedError raised
     # Output scanner signature: (prompt: str, output: str) -> tuple[str, bool, str | None]
     #   returns (sanitized_output, is_safe, reason); output with PII redacted in-place
-    input_scanners: list[Callable[[str], tuple[str, bool, str | None]]] = field(default_factory=list)
-    output_scanners: list[Callable[[str, str], tuple[str, bool, str | None]]] = field(default_factory=list)
+    input_scanners: list[Callable[[str], tuple[str, bool, str | None]]] = field(
+        default_factory=list
+    )
+    output_scanners: list[Callable[[str, str], tuple[str, bool, str | None]]] = field(
+        default_factory=list
+    )
 
     # Dispatch priority for this agent's LLM calls (1=lowest, 10=highest, 5=default).
     # Used as the stage-level weight in TwoLevelDispatcher for internal models:
@@ -276,7 +284,8 @@ class AgentConfig:
                     "embedding_model": self.tool_attention.embedding_model,
                     "embedding_dim": self.tool_attention.embedding_dim,
                 }
-                if self.tool_attention else None
+                if self.tool_attention
+                else None
             ),
         }
 
@@ -424,13 +433,19 @@ class RouterConfig:
 
     # --- Smart layer (model_tier) -------------------------------------------------
     tier_classifier: TierClassifierMode = "gpt_4o_mini"
-    tier_classifier_llm_model: str | None = None  # gpt_4o_mini default id; qwen/qwen_local require explicit id
+    tier_classifier_llm_model: str | None = (
+        None  # gpt_4o_mini default id; qwen/qwen_local require explicit id
+    )
     tier_classifier_max_tokens: int = 128
     # Keyword / length heuristics before the classifier LLM (disable to always call the classifier).
     tier_classifier_heuristic_shortcut: bool = True
-    tier_router_api_base: str | None = None  # Remote Hugging Face (or other) router URL — qwen mode only
+    tier_router_api_base: str | None = (
+        None  # Remote Hugging Face (or other) router URL — qwen mode only
+    )
     tier_router_api_key: str | None = None  # Remote router API key — qwen mode only
-    tier_local_router_api_base: str | None = None  # Local OpenAI-compatible URL — qwen_local only (never tier_router_api_base)
+    tier_local_router_api_base: str | None = (
+        None  # Local OpenAI-compatible URL — qwen_local only (never tier_router_api_base)
+    )
     tier_local_router_api_key: str | None = None  # Optional key for local classifier server
 
     tier_nano_model: str | None = None
@@ -518,16 +533,27 @@ def apply_llm_route_env_overrides(rc: RouterConfig) -> RouterConfig:
     if settings.llm_route_router_api_key and str(settings.llm_route_router_api_key).strip():
         rc.tier_router_api_key = str(settings.llm_route_router_api_key).strip()
 
-    if settings.llm_route_local_router_api_base and str(settings.llm_route_local_router_api_base).strip():
+    if (
+        settings.llm_route_local_router_api_base
+        and str(settings.llm_route_local_router_api_base).strip()
+    ):
         rc.tier_local_router_api_base = str(settings.llm_route_local_router_api_base).strip()
 
-    if settings.llm_route_local_router_api_key and str(settings.llm_route_local_router_api_key).strip():
+    if (
+        settings.llm_route_local_router_api_key
+        and str(settings.llm_route_local_router_api_key).strip()
+    ):
         rc.tier_local_router_api_key = str(settings.llm_route_local_router_api_key).strip()
 
-    if settings.llm_route_force_completion_model and str(settings.llm_route_force_completion_model).strip():
+    if (
+        settings.llm_route_force_completion_model
+        and str(settings.llm_route_force_completion_model).strip()
+    ):
         rc.tier_force_completion_model = str(settings.llm_route_force_completion_model).strip()
 
     if settings.llm_route_tier_classifier_heuristic_shortcut is not None:
-        rc.tier_classifier_heuristic_shortcut = settings.llm_route_tier_classifier_heuristic_shortcut
+        rc.tier_classifier_heuristic_shortcut = (
+            settings.llm_route_tier_classifier_heuristic_shortcut
+        )
 
     return rc

@@ -94,9 +94,7 @@ async def run_health_check(
         check_methods = {
             "redis": checker.check_redis,
             "vector_store": checker.check_vector_store,
-            "vector_store": checker.check_vector_store,
             "qdrant": checker.check_qdrant,
-            "milvus": checker.check_milvus,
             "milvus": checker.check_milvus,
             "langfuse": checker.check_langfuse,
             "llm": checker.check_llm,

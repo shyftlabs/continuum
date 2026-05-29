@@ -2,6 +2,7 @@
 Tests for DAGAgent: parallel execution, dependency gating,
 cycle detection, fail-fast abort, and predecessor output passing.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,6 @@ import pytest
 
 from orchestrator.agent.types import AgentResponse, FailStrategy, MergeStrategy, ResponseStatus
 from orchestrator.agent.workflow.dag import DAGAgent, DAGCycleError, DAGStageError, create_dag_agent
-
 
 # ---------------------------------------------------------------------------
 # Helpers

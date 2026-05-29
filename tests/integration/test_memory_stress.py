@@ -82,10 +82,7 @@ class TestBulkOperations:
     async def test_add_20_memories_single_user(self, memory_client):
         """Add 20 distinct memories for one user — no crash, all stored."""
         uid = _uid()
-        facts = [
-            f"I visited city number {i} on my travels, it was city_{i}."
-            for i in range(20)
-        ]
+        facts = [f"I visited city number {i} on my travels, it was city_{i}." for i in range(20)]
 
         start = time.time()
         for fact in facts:
@@ -137,7 +134,7 @@ class TestBulkOperations:
                 await memory_client.delete(mems[0].id)
 
         # After 30 cycles the system should still be responsive
-        final = await memory_client.get_all(user_id=uid)
+        await memory_client.get_all(user_id=uid)
         result = await memory_client.search("location", user_id=uid, limit=5)
         assert result is not None  # No crash
 
@@ -193,9 +190,7 @@ class TestConcurrentAccess:
 
         for index, result in results:
             texts = " ".join(r.memory for r in result.results)
-            assert f"FRAMEWORK_{index}" in texts, (
-                f"User {index} got wrong search results"
-            )
+            assert f"FRAMEWORK_{index}" in texts, f"User {index} got wrong search results"
 
     async def test_concurrent_add_and_search_same_user(self, memory_client):
         """Concurrent adds and searches for the same user do not cause errors."""

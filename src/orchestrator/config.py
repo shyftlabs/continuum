@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     openai_organization: str | None = None
 
     # Hugging Face (tier classifier via HF router when LLM_ROUTE_TIER_CLASSIFIER=qwen)
-    hf_api_key: str | None = None  # HF_API_KEY — used if LLM_ROUTE_ROUTER_API_KEY / tier_router_api_key unset
+    hf_api_key: str | None = (
+        None  # HF_API_KEY — used if LLM_ROUTE_ROUTER_API_KEY / tier_router_api_key unset
+    )
 
     # -------------------------------------------------------------------------
     # Google Gemini Configuration
@@ -101,9 +103,9 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # Smart Gateway integration
     # -------------------------------------------------------------------------
-    smart_gateway_url: str | None = None             # SMART_GATEWAY_URL
-    smart_gateway_api_key: str | None = None         # SMART_GATEWAY_API_KEY
-    smart_gateway_default_mode: str = "modest"       # SMART_GATEWAY_DEFAULT_MODE
+    smart_gateway_url: str | None = None  # SMART_GATEWAY_URL
+    smart_gateway_api_key: str | None = None  # SMART_GATEWAY_API_KEY
+    smart_gateway_default_mode: str = "modest"  # SMART_GATEWAY_DEFAULT_MODE
 
     # -------------------------------------------------------------------------
     # Smart layer (model_tier routing + tier classifiers)
@@ -116,11 +118,17 @@ class Settings(BaseSettings):
     llm_route_router_api_base: str | None = None  # LLM_ROUTE_ROUTER_API_BASE
     llm_route_router_api_key: str | None = None  # LLM_ROUTE_ROUTER_API_KEY
     llm_route_force_completion_model: str | None = None  # LLM_ROUTE_FORCE_COMPLETION_MODEL
-    llm_route_local_router_api_base: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_API_BASE (qwen_local)
+    llm_route_local_router_api_base: str | None = (
+        None  # LLM_ROUTE_LOCAL_ROUTER_API_BASE (qwen_local)
+    )
     llm_route_local_router_api_key: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_API_KEY
-    llm_route_local_router_model: str | None = None  # LLM_ROUTE_LOCAL_ROUTER_MODEL → MLX/local model id for qwen_local
+    llm_route_local_router_model: str | None = (
+        None  # LLM_ROUTE_LOCAL_ROUTER_MODEL → MLX/local model id for qwen_local
+    )
     # When False, skip keyword/length heuristics and always run the classifier LLM (if mode allows).
-    llm_route_tier_classifier_heuristic_shortcut: bool | None = None  # LLM_ROUTE_TIER_CLASSIFIER_HEURISTIC_SHORTCUT
+    llm_route_tier_classifier_heuristic_shortcut: bool | None = (
+        None  # LLM_ROUTE_TIER_CLASSIFIER_HEURISTIC_SHORTCUT
+    )
 
     # -------------------------------------------------------------------------
     # Memory Configuration (mem0 with pluggable vector store)
@@ -137,9 +145,9 @@ class Settings(BaseSettings):
     qdrant_collection: str = "orchestrator_memories"  # Collection name for memories
 
     # Milvus Vector Store Configuration
-    milvus_host: str = "localhost"         # Milvus host
-    milvus_port: int = 19530               # Milvus port
-    milvus_token: str | None = None        # Milvus token (for Zilliz Cloud)
+    milvus_host: str = "localhost"  # Milvus host
+    milvus_port: int = 19530  # Milvus port
+    milvus_token: str | None = None  # Milvus token (for Zilliz Cloud)
     milvus_collection: str = "orchestrator_memories"  # Collection name for memories
 
     # Memory LLM Configuration (use cheap models for memory operations)

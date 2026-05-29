@@ -15,8 +15,7 @@ try:
     from temporalio.worker import Worker
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. "
-        "Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 from orchestrator.logging import get_logger

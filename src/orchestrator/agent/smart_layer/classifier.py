@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from orchestrator.agent.config import RouterConfig
 from orchestrator.agent.smart_layer.defaults import CLASSIFIER_SYSTEM_PROMPT
-from orchestrator.agent.smart_layer.heuristics import heuristic_tier
 from orchestrator.agent.smart_layer.errors import TierClassifierError
+from orchestrator.agent.smart_layer.heuristics import heuristic_tier
 from orchestrator.agent.smart_layer.json_parse import parse_classifier_tier_strict
 from orchestrator.agent.smart_layer.types import ClassifyOutcome, ProductTier
 from orchestrator.config import settings

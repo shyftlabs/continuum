@@ -16,10 +16,7 @@ pytestmark = pytest.mark.integration
 
 def _skip_if_no_api_key():
     """Skip if no LLM API key is configured."""
-    has_key = any(
-        os.getenv(k)
-        for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"]
-    )
+    has_key = any(os.getenv(k) for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"])
     if not has_key:
         pytest.skip("No LLM API key configured")
 

@@ -16,8 +16,7 @@ try:
     from temporalio.client import Client, WorkflowHandle
 except ImportError as _err:
     raise ImportError(
-        "temporalio is required for Temporal support. "
-        "Install it with: pip install -e '.[temporal]'"
+        "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
 try:
@@ -25,7 +24,6 @@ try:
 except ImportError:
     pydantic_data_converter = None
 
-from orchestrator.config import settings
 from orchestrator.logging import get_logger
 from orchestrator.temporal.config import TemporalConfig
 from orchestrator.temporal.exceptions import TemporalConnectionError
@@ -40,9 +38,7 @@ class TemporalClient:
         self._config = config or TemporalConfig.from_settings()
         self._client: Client | None = None
 
-    async def connect(
-        self, host: str | None = None, namespace: str | None = None
-    ) -> None:
+    async def connect(self, host: str | None = None, namespace: str | None = None) -> None:
         """Connect to Temporal server. Uses settings defaults if not provided."""
         target_host = host or self._config.host
         target_ns = namespace or self._config.namespace
@@ -51,9 +47,7 @@ class TemporalClient:
             connect_kw: dict[str, Any] = {}
             if pydantic_data_converter is not None:
                 connect_kw["data_converter"] = pydantic_data_converter
-            self._client = await Client.connect(
-                target_host, namespace=target_ns, **connect_kw
-            )
+            self._client = await Client.connect(target_host, namespace=target_ns, **connect_kw)
             logger.info(f"Connected to Temporal at {target_host} (ns={target_ns})")
         except Exception as e:
             raise TemporalConnectionError(
@@ -110,9 +104,7 @@ class TemporalClient:
         """Start any workflow."""
         workflow_id = id or f"workflow-{uuid.uuid4().hex[:16]}"
         queue = task_queue or self._config.task_queue
-        timeout = execution_timeout or timedelta(
-            seconds=self._config.workflow_execution_timeout
-        )
+        timeout = execution_timeout or timedelta(seconds=self._config.workflow_execution_timeout)
 
         handle = await self.raw_client.start_workflow(
             workflow_fn,
@@ -142,9 +134,7 @@ class TemporalClient:
             task_queue=task_queue,
         )
 
-    async def signal_workflow(
-        self, workflow_id: str, signal_name: str, arg: Any = None
-    ) -> None:
+    async def signal_workflow(self, workflow_id: str, signal_name: str, arg: Any = None) -> None:
         """Send a signal to a running workflow."""
         handle = self.raw_client.get_workflow_handle(workflow_id)
         await handle.signal(signal_name, arg)
@@ -159,9 +149,7 @@ class TemporalClient:
         handle = self.raw_client.get_workflow_handle(workflow_id)
         await handle.cancel()
 
-    async def get_workflow_result(
-        self, workflow_id: str, result_type: type | None = None
-    ) -> Any:
+    async def get_workflow_result(self, workflow_id: str, result_type: type | None = None) -> Any:
         """Get the result of a completed workflow."""
         handle = self.raw_client.get_workflow_handle(workflow_id)
         if result_type:

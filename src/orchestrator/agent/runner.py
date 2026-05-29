@@ -13,7 +13,6 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from orchestrator.agent.base import BaseAgent
-from orchestrator.tools.tool_attention.router import _tool_name
 from orchestrator.agent.config import RunnerConfig
 from orchestrator.agent.exceptions import (
     AgentConfigurationError,
@@ -21,7 +20,7 @@ from orchestrator.agent.exceptions import (
     AgentExecutionError,
     MaxTurnsExceededError,
 )
-from orchestrator.agent.execution.executor import Executor
+from orchestrator.agent.execution.executor import Executor, _enrich_config_for_gateway
 from orchestrator.agent.execution.handoff_executor import HandoffExecutor
 from orchestrator.agent.execution.message_builder import MessageBuilder
 from orchestrator.agent.execution.run_finalizer import RunFinalizer
@@ -29,7 +28,6 @@ from orchestrator.agent.execution.run_lifecycle import RunLifecycle
 from orchestrator.agent.execution.stream_executor import StreamExecutor
 from orchestrator.agent.execution.tool_handler import ToolHandler
 from orchestrator.agent.handoff.manager import HandoffManager
-from orchestrator.agent.workflow.router import RouterAgent
 from orchestrator.agent.persistence.state import RunStateManager
 from orchestrator.agent.services.context_service import ContextService
 from orchestrator.agent.services.memory_service import MemoryService
@@ -48,20 +46,19 @@ from orchestrator.agent.types import (
     PrepareRunResult,
     ResponseStatus,
     RunContext,
-    RunState,
-    RunStatus,
     generate_run_id,
 )
 from orchestrator.agent.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from orchestrator.agent.utils.context_utils import create_run_context
 from orchestrator.agent.utils.message_utils import message_to_dict
 from orchestrator.agent.utils.validation_utils import validate_input
+from orchestrator.agent.workflow.router import RouterAgent
 from orchestrator.config import settings
+from orchestrator.config import settings as app_settings
 from orchestrator.core.container import Container, get_container
 from orchestrator.llm.config import LLMConfig
-from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.logging import get_logger
-from orchestrator.config import settings as app_settings
+from orchestrator.tools.tool_attention.router import _tool_name
 
 if TYPE_CHECKING:
     from orchestrator.llm import LLMClient
@@ -72,7 +69,6 @@ if TYPE_CHECKING:
     from orchestrator.tools import ToolExecutor
 
 logger = get_logger(__name__)
-
 
 
 class AgentRunner:
@@ -342,7 +338,10 @@ class AgentRunner:
             agent.on_start(agent, {"context": context, "input": input})
 
         messages, user_message_index = await self._message_builder.prepare_messages(
-            agent, input, context, tool_context_state=tool_context_state,
+            agent,
+            input,
+            context,
+            tool_context_state=tool_context_state,
         )
         run_state.messages = [message_to_dict(m) for m in messages]
 
@@ -376,7 +375,16 @@ class AgentRunner:
         start_time = time.time()
 
         result = await self._prepare_run(
-            agent, input, session_id, conversation_id, user_id, context, max_turns, trace_id, metadata, tags
+            agent,
+            input,
+            session_id,
+            conversation_id,
+            user_id,
+            context,
+            max_turns,
+            trace_id,
+            metadata,
+            tags,
         )
         if not result.success:
             return result.error_response
@@ -458,16 +466,24 @@ class AgentRunner:
 
             # Workflow agents must use agent.execute() directly, not runner.run().
             response = await self._executor.execute_loop(
-                agent=agent, messages=messages, context=ctx, run_state=run_state,
+                agent=agent,
+                messages=messages,
+                context=ctx,
+                run_state=run_state,
             )
 
             if agent.on_end:
                 agent.on_end(agent, {"context": ctx, "response": response})
 
             await self._finalizer.finalize(
-                agent, ctx, run_state, response,
-                result.user_message_index, result.tool_context_state,
-                start_time, response.messages,
+                agent,
+                ctx,
+                run_state,
+                response,
+                result.user_message_index,
+                result.tool_context_state,
+                start_time,
+                response.messages,
             )
 
             self._circuit_breaker.record_success()
@@ -490,9 +506,14 @@ class AgentRunner:
                 if agent.on_end:
                     agent.on_end(agent, {"context": ctx, "response": partial})
                 await self._finalizer.finalize(
-                    agent, ctx, run_state, partial,
-                    result.user_message_index, result.tool_context_state,
-                    start_time, run_state.messages,
+                    agent,
+                    ctx,
+                    run_state,
+                    partial,
+                    result.user_message_index,
+                    result.tool_context_state,
+                    start_time,
+                    run_state.messages,
                 )
                 e.partial_response = partial
                 raise
@@ -530,7 +551,16 @@ class AgentRunner:
         start_time = time.time()
 
         result = await self._prepare_run(
-            agent, input, session_id, conversation_id, user_id, None, max_turns, trace_id, metadata, None
+            agent,
+            input,
+            session_id,
+            conversation_id,
+            user_id,
+            None,
+            max_turns,
+            trace_id,
+            metadata,
+            None,
         )
         if not result.success:
             _run_id = generate_run_id()
@@ -554,8 +584,10 @@ class AgentRunner:
         run_state = result.run_state
 
         yield AgentEvent(
-            type=EventType.RUN_START, agent_name=agent.name,
-            run_id=ctx.run_id, data={"input": input if isinstance(input, str) else "[messages]"},
+            type=EventType.RUN_START,
+            agent_name=agent.name,
+            run_id=ctx.run_id,
+            data={"input": input if isinstance(input, str) else "[messages]"},
             trace_id=ctx.trace_id,
         )
 
@@ -564,8 +596,10 @@ class AgentRunner:
             messages = list(run_state.messages) if run_state.messages else []
 
             yield AgentEvent(
-                type=EventType.AGENT_START, agent_name=agent.name,
-                run_id=ctx.run_id, trace_id=ctx.trace_id,
+                type=EventType.AGENT_START,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
             )
 
             if (
@@ -706,8 +740,10 @@ class AgentRunner:
                         content_parts.append(chunk.content)
                         if "NEED_TOOL:" not in chunk.content:
                             yield AgentEvent(
-                                type=EventType.CONTENT_DELTA, agent_name=agent.name,
-                                run_id=ctx.run_id, data={"content": chunk.content},
+                                type=EventType.CONTENT_DELTA,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={"content": chunk.content},
                                 trace_id=ctx.trace_id,
                             )
                     if chunk.tool_calls:
@@ -722,8 +758,10 @@ class AgentRunner:
                 _cfg = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx)
                 if content and (_cfg.json_mode or _cfg.response_format):
                     stripped = content.strip()
-                    if not ((stripped.startswith("{") and stripped.endswith("}")) or
-                            (stripped.startswith("[") and stripped.endswith("]"))):
+                    if not (
+                        (stripped.startswith("{") and stripped.endswith("}"))
+                        or (stripped.startswith("[") and stripped.endswith("]"))
+                    ):
                         logger.warning(
                             "Streamed response is not JSON despite json_mode being set",
                             extra={"model": _cfg.model, "preview": stripped[:100]},
@@ -747,7 +785,9 @@ class AgentRunner:
                         async for chunk in self.llm_client.chat_stream(
                             messages=llm_messages,
                             tools=expanded_tools,
-                            config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
+                            config=_enrich_config_for_gateway(
+                                LLMConfig.from_agent_config(agent), ctx
+                            ),
                             trace_metadata={"session_id": session_id} if session_id else None,
                         ):
                             if chunk.model:
@@ -755,8 +795,10 @@ class AgentRunner:
                             if chunk.content:
                                 content_parts.append(chunk.content)
                                 yield AgentEvent(
-                                    type=EventType.CONTENT_DELTA, agent_name=agent.name,
-                                    run_id=ctx.run_id, data={"content": chunk.content},
+                                    type=EventType.CONTENT_DELTA,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"content": chunk.content},
                                     trace_id=ctx.trace_id,
                                 )
                             if chunk.tool_calls:
@@ -769,27 +811,61 @@ class AgentRunner:
 
                 if content:
                     yield AgentEvent(
-                        type=EventType.CONTENT_COMPLETE, agent_name=agent.name,
-                        run_id=ctx.run_id, data={"content": content}, trace_id=ctx.trace_id,
+                        type=EventType.CONTENT_COMPLETE,
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        data={"content": content},
+                        trace_id=ctx.trace_id,
                     )
 
                 if tool_calls:
-                    messages.append({
-                        "role": "assistant", "content": content or None,
-                        "tool_calls": [tc.to_dict() if hasattr(tc, "to_dict") else tc for tc in tool_calls],
-                    })
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": content or None,
+                            "tool_calls": [
+                                tc.to_dict() if hasattr(tc, "to_dict") else tc for tc in tool_calls
+                            ],
+                        }
+                    )
 
                     for tc in tool_calls:
-                        tool_name = tc.function.name if hasattr(tc, "function") else tc.get("function", {}).get("name", "")
+                        tool_name = (
+                            tc.function.name
+                            if hasattr(tc, "function")
+                            else tc.get("function", {}).get("name", "")
+                        )
                         tool_call_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
 
                         is_handoff, target = agent.is_handoff_tool_call(tool_name)
                         if is_handoff and target:
-                            yield AgentEvent(type=EventType.HANDOFF_START, agent_name=agent.name, run_id=ctx.run_id, data={"target": target}, trace_id=ctx.trace_id)
+                            yield AgentEvent(
+                                type=EventType.HANDOFF_START,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={"target": target},
+                                trace_id=ctx.trace_id,
+                            )
 
                             if not self._handoff_executor:
-                                yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": "HandoffExecutor not available in streaming mode"}, trace_id=ctx.trace_id)
-                                yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
+                                yield AgentEvent(
+                                    type=EventType.HANDOFF_END,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={
+                                        "target": target,
+                                        "success": False,
+                                        "error": "HandoffExecutor not available in streaming mode",
+                                    },
+                                    trace_id=ctx.trace_id,
+                                )
+                                yield AgentEvent(
+                                    type=EventType.RUN_END,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"content": "", "turn_count": turn},
+                                    trace_id=ctx.trace_id,
+                                )
                                 return
 
                             handoff_result = await self._handoff_executor.execute_handoff(
@@ -802,36 +878,110 @@ class AgentRunner:
                             )
 
                             if not handoff_result.success:
-                                yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": False, "error": handoff_result.error}, trace_id=ctx.trace_id)
-                                yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
+                                yield AgentEvent(
+                                    type=EventType.HANDOFF_END,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={
+                                        "target": target,
+                                        "success": False,
+                                        "error": handoff_result.error,
+                                    },
+                                    trace_id=ctx.trace_id,
+                                )
+                                yield AgentEvent(
+                                    type=EventType.RUN_END,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"content": "", "turn_count": turn},
+                                    trace_id=ctx.trace_id,
+                                )
                                 return
 
-                            handoff_content = handoff_result.response.content if handoff_result.response else ""
-                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": handoff_content or ""})
+                            handoff_content = (
+                                handoff_result.response.content if handoff_result.response else ""
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "content": handoff_content or "",
+                                }
+                            )
 
-                            yield AgentEvent(type=EventType.HANDOFF_END, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "success": True}, trace_id=ctx.trace_id)
+                            yield AgentEvent(
+                                type=EventType.HANDOFF_END,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={"target": target, "success": True},
+                                trace_id=ctx.trace_id,
+                            )
                             if handoff_content:
-                                yield AgentEvent(type=EventType.HANDOFF_RETURN, agent_name=agent.name, run_id=ctx.run_id, data={"target": target, "content": handoff_content}, trace_id=ctx.trace_id)
-                                yield AgentEvent(type=EventType.CONTENT_COMPLETE, agent_name=agent.name, run_id=ctx.run_id, data={"content": handoff_content}, trace_id=ctx.trace_id)
+                                yield AgentEvent(
+                                    type=EventType.HANDOFF_RETURN,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"target": target, "content": handoff_content},
+                                    trace_id=ctx.trace_id,
+                                )
+                                yield AgentEvent(
+                                    type=EventType.CONTENT_COMPLETE,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"content": handoff_content},
+                                    trace_id=ctx.trace_id,
+                                )
                                 content = handoff_content
                             break
 
-                        yield AgentEvent(type=EventType.TOOL_CALL_START, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name}, trace_id=ctx.trace_id)
+                        yield AgentEvent(
+                            type=EventType.TOOL_CALL_START,
+                            agent_name=agent.name,
+                            run_id=ctx.run_id,
+                            data={"tool_name": tool_name},
+                            trace_id=ctx.trace_id,
+                        )
 
                         try:
-                            tool_result, _ = await self._tool_service.execute_tool_call(agent, tc, ctx)
+                            tool_result, _ = await self._tool_service.execute_tool_call(
+                                agent, tc, ctx
+                            )
                             messages.append(tool_result)
-                            yield AgentEvent(type=EventType.TOOL_CALL_END, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name, "result": tool_result.get("content", "")[:500]}, trace_id=ctx.trace_id)
+                            yield AgentEvent(
+                                type=EventType.TOOL_CALL_END,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={
+                                    "tool_name": tool_name,
+                                    "result": tool_result.get("content", "")[:500],
+                                },
+                                trace_id=ctx.trace_id,
+                            )
                         except Exception as e:
-                            yield AgentEvent(type=EventType.TOOL_CALL_ERROR, agent_name=agent.name, run_id=ctx.run_id, data={"tool_name": tool_name, "error": str(e)}, trace_id=ctx.trace_id)
-                            messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": f"Error executing tool: {e}"})
+                            yield AgentEvent(
+                                type=EventType.TOOL_CALL_ERROR,
+                                agent_name=agent.name,
+                                run_id=ctx.run_id,
+                                data={"tool_name": tool_name, "error": str(e)},
+                                trace_id=ctx.trace_id,
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "content": f"Error executing tool: {e}",
+                                }
+                            )
 
                     continue
                 break
 
             response = AgentResponse(
-                content=content, run_id=ctx.run_id, agent_name=agent.name,
-                status=ResponseStatus.SUCCESS, trace_id=ctx.trace_id,
+                content=content,
+                run_id=ctx.run_id,
+                agent_name=agent.name,
+                status=ResponseStatus.SUCCESS,
+                trace_id=ctx.trace_id,
             )
 
             # Append final assistant response to messages so it gets saved to Redis session
@@ -842,23 +992,55 @@ class AgentRunner:
                 agent.on_end(agent, {"context": ctx, "response": response})
 
             await self._finalizer.finalize(
-                agent, ctx, run_state, response,
-                result.user_message_index, result.tool_context_state,
-                start_time, messages,
+                agent,
+                ctx,
+                run_state,
+                response,
+                result.user_message_index,
+                result.tool_context_state,
+                start_time,
+                messages,
             )
 
-            yield AgentEvent(type=EventType.AGENT_END, agent_name=agent.name, run_id=ctx.run_id, data={"turn_count": turn}, trace_id=ctx.trace_id)
-            yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": content, "turn_count": turn}, trace_id=ctx.trace_id)
+            yield AgentEvent(
+                type=EventType.AGENT_END,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"turn_count": turn},
+                trace_id=ctx.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.RUN_END,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"content": content, "turn_count": turn},
+                trace_id=ctx.trace_id,
+            )
 
         except Exception as e:
             await self._finalizer.handle_error(agent, ctx, run_state, e, start_time)
 
-            yield AgentEvent(type=EventType.RUN_ERROR, agent_name=agent.name, run_id=ctx.run_id, data={"error": str(e), "error_type": type(e).__name__}, trace_id=ctx.trace_id)
-            yield AgentEvent(type=EventType.RUN_END, agent_name=agent.name, run_id=ctx.run_id, data={"content": "", "turn_count": turn}, trace_id=ctx.trace_id)
+            yield AgentEvent(
+                type=EventType.RUN_ERROR,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"error": str(e), "error_type": type(e).__name__},
+                trace_id=ctx.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.RUN_END,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"content": "", "turn_count": turn},
+                trace_id=ctx.trace_id,
+            )
 
             if isinstance(e, AgentError):
                 raise
             raise AgentExecutionError(
-                str(e), agent_name=agent.name, run_id=ctx.run_id,
-                trace_id=ctx.trace_id, original_error=e,
+                str(e),
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
+                original_error=e,
             ) from e

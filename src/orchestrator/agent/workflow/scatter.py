@@ -71,9 +71,9 @@ class ScatterConfig:
     merge_strategy: MergeStrategy = MergeStrategy.LLM_SUMMARIZE
     fail_strategy: FailStrategy = FailStrategy.CONTINUE_ON_ERROR
     timeout: int = 300
-    split_model: str | None = None    # Model for LLM task splitting
+    split_model: str | None = None  # Model for LLM task splitting
     summary_model: str | None = None  # Model for LLM result merging
-    summary_prompt: str | None = None # Custom merge prompt
+    summary_prompt: str | None = None  # Custom merge prompt
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,9 +121,11 @@ class ScatterAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("Agent name is required")
         if not self.agents:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("ScatterAgent requires at least one agent")
 
     async def execute(
@@ -159,12 +161,10 @@ class ScatterAgent(BaseAgent):
             },
             metadata={"workflow_type": "scatter"},
         ) as workflow_span:
-
             # Step 1 — determine input slices
             slices = await self._get_slices(input_text, llm_client)
             logger.info(
-                f"ScatterAgent '{self.name}': {len(slices)} slices for "
-                f"{len(self.agents)} agents"
+                f"ScatterAgent '{self.name}': {len(slices)} slices for {len(self.agents)} agents"
             )
             workflow_span.add_metadata("slices_preview", [s[:100] for s in slices])
 
@@ -173,7 +173,7 @@ class ScatterAgent(BaseAgent):
                 asyncio.create_task(
                     self._run_agent_safe(agent, slice_input, runner, context.branch_copy())
                 )
-                for agent, slice_input in zip(self.agents, slices)
+                for agent, slice_input in zip(self.agents, slices, strict=False)
             ]
 
             try:
@@ -195,7 +195,7 @@ class ScatterAgent(BaseAgent):
             successful: dict[str, AgentResponse] = {}
             failed: dict[str, str] = {}
 
-            for agent, task in zip(self.agents, tasks):
+            for agent, task in zip(self.agents, tasks, strict=False):
                 if task.done():
                     try:
                         successful[agent.name] = task.result()
@@ -233,12 +233,14 @@ class ScatterAgent(BaseAgent):
             for resp in successful.values():
                 total_usage = total_usage.add(resp.usage)
 
-            workflow_span.set_output({
-                "success": True,
-                "branches_succeeded": len(successful),
-                "branches_failed": len(failed),
-                "total_tokens": total_usage.total_tokens,
-            })
+            workflow_span.set_output(
+                {
+                    "success": True,
+                    "branches_succeeded": len(successful),
+                    "branches_failed": len(failed),
+                    "total_tokens": total_usage.total_tokens,
+                }
+            )
 
             result = AgentResponse(
                 content=merged,
@@ -257,6 +259,7 @@ class ScatterAgent(BaseAgent):
             )
 
         return result
+
     async def _get_slices(
         self,
         input_text: str,
@@ -321,7 +324,7 @@ class ScatterAgent(BaseAgent):
                 raise ValueError(f"Expected {len(self.agents)} slices, got {len(slices)}")
 
             logger.info(f"ScatterAgent: LLM split into {len(slices)} slices")
-            for i, (agent, s) in enumerate(zip(self.agents, slices)):
+            for i, (agent, s) in enumerate(zip(self.agents, slices, strict=False)):
                 logger.debug(f"  branch {i + 1} ({agent.name}): {s[:100]}")
 
             return slices
@@ -359,31 +362,24 @@ class ScatterAgent(BaseAgent):
             return next(iter(results.values())).content or ""
 
         if strategy == MergeStrategy.CONCATENATE:
-            return "\n\n".join(
-                f"## {name}\n{resp.content}" for name, resp in results.items()
-            )
+            return "\n\n".join(f"## {name}\n{resp.content}" for name, resp in results.items())
 
         if strategy == MergeStrategy.STRUCTURED:
-            return json.dumps(
-                {name: resp.content for name, resp in results.items()}, indent=2
-            )
+            return json.dumps({name: resp.content for name, resp in results.items()}, indent=2)
 
         # LLM_SUMMARIZE (default)
         if llm_client is None:
             try:
                 from orchestrator.core.container import get_container
+
                 llm_client = get_container().llm_client
             except Exception:
                 pass
 
         if llm_client is None:
-            return "\n\n".join(
-                f"## {name}\n{resp.content}" for name, resp in results.items()
-            )
+            return "\n\n".join(f"## {name}\n{resp.content}" for name, resp in results.items())
 
-        outputs = "\n\n".join(
-            f"### {name}\n{resp.content}" for name, resp in results.items()
-        )
+        outputs = "\n\n".join(f"### {name}\n{resp.content}" for name, resp in results.items())
         if self.scatter_config.summary_prompt:
             prompt = f"{outputs}\n\n{self.scatter_config.summary_prompt}"
         else:
@@ -394,7 +390,11 @@ class ScatterAgent(BaseAgent):
                 f"Synthesise these into a single coherent response that integrates all perspectives."
             )
 
-        logger.info("===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================", self.name, prompt)
+        logger.info(
+            "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
+            self.name,
+            prompt,
+        )
 
         from orchestrator.llm.config import LLMConfig
 
@@ -410,25 +410,26 @@ class ScatterAgent(BaseAgent):
             return response.content or ""
         except Exception as e:
             logger.warning(f"ScatterAgent: LLM merge failed ({e}) — concatenating")
-            return "\n\n".join(
-                f"## {name}\n{resp.content}" for name, resp in results.items()
-            )
+            return "\n\n".join(f"## {name}\n{resp.content}" for name, resp in results.items())
 
     def _get_llm(self) -> Any | None:
         try:
             from orchestrator.core.container import get_container
+
             return get_container().llm_client
         except Exception:
             return None
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "agents": [a.name for a in self.agents],
-            "scatter_config": self.scatter_config.to_dict(),
-            "input_slices": self.input_slices,
-            "workflow_type": "scatter",
-        })
+        base.update(
+            {
+                "agents": [a.name for a in self.agents],
+                "scatter_config": self.scatter_config.to_dict(),
+                "input_slices": self.input_slices,
+                "workflow_type": "scatter",
+            }
+        )
         return base
 
 

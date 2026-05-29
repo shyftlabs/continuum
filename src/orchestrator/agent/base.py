@@ -15,15 +15,14 @@ from pydantic import BaseModel
 
 from orchestrator.agent.config import AgentConfig, AgentMemoryConfig
 from orchestrator.agent.exceptions import AgentConfigurationError
-from orchestrator.logging import get_logger
 from orchestrator.agent.types import (
     Handoff,
     MemoryScope,
 )
 from orchestrator.config import settings
+from orchestrator.logging import get_logger
 
 if TYPE_CHECKING:
-    from orchestrator.agent.types import RunContext
     from orchestrator.llm.types import ToolDefinition
     from orchestrator.security.policy import PolicyStore
     from orchestrator.tools import MCPServer, ToolExecutor
@@ -102,7 +101,9 @@ class BaseAgent:
     model: str = field(default_factory=lambda: settings.default_llm_model)
     temperature: float = 0.7
     max_tokens: int | None = None
-    gateway_mode: str | None = None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE
+    gateway_mode: str | None = (
+        None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE
+    )
 
     # Tools
     tools: list[ToolDefinition] | list[dict[str, Any]] = field(default_factory=list)
@@ -409,7 +410,9 @@ class BaseAgent:
             "config": copy.deepcopy(self.config),
             "output_schema": self.output_schema,
             "enable_json_mode": self.enable_json_mode,
-            "json_schema": copy.deepcopy(self.json_schema) if isinstance(self.json_schema, dict) else self.json_schema,
+            "json_schema": copy.deepcopy(self.json_schema)
+            if isinstance(self.json_schema, dict)
+            else self.json_schema,
             "json_strict": self.json_strict,
             "input_schema": self.input_schema,
             "on_start": self.on_start,

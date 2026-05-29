@@ -79,8 +79,7 @@ async def validate_input(
 
         # Return graceful error response (safe access to avoid KeyError if Pydantic structure changes)
         error_details = [
-            f"- {err.get('loc', '?')}: {err.get('msg', 'unknown error')}"
-            for err in e.errors()
+            f"- {err.get('loc', '?')}: {err.get('msg', 'unknown error')}" for err in e.errors()
         ]
 
         return AgentResponse(

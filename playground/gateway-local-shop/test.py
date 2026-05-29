@@ -25,10 +25,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 import config  # noqa: F401 — side effect: sets os.environ gateway vars
 
-from orchestrator import AgentRunner, BaseAgent, RunnerConfig, get_logger, setup_logging, LogLevel
+from orchestrator import AgentRunner, BaseAgent, LogLevel, RunnerConfig, get_logger, setup_logging
+from orchestrator.config import settings
 from orchestrator.core.container import get_container
 from orchestrator.core.lifecycle import get_lifecycle_manager
-from orchestrator.config import settings
 
 logger = get_logger(__name__)
 
@@ -39,7 +39,9 @@ def print_gateway_status() -> None:
     print(f"\n{DIVIDER}")
     print("  Smart Gateway Configuration")
     print(DIVIDER)
-    print(f"  SMART_GATEWAY_URL  : {settings.smart_gateway_url or 'NOT SET — direct provider calls'}")
+    print(
+        f"  SMART_GATEWAY_URL  : {settings.smart_gateway_url or 'NOT SET — direct provider calls'}"
+    )
     print(f"  SMART_GATEWAY_KEY  : {settings.smart_gateway_api_key or 'NOT SET'}")
     print(f"  DEFAULT_MODE       : {settings.smart_gateway_default_mode}")
     print(DIVIDER + "\n")
@@ -53,10 +55,12 @@ async def run_test(
     session_id: str | None = None,
     user_id: str = "test-user",
 ) -> None:
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  TEST: {label}")
     print(f"  model       : {agent.model}")
-    print(f"  gateway_mode: {agent.gateway_mode or '(default: ' + settings.smart_gateway_default_mode + ')'}")
+    print(
+        f"  gateway_mode: {agent.gateway_mode or '(default: ' + settings.smart_gateway_default_mode + ')'}"
+    )
     print(f"  session_id  : {session_id or '(none — will use run_id)'}")
     print(f"  message     : {message}")
     print("=" * 60)

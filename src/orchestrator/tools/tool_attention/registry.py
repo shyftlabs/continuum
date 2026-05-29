@@ -91,12 +91,12 @@ class ToolSummaryRegistry:
     def _sync_upsert(self, tool_defs: list[Any]) -> None:
         pairs = [_tool_summary(t) for t in tool_defs]
         names = [p[0] for p in pairs if p[0]]
-        summaries = [p[1] for p, n in zip(pairs, [p[0] for p in pairs]) if n]
+        summaries = [p[1] for p, n in zip(pairs, [p[0] for p in pairs], strict=False) if n]
 
         embeddings = self._encoder.encode(summaries, normalize_embeddings=True).tolist()
         data = [
             {"tool_name": n, "vector": e, "summary": s}
-            for n, e, s in zip(names, embeddings, summaries)
+            for n, e, s in zip(names, embeddings, summaries, strict=False)
         ]
         self._client.upsert(collection_name=self._config.collection_name, data=data)
         logger.debug(f"Upserted {len(data)} tool embeddings")

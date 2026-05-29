@@ -141,7 +141,9 @@ class TestCleanupCorrectness:
         # Verify all gone
         for uid in users:
             remaining = await memory_client.get_all(user_id=uid)
-            assert len(remaining) == 0, f"User {uid} still has {len(remaining)} memories after delete"
+            assert len(remaining) == 0, (
+                f"User {uid} still has {len(remaining)} memories after delete"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +164,9 @@ class TestGrowthStability:
 
         all_mems = await memory_client.get_all(user_id=uid)
         # mem0 deduplication should keep this well below 10
-        ceo_mems = [m for m in all_mems if "ceo" in m.memory.lower() or "company" in m.memory.lower()]
+        ceo_mems = [
+            m for m in all_mems if "ceo" in m.memory.lower() or "company" in m.memory.lower()
+        ]
         assert len(ceo_mems) <= 3, (
             f"Expected deduplication, but found {len(ceo_mems)} copies of the same fact"
         )
@@ -206,8 +210,18 @@ class TestGrowthStability:
         mem_id = mems[0].id
 
         # Update the same memory 10 times
-        sports = ["tennis", "golf", "swimming", "cycling", "rowing",
-                  "running", "boxing", "climbing", "surfing", "skiing"]
+        sports = [
+            "tennis",
+            "golf",
+            "swimming",
+            "cycling",
+            "rowing",
+            "running",
+            "boxing",
+            "climbing",
+            "surfing",
+            "skiing",
+        ]
         for sport in sports:
             try:
                 await memory_client.update(mem_id, f"My favorite sport is {sport}.")
@@ -216,7 +230,9 @@ class TestGrowthStability:
 
         # Should not have exploded into many entries
         final = await memory_client.get_all(user_id=uid)
-        sport_mems = [m for m in final if "sport" in m.memory.lower() or "favorite" in m.memory.lower()]
+        sport_mems = [
+            m for m in final if "sport" in m.memory.lower() or "favorite" in m.memory.lower()
+        ]
         assert len(sport_mems) <= 3, (
             f"Update cycle created {len(sport_mems)} entries — expected deduplication"
         )
@@ -243,7 +259,7 @@ class TestConcurrentCleanup:
 
         # Verify all gone
         checks = await asyncio.gather(*[memory_client.get_all(user_id=uid) for uid in users])
-        for uid, remaining in zip(users, checks):
+        for uid, remaining in zip(users, checks, strict=False):
             assert len(remaining) == 0, f"User {uid} still has {len(remaining)} memories"
 
     async def test_add_then_immediate_delete_all(self, memory_client):

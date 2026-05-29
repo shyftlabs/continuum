@@ -25,7 +25,14 @@ from mcp.client.session import MessageHandlerFnT
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
-from mcp.types import CallToolResult, GetPromptResult, InitializeResult, ListPromptsResult, ListResourcesResult, ReadResourceResult, Resource, TextContent
+from mcp.types import (
+    CallToolResult,
+    GetPromptResult,
+    InitializeResult,
+    ListPromptsResult,
+    Resource,
+    TextContent,
+)
 from typing_extensions import TypedDict
 
 from orchestrator.exceptions import ValidationError
@@ -129,7 +136,7 @@ class MCPServer(abc.ABC):
         """Read a resource by URI. Returns the text content."""
         pass
 
-    async def __aenter__(self) -> "MCPServer":
+    async def __aenter__(self) -> MCPServer:
         await self.connect()
         return self
 
@@ -407,7 +414,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 is_json_error = (
                     "JSONDecodeError" in error_type_name
                     or "JsonDecodeError" in error_type_name
-                    or isinstance(e, ValueError) and (
+                    or isinstance(e, ValueError)
+                    and (
                         "Expecting value" in error_msg
                         or "Unterminated string" in error_msg
                         or "Expecting property name" in error_msg
@@ -478,8 +486,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 "Server not initialized. Make sure you call `connect()` first.",
                 server_name=self.name,
             )
-        from pydantic import AnyUrl
         from mcp.types import TextResourceContents
+        from pydantic import AnyUrl
 
         result = await self.session.read_resource(AnyUrl(uri))
         for item in result.contents:
@@ -509,7 +517,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 )
                 try:
                     await asyncio.wait_for(self._no_active_calls.wait(), timeout=30.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(
                         f"MCP cleanup: timed out waiting for in-flight calls to drain "
                         f"on server '{self.name}' ({self._active_calls} still active)"
@@ -530,11 +538,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 logger.debug("MCP cleanup cancelled during shutdown, continuing...")
             except RuntimeError as e:
                 msg = str(e).lower()
-                if (
-                    "cancel scope" in msg
-                    or "different task" in msg
-                    or "already running" in msg
-                ):
+                if "cancel scope" in msg or "different task" in msg or "already running" in msg:
                     logger.debug(f"MCP cleanup cross-task error (expected during shutdown): {e}")
                 else:
                     logger.error(f"Error cleaning up server: {e}")
@@ -915,6 +919,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
 # Schema generation helpers
 # ---------------------------------------------------------------------------
 
+
 def _type_to_schema(hint: Any) -> dict[str, Any]:
     """Convert a single Python type hint to a JSON Schema fragment.
 
@@ -986,7 +991,7 @@ def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
     return schema
 
 
-def function_tool(fn: Callable[..., Any]) -> "FunctionTool":
+def function_tool(fn: Callable[..., Any]) -> FunctionTool:
     """Decorator that converts a Python function to a ``FunctionTool``.
 
     The tool name is taken from ``fn.__name__``.
@@ -1011,16 +1016,20 @@ def function_tool(fn: Callable[..., Any]) -> "FunctionTool":
 
     # Wrap so call_tool can pass a dict while fn uses natural kwargs signatures.
     if inspect.iscoroutinefunction(fn):
+
         async def _wrapped(args: dict[str, Any]) -> Any:
             return await fn(**args)
     else:
+
         def _wrapped(args: dict[str, Any]) -> Any:  # type: ignore[misc]
             return fn(**args)
 
     return FunctionTool(name=name, fn=_wrapped, description=description, input_schema=input_schema)
 
 
-def _coerce_to_function_tool(item: "FunctionTool | Callable[..., Any] | dict[str, Any]") -> "FunctionTool":
+def _coerce_to_function_tool(
+    item: FunctionTool | Callable[..., Any] | dict[str, Any],
+) -> FunctionTool:
     """Normalise the three accepted tool formats into a ``FunctionTool``.
 
     Accepted formats:
@@ -1037,16 +1046,13 @@ def _coerce_to_function_tool(item: "FunctionTool | Callable[..., Any] | dict[str
         fn = item.get("fn")
         if fn is None or not callable(fn):
             raise ValueError(
-                "Tool dict must contain a callable 'fn' key. "
-                f"Got keys: {list(item.keys())}"
+                f"Tool dict must contain a callable 'fn' key. Got keys: {list(item.keys())}"
             )
         name = item.get("name") or getattr(fn, "__name__", "unknown")
         description = item.get("description") or (fn.__doc__ or "").strip().split("\n")[0]
         input_schema = item.get("input_schema") or _schema_from_function(fn)
         return FunctionTool(name=name, fn=fn, description=description, input_schema=input_schema)
-    raise TypeError(
-        f"Expected FunctionTool, callable, or dict — got {type(item).__name__}"
-    )
+    raise TypeError(f"Expected FunctionTool, callable, or dict — got {type(item).__name__}")
 
 
 @dataclass
@@ -1132,9 +1138,7 @@ class MCPServerFunction(MCPServer):
         for item in tools:
             ft = _coerce_to_function_tool(item)
             if ft.name in self._registry:
-                raise ValueError(
-                    f"MCPServerFunction '{name}': duplicate tool name '{ft.name}'"
-                )
+                raise ValueError(f"MCPServerFunction '{name}': duplicate tool name '{ft.name}'")
             mcp_tool = MCPTool(
                 name=ft.name,
                 description=ft.description,

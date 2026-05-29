@@ -77,7 +77,8 @@ class RunFinalizer:
                 except Exception as e:
                     logger.warning(
                         "Output scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)), e,
+                        getattr(scanner, "__name__", repr(scanner)),
+                        e,
                     )
 
         run_state.status = RunStatus.COMPLETED
@@ -87,8 +88,12 @@ class RunFinalizer:
 
         if response.status != ResponseStatus.MAX_TURNS_REACHED:
             await self.save_session_data(
-                agent, context, user_message_index,
-                tool_context_state, updated_context_state, messages,
+                agent,
+                context,
+                user_message_index,
+                tool_context_state,
+                updated_context_state,
+                messages,
             )
 
         e2e_latency_ms = (time.time() - start_time) * 1000
@@ -120,7 +125,8 @@ class RunFinalizer:
         """Shared error handling for run() and run_stream()."""
         metrics = get_metrics_collector()
         metrics.track_error(
-            "agent_run", error,
+            "agent_run",
+            error,
             metadata={"agent_name": agent.name, "run_id": context.run_id},
         )
 
@@ -204,7 +210,12 @@ class RunFinalizer:
     ) -> None:
         """Save messages and tool context to session."""
         original_session_id = context.session_id
-        if not (agent.config.log_to_session and not context.suppress_session_log and original_session_id and self._session_client):
+        if not (
+            agent.config.log_to_session
+            and not context.suppress_session_log
+            and original_session_id
+            and self._session_client
+        ):
             return
 
         try:

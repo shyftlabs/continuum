@@ -124,6 +124,7 @@ def _pick_template(templates: list[str], seed_offset: int) -> str:
 # IRC — load from Cornell Title 26 CSVs
 # ---------------------------------------------------------------------------
 
+
 def _clean_section_label(label: str) -> tuple[str, str, str]:
     if any(kw in label for kw in ["Repealed", "Renumbered", "[Reserved]"]):
         return "", "", ""
@@ -160,14 +161,16 @@ def load_irc_sections(csv_dir: Path, samples_per_subtitle: int) -> list[dict[str
                 section_num, topic, title = _clean_section_label(label)
                 if not section_num:
                     continue
-                subtitle_sections.append({
-                    "source_type": "irc",
-                    "section_num": section_num,
-                    "topic": topic,
-                    "title": title,
-                    "section_url": section_url,
-                    "subtitle": subtitle_name,
-                })
+                subtitle_sections.append(
+                    {
+                        "source_type": "irc",
+                        "section_num": section_num,
+                        "topic": topic,
+                        "title": title,
+                        "section_url": section_url,
+                        "subtitle": subtitle_name,
+                    }
+                )
 
         rng = random.Random(RANDOM_SEED)
         sampled = rng.sample(subtitle_sections, min(samples_per_subtitle, len(subtitle_sections)))
@@ -180,6 +183,7 @@ def load_irc_sections(csv_dir: Path, samples_per_subtitle: int) -> list[dict[str
 # ---------------------------------------------------------------------------
 # Other sources — load from pgvector DB
 # ---------------------------------------------------------------------------
+
 
 def load_chunks_from_db(source_type: str, samples: int) -> list[dict[str, Any]]:
     """
@@ -202,9 +206,25 @@ def load_chunks_from_db(source_type: str, samples: int) -> list[dict[str, Any]]:
 
     try:
         result = subprocess.run(
-            ["docker", "exec", "taxpilot_postgres", "psql",
-             "-U", "taxpilot", "-d", "taxpilot", "-t", "-A", "-F", "\t", "-c", sql],
-            capture_output=True, text=True, timeout=30,
+            [
+                "docker",
+                "exec",
+                "taxpilot_postgres",
+                "psql",
+                "-U",
+                "taxpilot",
+                "-d",
+                "taxpilot",
+                "-t",
+                "-A",
+                "-F",
+                "\t",
+                "-c",
+                sql,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip())
@@ -239,6 +259,7 @@ def load_chunks_from_db(source_type: str, samples: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Question generation per source type
 # ---------------------------------------------------------------------------
+
 
 def make_question(item: dict[str, Any], seed_offset: int) -> str:
     source_type = item["source_type"]
@@ -305,13 +326,16 @@ def make_expected_output(item: dict[str, Any]) -> str:
 # RAG API call
 # ---------------------------------------------------------------------------
 
+
 async def call_rag_api(question: str, client: httpx.AsyncClient) -> dict[str, Any]:
     payload = {"question": question, "force_research": True}
     headers = {}
     if API_TOKEN:
         headers["Authorization"] = f"Bearer {API_TOKEN}"
     try:
-        async with client.stream("POST", RAG_ENDPOINT, json=payload, headers=headers, timeout=RAG_TIMEOUT) as resp:
+        async with client.stream(
+            "POST", RAG_ENDPOINT, json=payload, headers=headers, timeout=RAG_TIMEOUT
+        ) as resp:
             resp.raise_for_status()
             answer_tokens: list[str] = []
             citations: list[dict] = []
@@ -319,7 +343,7 @@ async def call_rag_api(question: str, client: httpx.AsyncClient) -> dict[str, An
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
-                raw = line[len("data:"):].strip()
+                raw = line[len("data:") :].strip()
                 if not raw:
                     continue
                 try:
@@ -354,13 +378,14 @@ def _citations_to_context(citations: list[dict]) -> list[str]:
 # Dataset generation
 # ---------------------------------------------------------------------------
 
+
 async def generate_dataset(all_items: list[dict[str, Any]]) -> list[EvalCase]:
     """Call RAG API for each item and build EvalCase list."""
     cases: list[EvalCase] = []
 
     for i, item in enumerate(all_items):
         question = make_question(item, seed_offset=i)
-        print(f"  [{i+1}/{len(all_items)}] [{item['source_type']}] {question[:80]}...")
+        print(f"  [{i + 1}/{len(all_items)}] [{item['source_type']}] {question[:80]}...")
 
         async with httpx.AsyncClient() as client:
             t0 = time.monotonic()
@@ -383,17 +408,21 @@ async def generate_dataset(all_items: list[dict[str, Any]]) -> list[EvalCase]:
 
         # Source-specific metadata
         if item["source_type"] == "irc":
-            metadata.update({
-                "section_num": item["section_num"],
-                "section_url": item.get("section_url", ""),
-                "subtitle": item.get("subtitle", ""),
-                "topic": item["topic"],
-            })
+            metadata.update(
+                {
+                    "section_num": item["section_num"],
+                    "section_url": item.get("section_url", ""),
+                    "subtitle": item.get("subtitle", ""),
+                    "topic": item["topic"],
+                }
+            )
         else:
-            metadata.update({
-                "source_ref": item.get("source_ref", ""),
-                "title": item["title"],
-            })
+            metadata.update(
+                {
+                    "source_ref": item.get("source_ref", ""),
+                    "title": item["title"],
+                }
+            )
 
         case = EvalCase(
             input_text=question,
@@ -410,6 +439,7 @@ async def generate_dataset(all_items: list[dict[str, Any]]) -> list[EvalCase]:
 # RAGAS evaluation
 # ---------------------------------------------------------------------------
 
+
 async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
     from orchestrator.evaluation import RagasEvaluator
 
@@ -419,13 +449,13 @@ async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
     results = []
     for i, case in enumerate(cases):
         if not case.context:
-            print(f"  [RAGAS] Skipping case {i+1} — no context retrieved")
+            print(f"  [RAGAS] Skipping case {i + 1} — no context retrieved")
             continue
         answer = case.metadata.get("answer", "")
         if not answer:
-            print(f"  [RAGAS] Skipping case {i+1} — empty answer")
+            print(f"  [RAGAS] Skipping case {i + 1} — empty answer")
             continue
-        print(f"  [RAGAS] Evaluating case {i+1}/{len(cases)}: {case.input_text[:60]}...")
+        print(f"  [RAGAS] Evaluating case {i + 1}/{len(cases)}: {case.input_text[:60]}...")
         result = await evaluator.evaluate(case, answer)
         result.metadata["case_id"] = case.case_id
         result.metadata["source_type"] = case.metadata.get("source_type", "")
@@ -437,9 +467,11 @@ async def run_ragas(cases: list[EvalCase]) -> list[EvalResult]:
 # DeepEval evaluation
 # ---------------------------------------------------------------------------
 
+
 async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
     from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric, GEval
     from deepeval.test_case import LLMTestCaseParams
+
     from orchestrator.evaluation import DeepEvalEvaluator
 
     evaluator = DeepEvalEvaluator(
@@ -465,9 +497,9 @@ async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
     for i, case in enumerate(cases):
         answer = case.metadata.get("answer", "")
         if not answer:
-            print(f"  [DeepEval] Skipping case {i+1} — empty answer")
+            print(f"  [DeepEval] Skipping case {i + 1} — empty answer")
             continue
-        print(f"  [DeepEval] Evaluating case {i+1}/{len(cases)}: {case.input_text[:60]}...")
+        print(f"  [DeepEval] Evaluating case {i + 1}/{len(cases)}: {case.input_text[:60]}...")
         result = await evaluator.evaluate(case, answer)
         result.metadata["case_id"] = case.case_id
         result.metadata["source_type"] = case.metadata.get("source_type", "")
@@ -478,6 +510,7 @@ async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
 # ---------------------------------------------------------------------------
 # Save / load helpers
 # ---------------------------------------------------------------------------
+
 
 def save_cases(cases: list[EvalCase], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -509,23 +542,24 @@ def print_summary(results: list[EvalResult], label: str) -> None:
     for r in results:
         st = r.metadata.get("source_type", "unknown")
         source_scores.setdefault(st, []).append(r.overall_score or 0.0)
-    print(f"\n  Per-source breakdown:")
+    print("\n  Per-source breakdown:")
     for st, scores in sorted(source_scores.items()):
-        print(f"    {st:<20} avg={sum(scores)/len(scores):.3f}  n={len(scores)}")
+        print(f"    {st:<20} avg={sum(scores) / len(scores):.3f}  n={len(scores)}")
 
     # Per-criterion breakdown
     criterion_scores: dict[str, list[float]] = {}
     for r in results:
         for s in r.scores:
             criterion_scores.setdefault(s.criterion, []).append(s.score)
-    print(f"\n  Per-criterion breakdown:")
+    print("\n  Per-criterion breakdown:")
     for criterion, scores in criterion_scores.items():
-        print(f"    {criterion:<30} avg={sum(scores)/len(scores):.3f}")
+        print(f"    {criterion:<30} avg={sum(scores) / len(scores):.3f}")
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 async def main(
     samples_per_source: int,
@@ -557,6 +591,7 @@ async def main(
 
     # Print source breakdown
     from collections import Counter
+
     counts = Counter(c.metadata.get("source_type") for c in cases)
     for st, n in sorted(counts.items()):
         print(f"  {st:<20} {n} cases")
@@ -591,13 +626,15 @@ async def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate TaxPilot multi-source evaluation dataset")
+    parser = argparse.ArgumentParser(
+        description="Generate TaxPilot multi-source evaluation dataset"
+    )
     parser.add_argument(
         "--samples",
         type=int,
         default=DEFAULT_SAMPLES_PER_SOURCE,
         help=f"Items to sample per source (default: {DEFAULT_SAMPLES_PER_SOURCE}). "
-             f"For IRC this is per subtitle CSV (11 subtitles × samples).",
+        f"For IRC this is per subtitle CSV (11 subtitles × samples).",
     )
     parser.add_argument(
         "--output",

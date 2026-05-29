@@ -11,9 +11,9 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.agent.interfaces.executor_interface import IStreamExecutor
 from orchestrator.agent.types import AgentEvent, EventType, RunContext, RunState
-from orchestrator.agent.execution.executor import _enrich_config_for_gateway
 from orchestrator.llm.config import LLMConfig
 from orchestrator.logging import get_logger
 

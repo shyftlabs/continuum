@@ -12,7 +12,6 @@ import time
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # 01-#1: Circuit breaker race condition fix
 # ---------------------------------------------------------------------------
@@ -210,9 +209,7 @@ class TestValidationUtils:
 
         agent = BaseAgent(name="test")
         ctx = RunContext(run_id="r1")
-        result = asyncio.get_event_loop().run_until_complete(
-            validate_input(agent, "hello", ctx)
-        )
+        result = asyncio.get_event_loop().run_until_complete(validate_input(agent, "hello", ctx))
         assert result is None
 
 

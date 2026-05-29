@@ -47,11 +47,13 @@ class _CompressionCapture(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         msg = record.getMessage()
         if "compress" in msg.lower() or "threshold" in msg.lower():
-            _compression_events.append({
-                "ts": time.strftime("%H:%M:%S"),
-                "level": record.levelname,
-                "msg": msg,
-            })
+            _compression_events.append(
+                {
+                    "ts": time.strftime("%H:%M:%S"),
+                    "level": record.levelname,
+                    "msg": msg,
+                }
+            )
 
 
 logging.getLogger("orchestrator.llm.context_management").addHandler(_CompressionCapture())
@@ -67,12 +69,15 @@ _CONTEXT_CFG = ContextManagementConfig(
 
 # ── Agent: subclass LocalShopAgent, inject context_management ──────────────────
 
+
 class ContextTestAgent(LocalShopAgent):
     """LocalShopAgent with ContextManagementConfig injected into AgentConfig."""
 
     def _create_agent(self) -> None:
         super()._create_agent()
-        self._agent.config = dataclasses.replace(self._agent.config, context_management=_CONTEXT_CFG)
+        self._agent.config = dataclasses.replace(
+            self._agent.config, context_management=_CONTEXT_CFG
+        )
 
 
 # ── FastAPI ─────────────────────────────────────────────────────────────────────
@@ -88,7 +93,7 @@ async def lifespan(app: FastAPI):
     try:
         await _agent.initialize()
         print(f"✓ Agent ready — {len(_agent.tools)} tools loaded")
-        print(f"  Context: threshold=1%, strategy=SMART, keep_recent=1")
+        print("  Context: threshold=1%, strategy=SMART, keep_recent=1")
     except Exception as e:
         _init_error = str(e)
         print(f"✗ Agent init failed: {e}")
@@ -120,7 +125,9 @@ async def chat(req: ChatRequest):
     if not _agent or not _agent._initialized:
         msg = f"Agent not connected. {_init_error or 'Start the MCP server: python server.py'}"
         return {"response": msg}
-    response = await _agent.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
+    response = await _agent.chat(
+        req.message, user_id=req.user_id, conversation_id=req.conversation_id
+    )
     return {"response": response}
 
 

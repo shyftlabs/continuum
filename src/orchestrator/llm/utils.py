@@ -11,17 +11,28 @@ if TYPE_CHECKING:
 
 # Models that support response_format (JSON mode)
 _RESPONSE_FORMAT_SUPPORTED: set[str] = {
-    "gpt-4o", "gpt-4o-mini", "gpt-4o-turbo", "gpt-4-turbo",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4o-turbo",
+    "gpt-4-turbo",
     "gpt-3.5-turbo",
-    "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-    "gemini-1.5-pro", "gemini-1.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 }
 
 # Models that support strict JSON schema (Pydantic / json_schema type)
 _JSON_SCHEMA_SUPPORTED: set[str] = {
-    "gpt-4o", "gpt-4o-mini", "gpt-4o-turbo", "gpt-4-turbo",
-    "gemini-2.5-pro", "gemini-2.5-flash",
-    "gemini-1.5-pro", "gemini-1.5-flash",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4o-turbo",
+    "gpt-4-turbo",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
 }
 
 # Providers that do NOT support tools + JSON mode simultaneously
@@ -70,7 +81,10 @@ def validate_json_schema_config(agent: "BaseAgent") -> tuple[bool, str | None]:
     if agent.json_schema is not None:
         try:
             from pydantic import BaseModel
-            is_pydantic_model = isinstance(agent.json_schema, type) and issubclass(agent.json_schema, BaseModel)
+
+            is_pydantic_model = isinstance(agent.json_schema, type) and issubclass(
+                agent.json_schema, BaseModel
+            )
         except Exception:
             is_pydantic_model = False
 

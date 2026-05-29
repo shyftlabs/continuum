@@ -116,9 +116,11 @@ class DebateAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("Agent name is required")
         if self.pro_agent is None or self.con_agent is None or self.judge_agent is None:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError(
                 "DebateAgent requires pro_agent, con_agent, and judge_agent"
             )
@@ -171,7 +173,6 @@ class DebateAgent(BaseAgent):
                 "judge_agent": self.judge_agent.name,
             },
         ) as workflow_span:
-
             # Step 1 — run pro and con concurrently
             logger.info(
                 f"DebateAgent '{self.name}': running '{self.pro_agent.name}' "
@@ -257,11 +258,13 @@ class DebateAgent(BaseAgent):
             context.metadata["debate_pro"] = pro_content
             context.metadata["debate_con"] = con_content
 
-            workflow_span.set_output({
-                "success": True,
-                "synthesis_length": len(synthesis),
-                "total_tokens": total_usage.total_tokens,
-            })
+            workflow_span.set_output(
+                {
+                    "success": True,
+                    "synthesis_length": len(synthesis),
+                    "total_tokens": total_usage.total_tokens,
+                }
+            )
 
             return AgentResponse(
                 content=synthesis,
@@ -308,7 +311,9 @@ class DebateAgent(BaseAgent):
                 llm = self._get_llm()
                 if llm:
                     # Only summarise sides that exceed the limit
-                    async def _maybe_summarise(content: str, stance: str, needs: bool) -> tuple[str, TokenUsage]:
+                    async def _maybe_summarise(
+                        content: str, stance: str, needs: bool
+                    ) -> tuple[str, TokenUsage]:
                         if needs:
                             return await self._summarise_side(content, stance, llm)
                         return content, TokenUsage()
@@ -386,19 +391,22 @@ class DebateAgent(BaseAgent):
     def _get_llm(self) -> Any | None:
         try:
             from orchestrator.core.container import get_container
+
             return get_container().llm_client
         except Exception:
             return None
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "pro_agent": self.pro_agent.name if self.pro_agent else None,
-            "con_agent": self.con_agent.name if self.con_agent else None,
-            "judge_agent": self.judge_agent.name if self.judge_agent else None,
-            "debate_config": self.debate_config.to_dict(),
-            "workflow_type": "debate",
-        })
+        base.update(
+            {
+                "pro_agent": self.pro_agent.name if self.pro_agent else None,
+                "con_agent": self.con_agent.name if self.con_agent else None,
+                "judge_agent": self.judge_agent.name if self.judge_agent else None,
+                "debate_config": self.debate_config.to_dict(),
+                "workflow_type": "debate",
+            }
+        )
         return base
 
 

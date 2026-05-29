@@ -93,6 +93,7 @@ class ReflectionAgent(BaseAgent):
             # Resolve LLM client for critique calls
             if llm_client is None:
                 from orchestrator.core.container import get_container
+
                 llm_client = get_container().llm_client
 
             current_input = input_text
@@ -127,7 +128,9 @@ class ReflectionAgent(BaseAgent):
                 total_usage = total_usage.add(critique["usage"])
 
                 if critique["verdict"].startswith("PASS"):
-                    logger.info(f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}")
+                    logger.info(
+                        f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}"
+                    )
                     break
 
                 logger.info(
@@ -172,9 +175,8 @@ class ReflectionAgent(BaseAgent):
         """
         from orchestrator.llm.config import LLMConfig
 
-        model = (
-            self.reflection_config.reflection_model
-            or (self.agent.model if self.agent else settings.default_llm_model)
+        model = self.reflection_config.reflection_model or (
+            self.agent.model if self.agent else settings.default_llm_model
         )
 
         messages = [
@@ -205,7 +207,11 @@ class ReflectionAgent(BaseAgent):
                 )
 
             verdict = (llm_response.content or "PASS").strip()
-            logger.info("===== CRITIQUE VERDICT [%s] =====\n%s\n=========================", self.name, verdict)
+            logger.info(
+                "===== CRITIQUE VERDICT [%s] =====\n%s\n=========================",
+                self.name,
+                verdict,
+            )
             return {"verdict": verdict, "usage": usage}
 
         except Exception as e:

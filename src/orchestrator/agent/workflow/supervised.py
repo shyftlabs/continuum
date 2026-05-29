@@ -25,7 +25,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -38,7 +37,6 @@ from orchestrator.agent.types import (
     RunContext,
     TokenUsage,
 )
-from orchestrator.config import settings
 from orchestrator.logging import get_logger
 from orchestrator.observability.trace_context import SpanScope
 
@@ -57,10 +55,10 @@ logger = get_logger(__name__)
 class SupervisedConfig:
     """Configuration for SupervisedSequentialAgent."""
 
-    quality_threshold: float = 0.7      # Retry if supervisor score < this
-    max_retries: int = 2                # Max retries per step before giving up
-    supervisor_model: str | None = None # Model for quality scoring (default: agent model)
-    pass_full_history: bool = False     # Pass full history vs just last output
+    quality_threshold: float = 0.7  # Retry if supervisor score < this
+    max_retries: int = 2  # Max retries per step before giving up
+    supervisor_model: str | None = None  # Model for quality scoring (default: agent model)
+    pass_full_history: bool = False  # Pass full history vs just last output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     pipeline_context_max_chars: int | None = 300  # None = no truncation
 
@@ -108,9 +106,11 @@ class SupervisedSequentialAgent(BaseAgent):
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("Agent name is required")
         if not self.agents:
             from orchestrator.agent.exceptions import AgentConfigurationError
+
             raise AgentConfigurationError("SupervisedSequentialAgent requires at least one agent")
 
     async def execute(
@@ -207,11 +207,13 @@ class SupervisedSequentialAgent(BaseAgent):
                                         f"SupervisedSequential step {step_num} passed "
                                         f"(score={score:.2f})"
                                     )
-                                    step_span.set_output({
-                                        "success": True,
-                                        "score": score,
-                                        "attempts": attempt + 1,
-                                    })
+                                    step_span.set_output(
+                                        {
+                                            "success": True,
+                                            "score": score,
+                                            "attempts": attempt + 1,
+                                        }
+                                    )
                                     break
 
                                 # Score too low — prepare retry with feedback
@@ -231,11 +233,13 @@ class SupervisedSequentialAgent(BaseAgent):
                                         f"SupervisedSequential step {step_num} exhausted retries "
                                         f"(best score={best_score:.2f})"
                                     )
-                                    step_span.set_output({
-                                        "success": False,
-                                        "best_score": best_score,
-                                        "attempts": attempt + 1,
-                                    })
+                                    step_span.set_output(
+                                        {
+                                            "success": False,
+                                            "best_score": best_score,
+                                            "attempts": attempt + 1,
+                                        }
+                                    )
 
                             except Exception as e:
                                 logger.error(f"SupervisedSequential step {step_num} failed: {e}")
@@ -251,7 +255,9 @@ class SupervisedSequentialAgent(BaseAgent):
                                         original_error=e,
                                     ) from e
 
-                                current_input = f"Previous step failed: {e}. Please handle this gracefully."
+                                current_input = (
+                                    f"Previous step failed: {e}. Please handle this gracefully."
+                                )
                                 break
 
                         # Handle case where all retries were exhausted below threshold
@@ -263,7 +269,9 @@ class SupervisedSequentialAgent(BaseAgent):
                                     step=step_num,
                                     run_id=context.run_id,
                                 )
-                            current_input = f"Previous step produced no output. Please handle gracefully."
+                            current_input = (
+                                "Previous step produced no output. Please handle gracefully."
+                            )
                             continue
 
                         all_responses.append(best_response)
@@ -294,12 +302,14 @@ class SupervisedSequentialAgent(BaseAgent):
                     )
                 )
 
-                workflow_span.set_output({
-                    "success": True,
-                    "steps_executed": len(all_responses),
-                    "agents_used": agents_used,
-                    "total_tokens": total_usage.total_tokens,
-                })
+                workflow_span.set_output(
+                    {
+                        "success": True,
+                        "steps_executed": len(all_responses),
+                        "agents_used": agents_used,
+                        "total_tokens": total_usage.total_tokens,
+                    }
+                )
 
                 result = AgentResponse(
                     content=final.content,
@@ -395,17 +405,20 @@ class SupervisedSequentialAgent(BaseAgent):
     def _get_llm(self) -> Any | None:
         try:
             from orchestrator.core.container import get_container
+
             return get_container().llm_client
         except Exception:
             return None
 
     def to_dict(self) -> dict[str, Any]:
         base = super().to_dict()
-        base.update({
-            "agents": [a.name for a in self.agents],
-            "supervised_config": self.supervised_config.to_dict(),
-            "workflow_type": "supervised_sequential",
-        })
+        base.update(
+            {
+                "agents": [a.name for a in self.agents],
+                "supervised_config": self.supervised_config.to_dict(),
+                "workflow_type": "supervised_sequential",
+            }
+        )
         return base
 
 

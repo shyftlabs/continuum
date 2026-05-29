@@ -36,7 +36,6 @@ from orchestrator.memory.base import BaseMemoryProvider
 from orchestrator.memory.config import MemoryConfig
 from orchestrator.memory.exceptions import (
     MemoryConfigurationError,
-    MemoryError,
     MemoryUpdateError,
 )
 from orchestrator.memory.types import (
@@ -225,7 +224,9 @@ class Mem0Provider(BaseMemoryProvider):
         if agent_id:
             identifiers["agent_id"] = agent_id
         if conversation_id:
-            identifiers["run_id"] = conversation_id  # mem0 uses run_id for conversation-level scoping
+            identifiers["run_id"] = (
+                conversation_id  # mem0 uses run_id for conversation-level scoping
+            )
         return identifiers
 
     # =========================================================================

@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import threading
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # 03-#1: Context variable injection type validation
 # ---------------------------------------------------------------------------
@@ -142,6 +139,7 @@ class TestLifecycleExceptionHandling:
         """KeyboardInterrupt should propagate, not be caught as init failure."""
         # This is a code-level verification — we check the source
         import inspect
+
         from orchestrator.core.lifecycle import OrchestratorLifecycle
 
         source = inspect.getsource(OrchestratorLifecycle.initialize)
