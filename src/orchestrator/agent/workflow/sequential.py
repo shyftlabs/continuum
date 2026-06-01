@@ -78,6 +78,10 @@ class SequentialAgent(BaseAgent):
     # Sequential configuration
     sequential_config: SequentialConfig = field(default_factory=SequentialConfig)
 
+    # Agent whose memory_config governs post-sequence long-term memory writes.
+    # If None (default), no memory is written after the sequence completes.
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         """Initialize sequential agent."""
         # Skip base validation as we're a composite agent
@@ -260,7 +264,7 @@ class SequentialAgent(BaseAgent):
                     session_id=context.session_id,
                     user_message=input_text,
                     assistant_message=final_response.content or "",
-                    agent=None,
+                    agent=self.memory_agent,
                 )
 
             return result
