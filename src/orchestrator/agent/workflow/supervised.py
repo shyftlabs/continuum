@@ -103,6 +103,8 @@ class SupervisedSequentialAgent(BaseAgent):
     agents: list[BaseAgent] = field(default_factory=list)
     supervised_config: SupervisedConfig = field(default_factory=SupervisedConfig)
 
+    # Agent whose memory_config governs post-sequence long-term memory writes.
+    # If None (default), no memory is written after the supervised sequence completes.
     memory_agent: BaseAgent | None = None
 
     def __post_init__(self) -> None:
@@ -438,6 +440,7 @@ def create_supervised_agent(
     supervisor_model: str | None = None,
     pass_full_history: bool = False,
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST,
+    memory_agent: BaseAgent | None = None,
 ) -> SupervisedSequentialAgent:
     """
     Factory for SupervisedSequentialAgent.
@@ -466,6 +469,7 @@ def create_supervised_agent(
     return SupervisedSequentialAgent(
         name=name,
         agents=agents,
+        memory_agent=memory_agent,
         supervised_config=SupervisedConfig(
             quality_threshold=quality_threshold,
             max_retries=max_retries,

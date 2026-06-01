@@ -118,6 +118,8 @@ class ScatterAgent(BaseAgent):
     # Optional explicit slices — bypasses LLM splitting when provided
     input_slices: list[str] | None = None
 
+    # Agent whose memory_config governs post-execution long-term memory writes.
+    # If None (default), no memory is written after scatter-gather completes.
     memory_agent: BaseAgent | None = None
 
     def __post_init__(self) -> None:
@@ -449,6 +451,7 @@ def create_scatter_agent(
     fail_strategy: FailStrategy = FailStrategy.CONTINUE_ON_ERROR,
     split_model: str | None = None,
     timeout: int = 300,
+    memory_agent: BaseAgent | None = None,
 ) -> ScatterAgent:
     """
     Factory for ScatterAgent.
@@ -477,6 +480,7 @@ def create_scatter_agent(
         name=name,
         agents=agents,
         input_slices=input_slices,
+        memory_agent=memory_agent,
         scatter_config=ScatterConfig(
             merge_strategy=merge_strategy,
             fail_strategy=fail_strategy,

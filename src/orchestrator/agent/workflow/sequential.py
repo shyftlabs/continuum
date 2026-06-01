@@ -291,6 +291,7 @@ def create_sequential_agent(
     *,
     pass_full_history: bool = False,
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST,
+    memory_agent: BaseAgent | None = None,
 ) -> SequentialAgent:
     """
     Factory function to create a sequential agent.
@@ -300,6 +301,7 @@ def create_sequential_agent(
         agents: List of agents to execute in order
         pass_full_history: Whether to pass full history to each agent
         fail_strategy: How to handle failures
+        memory_agent: Agent whose memory_config governs post-sequence long-term memory writes
 
     Returns:
         Configured SequentialAgent
@@ -307,6 +309,7 @@ def create_sequential_agent(
     return SequentialAgent(
         name=name,
         agents=agents,
+        memory_agent=memory_agent,
         sequential_config=SequentialConfig(
             pass_full_history=pass_full_history,
             fail_strategy=fail_strategy,

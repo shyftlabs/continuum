@@ -426,6 +426,7 @@ def create_dag_agent(
     *,
     merge_strategy: MergeStrategy = MergeStrategy.CONCATENATE,
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST,
+    memory_agent: BaseAgent | None = None,
 ) -> DAGAgent:
     """Create a DAGAgent from a flat list of ``(stage_id, agent, depends_on)`` tuples.
 
@@ -444,7 +445,7 @@ def create_dag_agent(
             ],
         )
     """
-    dag = DAGAgent(name=name, merge_strategy=merge_strategy, fail_strategy=fail_strategy)
+    dag = DAGAgent(name=name, merge_strategy=merge_strategy, fail_strategy=fail_strategy, memory_agent=memory_agent)
     for stage_id, agent, depends_on in stages:
         dag.add_stage(stage_id, agent, depends_on)
     return dag
