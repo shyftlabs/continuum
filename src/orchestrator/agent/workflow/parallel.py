@@ -81,6 +81,8 @@ class ParallelAgent(BaseAgent):
     # Parallel configuration
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
+    # Agent whose memory_config governs post-execution long-term memory writes.
+    # If None (default), no memory is written after the parallel run completes.
     memory_agent: BaseAgent | None = None
 
     def __post_init__(self) -> None:
@@ -331,6 +333,7 @@ def create_parallel_agent(
     merge_strategy: MergeStrategy = MergeStrategy.LLM_SUMMARIZE,
     fail_strategy: FailStrategy = FailStrategy.CONTINUE_ON_ERROR,
     timeout: int = 300,
+    memory_agent: BaseAgent | None = None,
 ) -> ParallelAgent:
     """
     Factory function to create a parallel agent.
@@ -341,6 +344,7 @@ def create_parallel_agent(
         merge_strategy: How to merge results
         fail_strategy: How to handle failures
         timeout: Timeout in seconds
+        memory_agent: Agent whose memory_config governs post-execution long-term memory writes
 
     Returns:
         Configured ParallelAgent
@@ -348,6 +352,7 @@ def create_parallel_agent(
     return ParallelAgent(
         name=name,
         agents=agents,
+        memory_agent=memory_agent,
         parallel_config=ParallelConfig(
             merge_strategy=merge_strategy,
             fail_strategy=fail_strategy,
