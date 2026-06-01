@@ -118,6 +118,8 @@ class ScatterAgent(BaseAgent):
     # Optional explicit slices — bypasses LLM splitting when provided
     input_slices: list[str] | None = None
 
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
@@ -255,7 +257,7 @@ class ScatterAgent(BaseAgent):
                 session_id=context.session_id,
                 user_message=input_text,
                 assistant_message=merged,
-                agent=None,
+                agent=self.memory_agent,
             )
 
         return result

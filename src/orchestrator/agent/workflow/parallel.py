@@ -81,6 +81,8 @@ class ParallelAgent(BaseAgent):
     # Parallel configuration
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
 
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         """Initialize parallel agent."""
         if not self.name:
@@ -211,7 +213,7 @@ class ParallelAgent(BaseAgent):
                 session_id=context.session_id,
                 user_message=input_text,
                 assistant_message=merged,
-                agent=None,
+                agent=self.memory_agent,
             )
 
         return result

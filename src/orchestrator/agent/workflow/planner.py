@@ -88,6 +88,8 @@ class PlannerAgent(BaseAgent):
     # Planning configuration
     planning_config: PlanningConfig = field(default_factory=PlanningConfig)
 
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
@@ -356,7 +358,7 @@ class PlannerAgent(BaseAgent):
                     session_id=context.session_id,
                     user_message=input_text,
                     assistant_message=final_content or "",
-                    agent=None,
+                    agent=self.memory_agent,
                 )
 
             return result

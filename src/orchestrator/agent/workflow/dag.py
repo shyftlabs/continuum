@@ -140,6 +140,10 @@ class DAGAgent(BaseAgent):
     # Whether to stop immediately when any stage raises an exception.
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
 
+    # Agent whose memory_config governs post-execution long-term memory writes.
+    # If None (default), no memory is written after the DAG completes.
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
@@ -266,7 +270,7 @@ class DAGAgent(BaseAgent):
                     session_id=context.session_id,
                     user_message=input_text,
                     assistant_message=content,
-                    agent=None,
+                    agent=self.memory_agent,
                 )
 
             return AgentResponse(
