@@ -26,7 +26,7 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - _Nothing yet._
 
 ### Fixed
-- _Nothing yet._
+- `memory_agent` parameter now propagates through all workflow agent types (`SequentialAgent`, `ParallelAgent`, `ScatterAgent`, `PlannerAgent`, `SupervisedAgent`, `LoopAgent`, `ReflectionAgent`, `DebateAgent`) so long-term memory writes via `save_turn` work correctly across all workflows.
 
 ### Security
 - _Nothing yet._
