@@ -70,7 +70,6 @@ class ReflectionAgent(BaseAgent):
 
             raise AgentConfigurationError("ReflectionAgent requires an inner agent to execute")
 
-
     async def execute(
         self,
         input_text: str,
