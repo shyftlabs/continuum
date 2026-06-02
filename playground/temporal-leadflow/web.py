@@ -15,9 +15,9 @@ Steps exercised:
   5. Campaign durability (Temporal AgentWorkflow — survives restarts)
   7. Observability       (Langfuse traces tagged with campaign_id)
 """
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,7 +25,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 import argparse
-import asyncio
 import json
 import re
 import sys
@@ -46,15 +45,15 @@ for p in (_root / "src", _here):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from orchestrator import LogLevel, setup_logging
-from orchestrator.temporal.client import TemporalClient
-from orchestrator.temporal.human_in_loop import HumanInLoopManager
-from orchestrator.temporal.workflows.agent_workflow import AgentWorkflow
-
 from config import LeadFlowConfig, default_config
 from schemas import RankedLeadList
 from temporal.campaign import build_workflow_input
 from temporal.worker import setup_registry, start_worker, stop_worker
+
+from orchestrator import LogLevel, setup_logging
+from orchestrator.temporal.client import TemporalClient
+from orchestrator.temporal.human_in_loop import HumanInLoopManager
+from orchestrator.temporal.workflows.agent_workflow import AgentWorkflow
 
 setup_logging(level=LogLevel.INFO)
 
@@ -76,6 +75,7 @@ async def lifespan(app: FastAPI):
     client = TemporalClient()
     try:
         from orchestrator.temporal.config import TemporalConfig
+
         tc = TemporalConfig(
             host=cfg.temporal_host,
             namespace=cfg.temporal_namespace,
@@ -103,6 +103,7 @@ app = FastAPI(title="LeadFlow", lifespan=lifespan)
 
 # ── Request / response models ─────────────────────────────────────────────────
 
+
 class StartCampaignRequest(BaseModel):
     niche: str
     location: str
@@ -116,6 +117,7 @@ class ApproveRequest(BaseModel):
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health():
@@ -224,10 +226,7 @@ async def reject_campaign(campaign_id: str, req: ApproveRequest):
 
 @app.get("/campaigns")
 async def list_campaigns():
-    return {"campaigns": [
-        {"campaign_id": cid, **meta}
-        for cid, meta in _campaigns.items()
-    ]}
+    return {"campaigns": [{"campaign_id": cid, **meta} for cid, meta in _campaigns.items()]}
 
 
 def _try_parse_leads(text: str) -> dict | None:
@@ -248,6 +247,7 @@ def _try_parse_leads(text: str) -> dict | None:
 
 
 # ── Browser UI ────────────────────────────────────────────────────────────────
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():

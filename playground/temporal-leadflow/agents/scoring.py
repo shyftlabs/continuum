@@ -5,6 +5,7 @@ The LLM returns valid JSON matching the schema; the runner parses it
 into a RankedLeadList instance stored in AgentResponse.structured_output.
 The UI reads from the schema directly (no text parsing needed).
 """
+
 from __future__ import annotations
 
 import sys
@@ -12,9 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from orchestrator import AgentConfig, AgentMemoryConfig, BaseAgent
-
 from schemas import RankedLeadList
+
+from orchestrator import AgentConfig, AgentMemoryConfig, BaseAgent
 
 _NO_MEMORY = AgentMemoryConfig(search_memories=False, store_memories=False)
 

@@ -6,6 +6,7 @@ leads from a different source perspective. The MCP tool_executor
 slot is wired but empty — swap in a real Playwright MCP URL to
 enable actual browser scraping with no code changes.
 """
+
 from __future__ import annotations
 
 from orchestrator import AgentConfig, AgentMemoryConfig, BaseAgent

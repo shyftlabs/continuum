@@ -9,9 +9,9 @@ setup_registry() — async: connects FakeTwilioMCP, builds ToolExecutor,
 start_worker()   — starts the Temporal worker on the configured task queue.
 stop_worker()    — graceful shutdown.
 """
+
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -25,16 +25,16 @@ for p in (_root / "src", _hack):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from agents.scoring import make_scoring_agent
+from agents.scrapers import make_google_maps_agent, make_linkedin_agent, make_web_agent
+from agents.voice import make_crm_lookup_agent, make_voice_agent
+from config import LeadFlowConfig, default_config
+from tools.mock_twilio import FakeTwilioMCP
+
 from orchestrator import AgentRunner, RunnerConfig
 from orchestrator.temporal.client import TemporalClient
 from orchestrator.temporal.registry import AgentRegistry, get_agent_registry
 from orchestrator.temporal.worker import WorkerManager
-
-from agents.scrapers import make_google_maps_agent, make_linkedin_agent, make_web_agent
-from agents.scoring import make_scoring_agent
-from agents.voice import make_crm_lookup_agent, make_voice_agent
-from config import LeadFlowConfig, default_config
-from tools.mock_twilio import FakeTwilioMCP
 
 try:
     from orchestrator import MCPUtil, ToolExecutor
@@ -69,9 +69,7 @@ async def setup_registry(config: LeadFlowConfig | None = None) -> AgentRegistry:
     crm_lookup = make_crm_lookup_agent(m)
     voice = make_voice_agent(m, voice_executor, voice_tools)
 
-    all_agents = {
-        a.name: a for a in [google_maps, linkedin, web, scoring, crm_lookup, voice]
-    }
+    all_agents = {a.name: a for a in [google_maps, linkedin, web, scoring, crm_lookup, voice]}
 
     # Use the global singleton — run_agent_activity calls get_agent_registry()
     # so agents must be in this exact instance, not a separate one.

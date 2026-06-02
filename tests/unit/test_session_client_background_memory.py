@@ -142,9 +142,7 @@ class TestTemporalDowngrade:
         # Inside a Temporal activity, background mode is downgraded to sync so the
         # write completes within the durable/retriable activity boundary.
         client, mem, provider, registry = _make_client(mode="background")
-        with patch(
-            "orchestrator.session.client._in_temporal_activity", return_value=True
-        ):
+        with patch("orchestrator.session.client._in_temporal_activity", return_value=True):
             await client.add_message("sess-1234abcd", _msg())
         mem.add.assert_awaited_once()  # ran inline (sync)
         assert len(registry) == 0  # nothing was scheduled in the background
@@ -152,12 +150,8 @@ class TestTemporalDowngrade:
     async def test_non_temporal_uses_background(self):
         # Outside Temporal, background mode schedules the write off the path.
         gate = asyncio.Event()
-        client, mem, provider, registry = _make_client(
-            mode="background", add_mock=_gated_add(gate)
-        )
-        with patch(
-            "orchestrator.session.client._in_temporal_activity", return_value=False
-        ):
+        client, mem, provider, registry = _make_client(mode="background", add_mock=_gated_add(gate))
+        with patch("orchestrator.session.client._in_temporal_activity", return_value=False):
             await client.add_message("sess-1234abcd", _msg())
         assert mem.add.await_count == 0  # not awaited inline
         assert len(registry) == 1  # scheduled in background

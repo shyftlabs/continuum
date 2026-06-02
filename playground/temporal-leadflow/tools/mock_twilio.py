@@ -8,11 +8,12 @@ Provides three tools:
 
 Real Twilio: replace this server with a real MCP server URL in temporal/worker.py.
 """
+
 from __future__ import annotations
 
 import json
 
-from mcp.types import CallToolResult, ListPromptsResult, GetPromptResult, TextContent, Tool
+from mcp.types import CallToolResult, GetPromptResult, ListPromptsResult, TextContent, Tool
 
 
 class FakeTwilioMCP:
@@ -30,7 +31,10 @@ class FakeTwilioMCP:
                     "properties": {
                         "name": {"type": "string", "description": "Lead business name"},
                         "phone": {"type": "string", "description": "Phone number to call"},
-                        "goal": {"type": "string", "description": "Goal of the call (e.g. book a meeting)"},
+                        "goal": {
+                            "type": "string",
+                            "description": "Goal of the call (e.g. book a meeting)",
+                        },
                     },
                     "required": ["name", "phone", "goal"],
                 },
@@ -82,7 +86,10 @@ class FakeTwilioMCP:
     ]
     _CRM_WINDOWS = [
         ("weekday mornings 9am–11am", "Prefers early calls. Owner is very responsive."),
-        ("Tuesday/Thursday afternoons 2pm–4pm", "Spoke briefly last quarter, showed mild interest."),
+        (
+            "Tuesday/Thursday afternoons 2pm–4pm",
+            "Spoke briefly last quarter, showed mild interest.",
+        ),
         ("Friday mornings only", "Very busy — keep calls under 3 minutes."),
         ("any weekday", "New lead. No prior contact. Decision maker is the manager."),
         ("Monday mornings 8am–10am", "Previously requested a callback but never followed up."),
@@ -162,7 +169,7 @@ class FakeTwilioMCP:
             message = args.get("message", "Please call us back.")
             result = (
                 f"[VOICEMAIL LOG] No answer at {name}.\n"
-                f"Voicemail left: \"{message}\"\n"
+                f'Voicemail left: "{message}"\n'
                 f"[OUTCOME: VOICEMAIL]"
             )
             return CallToolResult(
@@ -173,12 +180,14 @@ class FakeTwilioMCP:
         if tool_name == "check_availability":
             name = args.get("name", "unknown")
             window, notes = self._crm_for(name)
-            crm_note = json.dumps({
-                "lead": name,
-                "last_contact": "never" if "New lead" in notes else "3 months ago",
-                "preferred_window": window,
-                "notes": notes,
-            })
+            crm_note = json.dumps(
+                {
+                    "lead": name,
+                    "last_contact": "never" if "New lead" in notes else "3 months ago",
+                    "preferred_window": window,
+                    "notes": notes,
+                }
+            )
             return CallToolResult(
                 content=[TextContent(type="text", text=crm_note)],
                 isError=False,

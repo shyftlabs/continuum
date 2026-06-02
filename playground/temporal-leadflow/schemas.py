@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -9,13 +8,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class ScoredLead(BaseModel):
     rank: int = 1
     name: str = ""
-    address: Optional[str] = ""
-    phone: Optional[str] = ""
-    website: Optional[str] = ""
-    description: Optional[str] = ""
+    address: str | None = ""
+    phone: str | None = ""
+    website: str | None = ""
+    description: str | None = ""
     score: int = Field(ge=1, le=10, default=5)
-    score_reason: Optional[str] = ""
-    outreach_hook: Optional[str] = ""
+    score_reason: str | None = ""
+    outreach_hook: str | None = ""
     sources: list[str] = Field(default_factory=list)
 
     @field_validator("score", mode="before")
@@ -31,7 +30,7 @@ class RankedLeadList(BaseModel):
     leads: list[ScoredLead] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _fill_total(self) -> "RankedLeadList":
+    def _fill_total(self) -> RankedLeadList:
         if self.total == 0 and self.leads:
             self.total = len(self.leads)
         return self

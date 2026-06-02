@@ -7,6 +7,7 @@ Steps:
   3. ApprovalStep  — blocks until UI sends /approve or /reject
   4. AgentStep     — voice-agent (mock Twilio + crm-lookup handoff)
 """
+
 from __future__ import annotations
 
 import sys
@@ -14,14 +15,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from config import LeadFlowConfig, default_config
+
 from orchestrator.temporal.types import (
     AgentStep,
     ApprovalStep,
     ParallelStep,
     WorkflowInput,
 )
-
-from config import LeadFlowConfig, default_config
 
 
 def build_workflow_input(

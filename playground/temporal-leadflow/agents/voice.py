@@ -10,6 +10,7 @@ crm_lookup  — lightweight agent that interprets CRM tool output and returns a
 Note: requires OpenAI-compatible models. Gemini rejects function_response messages
 in handoff history when the target agent has no tools defined.
 """
+
 from __future__ import annotations
 
 from orchestrator import AgentConfig, AgentMemoryConfig, BaseAgent
@@ -56,7 +57,7 @@ def make_voice_agent(model: str, tool_executor, tools: list) -> BaseAgent:
             Handoff(
                 target_agent="crm_lookup",
                 description="Hand off CRM availability data to crm_lookup for interpretation. "
-                            "Use this after calling check_availability to get a clean summary.",
+                "Use this after calling check_availability to get a clean summary.",
                 return_to_parent=True,
             )
         ],
