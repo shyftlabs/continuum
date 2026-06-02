@@ -10,6 +10,7 @@ Tracing is handled automatically via the @observe decorator.
 import threading
 from typing import Any
 
+from orchestrator.core.background_tasks import BackgroundTaskRegistry
 from orchestrator.logging import get_logger
 from orchestrator.memory import MemoryClient
 from orchestrator.observability.decorators import observe
@@ -26,6 +27,25 @@ from orchestrator.session.providers import create_provider, list_providers
 from orchestrator.session.types import ChatMessage, SessionMetadata
 
 logger = get_logger(__name__)
+
+
+def _in_temporal_activity() -> bool:
+    """Return True if executing inside a Temporal activity right now.
+
+    Used to force synchronous memory writes under Temporal regardless of the
+    configured mode: a fire-and-forget task would escape the activity's durable,
+    retriable boundary and could be lost when a worker is recycled. Detection is
+    per-call (not a static config flag) so a process serving both HTTP requests
+    and Temporal activities routes each correctly. Import-safe when the optional
+    ``temporalio`` extra is not installed.
+    """
+    try:
+        from temporalio import activity
+
+        return activity.in_activity()
+    except Exception:
+        return False
+
 
 # Global client state
 _global_lock = threading.Lock()
@@ -79,6 +99,7 @@ class SessionClient:
         memory_client: MemoryClient | None = None,
         provider: BaseSessionProvider | None = None,
         auto_initialize: bool = True,
+        background_tasks: BackgroundTaskRegistry | None = None,
     ):
         """
         Initialize the Session Client.
@@ -88,10 +109,15 @@ class SessionClient:
             memory_client: Optional memory client. Uses global client if not provided.
             provider: Optional session provider. Created from registry if not provided.
             auto_initialize: Whether to initialize clients immediately.
+            background_tasks: Optional registry for fire-and-forget memory writes
+                (used when ``memory_write_mode='background'``). Falls back to the
+                container's registry when not provided; if neither is available,
+                the client transparently degrades to synchronous memory writes.
         """
         self._session_config = session_config or SessionConfig()
         self._provider: BaseSessionProvider | None = provider
         self._memory_client: MemoryClient | None = memory_client
+        self._background_tasks = background_tasks
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -129,6 +155,23 @@ class SessionClient:
                 )
             self._memory_client = client
         return self._memory_client
+
+    @property
+    def background_tasks(self) -> BackgroundTaskRegistry | None:
+        """Get the background task registry (from constructor or container).
+
+        Returns None if no registry is available, in which case callers should
+        fall back to synchronous execution.
+        """
+        if self._background_tasks is None:
+            try:
+                from orchestrator.core.container import get_container
+
+                self._background_tasks = get_container().background_tasks
+            except Exception:
+                # Container not available (e.g. standalone/tests) — degrade gracefully.
+                return None
+        return self._background_tasks
 
     @property
     def is_enabled(self) -> bool:
@@ -298,107 +341,72 @@ class SessionClient:
                 metadata=metadata,
             )
 
-            # Optionally add to long-term memory (mem0)
-            # Memory storage is best-effort - failures should not break session operations
+            # Optionally add to long-term memory (mem0).
+            # Memory storage is best-effort — failures must never break session ops.
+            # In 'background' mode the (potentially slow) mem0 fact-extraction is
+            # scheduled as a fire-and-forget task so it does not add latency to the
+            # response; the short-term Redis write above is always synchronous.
             if store_in_memory and self._memory_client and self._memory_client.is_enabled:
-                try:
-                    # Get session metadata to extract user_id and agent_id
-                    session_metadata = await self.provider.get_session_metadata(session_id)
-
-                    if session_metadata:
-                        # Build memory metadata for observability
-                        memory_metadata = dict(metadata) if metadata else {}
-                        if session_id:
-                            memory_metadata["session_id"] = session_id
-                        if session_metadata.user_id:
-                            memory_metadata["_user_id"] = session_metadata.user_id
-                        if agent_id:
-                            memory_metadata["_agent_id"] = agent_id
-
-                        logger.debug(
-                            f"🧠 Extracting memory: role={message.role} "
-                            f"session={session_id[:8] if session_id else 'none'} "
-                            f"user={session_metadata.user_id[:8] if session_metadata.user_id else 'none'}"
-                        )
-
-                        result = await self.memory_client.add(
-                            messages=[message.to_dict()],
-                            user_id=session_metadata.user_id,
-                            agent_id=agent_id,
-                            conversation_id=session_metadata.conversation_id,
-                            metadata=memory_metadata,
-                            custom_prompt=extraction_prompt,
-                        )
-
-                        # Build list of (fact_text, fact_id) for stored facts
-                        stored_pairs: list[tuple[str, str | None]] = []
-                        for fact in result.results:
-                            if isinstance(fact, dict):
-                                fact_text = fact.get("memory") or fact.get("text") or str(fact)
-                                fact_id = fact.get("id")
-                            else:
-                                fact_text = (
-                                    getattr(fact, "memory", None)
-                                    or getattr(fact, "text", None)
-                                    or str(fact)
-                                )
-                                fact_id = getattr(fact, "id", None)
-                            if fact_text:
-                                stored_pairs.append((fact_text, fact_id))
-
-                        # Apply pre_store_filter: delete facts that don't pass (best-effort)
-                        if pre_store_filter and stored_pairs:
-                            fact_texts = [t for t, _ in stored_pairs]
-                            try:
-                                allowed = set(pre_store_filter(fact_texts))
-                            except Exception as fe:
-                                logger.warning(f"pre_store_filter failed: {fe}")
-                                allowed = set(fact_texts)
-                            filtered_out = [(t, i) for t, i in stored_pairs if t not in allowed]
-                            if filtered_out:
-                                logger.info(
-                                    f"🚫 PII filter blocked {len(filtered_out)} fact(s): {[t for t, _ in filtered_out]}"
-                                )
-                            for _fact_text, fact_id in filtered_out:
-                                if fact_id:
-                                    try:
-                                        await self.memory_client.delete(fact_id)
-                                    except Exception as de:
-                                        logger.warning(
-                                            f"Failed to delete filtered fact {fact_id}: {de}"
-                                        )
-                            stored_pairs = [(t, i) for t, i in stored_pairs if t in allowed]
-
-                        if stored_pairs:
-                            facts_preview = "; ".join(t[:60] for t, _ in stored_pairs[:3])
-                            logger.info(
-                                f"✅ Memory: {len(stored_pairs)} fact(s) stored — {facts_preview}"
-                            )
-                        else:
-                            logger.debug("🧠 Memory: no new facts extracted")
-
-                        # Fire on_stored callback with final stored fact texts
-                        final_facts = [t for t, _ in stored_pairs]
-                        if on_stored and final_facts:
-                            try:
-                                on_stored(final_facts)
-                            except Exception as ce:
-                                logger.warning(f"on_stored callback failed: {ce}")
-                    else:
-                        logger.warning(
-                            f"⚠️ Cannot store memory: Session metadata not found for session_id={session_id[:8] if session_id else 'none'}"
-                        )
-                except Exception as mem_error:
-                    # Memory storage failures should not break session operations
-                    logger.error(
-                        f"❌ Memory storage failed: {mem_error}",
-                        exc_info=True,
-                        extra={"session_id": session_id, "role": message.role},
+                registry = self.background_tasks
+                # Resolve the EFFECTIVE write mode at call time. Inside a Temporal
+                # activity we always force 'sync' so the mem0 write completes within
+                # the durable/retriable activity boundary (a fire-and-forget task
+                # would escape Temporal's tracking and could be lost on worker
+                # recycle). Detection is per-call, so a process that serves both
+                # HTTP requests and Temporal activities routes each correctly.
+                configured_mode = self._session_config.memory_write_mode
+                in_temporal = _in_temporal_activity()
+                effective_mode = "sync" if in_temporal else configured_mode
+                sid = session_id[:8] if session_id else "none"
+                if effective_mode == "background" and registry is not None:
+                    logger.info(
+                        "🧠 Memory write mode=background — scheduling mem0 write off the "
+                        "response path (session=%s)",
+                        sid,
                     )
-                    report_error(
-                        mem_error,
-                        context="session_memory_storage",
-                        metadata={"session_id": session_id, "message_role": message.role},
+                    scheduled = registry.spawn(
+                        self._store_in_memory(
+                            session_id=session_id,
+                            message=message,
+                            agent_id=agent_id,
+                            metadata=metadata,
+                            extraction_prompt=extraction_prompt,
+                            pre_store_filter=pre_store_filter,
+                            on_stored=on_stored,
+                        ),
+                        label=f"mem-write:{session_id[:8] if session_id else 'none'}",
+                    )
+                    # spawn() returns None if there's no running loop to schedule
+                    # onto — fall back to inline so the write is never dropped.
+                    if scheduled is None:
+                        await self._store_in_memory(
+                            session_id=session_id,
+                            message=message,
+                            agent_id=agent_id,
+                            metadata=metadata,
+                            extraction_prompt=extraction_prompt,
+                            pre_store_filter=pre_store_filter,
+                            on_stored=on_stored,
+                        )
+                else:
+                    reason = (
+                        " (forced: Temporal activity)"
+                        if in_temporal and configured_mode == "background"
+                        else ""
+                    )
+                    logger.info(
+                        "🧠 Memory write mode=sync%s — awaiting mem0 write inline (session=%s)",
+                        reason,
+                        sid,
+                    )
+                    await self._store_in_memory(
+                        session_id=session_id,
+                        message=message,
+                        agent_id=agent_id,
+                        metadata=metadata,
+                        extraction_prompt=extraction_prompt,
+                        pre_store_filter=pre_store_filter,
+                        on_stored=on_stored,
                     )
 
             logger.debug(
@@ -420,6 +428,120 @@ class SessionClient:
                 session_id=session_id,
                 original_error=e,
             ) from e
+
+    async def _store_in_memory(
+        self,
+        *,
+        session_id: str,
+        message: ChatMessage,
+        agent_id: str | None,
+        metadata: dict[str, Any] | None,
+        extraction_prompt: str | None,
+        pre_store_filter: Any | None,
+        on_stored: Any | None,
+    ) -> None:
+        """Extract and store long-term memory (mem0) for a single message.
+
+        Best-effort: any failure is logged/reported but never raised, so this is
+        safe to run either inline (sync mode) or as a fire-and-forget background
+        task (background mode). The short-term session write is handled separately
+        by the caller and is always synchronous.
+        """
+        try:
+            # Get session metadata to extract user_id and agent_id
+            session_metadata = await self.provider.get_session_metadata(session_id)
+
+            if session_metadata:
+                # Build memory metadata for observability
+                memory_metadata = dict(metadata) if metadata else {}
+                if session_id:
+                    memory_metadata["session_id"] = session_id
+                if session_metadata.user_id:
+                    memory_metadata["_user_id"] = session_metadata.user_id
+                if agent_id:
+                    memory_metadata["_agent_id"] = agent_id
+
+                logger.debug(
+                    f"🧠 Extracting memory: role={message.role} "
+                    f"session={session_id[:8] if session_id else 'none'} "
+                    f"user={session_metadata.user_id[:8] if session_metadata.user_id else 'none'}"
+                )
+
+                result = await self.memory_client.add(
+                    messages=[message.to_dict()],
+                    user_id=session_metadata.user_id,
+                    agent_id=agent_id,
+                    conversation_id=session_metadata.conversation_id,
+                    metadata=memory_metadata,
+                    custom_prompt=extraction_prompt,
+                )
+
+                # Build list of (fact_text, fact_id) for stored facts
+                stored_pairs: list[tuple[str, str | None]] = []
+                for fact in result.results:
+                    if isinstance(fact, dict):
+                        fact_text = fact.get("memory") or fact.get("text") or str(fact)
+                        fact_id = fact.get("id")
+                    else:
+                        fact_text = (
+                            getattr(fact, "memory", None)
+                            or getattr(fact, "text", None)
+                            or str(fact)
+                        )
+                        fact_id = getattr(fact, "id", None)
+                    if fact_text:
+                        stored_pairs.append((fact_text, fact_id))
+
+                # Apply pre_store_filter: delete facts that don't pass (best-effort)
+                if pre_store_filter and stored_pairs:
+                    fact_texts = [t for t, _ in stored_pairs]
+                    try:
+                        allowed = set(pre_store_filter(fact_texts))
+                    except Exception as fe:
+                        logger.warning(f"pre_store_filter failed: {fe}")
+                        allowed = set(fact_texts)
+                    filtered_out = [(t, i) for t, i in stored_pairs if t not in allowed]
+                    if filtered_out:
+                        logger.info(
+                            f"🚫 PII filter blocked {len(filtered_out)} fact(s): {[t for t, _ in filtered_out]}"
+                        )
+                    for _fact_text, fact_id in filtered_out:
+                        if fact_id:
+                            try:
+                                await self.memory_client.delete(fact_id)
+                            except Exception as de:
+                                logger.warning(f"Failed to delete filtered fact {fact_id}: {de}")
+                    stored_pairs = [(t, i) for t, i in stored_pairs if t in allowed]
+
+                if stored_pairs:
+                    facts_preview = "; ".join(t[:60] for t, _ in stored_pairs[:3])
+                    logger.info(f"✅ Memory: {len(stored_pairs)} fact(s) stored — {facts_preview}")
+                else:
+                    logger.debug("🧠 Memory: no new facts extracted")
+
+                # Fire on_stored callback with final stored fact texts
+                final_facts = [t for t, _ in stored_pairs]
+                if on_stored and final_facts:
+                    try:
+                        on_stored(final_facts)
+                    except Exception as ce:
+                        logger.warning(f"on_stored callback failed: {ce}")
+            else:
+                logger.warning(
+                    f"⚠️ Cannot store memory: Session metadata not found for session_id={session_id[:8] if session_id else 'none'}"
+                )
+        except Exception as mem_error:
+            # Memory storage failures should not break session operations
+            logger.error(
+                f"❌ Memory storage failed: {mem_error}",
+                exc_info=True,
+                extra={"session_id": session_id, "role": message.role},
+            )
+            report_error(
+                mem_error,
+                context="session_memory_storage",
+                metadata={"session_id": session_id, "message_role": message.role},
+            )
 
     @observe(name="session_get_history", capture_output=True)
     async def get_conversation_history(

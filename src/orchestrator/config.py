@@ -192,6 +192,13 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 86400 * 7  # Session TTL: 7 days (configurable)
     session_max_messages: int = 1000  # Maximum messages per session (configurable, for scalability)
     session_key_prefix: str = "orchestrator:session"  # Redis key prefix for sessions
+    # Long-term memory (mem0) write timing: 'sync' (await before returning) or
+    # 'background' (fire-and-forget, faster responses, eventual consistency).
+    # Default 'background' — the mem0 fact-extraction (an LLM call) is kept off
+    # the response path. Writes inside a Temporal activity are auto-forced to
+    # 'sync' regardless of this setting. Override per deployment via
+    # SESSION_MEMORY_WRITE_MODE; set 'sync' for strict read-after-write.
+    session_memory_write_mode: Literal["sync", "background"] = "background"
 
     # -------------------------------------------------------------------------
     # Context Management Configuration (Dynamic Context Compression)

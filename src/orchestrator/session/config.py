@@ -113,6 +113,25 @@ class SessionConfig(BaseModel):
         ),
     )
 
+    # Long-term Memory Write Behavior
+    memory_write_mode: Literal["sync", "background"] = Field(
+        default_factory=lambda: settings.session_memory_write_mode,
+        description=(
+            "When to perform the long-term memory (mem0) write relative to the "
+            "request. 'background' (default) schedules the memory write as a "
+            "fire-and-forget task and returns immediately — faster responses, at "
+            "the cost of eventual consistency (a just-stored fact may not be "
+            "searchable for a brief moment). 'sync' awaits the memory write before "
+            "returning — strong read-after-write consistency, but the mem0 "
+            "fact-extraction (an LLM call) adds latency to the response. The "
+            "short-term Redis session write is always synchronous regardless of "
+            "this setting. NOTE: writes executing inside a Temporal activity are "
+            "automatically forced to 'sync' (detected per-call), so the write "
+            "stays within the durable, retriable activity boundary and cannot be "
+            "lost on worker recycle — no manual configuration needed for Temporal."
+        ),
+    )
+
     def is_configured(self) -> bool:
         """Check if session is properly configured."""
         if not self.enabled:

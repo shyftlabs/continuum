@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from orchestrator.config import settings
+from orchestrator.core.background_tasks import BackgroundTaskRegistry
 from orchestrator.logging import get_logger
 from orchestrator.protocols import ILLMClient, IMemoryClient, ISessionClient
 
@@ -115,6 +116,11 @@ class Container:
         self._langfuse_client: Any | None = None
         self._tracing_manager: TracingManager | None = None
         self._tool_executor: ToolExecutor | None = None
+        # Registry for fire-and-forget tasks (e.g. background long-term memory
+        # writes). Created eagerly — it holds no resources and creating it lazily
+        # under self._lock would deadlock when reached from within another
+        # lock-holding property (e.g. session_client -> _initialize_session_client).
+        self._background_tasks: BackgroundTaskRegistry = BackgroundTaskRegistry(name="container")
 
         # Initialization flags
         self._llm_initialized = False
@@ -254,6 +260,15 @@ class Container:
             return self._session_client.provider
         return None
 
+    @property
+    def background_tasks(self) -> BackgroundTaskRegistry:
+        """Get the shared background task registry.
+
+        Owns fire-and-forget tasks (e.g. background long-term memory writes) and
+        is drained during ``shutdown()`` so in-flight work is not lost.
+        """
+        return self._background_tasks
+
     def _initialize_session_client(self) -> None:
         """Initialize the session client and provider."""
         from orchestrator.session import SessionClient, SessionConfig
@@ -269,6 +284,7 @@ class Container:
         self._session_client = SessionClient(
             session_config=config,
             provider=provider,
+            background_tasks=self.background_tasks,
         )
         self._session_initialized = True
         logger.debug("Session client initialized via container")
@@ -417,6 +433,7 @@ class Container:
             self._langfuse_client = None
             self._tracing_manager = None
             self._tool_executor = None
+            self._background_tasks = BackgroundTaskRegistry(name="container")
 
             self._llm_initialized = False
             self._memory_initialized = False
@@ -475,6 +492,16 @@ class Container:
                     logger.warning(f"Error shutting down tracing manager: {e}")
             else:
                 logger.debug("Tracing manager is part of shared service, skipping shutdown")
+
+        # Drain background tasks (e.g. background long-term memory writes) BEFORE
+        # closing the memory client, so any in-flight write can finish against a
+        # still-open client rather than being lost at shutdown.
+        if len(self._background_tasks) > 0:
+            try:
+                await self._background_tasks.drain(timeout=10.0)
+                logger.debug("Background tasks drained")
+            except Exception as e:
+                logger.warning(f"Error draining background tasks: {e}")
 
         # Close memory client (with timeout to prevent hanging)
         # Memory client (Qdrant) is typically not shared, so we close it
