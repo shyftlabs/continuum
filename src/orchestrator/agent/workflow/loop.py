@@ -81,6 +81,10 @@ class LoopAgent(BaseAgent):
     # Loop configuration
     loop_config: LoopConfig = field(default_factory=LoopConfig)
 
+    # Agent whose memory_config governs post-execution long-term memory writes.
+    # Defaults to the loop agent itself (the natural producer of the final output).
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         """Initialize loop agent."""
         if not self.name:
@@ -92,6 +96,7 @@ class LoopAgent(BaseAgent):
             from orchestrator.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("LoopAgent requires an agent to execute")
+
 
     async def execute(
         self,
@@ -213,7 +218,7 @@ class LoopAgent(BaseAgent):
                     session_id=context.session_id,
                     user_message=input_text,
                     assistant_message=final_response.content or "",
-                    agent=None,
+                    agent=self.memory_agent,
                 )
 
             return result
@@ -352,6 +357,7 @@ def create_loop_agent(
     termination_tool: str | None = None,
     termination_pattern: str | None = None,
     termination_condition: Callable[[str, list[dict[str, Any]]], bool] | None = None,
+    memory_agent: BaseAgent | None = None,
 ) -> LoopAgent:
     """
     Factory function to create a loop agent.
@@ -387,4 +393,5 @@ def create_loop_agent(
         name=name,
         agent=agent,
         termination=termination,
+        memory_agent=memory_agent,
     )
