@@ -15,13 +15,11 @@ import pytest
 
 from orchestrator.agent.types import (
     AgentResponse,
-    FailStrategy,
     MergeStrategy,
     ResponseStatus,
     RunContext,
     TokenUsage,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -329,3 +327,149 @@ class TestSupervisedMemoryAgent:
             memory_agent=mem,
         )
         assert sup.memory_agent is mem
+
+
+# ---------------------------------------------------------------------------
+# LoopAgent  (OUTPUT_MATCH termination avoids LLM termination check)
+# ---------------------------------------------------------------------------
+
+
+class TestLoopMemoryAgent:
+    @pytest.mark.asyncio
+    async def test_save_turn_agent_is_none_by_default(self):
+        from orchestrator.agent.types import TerminationConfig, TerminationType
+        from orchestrator.agent.workflow.loop import LoopAgent
+
+        loop = LoopAgent(
+            name="loop",
+            agent=_make_base_agent("a"),
+            termination=TerminationConfig(
+                type=TerminationType.OUTPUT_MATCH, pattern="ok", max_iterations=1
+            ),
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await loop.execute("input", runner, _make_context(), llm_client=MagicMock())
+        runner.save_turn.assert_called_once()
+        assert runner.save_turn.call_args.kwargs["agent"] is None
+
+    @pytest.mark.asyncio
+    async def test_save_turn_uses_memory_agent_when_set(self):
+        from orchestrator.agent.types import TerminationConfig, TerminationType
+        from orchestrator.agent.workflow.loop import LoopAgent
+
+        mem = _make_base_agent("mem")
+        loop = LoopAgent(
+            name="loop",
+            agent=_make_base_agent("a"),
+            termination=TerminationConfig(
+                type=TerminationType.OUTPUT_MATCH, pattern="ok", max_iterations=1
+            ),
+            memory_agent=mem,
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await loop.execute("input", runner, _make_context(), llm_client=MagicMock())
+        assert runner.save_turn.call_args.kwargs["agent"] is mem
+
+    def test_create_loop_agent_passes_memory_agent(self):
+        from orchestrator.agent.workflow.loop import create_loop_agent
+
+        mem = _make_base_agent("mem")
+        loop = create_loop_agent("loop", agent=_make_base_agent("a"), memory_agent=mem)
+        assert loop.memory_agent is mem
+
+
+# ---------------------------------------------------------------------------
+# ReflectionAgent  (max_reflections=0 skips critique LLM call; llm_client passed directly)
+# ---------------------------------------------------------------------------
+
+
+class TestReflectionMemoryAgent:
+    @pytest.mark.asyncio
+    async def test_save_turn_agent_is_none_by_default(self):
+        from orchestrator.agent.workflow.reflection import ReflectionAgent, ReflectionConfig
+
+        ref = ReflectionAgent(
+            name="ref",
+            agent=_make_base_agent("a"),
+            reflection_config=ReflectionConfig(max_reflections=0),
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await ref.execute("input", runner, _make_context(), llm_client=MagicMock())
+        runner.save_turn.assert_called_once()
+        assert runner.save_turn.call_args.kwargs["agent"] is None
+
+    @pytest.mark.asyncio
+    async def test_save_turn_uses_memory_agent_when_set(self):
+        from orchestrator.agent.workflow.reflection import ReflectionAgent, ReflectionConfig
+
+        mem = _make_base_agent("mem")
+        ref = ReflectionAgent(
+            name="ref",
+            agent=_make_base_agent("a"),
+            reflection_config=ReflectionConfig(max_reflections=0),
+            memory_agent=mem,
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await ref.execute("input", runner, _make_context(), llm_client=MagicMock())
+        assert runner.save_turn.call_args.kwargs["agent"] is mem
+
+    def test_create_reflection_agent_passes_memory_agent(self):
+        from orchestrator.agent.workflow.reflection import create_reflection_agent
+
+        mem = _make_base_agent("mem")
+        ref = create_reflection_agent("ref", agent=_make_base_agent("a"), memory_agent=mem)
+        assert ref.memory_agent is mem
+
+
+# ---------------------------------------------------------------------------
+# DebateAgent  (summarise_arguments=False by default — no LLM excerpt call)
+# ---------------------------------------------------------------------------
+
+
+class TestDebateMemoryAgent:
+    @pytest.mark.asyncio
+    async def test_save_turn_agent_is_none_by_default(self):
+        from orchestrator.agent.workflow.debate import DebateAgent
+
+        debate = DebateAgent(
+            name="debate",
+            pro_agent=_make_base_agent("pro"),
+            con_agent=_make_base_agent("con"),
+            judge_agent=_make_base_agent("judge"),
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await debate.execute("input", runner, _make_context())
+        runner.save_turn.assert_called_once()
+        assert runner.save_turn.call_args.kwargs["agent"] is None
+
+    @pytest.mark.asyncio
+    async def test_save_turn_uses_memory_agent_when_set(self):
+        from orchestrator.agent.workflow.debate import DebateAgent
+
+        mem = _make_base_agent("mem")
+        debate = DebateAgent(
+            name="debate",
+            pro_agent=_make_base_agent("pro"),
+            con_agent=_make_base_agent("con"),
+            judge_agent=_make_base_agent("judge"),
+            memory_agent=mem,
+        )
+        runner = _make_runner()
+        with _patch_span():
+            await debate.execute("input", runner, _make_context())
+        assert runner.save_turn.call_args.kwargs["agent"] is mem
+
+    def test_create_debate_agent_memory_agent_defaults_to_judge(self):
+        from orchestrator.agent.workflow.debate import create_debate_agent
+
+        debate = create_debate_agent(
+            "debate",
+            pro_stance="Argue for.",
+            con_stance="Argue against.",
+        )
+        assert debate.memory_agent is None

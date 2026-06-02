@@ -113,6 +113,10 @@ class DebateAgent(BaseAgent):
     judge_agent: BaseAgent | None = None
     debate_config: DebateConfig = field(default_factory=DebateConfig)
 
+    # Agent whose memory_config governs post-execution long-term memory writes.
+    # Defaults to judge_agent (the natural synthesiser of the final output).
+    memory_agent: BaseAgent | None = None
+
     def __post_init__(self) -> None:
         if not self.name:
             from orchestrator.agent.exceptions import AgentConfigurationError
@@ -124,6 +128,7 @@ class DebateAgent(BaseAgent):
             raise AgentConfigurationError(
                 "DebateAgent requires pro_agent, con_agent, and judge_agent"
             )
+
 
     async def execute(
         self,
@@ -151,7 +156,7 @@ class DebateAgent(BaseAgent):
                 session_id=context.session_id,
                 user_message=input_text,
                 assistant_message=result.content or "",
-                agent=None,
+                agent=self.memory_agent,
             )
         return result
 
