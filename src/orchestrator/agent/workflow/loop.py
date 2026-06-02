@@ -97,7 +97,6 @@ class LoopAgent(BaseAgent):
 
             raise AgentConfigurationError("LoopAgent requires an agent to execute")
 
-
     async def execute(
         self,
         input_text: str,

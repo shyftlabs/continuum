@@ -129,7 +129,6 @@ class DebateAgent(BaseAgent):
                 "DebateAgent requires pro_agent, con_agent, and judge_agent"
             )
 
-
     async def execute(
         self,
         input_text: str,

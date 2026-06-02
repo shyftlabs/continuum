@@ -123,7 +123,6 @@ class PlannerAgent(BaseAgent):
                 f"Consider single-agent mode (agent=worker) for more flexibility."
             )
 
-
     @property
     def _mode(self) -> str:
         return "single" if self.agent else "pool"

@@ -445,7 +445,12 @@ def create_dag_agent(
             ],
         )
     """
-    dag = DAGAgent(name=name, merge_strategy=merge_strategy, fail_strategy=fail_strategy, memory_agent=memory_agent)
+    dag = DAGAgent(
+        name=name,
+        merge_strategy=merge_strategy,
+        fail_strategy=fail_strategy,
+        memory_agent=memory_agent,
+    )
     for stage_id, agent, depends_on in stages:
         dag.add_stage(stage_id, agent, depends_on)
     return dag
