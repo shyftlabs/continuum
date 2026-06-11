@@ -57,7 +57,11 @@ from continuum.agent.types import (
 from continuum.agent.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from continuum.agent.utils.context_utils import create_run_context
 from continuum.agent.utils.message_utils import message_to_dict
-from continuum.agent.utils.validation_utils import validate_input
+from continuum.agent.utils.validation_utils import (
+    apply_output_scanners,
+    last_user_prompt,
+    validate_input,
+)
 from continuum.agent.workflow.router import RouterAgent
 from continuum.config import settings
 from continuum.config import settings as app_settings
@@ -816,6 +820,12 @@ class AgentRunner:
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
+            # When output_scanners are configured, raw token deltas must NOT reach
+            # the client unredacted. We suppress per-token CONTENT_DELTA events and
+            # instead emit a single sanitized CONTENT_COMPLETE per turn. Agents with
+            # no scanners stream token-by-token as before.
+            scanners_active = bool(getattr(agent, "config", None) and agent.config.output_scanners)
+
             yield AgentEvent(
                 type=EventType.AGENT_START,
                 agent_name=agent.name,
@@ -849,13 +859,14 @@ class AgentRunner:
                             )
                         elif ev.kind == "content_delta" and ev.text:
                             content_parts.append(ev.text)
-                            yield AgentEvent(
-                                type=EventType.CONTENT_DELTA,
-                                agent_name=agent.name,
-                                run_id=ctx.run_id,
-                                data={"content": ev.text},
-                                trace_id=ctx.trace_id,
-                            )
+                            if not scanners_active:
+                                yield AgentEvent(
+                                    type=EventType.CONTENT_DELTA,
+                                    agent_name=agent.name,
+                                    run_id=ctx.run_id,
+                                    data={"content": ev.text},
+                                    trace_id=ctx.trace_id,
+                                )
                 except Exception as e_mt:
                     await self._finalizer.handle_error(agent, ctx, run_state, e_mt, start_time)
                     if isinstance(e_mt, AgentError):
@@ -869,6 +880,8 @@ class AgentRunner:
                     ) from e_mt
 
                 content = "".join(content_parts)
+                if scanners_active:
+                    content = apply_output_scanners(agent, last_user_prompt(messages), content)
                 te = parse_product_tier(last_routing.get("tier"))
                 if te:
                     ctx.priority = tier_dispatch_priority(te)
@@ -1008,7 +1021,7 @@ class AgentRunner:
                         last_seen_model = chunk.model
                     if chunk.content:
                         content_parts.append(chunk.content)
-                        if "NEED_TOOL:" not in chunk.content:
+                        if "NEED_TOOL:" not in chunk.content and not scanners_active:
                             yield AgentEvent(
                                 type=EventType.CONTENT_DELTA,
                                 agent_name=agent.name,
@@ -1064,13 +1077,14 @@ class AgentRunner:
                                 last_seen_model = chunk.model
                             if chunk.content:
                                 content_parts.append(chunk.content)
-                                yield AgentEvent(
-                                    type=EventType.CONTENT_DELTA,
-                                    agent_name=agent.name,
-                                    run_id=ctx.run_id,
-                                    data={"content": chunk.content},
-                                    trace_id=ctx.trace_id,
-                                )
+                                if not scanners_active:
+                                    yield AgentEvent(
+                                        type=EventType.CONTENT_DELTA,
+                                        agent_name=agent.name,
+                                        run_id=ctx.run_id,
+                                        data={"content": chunk.content},
+                                        trace_id=ctx.trace_id,
+                                    )
                             if chunk.tool_calls:
                                 tool_calls = chunk.tool_calls
                         if last_seen_model and settings.smart_gateway_url:
@@ -1078,6 +1092,12 @@ class AgentRunner:
                         content = "".join(content_parts)
                 else:
                     pass  # CONTENT_DELTA already yielded live in the streaming loop above
+
+                # Redact output before it leaves the runner (deltas were suppressed
+                # above when scanners are active, so this is the client's first sight
+                # of the content).
+                if content and scanners_active:
+                    content = apply_output_scanners(agent, last_user_prompt(messages), content)
 
                 if content:
                     yield AgentEvent(
@@ -1216,6 +1236,10 @@ class AgentRunner:
                             handoff_content = (
                                 handoff_result.response.content if handoff_result.response else ""
                             )
+                            if handoff_content and scanners_active:
+                                handoff_content = apply_output_scanners(
+                                    agent, last_user_prompt(messages), handoff_content
+                                )
                             messages.append(
                                 {
                                     "role": "tool",
