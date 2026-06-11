@@ -6,6 +6,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.types import ResponseStatus, RunStatus
+from continuum.agent.utils.validation_utils import apply_output_scanners, last_user_prompt
 from continuum.logging import get_logger
 from continuum.observability.metrics import get_metrics_collector
 
@@ -65,23 +66,9 @@ class RunFinalizer:
         # Scanners redact PII in response.content before it is saved to session or returned.
         # Fail-open: if a scanner crashes the response is still returned unmodified.
         if agent.config and agent.config.output_scanners and response.content:
-            prompt = ""
-            if messages:
-                # Use the last user message as the prompt context for output scanners
-                for m in reversed(messages):
-                    if m.get("role") == "user":
-                        prompt = str(m.get("content", ""))
-                        break
-            for scanner in agent.config.output_scanners:
-                try:
-                    sanitized, _, _ = scanner(prompt, response.content)
-                    response.content = sanitized
-                except Exception as e:
-                    logger.warning(
-                        "Output scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)),
-                        e,
-                    )
+            response.content = apply_output_scanners(
+                agent, last_user_prompt(messages), response.content
+            )
 
         run_state.status = RunStatus.COMPLETED
         await self._context_service.save_run_state(run_state)
