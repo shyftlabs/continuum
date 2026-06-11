@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from continuum.agent.exceptions import MaxTurnsExceededError
+from continuum.agent.exceptions import HandoffLoopError, MaxTurnsExceededError
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     record_llm_turn,
@@ -37,6 +37,11 @@ if TYPE_CHECKING:
     from continuum.llm import LLMClient
 
 logger = get_logger(__name__)
+
+# Max consecutive handoffs to the SAME target before we declare a handoff loop.
+# Catches routing agents stuck re-routing under return_to_parent=True before they
+# silently exhaust max_turns.
+_MAX_CONSECUTIVE_HANDOFFS = 3
 
 
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
@@ -463,8 +468,32 @@ class Executor(IExecutor):
                     # Execute handoffs sequentially (they may return early)
                     if handoff_calls and self._handoff_executor:
                         for tc, target in handoff_calls:
+                            _hc = agent.get_handoff(target)
+                            # Guard against handoff loops: a routing agent under
+                            # return_to_parent=True can keep re-handing-off to the same
+                            # target every turn (the recipient is popped from the stack,
+                            # so cycle/depth checks don't catch it), silently burning
+                            # turns until MaxTurnsExceededError. Only return_to_parent
+                            # handoffs can loop this way — a return_to_parent=False
+                            # handoff returns its result directly and cannot re-route —
+                            # so the guard is scoped to them to avoid false positives on
+                            # legitimate repeated same-target handoffs.
+                            if _hc is None or _hc.return_to_parent:
+                                _streak = 0
+                                for _h in reversed(run_state.handoff_chain):
+                                    if _h.get("to_agent") == target:
+                                        _streak += 1
+                                    else:
+                                        break
+                                if _streak >= _MAX_CONSECUTIVE_HANDOFFS:
+                                    raise HandoffLoopError(
+                                        from_agent=agent.name,
+                                        to_agent=target,
+                                        count=_streak,
+                                        run_id=context.run_id,
+                                        trace_id=context.trace_id,
+                                    )
                             if recorder is not None:
-                                _hc = agent.get_handoff(target)
                                 recorder.record_handoff(
                                     agent.name,
                                     target,

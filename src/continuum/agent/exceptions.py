@@ -212,6 +212,34 @@ class HandoffCycleDetectedError(HandoffError):
         self.context["cycle_path"] = cycle_path
 
 
+class HandoffLoopError(HandoffError):
+    """
+    Raised when an agent hands off to the same target repeatedly without making
+    progress — a likely handoff loop (common when a routing agent keeps
+    re-routing under the default ``return_to_parent=True``).
+
+    Caught early with a clear message instead of silently burning turns until
+    ``MaxTurnsExceededError``.
+    """
+
+    def __init__(
+        self,
+        from_agent: str,
+        to_agent: str,
+        count: int,
+        **kwargs: Any,
+    ):
+        message = (
+            f"Handoff loop detected: '{from_agent}' handed off to '{to_agent}' "
+            f"{count} times in a row without resolving. This usually means a routing "
+            f"agent keeps re-routing. Set return_to_parent=False on the handoff so the "
+            f"target's response is returned directly, or adjust the agent's instructions."
+        )
+        super().__init__(message, from_agent=from_agent, to_agent=to_agent, **kwargs)
+        self.count = count
+        self.context["consecutive_handoffs"] = count
+
+
 # =============================================================================
 # Tool Errors
 # =============================================================================
