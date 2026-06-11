@@ -270,9 +270,19 @@ class HandoffExecutor(IHandoffExecutor):
                     f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
                 )
 
-            # Execute target agent (executor guaranteed to be set by early validation)
+            # Execute target agent (executor guaranteed to be set by early validation).
+            # The recipient agent runs one level below the top-level runner, so its
+            # lifecycle hooks (on_start / on_end / on_error) are fired here — the
+            # runner only fires them for the agent passed to run()/run_stream().
+            # This keeps the audit trail complete across handoffs. Ordering and call
+            # signatures mirror the top-level runner; on_tool_call already fires
+            # inside the tool service for whichever agent the loop is driving.
             response = None
             try:
+                if target_agent.on_start:
+                    target_agent.on_start(
+                        target_agent, {"context": target_context, "input": reason}
+                    )
                 response = await self._executor.execute_loop(
                     agent=target_agent,
                     messages=target_messages,
@@ -281,6 +291,8 @@ class HandoffExecutor(IHandoffExecutor):
                 )
             except Exception as e:
                 logger.error(f"Failed to execute target agent '{target_name}': {e}", exc_info=True)
+                if target_agent.on_error:
+                    target_agent.on_error(target_agent, e, {"context": target_context})
                 result = HandoffResult(
                     handoff_id=handoff_data.handoff_id,
                     from_agent=agent.name,
@@ -290,6 +302,15 @@ class HandoffExecutor(IHandoffExecutor):
                 )
                 await self._handoff_manager.trace_handoff("end", handoff_data, context, result)
                 return result
+
+            # on_end fires only after a genuinely successful execution and OUTSIDE
+            # the try above — a hook that raises must not mask the success as a
+            # failure or double-fire on_error. (A raising on_end then propagates to
+            # the outer handler, mirroring the top-level runner's hook handling.)
+            if target_agent.on_end:
+                target_agent.on_end(
+                    target_agent, {"context": target_context, "response": response}
+                )
 
             # Trace handoff end
             result = HandoffResult(
