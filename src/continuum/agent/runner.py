@@ -65,6 +65,11 @@ from continuum.core.container import Container, get_container
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger
 from continuum.tools.tool_attention.router import _tool_name
+from continuum.utils.sanitization import (
+    InvalidIdentifierError,
+    validate_conversation_id,
+    validate_user_id,
+)
 
 if TYPE_CHECKING:
     from continuum.llm import LLMClient
@@ -281,15 +286,34 @@ class AgentRunner:
         if agent.name not in self._agent_registry:
             self.register_agent(agent)
 
-        if context is None:
-            context = create_run_context(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                trace_id=trace_id,
-                max_turns=max_turns or agent.config.max_turns,
-                metadata=metadata or {},
-                tags=tags or [],
+        # Validate the scope identifiers at the SDK boundary. This is the one
+        # place every runner.run()/run_stream() call passes through, so it
+        # guards memory scoping regardless of which app calls in. Validation
+        # runs for a caller-supplied context too — otherwise a hand-built
+        # RunContext could smuggle raw, unvalidated ids past this check.
+        try:
+            if context is None:
+                context = create_run_context(
+                    session_id=session_id,
+                    conversation_id=validate_conversation_id(conversation_id),
+                    user_id=validate_user_id(user_id),
+                    trace_id=trace_id,
+                    max_turns=max_turns or agent.config.max_turns,
+                    metadata=metadata or {},
+                    tags=tags or [],
+                )
+            else:
+                context.user_id = validate_user_id(context.user_id)
+                context.conversation_id = validate_conversation_id(context.conversation_id)
+        except InvalidIdentifierError as e:
+            return PrepareRunResult(
+                success=False,
+                error_response=AgentResponse(
+                    content=str(e),
+                    agent_name=agent.name,
+                    status=ResponseStatus.ERROR,
+                    error=str(e),
+                ),
             )
 
         if agent.input_schema is not None:
@@ -785,11 +809,16 @@ class AgentRunner:
         )
         if not result.success:
             _run_id = generate_run_id()
+            _err = (
+                result.error_response.error
+                if result.error_response and result.error_response.error
+                else "Input validation failed"
+            )
             yield AgentEvent(
                 type=EventType.RUN_ERROR,
                 agent_name=agent.name,
                 run_id=_run_id,
-                data={"error": "Input validation failed", "error_type": "ValidationError"},
+                data={"error": _err, "error_type": "ValidationError"},
                 trace_id=trace_id,
             )
             yield AgentEvent(

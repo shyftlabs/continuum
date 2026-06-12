@@ -32,6 +32,7 @@ from continuum.session.types import (
     SessionMetadata,
     generate_session_id,
 )
+from continuum.utils.sanitization import validate_conversation_id, validate_user_id
 
 logger = get_logger(__name__)
 
@@ -208,9 +209,16 @@ class RedisSessionProvider(BaseSessionProvider):
         Namespace prefixes ("c:" / "u:") prevent collision between a bare
         user_id like "foo:bar" and a conversation_id="foo" + user_id="bar"
         pair, which would otherwise both produce the same key "foo:bar".
+
+        Raises:
+            InvalidIdentifierError: if user_id/conversation_id contain characters
+                unsafe for a Redis key fragment. An explicit session_id is trusted
+                as-is (internal handoff calls supply framework-generated ids).
         """
         if session_id:
             return session_id
+        user_id = validate_user_id(user_id)
+        conversation_id = validate_conversation_id(conversation_id)
         if conversation_id and user_id:
             return f"c:{conversation_id}:u:{user_id}"
         if user_id:
