@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from continuum.agent.exceptions import HandoffLoopError, MaxTurnsExceededError
+from continuum.agent.exceptions import (
+    HandoffLoopError,
+    MaxTurnsExceededError,
+    StructuredOutputError,
+)
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     record_llm_turn,
@@ -25,6 +29,12 @@ from continuum.agent.types import (
 )
 from continuum.config import settings
 from continuum.llm.config import LLMConfig
+from continuum.llm.structured_output import (
+    coerce_and_validate,
+    is_pydantic_schema,
+    schema_prompt,
+    to_openai_response_format,
+)
 from continuum.logging import get_logger
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
@@ -42,6 +52,10 @@ logger = get_logger(__name__)
 # Catches routing agents stuck re-routing under return_to_parent=True before they
 # silently exhaust max_turns.
 _MAX_CONSECUTIVE_HANDOFFS = 3
+
+# Extra LLM calls allowed to coax a valid structured output after the first
+# attempt fails validation. 1 = one retry (see ADR / fix plan, decision #3).
+_MAX_STRUCTURED_OUTPUT_RETRIES = 1
 
 
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
@@ -210,6 +224,23 @@ class Executor(IExecutor):
                                 ),
                             },
                         )
+
+                    # Structured output: constrain THIS call to the schema only when
+                    # the agent has no tools (every call is then a final answer).
+                    # Tool-using agents are NOT constrained here — that would fight
+                    # tool calling (R1); they get a separate formatting call after
+                    # the loop. Constraint = schema-in-prompt (universal) + a
+                    # json_schema response_format dict (honored natively by OpenAI,
+                    # ignored safely elsewhere).
+                    if is_pydantic_schema(agent.output_schema) and not agent.get_tools_for_llm():
+                        llm_config = llm_config.model_copy(
+                            update={
+                                "response_format": to_openai_response_format(agent.output_schema)
+                            }
+                        )
+                        llm_messages = llm_messages + [
+                            {"role": "system", "content": schema_prompt(agent.output_schema)}
+                        ]
 
                     # NOTE: We pass auto_session=False because Executor manages the
                     # conversation loop including tool calls.
@@ -630,142 +661,61 @@ class Executor(IExecutor):
                 # Merge all tool summaries into one for the response
                 merged_tool_summary = self._merge_tool_summaries(all_tool_summaries)
 
-                # Parse structured output if JSON mode was enabled and output_schema is set
+                # Structured output: produce a validated instance, or a clear error.
+                # The model was already steered toward the schema (prompt + response_format
+                # for no-tool agents). For tool agents the loop ran unconstrained, so
+                # _resolve_structured_output makes a separate formatting call here.
                 structured_output = None
-                # Parse structured output whenever output_schema is set.
-                # `enable_json_mode` controls how the LLM is asked to format the
-                # response, but having an `output_schema` should be sufficient
-                # to opt into deserialization on the way back.
-                if agent.output_schema and response.content:
-                    try:
-                        import json
-
-                        # Log that we're expecting JSON format
+                structured_output_error = None
+                if is_pydantic_schema(agent.output_schema):
+                    (
+                        structured_output,
+                        structured_output_error,
+                    ) = await self._resolve_structured_output(
+                        agent, messages, response.content, context
+                    )
+                    if structured_output is not None:
                         logger.info(
-                            f"🔍 Verifying JSON format response for agent {agent.name}",
-                            extra={
-                                "agent_name": agent.name,
-                                "content_length": len(response.content) if response.content else 0,
-                                "output_schema": agent.output_schema.__name__,
-                            },
+                            f"✅ structured_output ready for agent {agent.name} "
+                            f"({agent.output_schema.__name__})",
+                            extra={"agent_name": agent.name},
                         )
-
-                        # Check if content looks like JSON (strip markdown fences first)
-                        content_stripped = response.content.strip()
-                        if content_stripped.startswith("```"):
-                            import re as _re
-
-                            content_stripped = _re.sub(r"^```[a-z]*\n?", "", content_stripped)
-                            content_stripped = content_stripped.rstrip("`").rstrip()
-
-                        is_json_like = (
-                            content_stripped.startswith("{") and content_stripped.endswith("}")
-                        ) or (content_stripped.startswith("[") and content_stripped.endswith("]"))
-
-                        if not is_json_like:
-                            logger.warning(
-                                f"⚠️ Response from agent {agent.name} doesn't appear to be JSON format "
-                                f"(expected JSON mode enabled). Content preview: {content_stripped[:100]}",
-                                extra={
-                                    "agent_name": agent.name,
-                                    "content_preview": content_stripped[:200],
-                                },
-                            )
-                            # Try to extract a JSON object/array embedded in prose or markdown
-                            import re as _re
-
-                            _json_match = _re.search(r"\{[\s\S]*\}|\[[\s\S]*\]", content_stripped)
-                            if _json_match:
-                                content_stripped = _json_match.group(0)
-                                logger.info(
-                                    f"🔧 Extracted embedded JSON from prose response for agent {agent.name}",
-                                    extra={"agent_name": agent.name},
-                                )
-
-                        # Parse JSON content
-                        parsed_json = json.loads(content_stripped)
-
-                        # Unwrap {"ClassName": {...}} or {"ClassName": [...]} if model
-                        # wraps the payload under the schema name instead of returning
-                        # the flat object directly.
-                        if isinstance(parsed_json, dict) and len(parsed_json) == 1:
-                            only_key = next(iter(parsed_json))
-                            if only_key == agent.output_schema.__name__:
-                                inner = parsed_json[only_key]
-                                parsed_json = {"leads": inner} if isinstance(inner, list) else inner
-
-                        logger.info(
-                            f"✅ Successfully parsed JSON response for agent {agent.name}",
-                            extra={
-                                "agent_name": agent.name,
-                                "json_keys": list(parsed_json.keys())
-                                if isinstance(parsed_json, dict)
-                                else None,
-                            },
+                    elif agent.output_schema_strict:
+                        raise StructuredOutputError(
+                            schema_name=agent.output_schema.__name__,
+                            reason=structured_output_error or "no valid structured output",
+                            agent_name=agent.name,
+                            run_id=context.run_id,
+                            trace_id=context.trace_id,
                         )
-
-                        # Validate against output_schema Pydantic model
-                        structured_output = agent.output_schema.model_validate(parsed_json)
-                        logger.info(
-                            f"✅ Successfully validated structured output for agent {agent.name} against {agent.output_schema.__name__}",
+                    else:
+                        # Soft failure: visible (warning + error field), not silent.
+                        logger.warning(
+                            f"⚠️ structured_output unavailable for agent {agent.name}: "
+                            f"{structured_output_error}",
                             extra={
                                 "agent_name": agent.name,
                                 "output_schema": agent.output_schema.__name__,
-                            },
-                        )
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            f"❌ Failed to parse JSON response for agent {agent.name}: {e}",
-                            extra={
-                                "agent_name": agent.name,
-                                "content_preview": response.content[:200]
-                                if response.content
-                                else None,
-                                "error": str(e),
-                            },
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"❌ Failed to validate structured output against schema for agent {agent.name}: {e}",
-                            extra={
-                                "agent_name": agent.name,
-                                "output_schema": agent.output_schema.__name__
-                                if agent.output_schema
-                                else None,
-                                "error": str(e),
+                                "error": structured_output_error,
                             },
                         )
                 elif agent.enable_json_mode and response.content:
-                    # JSON mode enabled but no output_schema - just verify it's JSON
-                    import json
+                    # Legacy path: JSON mode without output_schema — just verify it's JSON.
+                    import json as _json
 
                     try:
-                        content_stripped = response.content.strip()
-                        parsed_json = json.loads(response.content)
-                        logger.info(
-                            f"✅ JSON mode enabled: Response is valid JSON for agent {agent.name}",
-                            extra={
-                                "agent_name": agent.name,
-                                "json_keys": list(parsed_json.keys())
-                                if isinstance(parsed_json, dict)
-                                else None,
-                            },
-                        )
-                    except json.JSONDecodeError as e:
+                        _json.loads(response.content.strip())
+                    except _json.JSONDecodeError as e:
                         logger.warning(
-                            f"⚠️ JSON mode enabled but response is not valid JSON for agent {agent.name}: {e}",
-                            extra={
-                                "agent_name": agent.name,
-                                "content_preview": content_stripped[:200]
-                                if response.content
-                                else None,
-                            },
+                            f"⚠️ JSON mode enabled but response is not valid JSON for "
+                            f"agent {agent.name}: {e}"
                         )
 
                 # No tool calls, we're done
                 agent_response = AgentResponse(
                     content=response.content or "",
                     structured_output=structured_output,
+                    structured_output_error=structured_output_error,
                     agent_name=agent.name,
                     status=ResponseStatus.SUCCESS,
                     usage=total_usage,
@@ -1031,6 +981,88 @@ class Executor(IExecutor):
                 return f"Error executing '{tool_name}': {e}"
 
         return f"Tool '{tool_name}' is not available"
+
+    async def _resolve_structured_output(
+        self,
+        agent: BaseAgent,
+        base_messages: list[dict[str, Any]],
+        content: str | None,
+        context: RunContext,
+    ) -> tuple[Any, str | None]:
+        """Produce a validated ``output_schema`` instance, or (None, reason).
+
+        First tries the content already produced. For no-tool agents that content
+        came from a schema-constrained call, so it counts as the primary attempt and
+        only ``_MAX_STRUCTURED_OUTPUT_RETRIES`` dedicated formatting calls follow
+        (total = 1 constrained + 1 retry). For tool agents the loop ran
+        unconstrained, so the prose content is not a structured attempt and the
+        full ``1 + _MAX_STRUCTURED_OUTPUT_RETRIES`` formatting-call budget applies.
+        """
+        schema = agent.output_schema
+        assert schema is not None  # caller guards on agent.output_schema
+
+        obj, err = coerce_and_validate(content, schema)
+        if obj is not None:
+            return obj, None
+
+        # The constrained inline call (no-tool agents) already spent the primary
+        # attempt; tool agents' prose content did not, so they keep the full budget.
+        primary_already_spent = not agent.get_tools_for_llm()
+        format_calls = (1 + _MAX_STRUCTURED_OUTPUT_RETRIES) - (1 if primary_already_spent else 0)
+
+        prior = content
+        last_err = err
+        for _ in range(format_calls):
+            try:
+                fmt_content = await self._structured_format_call(
+                    agent, base_messages, prior, last_err, context
+                )
+            except Exception as e:  # provider rejected the request, etc.
+                logger.warning(
+                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                )
+                last_err = f"formatting call failed: {e}"
+                break
+            obj, last_err = coerce_and_validate(fmt_content, schema)
+            if obj is not None:
+                return obj, None
+            prior = fmt_content
+        return None, last_err
+
+    async def _structured_format_call(
+        self,
+        agent: BaseAgent,
+        base_messages: list[dict[str, Any]],
+        prior_content: str | None,
+        error: str | None,
+        context: RunContext,
+    ) -> str | None:
+        """One dedicated, tool-free, schema-constrained call to format the answer."""
+        schema = agent.output_schema
+        assert schema is not None
+
+        instruction = schema_prompt(schema)
+        if prior_content:
+            instruction += f"\n\nConvert the following into that JSON object:\n{prior_content}"
+        if error:
+            instruction += (
+                f"\n\nThe previous attempt was invalid ({error}). Return corrected JSON only."
+            )
+        fmt_messages = list(base_messages) + [{"role": "user", "content": instruction}]
+
+        cfg = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), context)
+        cfg = cfg.model_copy(update={"response_format": to_openai_response_format(schema)})
+
+        resp = await self.llm_client.chat(
+            messages=fmt_messages,
+            tools=None,  # no tools — this is a pure formatting pass
+            config=cfg,
+            session_id=context.session_id,
+            auto_session=False,
+            priority=context.priority,
+            stage_priority=agent.config.stage_priority if agent.config else 5,
+        )
+        return resp.content
 
     def _merge_tool_summaries(
         self,

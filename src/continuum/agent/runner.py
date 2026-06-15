@@ -19,8 +19,13 @@ from continuum.agent.exceptions import (
     AgentError,
     AgentExecutionError,
     MaxTurnsExceededError,
+    StructuredOutputError,
 )
-from continuum.agent.execution.executor import Executor, _enrich_config_for_gateway
+from continuum.agent.execution.executor import (
+    _MAX_STRUCTURED_OUTPUT_RETRIES,
+    Executor,
+    _enrich_config_for_gateway,
+)
 from continuum.agent.execution.handoff_executor import HandoffExecutor
 from continuum.agent.execution.message_builder import MessageBuilder
 from continuum.agent.execution.run_finalizer import RunFinalizer
@@ -67,6 +72,12 @@ from continuum.config import settings
 from continuum.config import settings as app_settings
 from continuum.core.container import Container, get_container
 from continuum.llm.config import LLMConfig
+from continuum.llm.structured_output import (
+    coerce_and_validate,
+    is_pydantic_schema,
+    schema_prompt,
+    to_openai_response_format,
+)
 from continuum.logging import get_logger
 from continuum.tools.tool_attention.router import _tool_name
 
@@ -756,6 +767,64 @@ class AgentRunner:
         """
         await self._finalizer.persist_decision_trace(context, response)
 
+    async def _resolve_structured_output_stream(
+        self,
+        agent: BaseAgent,
+        base_messages: list[dict[str, Any]],
+        content: str | None,
+        ctx: RunContext,
+    ) -> tuple[Any, str | None]:
+        """Streaming counterpart of Executor._resolve_structured_output.
+
+        Tries the streamed content first. For no-tool agents that content was
+        schema-constrained, so it counts as the primary attempt and only
+        ``_MAX_STRUCTURED_OUTPUT_RETRIES`` blocking formatting calls follow; tool
+        agents' unconstrained content keeps the full ``1 +
+        _MAX_STRUCTURED_OUTPUT_RETRIES`` budget. Retries are non-streaming —
+        streaming a retry adds no value.
+        """
+        schema = agent.output_schema
+        assert schema is not None
+
+        obj, err = coerce_and_validate(content, schema)
+        if obj is not None:
+            return obj, None
+
+        # The constrained inline call (no-tool agents) already spent the primary
+        # attempt; tool agents' prose content did not, so they keep the full budget.
+        primary_already_spent = not agent.get_tools_for_llm()
+        format_calls = (1 + _MAX_STRUCTURED_OUTPUT_RETRIES) - (1 if primary_already_spent else 0)
+
+        prior, last_err = content, err
+        for _ in range(format_calls):
+            instruction = schema_prompt(schema)
+            if prior:
+                instruction += f"\n\nConvert the following into that JSON object:\n{prior}"
+            if last_err:
+                instruction += f"\n\nThe previous attempt was invalid ({last_err}). Return corrected JSON only."
+            fmt_messages = list(base_messages) + [{"role": "user", "content": instruction}]
+            cfg = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx)
+            cfg = cfg.model_copy(update={"response_format": to_openai_response_format(schema)})
+            try:
+                resp = await self.llm_client.chat(
+                    messages=fmt_messages,
+                    tools=None,
+                    config=cfg,
+                    session_id=ctx.session_id,
+                    auto_session=False,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                )
+                last_err = f"formatting call failed: {e}"
+                break
+            obj, last_err = coerce_and_validate(resp.content, schema)
+            if obj is not None:
+                return obj, None
+            prior = resp.content
+        return None, last_err
+
     # =========================================================================
     # Run (streaming)
     # =========================================================================
@@ -806,6 +875,7 @@ class AgentRunner:
             return
 
         ctx = result.context
+        assert ctx is not None  # _prepare_run always sets context on success
         run_state = result.run_state
 
         yield AgentEvent(
@@ -1007,6 +1077,19 @@ class AgentRunner:
                 else:
                     llm_messages = messages
 
+                # Structured output: constrain the FINAL-answer call to the schema
+                # for no-tool agents (every call is a final answer). Tool agents are
+                # NOT constrained here — they get a blocking formatting call after the
+                # loop (parity with the non-streaming executor).
+                _stream_config = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx)
+                if is_pydantic_schema(agent.output_schema) and not agent.get_tools_for_llm():
+                    _stream_config = _stream_config.model_copy(
+                        update={"response_format": to_openai_response_format(agent.output_schema)}
+                    )
+                    llm_messages = llm_messages + [
+                        {"role": "system", "content": schema_prompt(agent.output_schema)}
+                    ]
+
                 content_parts: list[str] = []
                 tool_calls: list = []
                 last_seen_model: str | None = None
@@ -1014,7 +1097,7 @@ class AgentRunner:
                 async for chunk in self.llm_client.chat_stream(
                     messages=llm_messages,
                     tools=tools if tools else None,
-                    config=_enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx),
+                    config=_stream_config,
                     trace_metadata={"session_id": session_id} if session_id else None,
                 ):
                     if chunk.model:
@@ -1333,8 +1416,32 @@ class AgentRunner:
                     continue
                 break
 
+            # Structured output (parity with the non-streaming executor).
+            structured_output = None
+            structured_output_error = None
+            if is_pydantic_schema(agent.output_schema):
+                (
+                    structured_output,
+                    structured_output_error,
+                ) = await self._resolve_structured_output_stream(agent, messages, content, ctx)
+                if structured_output is None and agent.output_schema_strict:
+                    raise StructuredOutputError(
+                        schema_name=agent.output_schema.__name__,
+                        reason=structured_output_error or "no valid structured output",
+                        agent_name=agent.name,
+                        run_id=ctx.run_id,
+                        trace_id=ctx.trace_id,
+                    )
+                if structured_output is None:
+                    logger.warning(
+                        f"⚠️ structured_output unavailable for agent {agent.name}: "
+                        f"{structured_output_error}"
+                    )
+
             response = AgentResponse(
                 content=content,
+                structured_output=structured_output,
+                structured_output_error=structured_output_error,
                 run_id=ctx.run_id,
                 agent_name=agent.name,
                 status=ResponseStatus.SUCCESS,
@@ -1370,7 +1477,14 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=ctx.run_id,
-                data={"content": content, "turn_count": turn},
+                data={
+                    "content": content,
+                    "turn_count": turn,
+                    "structured_output": structured_output.model_dump()
+                    if structured_output
+                    else None,
+                    "structured_output_error": structured_output_error,
+                },
                 trace_id=ctx.trace_id,
             )
 
