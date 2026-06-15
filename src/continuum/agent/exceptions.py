@@ -117,6 +117,30 @@ class MaxTurnsExceededError(AgentError):
             self.context["current_turn"] = current_turn
 
 
+class StructuredOutputError(AgentError):
+    """Raised when an agent with ``output_schema`` cannot produce a valid instance.
+
+    Only raised when the agent opts in via ``output_schema_strict=True``. By
+    default structured-output failures are soft: ``structured_output`` is left
+    ``None`` and ``AgentResponse.structured_output_error`` carries the reason.
+    """
+
+    def __init__(
+        self,
+        schema_name: str,
+        reason: str,
+        **kwargs: Any,
+    ):
+        message = (
+            f"Could not produce structured output for schema '{schema_name}': {reason}"
+        )
+        super().__init__(message, **kwargs)
+        self.schema_name = schema_name
+        self.reason = reason
+        self.context["schema_name"] = schema_name
+        self.context["reason"] = reason
+
+
 # =============================================================================
 # Handoff Errors
 # =============================================================================

@@ -489,6 +489,10 @@ class AgentResponse:
     # Core output
     content: str
     structured_output: BaseModel | None = None
+    # When output_schema was set but a valid instance could NOT be produced, this
+    # holds the reason (parse/validation error). None on success or when no schema.
+    # Makes the failure visible instead of a silent None.
+    structured_output_error: str | None = None
 
     # Execution info
     run_id: str = ""
@@ -597,6 +601,7 @@ class AgentResponse:
             "structured_output": self.structured_output.model_dump()
             if self.structured_output
             else None,
+            "structured_output_error": self.structured_output_error,
             "run_id": self.run_id,
             "agent_name": self.agent_name,
             "status": self.status.value,
