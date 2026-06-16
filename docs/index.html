@@ -816,8 +816,8 @@
     </div>
     <div class="card">
       <div class="card-icon">◈</div>
-      <h3>Safe by default</h3>
-      <p>Input/output PII redaction. Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
+      <h3>Safety hooks built in</h3>
+      <p>Pluggable input/output PII redaction and content scanners (bring your own — none run until configured). Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
     </div>
     <div class="card">
       <div class="card-icon">▢</div>
@@ -2565,10 +2565,16 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="rs-pii"></a>
   <h2>PII filtering on memory writes</h2>
-  <p>Before a memory is stored, Continuum can run it through a PII scrubber that redacts emails, phone numbers, SSNs, and credit cards. Configure via the memory client:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.memory <span class="kw">import</span> <span class="cls">MemoryClient</span>, <span class="cls">PIIPolicy</span>
+  <p>Continuum does not ship a built-in PII scrubber — you supply your own redaction logic via <code>pre_store_filter</code>, which runs over extracted facts before they are written to memory. Return the facts with PII masked, or drop them entirely. With no filter configured, facts are stored unmodified.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> re
+<span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
 
-memory = <span class="cls">MemoryClient</span>(pii_policy=<span class="cls">PIIPolicy</span>.REDACT)</pre></div>
+<span class="cm"># pre_store_filter — runs over extracted facts; mask or drop PII before storage</span>
+<span class="kw">def</span> <span class="fn">redact_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
+    <span class="kw">return</span> [re.<span class="fn">sub</span>(<span class="str">r'\d{3}-\d{2}-\d{4}'</span>, <span class="str">'[SSN]'</span>, f) <span class="kw">for</span> f <span class="kw">in</span> facts]
+
+memory_config = <span class="cls">AgentMemoryConfig</span>(store_memories=<span class="cls">True</span>, pre_store_filter=redact_pii)</pre></div>
+  <p>To redact model <em>responses</em> (not memory), attach callables to <code>output_scanners</code> on <code>AgentConfig</code> (see <strong>Input / Output Scanning</strong>). Both are bring-your-own hooks: with none configured, no redaction occurs.</p>
 
   <a class="anchor" id="rs-artifacts"></a>
   <h2>Run artifacts</h2>
