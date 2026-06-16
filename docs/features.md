@@ -9,7 +9,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 
 | Feature                       | Description                                                                                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Multi-provider support        | OpenAI, Anthropic, Google Gemini via native SDKs — not proxied                                                              |
+| Multi-provider support        | Provider-agnostic by design. Ships three native-SDK providers (OpenAI, Anthropic, Google Gemini — not proxied) plus an optional Smart Gateway that routes many more models through one endpoint. Every backend implements one small interface (`BaseProvider`) and returns a normalized response, so adding another is a self-contained adapter registered via `register_provider()` — not a framework change. |
 | Priority dispatcher           | Queues external API calls by request priority (1–10) under load                                                             |
 | Two-level dispatcher          | For self-hosted models (vLLM, SGLang): stage priority × request priority                                                    |
 | Smart layer / tier classifier | Routes to cheap vs. expensive models by query complexity; supports fixed rules, JSON classifier, remote Qwen, or local Qwen |
