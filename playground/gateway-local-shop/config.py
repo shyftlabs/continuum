@@ -20,8 +20,16 @@ load_dotenv(_ENV_PATH, override=True)
 # that are absent from .env yet still live in os.environ as stale shell exports.
 # Explicitly remove gateway vars when they are not present in the .env file so
 # that a previous shell session can never accidentally activate the gateway.
+# EMBEDDER_API_BASE / EMBEDDER_API_KEY are included because a stale export of
+# either reroutes mem0's embedder away from direct OpenAI — and combined with a
+# gateway key it makes embeddings.create() 401 against the wrong endpoint.
 _file_env = dotenv_values(_ENV_PATH)
-for _var in ("SMART_GATEWAY_URL", "SMART_GATEWAY_API_KEY"):
+for _var in (
+    "SMART_GATEWAY_URL",
+    "SMART_GATEWAY_API_KEY",
+    "EMBEDDER_API_BASE",
+    "EMBEDDER_API_KEY",
+):
     if _var not in _file_env:
         os.environ.pop(_var, None)
 
