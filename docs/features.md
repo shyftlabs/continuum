@@ -107,7 +107,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | PolicyStore             | Deny-overrides ACL engine; glob pattern matching on subject × resource                   |
 | AccessPolicy            | Resource prefixes: `tool:*`, `memory:*`, `data:*`                                        |
 | ToolAccessDeniedError   | Policy denial surfaced to the LLM with a configurable message                            |
-| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) propagate through handoffs via `RunContext.data_labels` |
+| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate through handoffs and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` (e.g. deny `tool:send_email` for subject `pii`); with no policy store configured they have no effect. Tool access only — not wired into the memory path. |
 | Input sanitization      | Injection detection at the system boundary                                               |
 | Secret utilities        | Utilities for safe handling of secrets and credentials                                   |
 
