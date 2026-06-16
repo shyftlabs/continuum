@@ -146,7 +146,9 @@ def _describe(obj: object) -> str:
     if obj is None:
         return "structured_output = None"
     if isinstance(obj, Review):
-        return f"Review(sentiment={obj.sentiment!r}, score={obj.score}, summary={obj.summary[:40]!r})"
+        return (
+            f"Review(sentiment={obj.sentiment!r}, score={obj.score}, summary={obj.summary[:40]!r})"
+        )
     return f"{type(obj).__name__} (NOT a Review!) -> {obj!r}"
 
 

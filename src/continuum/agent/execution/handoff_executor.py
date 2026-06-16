@@ -308,9 +308,7 @@ class HandoffExecutor(IHandoffExecutor):
             # failure or double-fire on_error. (A raising on_end then propagates to
             # the outer handler, mirroring the top-level runner's hook handling.)
             if target_agent.on_end:
-                target_agent.on_end(
-                    target_agent, {"context": target_context, "response": response}
-                )
+                target_agent.on_end(target_agent, {"context": target_context, "response": response})
 
             # Trace handoff end
             result = HandoffResult(

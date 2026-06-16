@@ -131,9 +131,7 @@ class StructuredOutputError(AgentError):
         reason: str,
         **kwargs: Any,
     ):
-        message = (
-            f"Could not produce structured output for schema '{schema_name}': {reason}"
-        )
+        message = f"Could not produce structured output for schema '{schema_name}': {reason}"
         super().__init__(message, **kwargs)
         self.schema_name = schema_name
         self.reason = reason
