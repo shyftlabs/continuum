@@ -72,7 +72,13 @@ try:
     # — which is NOT what we want here: this check must hit the providers directly.
     # So: for the gateway vars, if .env does not define them, drop any stale export.
     _file_env = dotenv_values(_ENV_PATH)
-    for _var in ("SMART_GATEWAY_URL", "SMART_GATEWAY_API_KEY", "SMART_GATEWAY_DEFAULT_MODE"):
+    for _var in (
+        "SMART_GATEWAY_URL",
+        "SMART_GATEWAY_API_KEY",
+        "SMART_GATEWAY_DEFAULT_MODE",
+        "EMBEDDER_API_BASE",
+        "EMBEDDER_API_KEY",
+    ):
         if _var not in _file_env and _var in os.environ:
             print(f"  [setup] dropping stale shell export {_var} (not set in .env)")
             os.environ.pop(_var, None)
