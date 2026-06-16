@@ -170,7 +170,32 @@ def _outcome(text: str) -> str | None:
     return None
 
 
-def _register_run(run_id, mode, label, query, final, *, parent=None, from_step=None):
+# The deterministic source of truth: compute_consolidation returns
+# {"status": "CLEAN"|"CONTROL_ISSUE", ...}. Read THAT from the trace rather than
+# the report LLM's free-form DECISION: line, which can disagree (the report stage
+# narrates and may call a booked-but-material $2M misstatement a "control issue"
+# even when consolidation nets to zero). Tolerates escaped quotes (\"status\")
+# from tool results serialized as JSON strings. Step status fields use
+# completed/running/error — never CLEAN/CONTROL_ISSUE — so this only matches the
+# consolidation result.
+_STATUS_RE = _re.compile(r'\\?"status\\?"\s*:\s*\\?"(CLEAN|CONTROL_ISSUE)', _re.IGNORECASE)
+
+
+def _outcome_from_trace(trace) -> str | None:
+    """Deterministic verdict from compute_consolidation's status in the trace.
+    Returns 'clean'/'issue', or None if no consolidation result is present (the
+    caller then falls back to the DECISION:/STATUS= text)."""
+    if not trace:
+        return None
+    import json as _json
+
+    matches = _STATUS_RE.findall(_json.dumps(trace))
+    if matches:
+        return "issue" if matches[-1].upper() == "CONTROL_ISSUE" else "clean"
+    return None
+
+
+def _register_run(run_id, mode, label, query, final, *, parent=None, from_step=None, trace=None):
     entry = {
         "run_id": run_id,
         "mode": mode,
@@ -178,7 +203,8 @@ def _register_run(run_id, mode, label, query, final, *, parent=None, from_step=N
         "query": query,
         "parent_run_id": parent,
         "forked_from_step": from_step,
-        "outcome": _outcome(final),
+        # Prefer the deterministic tool verdict; fall back to the LLM DECISION: line.
+        "outcome": _outcome_from_trace(trace) or _outcome(final),
         "seq": next(state.seq),
     }
     state.runs[run_id] = entry
@@ -268,8 +294,9 @@ async def run(req: RunRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
     run_id = resp.run_id or ctx.run_id
     label = f"[{req.mode}] " + (req.message[:38] + ("…" if len(req.message) > 38 else ""))
-    _register_run(run_id, req.mode, label, req.message, resp.content or "")
-    return {"run_id": run_id, "response": resp.content, "trace": await _trace_dict(run_id)}
+    trace = await _trace_dict(run_id)
+    _register_run(run_id, req.mode, label, req.message, resp.content or "", trace=trace)
+    return {"run_id": run_id, "response": resp.content, "trace": trace}
 
 
 @app.post("/fork")
@@ -288,6 +315,7 @@ async def fork(req: ForkRequest):
         logger.error(f"fork failed: {e}")
         return JSONResponse(status_code=400, content={"error": str(e)})
     run_id = resp.run_id
+    trace = await _trace_dict(run_id)
     _register_run(
         run_id,
         mode,
@@ -296,8 +324,9 @@ async def fork(req: ForkRequest):
         resp.content or "",
         parent=req.run_id,
         from_step=req.from_step,
+        trace=trace,
     )
-    return {"run_id": run_id, "response": resp.content, "trace": await _trace_dict(run_id)}
+    return {"run_id": run_id, "response": resp.content, "trace": trace}
 
 
 async def _branch_fork(run_id, from_step, override, label, placeholder_id, mode, agent_arg):
@@ -308,6 +337,7 @@ async def _branch_fork(run_id, from_step, override, label, placeholder_id, mode,
             run_id, from_step, override=override, agent=agent_arg, label=label
         )
         parent = state.runs.get(run_id)
+        trace = await _trace_dict(resp.run_id)
         _register_run(
             resp.run_id,
             mode,
@@ -316,6 +346,7 @@ async def _branch_fork(run_id, from_step, override, label, placeholder_id, mode,
             resp.content or "",
             parent=run_id,
             from_step=from_step,
+            trace=trace,
         )
         state.runs.pop(placeholder_id, None)
     except Exception as e:
