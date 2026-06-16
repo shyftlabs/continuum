@@ -1,5 +1,5 @@
 """
-Decision-Trace GlassBox — MCP tools server (financial-close domain).
+Decision-Trace TimeTravel — MCP tools server (financial-close domain).
 
 Reuses local/glassbox's DETERMINISTIC close engine so that, across *every*
 multi-agent topology, the verdict is computed by tools (not LLM mood) and the
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("decision-trace-glassbox")
+mcp = FastMCP("decision-trace-timetravel")
 
 BUGGY_MATERIALITY_THRESHOLD_USD = 5_000_000
 ESCALATION_FLOOR_USD = 1_000_000  # SOX-style floor: $1M+ items can't be silently waived
@@ -200,5 +200,5 @@ if __name__ == "__main__":
     import uvicorn
 
     app = mcp.streamable_http_app()
-    print("Decision-Trace GlassBox MCP server running at http://localhost:8896/mcp")
+    print("Decision-Trace TimeTravel MCP server running at http://localhost:8896/mcp")
     uvicorn.run(app, host="0.0.0.0", port=8896)
