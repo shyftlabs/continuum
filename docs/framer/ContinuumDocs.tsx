@@ -1508,7 +1508,7 @@ agent = <span class="cls">BaseAgent</span>(
     <strong>Two halves:</strong> <b>record</b> (the trace — what happened) and <b>what-if</b> (fork — rewind, change one input, replay). The feature is off by default and costs one boolean check per turn when disabled.
   </div>
   <div class="callout callout-tip">
-    <strong>Worked examples: </strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/decision-trace-glassbox" target="_blank"><code>playground/decision-trace-glassbox</code></a> runs across all nine workflow patterns (+ handoff), so you can fork and compare each one.
+    <strong>Worked examples: </strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/decision-trace-timetravel" target="_blank"><code>playground/decision-trace-timetravel</code></a> runs across all nine workflow patterns (+ handoff), so you can fork and compare each one.
   </div>
 
   <a class="anchor" id="run-trace-enable"></a>
@@ -1520,7 +1520,7 @@ DECISION_TRACE_DETAIL=full         <span class="cm"># off | full</span>
 DECISION_TRACE_STORE=redis         <span class="cm"># redis | memory | null</span>
 DECISION_TRACE_CHECKPOINT=true     <span class="cm"># per-step snapshots → enables fork/rewind</span>
 DECISION_TRACE_TTL_DAYS=14         <span class="cm"># auto-expiry of persisted traces</span></pre></div>
-  <p>…or flip the same switches programmatically before the first run — which is what the <code>decision-trace-glassbox</code> playground does:</p>
+  <p>…or flip the same switches programmatically before the first run — which is what the <code>decision-trace-timetravel</code> playground does:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.config <span class="kw">import</span> settings
 settings.decision_trace_enabled = <span class="cls">True</span>
 settings.decision_trace_checkpoint = <span class="cls">True</span>   <span class="cm"># only if you want fork/rewind</span>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Decision-Trace GlassBox — Web UI + REST backend.
+Decision-Trace TimeTravel — Web UI + REST backend.
 
 Exercises the multi-agent Decision Trace work (handoff fork + Sequential/Router
 workflow fork) end-to-end against the real runner, MCP tools, and Redis.
@@ -130,7 +130,7 @@ async def _startup() -> None:
             for a in agents:
                 state.runner.register_agent(a)
         state.ready = True
-        logger.info("✓ Decision-Trace GlassBox ready (modes: %s)", ", ".join(state.entries))
+        logger.info("✓ Decision-Trace TimeTravel ready (modes: %s)", ", ".join(state.entries))
     except Exception as e:
         state.init_error = str(e)
         logger.error(f"Startup failed: {e}")
@@ -416,7 +416,7 @@ async def index():
 HTML_PAGE = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Decision-Trace GlassBox</title>
+<title>Decision-Trace TimeTravel</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0e1116;color:#e6edf3;height:100vh;display:flex;flex-direction:column}
@@ -468,7 +468,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .banner{background:#3a1a1c;color:#f85149;padding:8px 16px;font-size:13px}.empty{color:#6e7681;font-size:13px;padding:20px 4px}
 </style></head><body>
 <div class="topbar">
-  <div class="brand">◆ <b>Decision-Trace GlassBox</b></div>
+  <div class="brand">◆ <b>Decision-Trace TimeTravel</b></div>
   <div class="tag">trace + fork across handoffs & workflows</div>
   <span class="spacer"></span>
   <select id="mode">
@@ -675,6 +675,6 @@ fetch('/status').then(r=>r.json()).then(s=>{if(!s.ready)setBanner(s.error||'Back
 """
 
 if __name__ == "__main__":
-    print(f"Decision-Trace GlassBox UI at http://localhost:{default_config.web_port}")
+    print(f"Decision-Trace TimeTravel UI at http://localhost:{default_config.web_port}")
     print(f"Make sure the MCP server is running:  python server.py  (:{default_config.mcp_port})")
     uvicorn.run(app, host="0.0.0.0", port=default_config.web_port)
