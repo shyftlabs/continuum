@@ -1259,20 +1259,15 @@ class TestIdentifierSanitization:
         finally:
             await p.close()
 
-    @pytest.mark.xfail(
-        reason="SESS-102 (Low): zero-width unicode in user_id preserved → invisible "
-        "session bucket. sanitize_user_input() strips it but is never called on id fields.",
-        strict=True,
-    )
     async def test_zero_width_char_in_user_id_is_stripped(self, test_id):
         """
         SESS-ZEROWIDTH (parity: MEM-011, Low):
         A zero-width space (\\u200b) in user_id creates an invisible bucket —
         'u:alice\\u200bbob' looks identical to 'u:alicebob' in any log or UI.
-        sanitize_user_input() strips \\u200b but is never called on id fields.
 
         SECURE expectation: invisible unicode stripped from the resolved id.
-        Current behavior: FAILS — zero-width char preserved.
+        Fixed by #55: validate_user_id() strips invisible unicode from id fields
+        before they become Redis key fragments.
         """
         p = _make_provider()
         try:
@@ -1285,11 +1280,6 @@ class TestIdentifierSanitization:
         finally:
             await p.close()
 
-    @pytest.mark.xfail(
-        reason="SESS-103 (Low): whitespace-only user_id ('   ') is truthy → accepted, "
-        "creates a 'u:   ' bucket. No .strip() validation on id fields.",
-        strict=True,
-    )
     async def test_whitespace_only_user_id_is_rejected_or_normalized(self, test_id):
         """
         SESS-WHITESPACE (parity: MEM-010, Low):
@@ -1297,7 +1287,8 @@ class TestIdentifierSanitization:
         a bucket 'u:   '. A blank-looking user gets a real, addressable session.
 
         SECURE expectation: whitespace-only id rejected or trimmed to empty→UUID.
-        Current behavior: FAILS — 'u:   ' bucket created silently.
+        Fixed by #55: validate_user_id() strips whitespace and treats a
+        whitespace-only id as anonymous (→ generated UUID session).
         """
         from continuum.session.exceptions import SessionError
 
