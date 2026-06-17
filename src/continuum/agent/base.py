@@ -122,6 +122,9 @@ class BaseAgent:
 
     # Output schema for structured output
     output_schema: type[BaseModel] | None = None
+    # When True, a structured-output failure raises StructuredOutputError instead
+    # of softly returning structured_output=None (+ structured_output_error).
+    output_schema_strict: bool = False
 
     # JSON mode configuration for structured outputs
     enable_json_mode: bool = False

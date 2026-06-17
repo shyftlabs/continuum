@@ -101,6 +101,44 @@ class TestPolicyStoreGlobMatching:
         assert store.check("summarizer_agent", "data:public").allowed is True
 
 
+class TestPolicyStoreMultiSubject:
+    """`check()` accepts multiple subjects — this is how RunContext.data_labels
+    gate access: a data label tainting the run acts as an extra subject."""
+
+    def test_single_string_subject_still_works(self):
+        store = PolicyStore()
+        store.add_policy(_deny("no_pii_email", ["pii"], ["tool:send_email"]))
+        # Backward compatible: plain string subject, no label → allowed.
+        assert store.check("agent", "tool:send_email").allowed is True
+
+    def test_label_in_subjects_triggers_deny(self):
+        store = PolicyStore()
+        store.add_policy(_deny("no_pii_email", ["pii"], ["tool:send_email"]))
+        # Agent name alone → allowed; agent + "pii" label → denied.
+        assert store.check(["agent"], "tool:send_email").allowed is True
+        decision = store.check(["agent", "pii"], "tool:send_email")
+        assert decision.allowed is False
+        assert decision.policy_name == "no_pii_email"
+
+    def test_label_only_denies_matching_resource(self):
+        store = PolicyStore()
+        store.add_policy(_deny("no_pii_email", ["pii"], ["tool:send_email"]))
+        # A different tool is unaffected even when the pii label is present.
+        assert store.check(["agent", "pii"], "tool:lookup_account").allowed is True
+
+    def test_any_subject_match_is_enough(self):
+        store = PolicyStore()
+        store.add_policy(_deny("block", ["phi"], ["tool:*"]))
+        # Only one of several subjects needs to match the policy.
+        assert store.check(["agent", "pii", "phi"], "tool:anything").allowed is False
+        assert store.check(["agent", "pii"], "tool:anything").allowed is True
+
+    def test_empty_extra_subjects_behaves_like_agent_only(self):
+        store = PolicyStore()
+        store.add_policy(_deny("no_pii_email", ["pii"], ["tool:send_email"]))
+        assert store.check(["agent"], "tool:send_email").allowed is True
+
+
 class TestPolicyStoreMutability:
     def test_add_replaces_existing_name(self):
         store = PolicyStore()

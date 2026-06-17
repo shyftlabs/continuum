@@ -31,6 +31,11 @@ from continuum.core.container import Container, get_container
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
+from continuum.utils.sanitization import (
+    InvalidIdentifierError,
+    validate_conversation_id,
+    validate_user_id,
+)
 
 logger = get_logger(__name__)
 
@@ -210,6 +215,13 @@ class LocalShopAgent:
         if not self._initialized:
             await self.initialize()
 
+        try:
+            user_id = validate_user_id(user_id)
+            conversation_id = validate_conversation_id(conversation_id)
+        except InvalidIdentifierError as e:
+            logger.warning(f"Rejected invalid identifier: {e}")
+            return f"Error: {e}"
+
         namespace = self._mcp_server.name if self._mcp_server else "local-shop"
         cart_session_id = f"{user_id}:{conversation_id}"
 
@@ -257,6 +269,14 @@ class LocalShopAgent:
     ) -> AsyncGenerator[str]:
         if not self._initialized:
             await self.initialize()
+
+        try:
+            user_id = validate_user_id(user_id)
+            conversation_id = validate_conversation_id(conversation_id)
+        except InvalidIdentifierError as e:
+            logger.warning(f"Rejected invalid identifier: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            return
 
         namespace = self._mcp_server.name if self._mcp_server else "local-shop"
         cart_session_id = f"{user_id}:{conversation_id}"

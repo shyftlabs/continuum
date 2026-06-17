@@ -18,6 +18,7 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `continuum` CLI for one-command infra startup — `continuum up [minimal|standard|full]`, plus `down`, `status`, `logs`, and `config-path`. The Docker Compose stack and Temporal dynamic config are now bundled in the wheel, so there's no compose file to locate or copy after a `pip install`. Each profile writes a managed block to `./.env` so the SDK only targets services that are actually running.
 - All published Docker host ports are overridable via `.env` (e.g. `QDRANT_PORT`, `SESSION_REDIS_PORT`, `MILVUS_PORT`, `LANGFUSE_WEB_PORT`, `TEMPORAL_PORT`), with defaults preserving prior behavior — avoids collisions on multi-project machines.
 - "Releasing (maintainers)" section in `CONTRIBUTING.md` linking the canonical [`docs/versioning.md`](docs/versioning.md) publish guide.
+- Open LLM provider registry — `register_provider(prefix, factory)` and `register_default_provider(factory)` let new backends extend model-name routing without editing core (`get_provider` now resolves via longest-prefix match against the registry).
 
 ### Changed
 - _Nothing yet._
@@ -25,6 +26,12 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 - Docker healthchecks for `qdrant` (now probes `/readyz` over bash `/dev/tcp`, since the image ships no `curl`) and `temporal` (`BIND_ON_IP=0.0.0.0` so the localhost healthcheck can reach the frontend) — both previously reported `unhealthy` while serving correctly.
 - `continuum down`/`status`/`logs` now activate all compose profiles, so profiled containers from `minimal`/`standard` are no longer orphaned.
+- `structured_output` is now populated across all providers in both `run()` and `run_stream()`; previously it was left empty on several provider paths.
+- Lifecycle `on_end` hook now fires for agents reached via handoff — previously only the entry agent's hook ran, and a raising hook no longer masks a successful handoff as a failure.
+- Output scanners now run in streaming mode, closing a PII-leak path where the streamed final response bypassed redaction applied in non-streaming runs.
+- `return_to_parent=True` handoffs are now bounded by a loop guard (`HandoffLoopError`) instead of recursing unbounded between parent and child.
+- `RunContext.data_labels` are now enforced as additional policy subjects by the tool-access engine (deny policies on `data:*` resources take effect).
+- Removed docs references to a non-existent `PIIPolicy` API; clarified that PII redaction is opt-in via `pre_store_filter` (memory) and output scanners (runs).
 
 ---
 

@@ -117,6 +117,28 @@ class MaxTurnsExceededError(AgentError):
             self.context["current_turn"] = current_turn
 
 
+class StructuredOutputError(AgentError):
+    """Raised when an agent with ``output_schema`` cannot produce a valid instance.
+
+    Only raised when the agent opts in via ``output_schema_strict=True``. By
+    default structured-output failures are soft: ``structured_output`` is left
+    ``None`` and ``AgentResponse.structured_output_error`` carries the reason.
+    """
+
+    def __init__(
+        self,
+        schema_name: str,
+        reason: str,
+        **kwargs: Any,
+    ):
+        message = f"Could not produce structured output for schema '{schema_name}': {reason}"
+        super().__init__(message, **kwargs)
+        self.schema_name = schema_name
+        self.reason = reason
+        self.context["schema_name"] = schema_name
+        self.context["reason"] = reason
+
+
 # =============================================================================
 # Handoff Errors
 # =============================================================================
@@ -210,6 +232,34 @@ class HandoffCycleDetectedError(HandoffError):
         self.agent_stack = agent_stack
         self.context["agent_stack"] = agent_stack
         self.context["cycle_path"] = cycle_path
+
+
+class HandoffLoopError(HandoffError):
+    """
+    Raised when an agent hands off to the same target repeatedly without making
+    progress — a likely handoff loop (common when a routing agent keeps
+    re-routing under the default ``return_to_parent=True``).
+
+    Caught early with a clear message instead of silently burning turns until
+    ``MaxTurnsExceededError``.
+    """
+
+    def __init__(
+        self,
+        from_agent: str,
+        to_agent: str,
+        count: int,
+        **kwargs: Any,
+    ):
+        message = (
+            f"Handoff loop detected: '{from_agent}' handed off to '{to_agent}' "
+            f"{count} times in a row without resolving. This usually means a routing "
+            f"agent keeps re-routing. Set return_to_parent=False on the handoff so the "
+            f"target's response is returned directly, or adjust the agent's instructions."
+        )
+        super().__init__(message, from_agent=from_agent, to_agent=to_agent, **kwargs)
+        self.count = count
+        self.context["consecutive_handoffs"] = count
 
 
 # =============================================================================
