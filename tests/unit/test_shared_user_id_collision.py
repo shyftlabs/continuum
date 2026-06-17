@@ -37,22 +37,24 @@ from continuum.memory import (
 
 # ── shared helpers ────────────────────────────────────────────────────────────
 
+
 def _mock_provider():
     from continuum.memory import BaseMemoryProvider
+
     p = MagicMock(spec=BaseMemoryProvider)
     p.is_initialized = True
-    p.add    = AsyncMock(return_value=MemoryAddResult(message="Added", results=[]))
-    p.search = AsyncMock(return_value=MemorySearchResult(
-        results=[], query="", limit=5, total_results=0
-    ))
-    p.delete     = AsyncMock(return_value=True)
+    p.add = AsyncMock(return_value=MemoryAddResult(message="Added", results=[]))
+    p.search = AsyncMock(
+        return_value=MemorySearchResult(results=[], query="", limit=5, total_results=0)
+    )
+    p.delete = AsyncMock(return_value=True)
     p.delete_all = AsyncMock(return_value=True)
-    p.get        = AsyncMock(return_value=None)
-    p.get_all    = AsyncMock(return_value=[])
-    p.update     = AsyncMock(return_value=MemoryEntry(id="m-1", memory="updated"))
-    p.history    = AsyncMock(return_value=[])
-    p.reset      = AsyncMock(return_value=True)
-    p.close      = AsyncMock()
+    p.get = AsyncMock(return_value=None)
+    p.get_all = AsyncMock(return_value=[])
+    p.update = AsyncMock(return_value=MemoryEntry(id="m-1", memory="updated"))
+    p.history = AsyncMock(return_value=[])
+    p.reset = AsyncMock(return_value=True)
+    p.close = AsyncMock()
     return p
 
 
@@ -64,6 +66,7 @@ def _client(provider=None):
 # =============================================================================
 # 1. Memory layer — same user_id → same bucket
 # =============================================================================
+
 
 class TestMemoryBucketCollision:
     """
@@ -92,7 +95,7 @@ class TestMemoryBucketCollision:
         client_B = _client(provider=provider)  # same provider = same store
 
         await client_A.add("I own a golden retriever", user_id="alice")
-        await client_B.add("I prefer cats",            user_id="alice")
+        await client_B.add("I prefer cats", user_id="alice")
 
         # Both wrote to exactly the same user_id key
         assert received[0]["user_id"] == "alice"
@@ -146,6 +149,7 @@ class TestMemoryBucketCollision:
 # 2. Session layer — same user_id → same Redis key
 # =============================================================================
 
+
 class TestSessionKeyCollision:
     """
     The Redis provider computes a deterministic session ID from user_id.
@@ -154,6 +158,7 @@ class TestSessionKeyCollision:
 
     def _compute_session_id(self, session_id, user_id, conversation_id):
         from continuum.session.types import generate_session_id
+
         if session_id:
             return session_id
         if conversation_id and user_id:
@@ -176,11 +181,11 @@ class TestSessionKeyCollision:
     def test_different_user_ids_produce_different_keys(self):
         """Normal case: unique user_ids → completely separate sessions."""
         key_alice = self._compute_session_id(None, "alice", None)
-        key_bob   = self._compute_session_id(None, "bob",   None)
+        key_bob = self._compute_session_id(None, "bob", None)
 
         assert key_alice != key_bob
         assert key_alice == "u:alice"
-        assert key_bob   == "u:bob"
+        assert key_bob == "u:bob"
 
     def test_conversation_id_separates_sessions_for_same_user(self):
         """
@@ -192,8 +197,8 @@ class TestSessionKeyCollision:
         key_tab1 = self._compute_session_id(None, "alice", "conv-tab1")
         key_tab2 = self._compute_session_id(None, "alice", "conv-tab2")
 
-        assert key_tab1 != key_tab2          # separate sessions
-        assert "alice" in key_tab1           # same user embedded in key
+        assert key_tab1 != key_tab2  # separate sessions
+        assert "alice" in key_tab1  # same user embedded in key
         assert "alice" in key_tab2
 
     def test_no_user_id_generates_random_uuid_per_caller(self):
@@ -205,12 +210,13 @@ class TestSessionKeyCollision:
         key_A = self._compute_session_id(None, None, None)
         key_B = self._compute_session_id(None, None, None)
 
-        assert key_A != key_B   # random UUIDs — always different
+        assert key_A != key_B  # random UUIDs — always different
 
 
 # =============================================================================
 # 3. Memory isolation with conversation_id — partial fix only
 # =============================================================================
+
 
 class TestConversationIdAsPartialFix:
     """
@@ -245,10 +251,18 @@ class TestConversationIdAsPartialFix:
 
         # Both calls reach the provider with user_id="alice" and NO conversation_id
         # because user isolation mode DROPS conversation_id (scope only uses user_id)
-        assert received_kwargs[0] == {"user_id": "alice", "metadata": None,
-                                       "custom_prompt": None, "infer": True}
-        assert received_kwargs[1] == {"user_id": "alice", "metadata": None,
-                                       "custom_prompt": None, "infer": True}
+        assert received_kwargs[0] == {
+            "user_id": "alice",
+            "metadata": None,
+            "custom_prompt": None,
+            "infer": True,
+        }
+        assert received_kwargs[1] == {
+            "user_id": "alice",
+            "metadata": None,
+            "custom_prompt": None,
+            "infer": True,
+        }
 
         # Both land in the same bucket despite different conversation_ids
         assert received_kwargs[0]["user_id"] == received_kwargs[1]["user_id"]
@@ -284,6 +298,7 @@ class TestConversationIdAsPartialFix:
 # =============================================================================
 # 4. The playground scenario end-to-end
 # =============================================================================
+
 
 class TestPlaygroundScenario:
     """
@@ -328,6 +343,7 @@ class TestPlaygroundScenario:
 
         # Same memory scope key
         from continuum.memory.scopes import MemoryScope
+
         scope_A = MemoryScope.user(uid_A).to_identifiers()
         scope_B = MemoryScope.user(uid_B).to_identifiers()
         assert scope_A == scope_B  # ONE memory bucket — both share memories

@@ -132,9 +132,7 @@ class TestCrossScopeIsolation:
 
             result_b = await client.search("API token rotation", agent_id=agent_b, limit=5)
             b_text = " ".join(r.memory.lower() for r in result_b.results)
-            assert "token" not in b_text or "rotat" not in b_text, (
-                "agent-B leaked agent-A's memory"
-            )
+            assert "token" not in b_text or "rotat" not in b_text, "agent-B leaked agent-A's memory"
         finally:
             try:
                 await client.delete_all(agent_id=agent_a)
@@ -163,10 +161,14 @@ class TestCrossScopeIsolation:
         created.append(uid)
 
         await client.add("I drive a blue Subaru.", user_id=uid, conversation_id=_cid())
-        result = await client.search("what car do I drive", user_id=uid, conversation_id=_cid(), limit=5)
+        result = await client.search(
+            "what car do I drive", user_id=uid, conversation_id=_cid(), limit=5
+        )
 
         text = " ".join(r.memory.lower() for r in result.results)
-        assert "subaru" in text or "blue" in text, "user-scope memory not found across conversations"
+        assert "subaru" in text or "blue" in text, (
+            "user-scope memory not found across conversations"
+        )
 
 
 # =============================================================================
@@ -249,7 +251,6 @@ class TestBackendFailures:
 
 
 class TestConcurrency:
-
     async def test_parallel_add_search_delete_same_user(self, user_client):
         """Interleaved add/search/delete for one user must not crash or corrupt state."""
         client, created = user_client
@@ -313,7 +314,6 @@ class TestConcurrency:
 
 
 class TestAdversarialInputs:
-
     async def test_empty_string_does_not_crash(self, user_client):
         client, created = user_client
         uid = _uid()
@@ -359,7 +359,6 @@ class TestAdversarialInputs:
 
 
 class TestLifecycle:
-
     async def test_delete_removes_memory(self, user_client):
         client, created = user_client
         uid = _uid()

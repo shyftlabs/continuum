@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import pytest
 
-WHITESPACE = "   "   # three spaces — what a user might accidentally type
-CLEAN_ID   = "alice" # control: a normal user_id
+WHITESPACE = "   "  # three spaces — what a user might accidentally type
+CLEAN_ID = "alice"  # control: a normal user_id
 
 # =============================================================================
 # Checkpoint 1 — CLI layer  (playground/gateway-local-shop/cli.py:52)
 # =============================================================================
+
 
 class TestCheckpoint1_CLI:
     """
@@ -62,6 +63,7 @@ class TestCheckpoint1_CLI:
 # Checkpoint 2 — Session ID computation  (session/providers/redis.py:194)
 # =============================================================================
 
+
 class TestCheckpoint2_SessionIdComputation:
     """
     _compute_session_id builds the Redis key that stores session metadata.
@@ -78,6 +80,7 @@ class TestCheckpoint2_SessionIdComputation:
     def _provider(self):
         from continuum.session.config import SessionConfig
         from continuum.session.providers.redis import RedisSessionProvider
+
         return RedisSessionProvider(SessionConfig(), auto_initialize=False)
 
     def test_whitespace_user_id_falls_through_to_uuid(self):
@@ -92,6 +95,7 @@ class TestCheckpoint2_SessionIdComputation:
     def test_colon_user_id_is_rejected(self):
         """A colon in user_id (Redis key delimiter) now raises rather than embeds."""
         from continuum.utils.sanitization import InvalidIdentifierError
+
         with pytest.raises(InvalidIdentifierError):
             self._provider()._compute_session_id(None, "u:victim", None)
 
@@ -115,6 +119,7 @@ class TestCheckpoint2_SessionIdComputation:
 # =============================================================================
 # Checkpoint 3 — RunContext  (agent/utils/context_utils.py + agent/types.py)
 # =============================================================================
+
 
 class TestCheckpoint3_RunContext:
     """
@@ -147,6 +152,7 @@ class TestCheckpoint3_RunContext:
         assert dataclasses.is_dataclass(RunContext), "RunContext must be a dataclass"
         try:
             from pydantic import BaseModel
+
             assert not issubclass(RunContext, BaseModel), (
                 "RunContext must NOT be a Pydantic model — it has no field-level validation"
             )
@@ -171,6 +177,7 @@ class TestCheckpoint3_RunContext:
 # =============================================================================
 # Checkpoint 4 — MemoryScope  (memory/scopes.py)
 # =============================================================================
+
 
 class TestCheckpoint4_MemoryScope:
     """
@@ -245,6 +252,7 @@ class TestCheckpoint4_MemoryScope:
 # Checkpoint 5 — Full journey summary (no mocking needed, pure logic)
 # =============================================================================
 
+
 class TestFullJourney:
     """
     Combines all checkpoints into one readable trace so you can see
@@ -267,6 +275,7 @@ class TestFullJourney:
         #   instead of embedding "u:   " in the Redis key.
         from continuum.session.config import SessionConfig
         from continuum.session.providers.redis import RedisSessionProvider
+
         provider = RedisSessionProvider(SessionConfig(), auto_initialize=False)
         session_key = provider._compute_session_id(None, WHITESPACE, None)
         assert not session_key.startswith("u:") and not session_key.startswith("c:"), (
@@ -276,6 +285,7 @@ class TestFullJourney:
         # — Layer 3: RunContext — still a plain dataclass with no validation.
         #   (Validation happens in the runner BEFORE it builds the context.)
         from continuum.agent.utils.context_utils import create_run_context
+
         ctx = create_run_context(user_id=WHITESPACE)
         assert ctx.user_id == WHITESPACE, "RunContext itself stores whitespace verbatim"
 
@@ -283,6 +293,7 @@ class TestFullJourney:
         #   pass-through (see test_memory_adversarial.py). Protected because the
         #   runner validates ctx.user_id before memory_service ever uses it.
         from continuum.memory.scopes import MemoryScope
+
         scope = MemoryScope.user(WHITESPACE)
         assert scope.user_id == WHITESPACE, "MemoryScope stays a documented pass-through"
 

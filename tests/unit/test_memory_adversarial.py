@@ -472,7 +472,6 @@ class TestAdversarialInputs:
 
 
 class TestConfigBoundaries:
-
     def test_embedding_dims_zero_marks_not_configured(self):
         config = MemoryConfig(
             enabled=True,
@@ -588,7 +587,6 @@ class TestConfigBoundaries:
 
 
 class TestConcurrentAccess:
-
     @pytest.mark.asyncio
     async def test_concurrent_adds_do_not_crash(self):
         """10 parallel add() calls with a mock provider must all complete."""
@@ -627,9 +625,7 @@ class TestConcurrentAccess:
         provider.add.side_effect = recording_add
         client = _make_client(provider=provider)
 
-        await asyncio.gather(*[
-            client.add("fact", user_id=f"user-{i}") for i in range(5)
-        ])
+        await asyncio.gather(*[client.add("fact", user_id=f"user-{i}") for i in range(5)])
 
         assert sorted(calls) == sorted([f"user-{i}" for i in range(5)])
 
@@ -773,9 +769,7 @@ class TestConcurrencyUnderLoad:
         provider.update.side_effect = recording_update
         client = _make_client(provider=provider)
 
-        await asyncio.gather(*[
-            client.update("m-shared", f"version-{i}") for i in range(5)
-        ])
+        await asyncio.gather(*[client.update("m-shared", f"version-{i}") for i in range(5)])
 
         assert len(call_args) == 5
         assert all(mid == "m-shared" for mid, _ in call_args)
@@ -822,9 +816,9 @@ class TestConcurrencyUnderLoad:
 
         await client.delete("m-1")
 
-        search_results = await asyncio.gather(*[
-            client.search("anything", user_id="u-1") for _ in range(8)
-        ])
+        search_results = await asyncio.gather(
+            *[client.search("anything", user_id="u-1") for _ in range(8)]
+        )
 
         assert all(r.total_results == 0 for r in search_results)
 
@@ -1215,7 +1209,6 @@ class TestIdentifierMisuse:
 
 
 class TestDisabledClientGuard:
-
     @pytest.mark.asyncio
     async def test_add_raises_when_disabled(self):
         config = MemoryConfig(enabled=False)

@@ -34,9 +34,12 @@ from continuum.llm.types import LLMResponse
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_llm_client(content: str = "ok") -> MagicMock:
     client = MagicMock()
-    client.chat = AsyncMock(return_value=LLMResponse(model="gpt-4o-mini", content=content, role="assistant"))
+    client.chat = AsyncMock(
+        return_value=LLMResponse(model="gpt-4o-mini", content=content, role="assistant")
+    )
     client.chat_stream = AsyncMock()
     return client
 
@@ -56,6 +59,7 @@ def _make_runner(llm_client=None) -> AgentRunner:
 # ---------------------------------------------------------------------------
 # 1. user_id accepted / normalized at the runner boundary
 # ---------------------------------------------------------------------------
+
 
 class TestRunnerUserIdAccepted:
     """Inputs that are valid (possibly after stripping noise) proceed."""
@@ -102,7 +106,9 @@ class TestRunnerUserIdAccepted:
 
     @pytest.mark.asyncio
     async def test_email_style_user_id_passes(self):
-        result = await _make_runner()._prepare_run(_make_agent(), "hello", user_id="user@example.com")
+        result = await _make_runner()._prepare_run(
+            _make_agent(), "hello", user_id="user@example.com"
+        )
         assert result.success is True
         assert result.context.user_id == "user@example.com"
 
@@ -110,6 +116,7 @@ class TestRunnerUserIdAccepted:
 # ---------------------------------------------------------------------------
 # 2. user_id rejected at the runner boundary
 # ---------------------------------------------------------------------------
+
 
 class TestRunnerUserIdRejected:
     """
@@ -139,7 +146,9 @@ class TestRunnerUserIdRejected:
     @pytest.mark.asyncio
     async def test_conv_key_hijack_attempt_rejected(self):
         """'c:conv1:u:victim' → reject."""
-        result = await _make_runner()._prepare_run(_make_agent(), "hello", user_id="c:conv1:u:victim")
+        result = await _make_runner()._prepare_run(
+            _make_agent(), "hello", user_id="c:conv1:u:victim"
+        )
         self._assert_rejected(result)
 
     @pytest.mark.asyncio
@@ -160,6 +169,7 @@ class TestRunnerUserIdRejected:
 # ---------------------------------------------------------------------------
 # 3. conversation_id validation at the runner boundary
 # ---------------------------------------------------------------------------
+
 
 class TestRunnerConversationIdValidation:
     """
@@ -182,7 +192,9 @@ class TestRunnerConversationIdValidation:
 
     @pytest.mark.asyncio
     async def test_normal_conversation_id_passes_unchanged(self):
-        result = await _make_runner()._prepare_run(_make_agent(), "hello", conversation_id="chat-abc-123")
+        result = await _make_runner()._prepare_run(
+            _make_agent(), "hello", conversation_id="chat-abc-123"
+        )
         assert result.success is True
         assert result.context.conversation_id == "chat-abc-123"
 
@@ -197,8 +209,8 @@ class TestRunnerConversationIdValidation:
 # 4. Both together
 # ---------------------------------------------------------------------------
 
-class TestRunnerBothIdsTogether:
 
+class TestRunnerBothIdsTogether:
     @pytest.mark.asyncio
     async def test_both_clean_pass_through(self):
         result = await _make_runner()._prepare_run(
@@ -228,6 +240,7 @@ class TestRunnerBothIdsTogether:
 # ---------------------------------------------------------------------------
 # 5. The bypass is closed — a caller-supplied RunContext is validated too
 # ---------------------------------------------------------------------------
+
 
 class TestRunnerContextBypassClosed:
     """
