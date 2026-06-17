@@ -20,6 +20,41 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def last_user_prompt(messages: list[dict[str, Any]] | None) -> str:
+    """Return the content of the most recent user message (or "")."""
+    if not messages:
+        return ""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            return str(message.get("content", ""))
+    return ""
+
+
+def apply_output_scanners(agent: BaseAgent, prompt: str, content: str) -> str:
+    """
+    Run an agent's ``output_scanners`` over ``content`` and return the sanitized
+    text. Scanners are chained (each sees the previous one's output). Fail-open:
+    a scanner that raises is logged and skipped, leaving content unmodified.
+
+    Single source of truth shared by the non-streaming finalizer and the
+    streaming runner so both paths redact identically.
+    """
+    config = getattr(agent, "config", None)
+    if not (config and config.output_scanners and content):
+        return content
+    sanitized = content
+    for scanner in config.output_scanners:
+        try:
+            sanitized, _, _ = scanner(prompt, sanitized)
+        except Exception as e:
+            logger.warning(
+                "Output scanner %s failed (fail-open): %s",
+                getattr(scanner, "__name__", repr(scanner)),
+                e,
+            )
+    return sanitized
+
+
 async def validate_input(
     agent: BaseAgent,
     input: str | list[dict[str, Any]] | list[ChatMessage],

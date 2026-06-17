@@ -9,6 +9,7 @@ Inspired by Orla's serving/access/evaluator.go:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
@@ -69,22 +70,29 @@ class PolicyStore:
     def list_policies(self) -> list[AccessPolicy]:
         return list(self._policies)
 
-    def check(self, subject: str, resource: str) -> PolicyDecision:
+    def check(self, subject: str | Iterable[str], resource: str) -> PolicyDecision:
         """Evaluate policies for (subject, resource).
 
         Args:
-            subject: Caller identity — typically the agent name.
+            subject: Caller identity — typically the agent name. May also be an
+                iterable of identities (e.g. the agent name plus the run's active
+                data-sensitivity labels like ``"pii"``); a policy matches if ANY
+                of them matches its ``subjects`` globs. This is how
+                ``RunContext.data_labels`` gates access: a label tainting the run
+                acts as an additional subject.
             resource: Resource being accessed, e.g. "tool:shell_exec",
                 "memory:user_notes", "data:pii".
 
         Returns:
             PolicyDecision with allowed=True/False and the matching policy name.
         """
+        subjects = [subject] if isinstance(subject, str) else list(subject)
+
         deny_match: AccessPolicy | None = None
         allow_match: AccessPolicy | None = None
 
         for policy in self._policies:
-            if not _matches_any(subject, policy.subjects):
+            if not any(_matches_any(s, policy.subjects) for s in subjects):
                 continue
             if not _matches_any(resource, policy.resources):
                 continue

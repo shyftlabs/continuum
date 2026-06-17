@@ -1,5 +1,5 @@
 """
-Decision-Trace GlassBox configuration (financial-close domain).
+Decision-Trace TimeTravel configuration (financial-close domain).
 
 Recreated on top of local/glassbox: the same deterministic month-end close,
 expressed across all 9 multi-agent patterns (+ handoff), with the materiality
@@ -16,7 +16,12 @@ _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(_ENV_PATH, override=True)
 
 _file_env = dotenv_values(_ENV_PATH)
-for _var in ("SMART_GATEWAY_URL", "SMART_GATEWAY_API_KEY"):
+for _var in (
+    "SMART_GATEWAY_URL",
+    "SMART_GATEWAY_API_KEY",
+    "EMBEDDER_API_BASE",
+    "EMBEDDER_API_KEY",
+):
     if _var not in _file_env:
         os.environ.pop(_var, None)
 
@@ -29,7 +34,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class GlassboxConfig:
+class TimetravelConfig:
     mcp_url: str = "http://localhost:8896/mcp"
     mcp_timeout: float = 15.0
     # gpt-4o follows the multi-step tool instructions reliably across topologies.
@@ -44,4 +49,4 @@ class GlassboxConfig:
     mcp_port: int = 8896
 
 
-default_config = GlassboxConfig()
+default_config = TimetravelConfig()

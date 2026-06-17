@@ -303,7 +303,7 @@ class Mem0Provider(BaseMemoryProvider):
             return result
 
         except Exception as e:
-            logger.error(f"mem0.add() failed: {e}")
+            logger.error(f"mem0.add() failed: {e}", exc_info=True)
             report_error(e, context="memory_add")
             return MemoryAddResult(message="Memory operation failed", results=[])
 
@@ -351,7 +351,7 @@ class Mem0Provider(BaseMemoryProvider):
             return result
 
         except Exception as e:
-            logger.error(f"mem0.search() failed: {e}")
+            logger.error(f"mem0.search() failed: {e}", exc_info=True)
             report_error(e, context="memory_search")
             return MemorySearchResult(results=[], query=query, limit=limit, total_results=0)
 
@@ -372,7 +372,7 @@ class Mem0Provider(BaseMemoryProvider):
             return None
 
         except Exception as e:
-            logger.error(f"mem0.get() failed for {memory_id}: {e}")
+            logger.error(f"mem0.get() failed for {memory_id}: {e}", exc_info=True)
             report_error(e, context="memory_get")
             return None
 
@@ -405,7 +405,7 @@ class Mem0Provider(BaseMemoryProvider):
             return memories
 
         except Exception as e:
-            logger.error(f"mem0.get_all() failed: {e}")
+            logger.error(f"mem0.get_all() failed: {e}", exc_info=True)
             report_error(e, context="memory_get_all")
             return []
 
@@ -425,7 +425,7 @@ class Mem0Provider(BaseMemoryProvider):
             return True
 
         except Exception as e:
-            logger.error(f"mem0.delete() failed for {memory_id}: {e}")
+            logger.error(f"mem0.delete() failed for {memory_id}: {e}", exc_info=True)
             report_error(e, context="memory_delete")
             return False
 
@@ -455,7 +455,7 @@ class Mem0Provider(BaseMemoryProvider):
             return True
 
         except Exception as e:
-            logger.error(f"mem0.delete_all() failed: {e}")
+            logger.error(f"mem0.delete_all() failed: {e}", exc_info=True)
             report_error(e, context="memory_delete_all")
             return False
 
@@ -500,7 +500,7 @@ class Mem0Provider(BaseMemoryProvider):
         except MemoryUpdateError:
             raise
         except Exception as e:
-            logger.error(f"mem0.update() failed for {memory_id}: {e}")
+            logger.error(f"mem0.update() failed for {memory_id}: {e}", exc_info=True)
             report_error(e, context="memory_update")
             raise MemoryUpdateError(
                 f"Failed to update memory: {e}",
@@ -526,7 +526,7 @@ class Mem0Provider(BaseMemoryProvider):
             return history
 
         except Exception as e:
-            logger.error(f"mem0.history() failed for {memory_id}: {e}")
+            logger.error(f"mem0.history() failed for {memory_id}: {e}", exc_info=True)
             report_error(e, context="memory_history")
             return []
 
@@ -548,7 +548,7 @@ class Mem0Provider(BaseMemoryProvider):
             return True
 
         except Exception as e:
-            logger.error(f"mem0.reset() failed: {e}")
+            logger.error(f"mem0.reset() failed: {e}", exc_info=True)
             report_error(e, context="memory_reset")
             return False
 
@@ -593,7 +593,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.add(**kwargs)
             return MemoryAddResult.from_mem0_response(response)
         except Exception as e:
-            logger.error(f"mem0.add() sync failed: {e}")
+            logger.error(f"mem0.add() sync failed: {e}", exc_info=True)
             return MemoryAddResult(message="Memory operation failed", results=[])
 
     def search_sync(
@@ -623,7 +623,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.search(**kwargs)
             return MemorySearchResult.from_mem0_response(response, query, limit)
         except Exception as e:
-            logger.error(f"mem0.search() sync failed: {e}")
+            logger.error(f"mem0.search() sync failed: {e}", exc_info=True)
             return MemorySearchResult(results=[], query=query, limit=limit, total_results=0)
 
     def get_sync(self, memory_id: str) -> MemoryEntry | None:
@@ -636,7 +636,7 @@ class Mem0Provider(BaseMemoryProvider):
                 return MemoryEntry.from_mem0_result(response)
             return None
         except Exception as e:
-            logger.error(f"mem0.get() sync failed for {memory_id}: {e}")
+            logger.error(f"mem0.get() sync failed for {memory_id}: {e}", exc_info=True)
             return None
 
     def get_all_sync(
@@ -658,7 +658,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.get_all(**kwargs)
             return [MemoryEntry.from_mem0_result(m) for m in response.get("results", [])]
         except Exception as e:
-            logger.error(f"mem0.get_all() sync failed: {e}")
+            logger.error(f"mem0.get_all() sync failed: {e}", exc_info=True)
             return []
 
     def delete_sync(self, memory_id: str) -> bool:
@@ -669,7 +669,7 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.delete(memory_id=memory_id)
             return True
         except Exception as e:
-            logger.error(f"mem0.delete() sync failed for {memory_id}: {e}")
+            logger.error(f"mem0.delete() sync failed for {memory_id}: {e}", exc_info=True)
             return False
 
     def delete_all_sync(
@@ -688,7 +688,7 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.delete_all(**kwargs)
             return True
         except Exception as e:
-            logger.error(f"mem0.delete_all() sync failed: {e}")
+            logger.error(f"mem0.delete_all() sync failed: {e}", exc_info=True)
             return False
 
     def update_sync(
@@ -720,7 +720,7 @@ class Mem0Provider(BaseMemoryProvider):
         except MemoryUpdateError:
             raise
         except Exception as e:
-            logger.error(f"mem0.update() sync failed for {memory_id}: {e}")
+            logger.error(f"mem0.update() sync failed for {memory_id}: {e}", exc_info=True)
             raise MemoryUpdateError(
                 f"Failed to update memory: {e}",
                 memory_id=memory_id,
@@ -734,7 +734,7 @@ class Mem0Provider(BaseMemoryProvider):
         try:
             return self._sync_memory.history(memory_id=memory_id)
         except Exception as e:
-            logger.error(f"mem0.history() sync failed for {memory_id}: {e}")
+            logger.error(f"mem0.history() sync failed for {memory_id}: {e}", exc_info=True)
             return []
 
     def reset_sync(self) -> bool:
@@ -746,5 +746,5 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.reset()
             return True
         except Exception as e:
-            logger.error(f"mem0.reset() sync failed: {e}")
+            logger.error(f"mem0.reset() sync failed: {e}", exc_info=True)
             return False

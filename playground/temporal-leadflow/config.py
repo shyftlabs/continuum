@@ -7,7 +7,12 @@ _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(_ENV_PATH, override=True)
 
 _file_env = dotenv_values(_ENV_PATH)
-for _var in ("SMART_GATEWAY_URL", "SMART_GATEWAY_API_KEY"):
+for _var in (
+    "SMART_GATEWAY_URL",
+    "SMART_GATEWAY_API_KEY",
+    "EMBEDDER_API_BASE",
+    "EMBEDDER_API_KEY",
+):
     if _var not in _file_env:
         os.environ.pop(_var, None)
 

@@ -536,6 +536,7 @@ class ToolExecutor:
         metadata: dict[str, Any] | None = None,
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> ChatMessage:
         """
         Execute a single tool call and return the result as a ChatMessage.
@@ -574,11 +575,14 @@ class ToolExecutor:
 
         server, tool = self.tool_registry[tool_name]
 
-        # Access control check (deny-overrides policy engine)
+        # Access control check (deny-overrides policy engine). Active data labels
+        # (e.g. "pii", "phi") are passed as additional subjects so a run tainted
+        # with sensitive data can be denied risky tools via policy.
         if policy_store is not None and subject is not None:
             from continuum.agent.exceptions import ToolAccessDeniedError
 
-            decision = policy_store.check(subject, f"tool:{tool_name}")
+            subjects = [subject, *sorted(data_labels)] if data_labels else subject
+            decision = policy_store.check(subjects, f"tool:{tool_name}")
             if not decision.allowed:
                 raise ToolAccessDeniedError(
                     tool_name=tool_name,
@@ -738,6 +742,7 @@ class ToolExecutor:
         metadata: dict[str, Any] | None = None,
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> list[ChatMessage]:
         """
         Execute multiple tool calls and return results as ChatMessages.
@@ -749,6 +754,8 @@ class ToolExecutor:
             metadata: Optional additional metadata.
             policy_store: Optional access control policy store passed to each call.
             subject: Caller identity for policy evaluation (typically agent name).
+            data_labels: Active run data-sensitivity labels, passed as additional
+                policy subjects.
 
         Returns:
             List of ChatMessage objects with role="tool" containing tool results.
@@ -763,6 +770,7 @@ class ToolExecutor:
                 metadata=metadata,
                 policy_store=policy_store,
                 subject=subject,
+                data_labels=data_labels,
             )
             for tc in tool_calls
         ]

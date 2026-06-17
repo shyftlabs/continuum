@@ -516,6 +516,13 @@ const BODY = `
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-session-multi')">Multi-agent Pattern</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-final')">Deciding Final Response</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-context')">Context Management</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-trace')"> Time-Travel (Decision Trace)</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-enable')">Enable &amp; configure</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-inspect')">Inspect a trace</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-fork')">Fork &amp; rewind</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-branch')">Branch &amp; diff</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-store')">Storage backends</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-limits')">Limitations</a>
     <div class="sidebar-group-label">Deployment</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-lifecycle')">App Lifecycle</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-fastapi')">FastAPI Server</a>
@@ -684,8 +691,8 @@ const BODY = `
     </div>
     <div class="card">
       <div class="card-icon">◈</div>
-      <h3>Safe by default</h3>
-      <p>Input/output PII redaction. Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
+      <h3>Safety hooks built in</h3>
+      <p>Pluggable input/output PII redaction and content scanners (bring your own — none run until configured). Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
     </div>
     <div class="card">
       <div class="card-icon">▢</div>
@@ -698,11 +705,15 @@ const BODY = `
   <h2>Quickstart</h2>
   <ol class="steps">
     <li>
-      <strong>Install</strong>
+      <strong>Install</strong><br>
+      git clone continuum(<a href="https://github.com/shyftlabs/continuum" target="_blank">https://github.com/shyftlabs/continuum</a>) into your local computer, enter the project, then:
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
 python3.13 -m venv .venv    
 source .venv/bin/activate
-pip install shyftlabs-continuum </pre></div>
+pip install -e ".[dev]"
+
+optional:
+pip install -e '.[temporal]' </div>
     </li>
     <li>
       <strong>Setup environment and spin up infrastructure</strong>
@@ -711,27 +722,32 @@ pip install shyftlabs-continuum </pre></div>
       
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Next, configure your <code>.env</code> file:</p>
       <div class="code-wrapper" style="max-height: 400px; overflow-y: auto;"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># ── LLM Provider Keys ────────────────────────────────────────────────────────</span>
-OPENAI_API_KEY=your-openai-api-key        <span class="cm"># required (also used for embeddings)</span>
-GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># if using Gemini</span>
-<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # if using Claude</span>
+OPENAI_API_KEY=your-openai-api-key        <span class="cm"># optional </span>
+GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional</span>
+<span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional</span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
 FALLBACK_LLM_MODEL=gpt-4o-mini
 DEFAULT_LLM_TEMPERATURE=0.7
 DEFAULT_LLM_MAX_TOKENS=4096
-LLM_REQUEST_TIMEOUT=60
+LLM_REQUEST_TIMEOUT=300
 LLM_MAX_RETRIES=3
 LLM_ENABLE_FALLBACK=true
 
 <span class="cm"># ── Embeddings ────────────────────────────────────────────────────────────────</span>
 EMBEDDER_PROVIDER=openai
-EMBEDDER_MODEL=text-embedding-3-small
+EMBEDDER_MODEL=openai/text-embedding-3-small  <span class="cm"># use provider/model prefix when routing through gateway</span>
 EMBEDDING_DIMS=1536
+<span class="cm"># EMBEDDER_API_KEY=  # explicit key (falls back to SMART_GATEWAY_API_KEY when EMBEDDER_API_BASE is set)</span>
+EMBEDDER_API_BASE=https://continuum.shyftops.io/v1
 
 <span class="cm"># ── Memory (mem0 + Milvus) ───────────────────────────────────────────────────</span>
 MEMORY_ENABLED=true
 VECTOR_STORE_PROVIDER=milvus
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+QDRANT_COLLECTION=orchestrator_memories_openai
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 MILVUS_TOKEN=
@@ -759,7 +775,7 @@ LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
 LANGFUSE_SECRET_KEY=your-langfuse-secret-key
 LANGFUSE_HOST=http://localhost:3000
 LANGFUSE_BASE_URL=http://localhost:3000
-NEXTAUTH_SECRET=your-nextauth-secret
+NEXTAUTH_SECRET=your-nextauth-secret-here
 LANGFUSE_SAMPLE_RATE=1.0
 LANGFUSE_FLUSH_INTERVAL=1
 LANGFUSE_FLUSH_AT=15
@@ -776,6 +792,10 @@ TEMPORAL_WORKFLOW_EXECUTION_TIMEOUT=604800
 TEMPORAL_ACTIVITY_START_TO_CLOSE_TIMEOUT=300
 TEMPORAL_ACTIVITY_RETRY_MAX_ATTEMPTS=3
 
+<span class="cm"># ── Smart Gateway ─────────────────────────────────────────────────────────────</span>
+SMART_GATEWAY_URL=https://continuum.shyftops.io/v1
+SMART_GATEWAY_API_KEY=your-smart-gateway-api-key
+
 <span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
 ENVIRONMENT=development
 LOG_LEVEL=INFO
@@ -785,7 +805,7 @@ ANONYMIZED_TELEMETRY=false
 TOKENIZERS_PARALLELISM=false</pre></div>
 
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Finally, spin up the infrastructure:</p>
-      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>continuum up               <span class="cm"># Redis + Qdrant (minimal); `continuum up full` adds Langfuse · Temporal · Milvus</span></pre></div>
+      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>continuum up               <span class="cm"># Redis + Qdrant (minimal); \`continuum up full\` adds Langfuse · Temporal · Milvus</span></pre></div>
     </li>
     <li>
       <strong>Create and run your first agent</strong>
@@ -828,17 +848,17 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
   <p>Each module has a detailed markdown reference in the repository:</p>
   <table>
     <tr><th>Doc</th><th>Covers</th></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
-    <tr><td><a href="https://github.com/bhavik-shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
+    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
   </table>
 
 </section>
@@ -853,10 +873,10 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
 
   <div style="display:flex; gap:12px; margin: 16px 0 0;">
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
     </div>
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>.
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>.
     </div>
   </div>
 
@@ -1305,10 +1325,10 @@ triage = <span class="cls">BaseAgent</span>(
 
   <div style="display:flex; gap:12px; margin: 16px 0 0;">
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/local-shop" target="_blank"><code>playground/local-shop</code></a> — one agent with MCP tools over HTTP.
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
     </div>
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/multi-agent-shop" target="_blank"><code>playground/multi-agent-shop</code></a>
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>
     </div>
   </div>
 
@@ -1479,6 +1499,133 @@ agent = <span class="cls">BaseAgent</span>(
 
   <div class="callout callout-tip">
     <strong>Tip:</strong> Set <code>CONTEXT_COMPRESSION_THRESHOLD=0.8</code> (default) to trigger compression at 80% of the model's context window. <code>CONTEXT_KEEP_RECENT_MESSAGES=10</code> ensures the last 10 messages are never truncated.
+  </div>
+
+  <a class="anchor" id="run-trace"></a>
+  <h2>Time-Travel (Decision Trace)</h2>
+  <p>Continuum can record every decision in a run — each LLM call, tool call, handoff, and workflow step — as a structured, replayable <em>ledger</em>. Once recorded, you can rewind to any step, edit it, and re-execute only what's downstream; everything upstream replays from the saved checkpoint. <em>git rebase, for an agent run.</em></p>
+  <div class="callout callout-info">
+    <strong>Two halves:</strong> <b>record</b> (the trace — what happened) and <b>what-if</b> (fork — rewind, change one input, replay). The feature is off by default and costs one boolean check per turn when disabled.
+  </div>
+  <div class="callout callout-tip">
+    <strong>Worked examples: </strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/decision-trace-timetravel" target="_blank"><code>playground/decision-trace-timetravel</code></a> runs across all nine workflow patterns (+ handoff), so you can fork and compare each one.
+  </div>
+
+  <a class="anchor" id="run-trace-enable"></a>
+  <h3>Enable &amp; configure</h3>
+  <p>Disabled by default. Opt in with environment variables (or set the same fields on <code>settings</code> programmatically). Recording is independent of <em>forkability</em>: turn on <code>CHECKPOINT</code> only when you want to rewind, since it stores per-step message snapshots.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env — everything off unless you opt in</span>
+DECISION_TRACE_ENABLED=true
+DECISION_TRACE_DETAIL=full         <span class="cm"># off | full</span>
+DECISION_TRACE_STORE=redis         <span class="cm"># redis | memory | null</span>
+DECISION_TRACE_CHECKPOINT=true     <span class="cm"># per-step snapshots → enables fork/rewind</span>
+DECISION_TRACE_TTL_DAYS=14         <span class="cm"># auto-expiry of persisted traces</span></pre></div>
+  <p>…or flip the same switches programmatically before the first run — which is what the <code>decision-trace-timetravel</code> playground does:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.config <span class="kw">import</span> settings
+settings.decision_trace_enabled = <span class="cls">True</span>
+settings.decision_trace_checkpoint = <span class="cls">True</span>   <span class="cm"># only if you want fork/rewind</span>
+settings.decision_trace_store = <span class="str">"redis"</span></pre></div>
+  <table>
+    <thead><tr><th>Setting</th><th>Default</th><th>Controls</th></tr></thead>
+    <tbody>
+      <tr><td><code>DECISION_TRACE_ENABLED</code></td><td><code>false</code></td><td>Master switch. When off, no recorder is created and capture is skipped entirely.</td></tr>
+      <tr><td><code>DECISION_TRACE_DETAIL</code></td><td><code>full</code></td><td>What to attach to the response (the full trace is always persisted): <code>off</code> = persist only, attach nothing; <code>full</code> = attach the complete trace.</td></tr>
+      <tr><td><code>DECISION_TRACE_STORE</code></td><td><code>redis</code></td><td>Where traces persist: <code>redis</code>, <code>memory</code>, or <code>null</code>.</td></tr>
+      <tr><td><code>DECISION_TRACE_CHECKPOINT</code></td><td><code>false</code></td><td>Store per-step message snapshots. Required for <code>fork()</code>.</td></tr>
+      <tr><td><code>DECISION_TRACE_TTL_DAYS</code></td><td><code>14</code></td><td>Redis TTL for persisted traces.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout callout-tip">
+    <strong>A note on storage cost.</strong> <code>CHECKPOINT=true</code> stores a full message snapshot at every step, so a persisted trace can be sizeable and Redis usage grows with run volume. That's the price of being able to rewind — and it's worth it when you need it. To keep it modest: leave <code>CHECKPOINT</code> off unless you actually fork, and rely on <code>TTL_DAYS</code> to auto-expire old traces. Note that <code>DETAIL</code> only affects the trace <em>returned on the response</em> — the persisted trace is always full — so it isn't a storage lever. With the whole feature off (the default), nothing is stored at all.
+  </div>
+
+  <a class="anchor" id="run-trace-inspect"></a>
+  <h3>Inspect a trace</h3>
+  <p>When enabled, the trace is attached to the response. You can also reload any past run by id from the configured store.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>response = <span class="kw">await</span> runner.run(agent, <span class="str">"Run the month-end close."</span>)
+
+<span class="cm"># Attached to the response (when tracing is enabled)</span>
+trace = response.decision_trace        <span class="cm"># dict: steps, metrics, final_response…</span>
+
+<span class="cm"># …or reload any past run by id from the configured store</span>
+<span class="kw">from</span> orchestrator.agent.trace.config <span class="kw">import</span> get_trace_store
+<span class="kw">from</span> orchestrator.agent.trace.types <span class="kw">import</span> <span class="cls">TraceDetail</span>
+
+stored = <span class="kw">await</span> get_trace_store().<span class="fn">get</span>(response.run_id)
+data = stored.<span class="fn">to_dict</span>(<span class="cls">TraceDetail</span>.FULL)   <span class="cm"># steps with message checkpoints</span></pre></div>
+
+  <a class="anchor" id="run-trace-fork"></a>
+  <h2>Fork &amp; rewind</h2>
+  <p><code>runner.fork()</code> resumes a past run at <code>from_step</code>: steps before it replay from the saved checkpoint (no LLM or tool calls), an optional <code>override</code> edits that step, and the loop re-executes forward. The parent run is never mutated — the fork is a new run that records its lineage.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Rewind run X to a step, change one input, re-run only what's downstream</span>
+forked = <span class="kw">await</span> runner.fork(
+    run_id,
+    from_step=<span class="str">"s11"</span>,                      <span class="cm"># the step to resume at</span>
+    override={<span class="str">"set_tool_result"</span>: {          <span class="cm"># "what if the tool had returned X?"</span>
+        <span class="str">"tool_call_id"</span>: <span class="str">"call_abc"</span>,
+        <span class="str">"content"</span>: <span class="str">'{"materiality_threshold_usd": 1000000}'</span>,
+    }},
+    label=<span class="str">"threshold $1M"</span>,
+)
+<span class="fn">print</span>(forked.content)                    <span class="cm"># the new downstream outcome</span>
+<span class="fn">print</span>(forked.decision_trace[<span class="str">"parent_run_id"</span>])   <span class="cm"># lineage back to the original</span></pre></div>
+  <div class="callout callout-info">
+    <strong>Requires checkpoints.</strong> <code>fork()</code> needs the parent run to have been recorded with <code>DECISION_TRACE_CHECKPOINT=true</code> and a persisting store (<code>redis</code> or <code>memory</code>). Without a checkpoint at <code>from_step</code> it raises a clear error.
+  </div>
+  <p>The <code>override</code> applies a small, well-defined edit to the restored messages before the loop re-runs:</p>
+  <table class="param-table">
+    <tbody>
+      <tr><td>system</td><td>str</td><td>Replace (or prepend) the system instruction — a "what-if the policy were…" edit.</td></tr>
+      <tr><td>set_tool_result</td><td>{tool_call_id, content}</td><td>Override a recorded tool result — the "what if the tool had returned X?" knob.</td></tr>
+      <tr><td>replace_last_user</td><td>str</td><td>Replace the most recent user message content.</td></tr>
+      <tr><td>append</td><td>message dict</td><td>Append an extra message (e.g. one more instruction).</td></tr>
+    </tbody>
+  </table>
+  <p>Forking works across multi-agent runs too: it resumes the agent that produced the step and restores the handoff stack. <strong>All nine workflow orchestrators</strong> — <code>Sequential</code>, <code>Router</code>, <code>Loop</code>, <code>Reflection</code>, <code>Supervised</code>, <code>Planner</code>, <code>Parallel</code>, <code>Scatter</code>, and <code>Debate</code> — implement the <code>Forkable</code> protocol and resume from the stage that owns the step. Pipeline patterns replay earlier stages from cache; concurrent patterns (<code>Parallel</code>, <code>Scatter</code>, <code>Debate</code>) re-run only the forked branch and replay sibling branches' outputs from the saved trace.</p>
+
+  <a class="anchor" id="run-trace-branch"></a>
+  <h3>Branch &amp; diff</h3>
+  <p>Because upstream replays from cache, forking the same step at several values is cheap — run them concurrently and compare. <code>diff_traces()</code> reports what changed between two runs.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> asyncio
+<span class="kw">from</span> orchestrator.agent.trace <span class="kw">import</span> diff_traces
+<span class="kw">from</span> orchestrator.agent.trace.config <span class="kw">import</span> get_trace_store
+
+<span class="cm"># Branch the same step at three values, concurrently</span>
+forks = <span class="kw">await</span> asyncio.gather(*[
+    runner.fork(run_id, <span class="str">"s11"</span>, override={<span class="str">"replace_last_user"</span>: edit(v)})
+    <span class="kw">for</span> v <span class="kw">in</span> (<span class="num">5_000_000</span>, <span class="num">2_500_000</span>, <span class="num">1_000_000</span>)
+])
+
+<span class="cm"># Compare a fork against its parent</span>
+parent = <span class="kw">await</span> get_trace_store().<span class="fn">get</span>(run_id)
+child  = <span class="kw">await</span> get_trace_store().<span class="fn">get</span>(forks[-1].run_id)
+delta = <span class="fn">diff_traces</span>(parent, child)   <span class="cm"># final_response before/after, step deltas</span></pre></div>
+
+  <a class="anchor" id="run-trace-store"></a>
+  <h3>Storage backends</h3>
+  <p><code>DECISION_TRACE_STORE</code> chooses where a finished trace is saved so it can be reloaded — and forked — later. A Redis backend that can't connect falls back to <code>null</code> so persistence never breaks a run.</p>
+  <table>
+    <thead><tr><th>Backend</th><th>Where traces live</th><th>Survives restart / multi-process</th><th>Supports fork?</th></tr></thead>
+    <tbody>
+      <tr><td><code>redis</code> (default)</td><td>External Redis server</td><td>Yes / Yes — needs Redis running</td><td>Yes</td></tr>
+      <tr><td><code>memory</code></td><td>A dict inside the running process</td><td>No / No — zero setup</td><td>Yes, in the same process</td></tr>
+      <tr><td><code>null</code></td><td>Discarded (no-op)</td><td>— not persisted</td><td>No — nothing to reload</td></tr>
+    </tbody>
+  </table>
+  <div class="callout callout-info">
+    Decision Trace is an <em>execution ledger</em> the runtime reads back to resume runs — separate from <a onclick="showSection('integrations'); scrollToAnchor('int-langfuse')">Langfuse</a>, the human-facing observability sink, which keeps running in parallel.
+  </div>
+
+  <a class="anchor" id="run-trace-limits"></a>
+  <h3>Limitations</h3>
+  <div class="callout callout-warn">
+    <ul style="margin:0; padding-left:18px;">
+      <li><strong>Return-to-parent handoffs aren't forkable.</strong> Resuming the child can't reconstruct the parent's final answer, so forking a step inside one raises a clear error — use <code>return_to_parent=False</code> for handoffs you intend to fork. However, you can rerun an upstream agent before the parent agent with return_to_parent=True.</li>
+      <li><strong>Overrides depend on how a stage resumes.</strong> Workflow orchestrators re-run the resumed stage <em>fresh</em> — they re-call its tools — so <code>set_tool_result</code> is ignored there; use <code>replace_last_user</code> or <code>system</code> to change a workflow stage's input. <code>set_tool_result</code> only takes effect where the fork <em>replays the snapshot verbatim</em> (single-agent and handoff resume).</li>
+      <li><strong>Parallel can't rewind from its merge step.</strong> Forking a <em>branch</em> works in every concurrent pattern, but re-running only the final merge is supported by <code>Scatter</code> (gather-stage fork) and not yet by <code>Parallel</code>. Fork a branch instead, or use <code>Scatter</code> if you need to re-merge cached branch outputs.</li>
+      <li><strong>Planner mid-plan forks need an embedded plan.</strong> Forking a mid-plan step re-uses the plan recorded in the parent trace; traces recorded before plan-embedding existed can't mid-plan fork — fork from the plan stage (stage 0) to re-plan and re-execute instead.</li>
+      <li><strong>LLM nondeterminism.</strong> Re-executed steps are fresh model calls, so their <em>wording</em> can differ between runs even where your edit had no effect — a diff may show cosmetic text changes. Keep outcome-determining logic in tools and use <code>temperature=0</code> so verdicts and numbers stay stable; treat narrative diffs as informational.</li>
+    </ul>
   </div>
 
   <a class="anchor" id="run-lifecycle"></a>
@@ -2042,7 +2189,7 @@ client ◄┘</pre></div>
   <a class="anchor" id="smart-env"></a>
   <h3>Environment variables</h3>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env</span>
-SMART_GATEWAY_URL=http://localhost:8787/v1     <span class="cm"># gateway base URL</span>
+SMART_GATEWAY_URL=https://continuum.shyftops.io/v1     <span class="cm"># gateway base URL</span>
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key       <span class="cm"># bearer (matches a virtual key)</span>
 SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modest | quality</span></pre></div>
 
@@ -2190,6 +2337,10 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
     <tr><td>NEED_TOOL fallback</td><td>—</td><td>auto</td><td>If the LLM signals a missing tool, expand the candidate set and retry</td></tr>
   </table>
 
+  <div class="callout callout-tip">
+    <strong>Optional dependency.</strong> Tool Attention requires <code>sentence-transformers</code>, which is not installed by default. Install it with <code>pip install -e ".[embeddings]"</code> or <code>pip install sentence-transformers</code>. If not installed, tool-attention is silently disabled and all tools are loaded instead.
+  </div>
+
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
 
 agent = <span class="cls">BaseAgent</span>(
@@ -2289,10 +2440,16 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="rs-pii"></a>
   <h2>PII filtering on memory writes</h2>
-  <p>Before a memory is stored, Continuum can run it through a PII scrubber that redacts emails, phone numbers, SSNs, and credit cards. Configure via the memory client:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.memory <span class="kw">import</span> <span class="cls">MemoryClient</span>, <span class="cls">PIIPolicy</span>
+  <p>Continuum does not ship a built-in PII scrubber — you supply your own redaction logic via <code>pre_store_filter</code>, which runs over extracted facts before they are written to memory. Return the facts with PII masked, or drop them entirely. With no filter configured, facts are stored unmodified.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> re
+<span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
 
-memory = <span class="cls">MemoryClient</span>(pii_policy=<span class="cls">PIIPolicy</span>.REDACT)</pre></div>
+<span class="cm"># pre_store_filter — runs over extracted facts; mask or drop PII before storage</span>
+<span class="kw">def</span> <span class="fn">redact_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
+    <span class="kw">return</span> [re.<span class="fn">sub</span>(<span class="str">r'\\d{3}-\\d{2}-\\d{4}'</span>, <span class="str">'[SSN]'</span>, f) <span class="kw">for</span> f <span class="kw">in</span> facts]
+
+memory_config = <span class="cls">AgentMemoryConfig</span>(store_memories=<span class="cls">True</span>, pre_store_filter=redact_pii)</pre></div>
+  <p>To redact model <em>responses</em> (not memory), attach callables to <code>output_scanners</code> on <code>AgentConfig</code> (see <strong>Input / Output Scanning</strong>). Both are bring-your-own hooks: with none configured, no redaction occurs.</p>
 
   <a class="anchor" id="rs-artifacts"></a>
   <h2>Run artifacts</h2>
@@ -2341,7 +2498,7 @@ dataset = <span class="kw">await</span> <span class="fn">build_golden_dataset</s
   </div>
 
   <div class="callout callout-tip">
-    <strong>Source.</strong> The complete code lives at <a href="https://github.com/bhavik-shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
+    <strong>Source.</strong> The complete code lives at <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
   </div>
 
   <a class="anchor" id="ex-arch"></a>
@@ -2584,7 +2741,7 @@ mypy src/</pre>
 
 <footer>
   <span>Continuum v0.2.0 · Shyftlabs</span>
-  <span>Python 3.13+ · <a href="https://github.com/bhavik-shyftlabs/continuum">GitHub</a></span>
+  <span>Python 3.13+ · <a href="https://github.com/shyftlabs/continuum">GitHub</a></span>
 </footer>
 
 <!-- ═══════════════════ JS ═══════════════════ -->

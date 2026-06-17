@@ -9,7 +9,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 
 | Feature                       | Description                                                                                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Multi-provider support        | OpenAI, Anthropic, Google Gemini via native SDKs — not proxied                                                              |
+| Multi-provider support        | Provider-agnostic by design. Ships three native-SDK providers (OpenAI, Anthropic, Google Gemini — not proxied) plus an optional Smart Gateway that routes many more models through one endpoint. Every backend implements one small interface (`BaseProvider`) and returns a normalized response, so adding another is a self-contained adapter registered via `register_provider()` — not a framework change. |
 | Priority dispatcher           | Queues external API calls by request priority (1–10) under load                                                             |
 | Two-level dispatcher          | For self-hosted models (vLLM, SGLang): stage priority × request priority                                                    |
 | Smart layer / tier classifier | Routes to cheap vs. expensive models by query complexity; supports fixed rules, JSON classifier, remote Qwen, or local Qwen |
@@ -107,7 +107,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | PolicyStore             | Deny-overrides ACL engine; glob pattern matching on subject × resource                   |
 | AccessPolicy            | Resource prefixes: `tool:*`, `memory:*`, `data:*`                                        |
 | ToolAccessDeniedError   | Policy denial surfaced to the LLM with a configurable message                            |
-| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) propagate through handoffs via `RunContext.data_labels` |
+| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate through handoffs and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` (e.g. deny `tool:send_email` for subject `pii`); with no policy store configured they have no effect. Tool access only — not wired into the memory path; to keep sensitive content out of memory use `pre_store_filter` (content redaction), not labels. |
 | Input sanitization      | Injection detection at the system boundary                                               |
 | Secret utilities        | Utilities for safe handling of secrets and credentials                                   |
 

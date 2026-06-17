@@ -150,9 +150,12 @@ def _full_close_stages(p, tools, te, model) -> list[BaseAgent]:
         ),
         _agent(
             f"{p}-report",
-            "You are the reporting agent. Your input contains a 'STATUS=<...>' line and the "
-            "consolidation figures. Write a 2-3 sentence controller-to-CFO summary, then end "
-            "with EXACTLY one line:\nDECISION: CLEAN   (or)   DECISION: CONTROL_ISSUE",
+            "You are the reporting agent. Your input contains a 'STATUS=<CLEAN|CONTROL_ISSUE>' "
+            "line from the consolidation step — that is the authoritative verdict. Do NOT "
+            "re-judge it: a material discrepancy that was BOOKED and nets the suspense to zero "
+            "is CLEAN, not a control issue.\nWrite a 2-3 sentence controller-to-CFO summary, "
+            "then end with EXACTLY one line whose value MUST equal that STATUS:\n"
+            "DECISION: CLEAN   (or)   DECISION: CONTROL_ISSUE",
             tools,
             te,
             model,

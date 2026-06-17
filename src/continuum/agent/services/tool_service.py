@@ -198,6 +198,7 @@ class ToolService(IToolService):
                         trace_id=context.trace_id,
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
+                        data_labels=context.data_labels if agent_policy_store else None,
                     )
                     if results:
                         result = self._message_to_dict(results[0])
@@ -253,6 +254,7 @@ class ToolService(IToolService):
                         trace_id=context.trace_id,
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
+                        data_labels=context.data_labels if agent_policy_store else None,
                     )
                     if results:
                         result = self._message_to_dict(results[0])
