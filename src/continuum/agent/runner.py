@@ -881,7 +881,20 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Run an agent with streaming output."""
+        """Run an agent with streaming output.
+
+        Note: this is an async generator that publishes the run's data-label
+        policy context (a contextvar) for its duration and resets it in a
+        ``finally``. If a consumer stops iterating early (``break``) without
+        closing the generator, that ``finally`` only runs on GC, so the policy
+        context can briefly linger in the calling task. To guarantee prompt
+        cleanup, wrap consumption in ``contextlib.aclosing``::
+
+            from contextlib import aclosing
+            async with aclosing(runner.run_stream(agent, input)) as stream:
+                async for event in stream:
+                    ...
+        """
         start_time = time.time()
 
         result = await self._prepare_run(
