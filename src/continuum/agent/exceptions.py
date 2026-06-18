@@ -331,6 +331,34 @@ class MemoryAccessDeniedError(AgentError):
             self.context["policy_name"] = policy_name
 
 
+class ModelAccessDeniedError(AgentError):
+    """Raised when an access policy denies routing a run to a model/provider.
+
+    Enforced in LLMClient.chat(): a run tainted with a data label (e.g. "pii")
+    can be blocked from a model via `deny(subjects=["pii"], resources=["llm:..."])`.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        policy_name: str | None = None,
+        subject: str | None = None,
+        denial_message: str = "",
+        **kwargs: Any,
+    ):
+        message = f"Access denied: model '{model}' is blocked by policy"
+        if policy_name:
+            message += f" '{policy_name}'"
+        super().__init__(message, **kwargs)
+        self.context["model"] = model
+        if policy_name:
+            self.context["policy_name"] = policy_name
+        if subject:
+            self.context["subject"] = subject
+        if denial_message:
+            self.context["denial_message"] = denial_message
+
+
 # =============================================================================
 # Workflow Errors
 # =============================================================================

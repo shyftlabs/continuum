@@ -462,6 +462,13 @@ class AgentRunner:
                 error=str(e),
             )
 
+        # Publish the run's policy context so EVERY llm_client.chat() in this run
+        # — smart-layer triage, workflow orchestration, and the executor — is
+        # gated by the data-label model-routing policy, not just execute_loop.
+        # execute_loop re-publishes per-agent on handoffs (nested set/reset).
+        from continuum.security.policy_context import reset_active_policy, set_active_policy
+
+        _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -589,6 +596,8 @@ class AgentRunner:
                 trace_id=ctx.trace_id,
                 original_error=e,
             ) from e
+        finally:
+            reset_active_policy(_policy_token)
 
     # =========================================================================
     # Fork (time-travel: replay a run from a step with an edit)
@@ -916,6 +925,11 @@ class AgentRunner:
         )
 
         turn = 0
+        # Publish the run's policy context so every llm_client.chat() in this
+        # streaming run is gated by the data-label model-routing policy.
+        from continuum.security.policy_context import reset_active_policy, set_active_policy
+
+        _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -1544,3 +1558,5 @@ class AgentRunner:
                 trace_id=ctx.trace_id,
                 original_error=e,
             ) from e
+        finally:
+            reset_active_policy(_policy_token)

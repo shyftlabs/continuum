@@ -115,6 +115,28 @@ class Executor(IExecutor):
         context: RunContext,
         run_state: RunState,
     ) -> AgentResponse:
+        """Execute the main conversation loop.
+
+        Thin wrapper that publishes the agent's policy context (for the
+        data-label model-routing gate) into an ambient contextvar for the
+        duration of the loop, so every nested ``llm_client.chat()`` call —
+        turns, reasoning pass, ReAct loop, structured-format — is gated
+        automatically without threading policy params through each call. On
+        handoff, the executor is re-entered for the new agent, refreshing the
+        ambient policy to that agent's store/name.
+        """
+        from continuum.security.policy_context import use_active_policy
+
+        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context):
+            return await self._execute_loop_impl(agent, messages, context, run_state)
+
+    async def _execute_loop_impl(
+        self,
+        agent: BaseAgent,
+        messages: list[dict[str, Any]],
+        context: RunContext,
+        run_state: RunState,
+    ) -> AgentResponse:
         """
         Execute the main conversation loop.
 
