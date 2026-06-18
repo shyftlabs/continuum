@@ -49,6 +49,7 @@ from continuum.agent.types import (
     RunContext,
     TokenUsage,
 )
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.agent.workflow._forkable import (
     branch_outputs_from_trace,
     branch_recorder_context,
@@ -140,6 +141,7 @@ class ScatterAgent(BaseAgent):
 
             raise AgentConfigurationError("ScatterAgent requires at least one agent")
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

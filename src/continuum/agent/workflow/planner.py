@@ -27,6 +27,7 @@ from continuum.agent.types import (
     ResponseStatus,
     TokenUsage,
 )
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
@@ -127,6 +128,7 @@ class PlannerAgent(BaseAgent):
     def _mode(self) -> str:
         return "single" if self.agent else "pool"
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

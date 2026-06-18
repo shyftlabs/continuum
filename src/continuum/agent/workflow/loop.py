@@ -24,6 +24,7 @@ from continuum.agent.types import (
     TerminationType,
     TokenUsage,
 )
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.logging import get_logger
 
@@ -97,6 +98,7 @@ class LoopAgent(BaseAgent):
 
             raise AgentConfigurationError("LoopAgent requires an agent to execute")
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

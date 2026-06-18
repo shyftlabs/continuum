@@ -4,11 +4,45 @@ Context utilities for agent execution.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from continuum.agent.types import RunContext
     from continuum.tools.types import ToolContextState
+
+
+def publish_active_policy(
+    method: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Decorator for workflow ``execute()`` methods: publish the agent's policy
+    context for the call's duration.
+
+    Workflow agents run via ``execute()`` rather than ``AgentRunner.run``, so the
+    run-level ambient publisher doesn't wrap them. Without this, an orchestrator's
+    own coordination LLM calls (split/merge/synthesize/critique/route) would
+    bypass the data-label model-routing and telemetry gates. The ``RunContext``
+    is located among the call args (positional or ``context=`` keyword); if none
+    is present the method runs unchanged.
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        from continuum.agent.types import RunContext
+        from continuum.security.policy_context import use_active_policy
+
+        ctx = kwargs.get("context")
+        if ctx is None:
+            ctx = next((a for a in args if isinstance(a, RunContext)), None)
+
+        if ctx is not None:
+            with use_active_policy(getattr(self, "policy_store", None), self.name, ctx):
+                return await method(self, *args, **kwargs)
+        return await method(self, *args, **kwargs)
+
+    wrapper.__publishes_active_policy__ = True  # type: ignore[attr-defined]
+    return wrapper
 
 
 def create_run_context(
