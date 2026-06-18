@@ -981,6 +981,44 @@ class RunContext:
             "priority": self.priority,
         }
 
+    def taint(self, *labels: str) -> None:
+        """Add data-sensitivity labels to this run (provenance tainting).
+
+        Idempotent (set semantics). Labels propagate forward through the run —
+        across handoffs and serialization — so downstream consumers (tool gate,
+        and later model-routing / memory-write / telemetry) can act on them.
+        Producers call this: declared tool/memory-scope provenance, the run-level
+        seed, or any integrator-supplied scanner.
+        """
+        self.data_labels.update(labels)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RunContext:
+        """Reconstruct a RunContext from its ``to_dict()`` form.
+
+        Mirrors ``to_dict`` so labels (and core fields) survive a
+        serialize/resume round-trip. Runtime-only fields (recorder) are not
+        restored. Unknown/missing keys fall back to defaults.
+        """
+        usage_data = data.get("usage")
+        return cls(
+            run_id=data["run_id"],
+            session_id=data.get("session_id"),
+            conversation_id=data.get("conversation_id"),
+            user_id=data.get("user_id"),
+            trace_id=data.get("trace_id"),
+            parent_span_id=data.get("parent_span_id"),
+            agent_stack=list(data.get("agent_stack", [])),
+            handoff_chain=[HandoffData.from_dict(h) for h in data.get("handoff_chain", [])],
+            retrieved_memories=list(data.get("retrieved_memories", [])),
+            max_turns=data.get("max_turns", 25),
+            metadata=dict(data.get("metadata", {})),
+            tags=list(data.get("tags", [])),
+            usage=TokenUsage.from_dict(usage_data) if usage_data else TokenUsage(),
+            data_labels=set(data.get("data_labels", [])),
+            priority=data.get("priority", 5),
+        )
+
     def branch_copy(self) -> RunContext:
         """
         Create an isolated copy of this context for use in a parallel branch.
