@@ -14,7 +14,7 @@ wiring (subjects/resource, deny-before-send) without real network calls.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -139,7 +139,10 @@ class TestAmbientPolicyContext:
                 with pytest.raises(ModelAccessDeniedError):
                     await _chat(_client())
             provider.acomplete.assert_not_called()
-        ps.check.assert_called_once_with(["agent", "pii"], f"llm:{MODEL}")
+        # The model-routing gate consulted the ambient policy with the llm: resource.
+        # (@observe telemetry redaction may add "telemetry" checks too, so assert
+        # the specific gate call rather than a total count.)
+        assert call(["agent", "pii"], f"llm:{MODEL}") in ps.check.call_args_list
 
     async def test_explicit_params_take_precedence_over_ambient(self):
         from continuum.security.policy_context import use_active_policy
@@ -155,8 +158,11 @@ class TestAmbientPolicyContext:
                 # Explicit allow store passed → used instead of ambient deny store.
                 await _chat(_client(), policy_store=explicit_ps, policy_subject="explicit")
             provider.acomplete.assert_awaited_once()
-        explicit_ps.check.assert_called_once()
-        ambient_ps.check.assert_not_called()
+        # The LLM gate used the explicit store, not the ambient one. (The ambient
+        # store may still be consulted for @observe telemetry redaction, so assert
+        # specifically about the llm: resource rather than total call count.)
+        assert any(c.args[1].startswith("llm:") for c in explicit_ps.check.call_args_list)
+        assert not any(c.args[1].startswith("llm:") for c in ambient_ps.check.call_args_list)
 
     async def test_no_ambient_no_explicit_means_no_gate(self):
         provider = _fake_provider()

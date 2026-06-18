@@ -120,3 +120,82 @@ class TestStartTraceRedaction:
         assert captured["input"] is not None
         assert "123-45-6789" not in str(captured["input"]), "tainted input reached telemetry"
         assert "_redacted" in str(captured["input"])
+
+
+# ---------------------------------------------------------------------------
+# @observe span redaction — the per-LLM-call prompts/completions (and other
+# spans) must be redacted too, not just the trace-level preview.
+# ---------------------------------------------------------------------------
+
+
+class _FakeSpan:
+    def __init__(self):
+        self.output = None
+
+    def set_output(self, o):
+        self.output = o
+
+    def add_metadata(self, *a, **k):
+        pass
+
+    def set_error(self, *a, **k):
+        pass
+
+
+class _FakeSpanScope:
+    last = None
+
+    def __init__(self, name, input=None, metadata=None, level=None):  # noqa: A002
+        self.input = input
+        self.span = _FakeSpan()
+        _FakeSpanScope.last = self
+
+    async def __aenter__(self):
+        return self.span
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class TestObserveSpanRedaction:
+    async def test_observe_redacts_span_input_and_output_when_denied(self, monkeypatch):
+        from continuum.observability import decorators
+        from continuum.security.policy_context import use_active_policy
+
+        monkeypatch.setattr(decorators, "SpanScope", _FakeSpanScope)
+
+        @decorators.observe(name="llm_chat")
+        async def call(messages):
+            return {"completion": "patient SSN 123-45-6789"}
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        ctx = create_run_context(data_labels={"pii"})
+
+        with use_active_policy(ps, "agent", ctx):
+            result = await call({"messages": [{"role": "user", "content": "my SSN 123-45-6789"}]})
+
+        # The function's real return value is untouched.
+        assert result == {"completion": "patient SSN 123-45-6789"}
+
+        # But the span captured a redacted input AND output — no raw content leaked.
+        scope = _FakeSpanScope.last
+        assert "123-45-6789" not in str(scope.input)
+        assert "_redacted" in str(scope.input)
+        assert "123-45-6789" not in str(scope.span.output)
+        assert "_redacted" in str(scope.span.output)
+
+    async def test_observe_passes_through_when_no_policy(self, monkeypatch):
+        from continuum.observability import decorators
+
+        monkeypatch.setattr(decorators, "SpanScope", _FakeSpanScope)
+
+        @decorators.observe(name="llm_chat")
+        async def call(messages):
+            return {"completion": "hello"}
+
+        result = await call({"messages": [{"role": "user", "content": "hi"}]})
+        assert result == {"completion": "hello"}
+        scope = _FakeSpanScope.last
+        # No ambient policy → content passes through to the span (not redacted).
+        assert "hello" in str(scope.span.output)
