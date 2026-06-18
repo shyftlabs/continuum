@@ -159,6 +159,13 @@ class MemoryService(IMemoryService):
             if memories.results:
                 context.retrieved_memories = [m.to_dict() for m in memories.results]
 
+                # Memory-scope provenance: reading data out of a scope declared
+                # sensitive taints the run ("read = taint"). Only taints when data
+                # actually flowed (results non-empty).
+                scope_labels = agent.memory_config.scope_data_labels.get(search_scope)
+                if scope_labels:
+                    context.taint(*scope_labels)
+
                 # Log memory search summary at DEBUG level
                 logger.debug(
                     f"💾 Memory search: scope={search_scope}, isolation={memory_isolation}, "

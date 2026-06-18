@@ -20,6 +20,7 @@ def create_run_context(
     max_turns: int = 25,
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
+    data_labels: set[str] | None = None,
 ) -> RunContext:
     """
     Create a run context with default values.
@@ -33,6 +34,9 @@ def create_run_context(
         max_turns: Maximum conversation turns
         metadata: Optional metadata
         tags: Optional tags
+        data_labels: Optional initial data-sensitivity labels (run-level
+            provenance) — e.g. the request arrived from a connector/endpoint
+            already known to carry "pii". Taints the run from the start.
 
     Returns:
         RunContext instance
@@ -48,6 +52,7 @@ def create_run_context(
         max_turns=max_turns,
         metadata=metadata or {},
         tags=tags or [],
+        data_labels=set(data_labels) if data_labels else set(),
     )
 
 

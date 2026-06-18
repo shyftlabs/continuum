@@ -202,6 +202,9 @@ class ToolService(IToolService):
                     )
                     if results:
                         result = self._message_to_dict(results[0])
+                        # Tool provenance: a declared tool's result taints the run.
+                        if agent.config and agent.config.tool_data_labels.get(tool_name):
+                            context.taint(*agent.config.tool_data_labels[tool_name])
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
@@ -258,6 +261,9 @@ class ToolService(IToolService):
                     )
                     if results:
                         result = self._message_to_dict(results[0])
+                        # Tool provenance: a declared tool's result taints the run.
+                        if agent.config and agent.config.tool_data_labels.get(tool_name):
+                            context.taint(*agent.config.tool_data_labels[tool_name])
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
