@@ -336,23 +336,9 @@ class LLMClient:
         # Checked before provider selection so a deny blocks the call entirely.
         # Explicit params win; otherwise the ambient run policy (published once
         # per run) is used, so every call site is gated without threading params.
-        from continuum.security.policy_context import resolve_active_policy
-
-        eff_store, eff_subject, eff_labels = resolve_active_policy(
-            policy_store, policy_subject, data_labels
+        self._enforce_model_routing_policy(
+            effective_config.model, policy_store, policy_subject, data_labels
         )
-        if eff_store is not None and eff_subject is not None:
-            from continuum.agent.exceptions import ModelAccessDeniedError
-
-            subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
-            decision = eff_store.check(subjects, f"llm:{effective_config.model}")
-            if not decision.allowed:
-                raise ModelAccessDeniedError(
-                    model=effective_config.model,
-                    policy_name=decision.policy_name,
-                    subject=eff_subject,
-                    denial_message=decision.denial_message,
-                )
 
         if self._rate_limiter:
             await self._rate_limiter.acquire()
@@ -424,6 +410,37 @@ class LLMClient:
 
         return llm_response
 
+    def _enforce_model_routing_policy(
+        self,
+        model: str,
+        policy_store: Any | None = None,
+        policy_subject: str | None = None,
+        data_labels: set[str] | None = None,
+    ) -> None:
+        """Data-label model-routing gate, shared by chat() and chat_stream().
+
+        Explicit args win; otherwise the ambient run policy is used. Folds the
+        run's labels into the policy subjects and checks ``llm:<model>``; raises
+        ModelAccessDeniedError on deny (before provider selection).
+        """
+        from continuum.security.policy_context import resolve_active_policy
+
+        eff_store, eff_subject, eff_labels = resolve_active_policy(
+            policy_store, policy_subject, data_labels
+        )
+        if eff_store is not None and eff_subject is not None:
+            from continuum.agent.exceptions import ModelAccessDeniedError
+
+            subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
+            decision = eff_store.check(subjects, f"llm:{model}")
+            if not decision.allowed:
+                raise ModelAccessDeniedError(
+                    model=model,
+                    policy_name=decision.policy_name,
+                    subject=eff_subject,
+                    denial_message=decision.denial_message,
+                )
+
     @observe(name="llm_chat_stream", capture_output=False)
     async def chat_stream(
         self,
@@ -433,6 +450,9 @@ class LLMClient:
         tool_choice: str | dict[str, Any] | None = None,
         *,
         trace_metadata: dict[str, Any] | None = None,
+        policy_store: Any | None = None,
+        policy_subject: str | None = None,
+        data_labels: set[str] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
@@ -459,6 +479,11 @@ class LLMClient:
 
         tools_dict = self._convert_tools(tools)
         effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
+
+        # Data-label model-routing gate (same as chat()): block before streaming.
+        self._enforce_model_routing_policy(
+            effective_config.model, policy_store, policy_subject, data_labels
+        )
 
         provider = get_provider(effective_config)
         logger.debug(f"Async stream: model={effective_config.model}")

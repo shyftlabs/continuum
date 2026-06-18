@@ -102,6 +102,55 @@ class TestModelRoutingPolicy:
 # ---------------------------------------------------------------------------
 
 
+def _fake_stream_provider() -> MagicMock:
+    provider = MagicMock()
+
+    async def astream(*a, **k):
+        yield MagicMock(content="ok")
+
+    provider.astream = astream
+    return provider
+
+
+class TestChatStreamGate:
+    """Streaming runs go through chat_stream(), which must enforce the same
+    model-routing gate as chat() — otherwise streaming bypasses it entirely."""
+
+    async def test_stream_denied_raises_before_streaming(self):
+        from continuum.agent.exceptions import ModelAccessDeniedError
+        from continuum.security.policy_context import use_active_policy
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        provider = _fake_stream_provider()
+        ctx = create_run_context(data_labels={"pii"})
+        with patch("continuum.llm.client.get_provider", return_value=provider) as gp:
+            with use_active_policy(ps, "agent", ctx):
+                with pytest.raises(ModelAccessDeniedError):
+                    async for _ in _client().chat_stream(
+                        messages=[{"role": "user", "content": "hi"}]
+                    ):
+                        pass
+            gp.assert_not_called()  # blocked before provider selection
+        assert call(["agent", "pii"], f"llm:{MODEL}") in ps.check.call_args_list
+
+    async def test_stream_allowed_proceeds(self):
+        from continuum.security.policy_context import use_active_policy
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=True, reason="ok")
+        provider = _fake_stream_provider()
+        ctx = create_run_context(data_labels={"pii"})
+        chunks = []
+        with patch("continuum.llm.client.get_provider", return_value=provider):
+            with use_active_policy(ps, "agent", ctx):
+                async for chunk in _client().chat_stream(
+                    messages=[{"role": "user", "content": "hi"}]
+                ):
+                    chunks.append(chunk)
+        assert len(chunks) == 1
+
+
 class TestAmbientPolicyContext:
     def test_use_active_policy_sets_and_resets(self):
         from continuum.security.policy_context import get_active_policy, use_active_policy
