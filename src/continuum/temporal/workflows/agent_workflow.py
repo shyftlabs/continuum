@@ -32,6 +32,7 @@ with workflow.unsafe.imports_passed_through():
         WaitStep,
         WorkflowInput,
         WorkflowResult,
+        is_authorized,
         parse_step,
     )
 
@@ -54,6 +55,7 @@ class AgentWorkflow:
         self._pending_decision: ApprovalDecision | None = None
         self._injected_input: dict[str, Any] | None = None
         self._last_output: str = ""
+        self._unauthorized_attempts: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Signals
@@ -87,6 +89,7 @@ class AgentWorkflow:
             "total_steps": getattr(self, "_total_steps", 0),
             "completed_steps": len(self._step_results),
             "cancelled": self._cancelled,
+            "unauthorized_attempts": list(self._unauthorized_attempts),
         }
 
     @workflow.query
@@ -256,42 +259,78 @@ class AgentWorkflow:
         self._status = "waiting_for_approval"
         self._pending_decision = None
 
-        # Wait for decision or timeout
-        try:
-            await workflow.wait_condition(
-                lambda: self._pending_decision is not None or self._cancelled,
-                timeout=timedelta(seconds=step.timeout),
-            )
-        except TimeoutError:
-            self._pending_approvals = [
-                a for a in self._pending_approvals if a["request_id"] != request_id
-            ]
-            self._status = "timed_out"
-            return False
+        # Wait for a VALID decision or timeout. A mismatched or unauthorized
+        # signal is discarded and we keep waiting, so a bad signal can neither
+        # resolve the step nor consume its timeout budget prematurely.
+        # workflow.now() keeps the remaining-timeout deterministic on replay.
+        start = workflow.now()
+        decision: ApprovalDecision | None = None
+        while True:
+            elapsed = (workflow.now() - start).total_seconds()
+            remaining = step.timeout - elapsed
+            if remaining <= 0:
+                self._pending_approvals = [
+                    a for a in self._pending_approvals if a["request_id"] != request_id
+                ]
+                self._status = "timed_out"
+                return False
 
-        if self._cancelled:
-            return False
+            try:
+                await workflow.wait_condition(
+                    lambda: self._pending_decision is not None or self._cancelled,
+                    timeout=timedelta(seconds=remaining),
+                )
+            except TimeoutError:
+                self._pending_approvals = [
+                    a for a in self._pending_approvals if a["request_id"] != request_id
+                ]
+                self._status = "timed_out"
+                return False
 
-        decision = self._pending_decision
-        self._pending_decision = None
+            if self._cancelled:
+                return False
+
+            candidate = self._pending_decision
+            self._pending_decision = None
+            if candidate is None:
+                continue
+
+            # Reject signals aimed at a different approval request.
+            if candidate.request_id != request_id:
+                workflow.logger.warning(
+                    f"Approval decision request_id mismatch: "
+                    f"expected '{request_id}', got '{candidate.request_id}'. "
+                    f"Ignoring mismatched decision."
+                )
+                continue
+
+            # Enforce the approvers allow-list. Unauthorized attempts are
+            # recorded (surfaced via get_status) and ignored — the step stays
+            # pending until an authorized approver responds or it times out.
+            if not is_authorized(step, candidate):
+                workflow.logger.warning(
+                    f"Unauthorized approval attempt by '{candidate.decided_by}' "
+                    f"for request '{request_id}': not in approvers {step.approvers}. "
+                    f"Ignoring."
+                )
+                self._unauthorized_attempts.append(
+                    {
+                        "request_id": request_id,
+                        "decided_by": candidate.decided_by,
+                        "decision": candidate.decision,
+                    }
+                )
+                continue
+
+            decision = candidate
+            break
+
         self._pending_approvals = [
             a for a in self._pending_approvals if a["request_id"] != request_id
         ]
-
-        if decision:
-            # Validate that the decision's request_id matches the current approval
-            if decision.request_id != request_id:
-                workflow.logger.warning(
-                    f"Approval decision request_id mismatch: "
-                    f"expected '{request_id}', got '{decision.request_id}'. "
-                    f"Ignoring mismatched decision."
-                )
-                return False
-            self._approval_decisions.append(decision)
-            self._status = "running"
-            return decision.decision == "approved"
-
-        return False
+        self._approval_decisions.append(decision)
+        self._status = "running"
+        return decision.decision == "approved"
 
     async def _run_parallel_step(self, step: ParallelStep, wf_input: WorkflowInput) -> None:
         """Run multiple agents concurrently and merge results."""
