@@ -32,12 +32,20 @@ def redact_for_telemetry(
     policy_store: Any | None = None,
     subject: str | None = None,
     labels: set[str] | None = None,
+    mask_secrets: bool = True,
 ) -> Any:
     """Return a telemetry-safe version of ``data``.
 
     If a policy (explicit or ambient) denies the run's labels for ``telemetry``,
-    returns a redacted placeholder. Otherwise returns ``data`` with secrets
-    masked (dicts only; non-dicts pass through unchanged when allowed).
+    returns a redacted placeholder.
+
+    ``mask_secrets`` controls the always-on secret masking applied when the
+    policy allows (or there is none). It is safe for small curated trace
+    previews, but must be ``False`` for arbitrary span payloads: ``redact_dict``
+    matches sensitive keys by substring, so it would mask legitimate fields like
+    ``prompt_tokens``/``completion_tokens`` (contain "token") and corrupt
+    token/cost observability. Spans therefore pass through unchanged when
+    allowed; only the label-deny gate applies to them.
     """
     eff_store, eff_subject, eff_labels = resolve_active_policy(policy_store, subject, labels)
     if eff_store is not None and eff_subject is not None:
@@ -49,4 +57,6 @@ def redact_for_telemetry(
                 placeholder += f" '{decision.policy_name}'"
             return {"_redacted": placeholder}
 
-    return redact_dict(data) if isinstance(data, dict) else data
+    if mask_secrets and isinstance(data, dict):
+        return redact_dict(data)
+    return data

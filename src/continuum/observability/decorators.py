@@ -107,16 +107,10 @@ def observe(
             input_data = None
             if capture_input:
                 try:
-                    from continuum.observability.data_redaction import redact_for_telemetry
-
-                    # Label-aware redaction (ambient run policy): redacts span
-                    # input for a tainted+denied run; masks secrets otherwise.
-                    input_data = redact_for_telemetry(
-                        truncate_data(_get_function_input(func, args, kwargs))
-                    )
+                    # Redaction is applied centrally in SpanScope (see _create_span).
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
-                    input_data = None
 
             # Use SpanScope from trace_context (async-safe, links to current trace)
             with SpanScope(
@@ -129,14 +123,8 @@ def observe(
                     result = func(*args, **kwargs)
 
                     if capture_output:
-                        try:
-                            from continuum.observability.data_redaction import redact_for_telemetry
-
-                            span.set_output(
-                                redact_for_telemetry(truncate_data(_serialize_output(result)))
-                            )
-                        except Exception as _e:
-                            logger.debug(f"Failed to capture output: {_e}")
+                        # Redaction is applied centrally in SpanScope.set_output.
+                        span.set_output(truncate_data(_serialize_output(result)))
 
                     return result
                 except Exception as e:
@@ -154,16 +142,10 @@ def observe(
             input_data = None
             if capture_input:
                 try:
-                    from continuum.observability.data_redaction import redact_for_telemetry
-
-                    # Label-aware redaction (ambient run policy): redacts span
-                    # input for a tainted+denied run; masks secrets otherwise.
-                    input_data = redact_for_telemetry(
-                        truncate_data(_get_function_input(func, args, kwargs))
-                    )
+                    # Redaction is applied centrally in SpanScope (see _create_span).
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
-                    input_data = None
 
             # Use SpanScope from trace_context (async-safe, links to current trace)
             async with SpanScope(
@@ -176,14 +158,8 @@ def observe(
                     result = await func(*args, **kwargs)
 
                     if capture_output:
-                        try:
-                            from continuum.observability.data_redaction import redact_for_telemetry
-
-                            span.set_output(
-                                redact_for_telemetry(truncate_data(_serialize_output(result)))
-                            )
-                        except Exception as _e:
-                            logger.debug(f"Failed to capture output: {_e}")
+                        # Redaction is applied centrally in SpanScope.set_output.
+                        span.set_output(truncate_data(_serialize_output(result)))
 
                     return result
                 except Exception as e:
@@ -298,16 +274,10 @@ def trace_agent(
             input_data = None
             if capture_input:
                 try:
-                    from continuum.observability.data_redaction import redact_for_telemetry
-
-                    # Label-aware redaction (ambient run policy): redacts span
-                    # input for a tainted+denied run; masks secrets otherwise.
-                    input_data = redact_for_telemetry(
-                        truncate_data(_get_function_input(func, args, kwargs))
-                    )
+                    # Redaction is applied centrally in SpanScope (see _create_span).
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
-                    input_data = None
 
             # Create agent metadata
             agent_metadata = {"agent_type": agent_type}
@@ -425,16 +395,10 @@ def trace_agent(
             input_data = None
             if capture_input:
                 try:
-                    from continuum.observability.data_redaction import redact_for_telemetry
-
-                    # Label-aware redaction (ambient run policy): redacts span
-                    # input for a tainted+denied run; masks secrets otherwise.
-                    input_data = redact_for_telemetry(
-                        truncate_data(_get_function_input(func, args, kwargs))
-                    )
+                    # Redaction is applied centrally in SpanScope (see _create_span).
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
-                    input_data = None
 
             # Create agent metadata
             agent_metadata = {"agent_type": agent_type}

@@ -350,8 +350,17 @@ class SpanScope:
         self._start_time = time.time()
 
         try:
-            # Truncate input if too large
-            truncated_input = truncate_data(self.input)
+            # Truncate input if too large, then apply label-aware redaction
+            # (ambient run policy). SpanScope is the single chokepoint every span
+            # passes through — @observe, tool calls, workflow stages, executor —
+            # so redacting here covers them all uniformly. mask_secrets=False:
+            # span payloads are arbitrary structured data (a deny -> placeholder;
+            # otherwise pass through, so token-usage fields aren't masked).
+            from continuum.observability.data_redaction import redact_for_telemetry
+
+            truncated_input = redact_for_telemetry(
+                truncate_data(self.input), mask_secrets=False
+            )
 
             # If we have a parent client, use it directly
             if parent is not None:
@@ -470,8 +479,14 @@ class SpanScope:
             restore_trace_context(self._token)
 
     def set_output(self, output: Any) -> None:
-        """Set span output."""
-        self._output = output
+        """Set span output (label-aware redaction applied — see _create_span)."""
+        try:
+            from continuum.observability.data_redaction import redact_for_telemetry
+
+            self._output = redact_for_telemetry(output, mask_secrets=False)
+        except Exception:
+            # Fail safe: never let a redaction error leak raw output to telemetry.
+            self._output = {"_redacted": "redaction error"}
 
     def set_error(self, error: str) -> None:
         """Set span error."""

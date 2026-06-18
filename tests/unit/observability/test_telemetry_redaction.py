@@ -74,6 +74,28 @@ class TestRedactForTelemetry:
         redact_for_telemetry({"q": "x"}, policy_store=ps, subject="agent")
         ps.check.assert_called_once_with("agent", "telemetry")
 
+    def test_mask_secrets_false_passes_structured_data_through(self):
+        # mask_secrets=False (used for spans) must NOT run redact_dict — otherwise
+        # is_sensitive_key matches "token" as a substring and masks token-usage
+        # fields (prompt_tokens/completion_tokens), breaking cost observability.
+        data = {"usage": {"prompt_tokens": 100, "completion_tokens": 20}, "auth_method": "oauth"}
+        out = redact_for_telemetry(data, mask_secrets=False)
+        assert out["usage"] == {"prompt_tokens": 100, "completion_tokens": 20}
+        assert out["auth_method"] == "oauth"
+
+    def test_mask_secrets_false_still_redacts_on_deny(self):
+        # The label gate still fires regardless of mask_secrets.
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        out = redact_for_telemetry(
+            {"usage": {"prompt_tokens": 100}},
+            policy_store=ps,
+            subject="agent",
+            labels={"pii"},
+            mask_secrets=False,
+        )
+        assert "_redacted" in out
+
 
 class TestStartTraceRedaction:
     async def test_start_trace_redacts_input_when_denied(self, monkeypatch):
@@ -123,79 +145,58 @@ class TestStartTraceRedaction:
 
 
 # ---------------------------------------------------------------------------
-# @observe span redaction — the per-LLM-call prompts/completions (and other
-# spans) must be redacted too, not just the trace-level preview.
+# SpanScope is the single chokepoint every span passes through (@observe, tool
+# calls, workflow stages, executor). Redaction lives here so ALL of them are
+# covered — including tool-call spans that don't go through @observe.
 # ---------------------------------------------------------------------------
 
 
-class _FakeSpan:
-    def __init__(self):
-        self.output = None
-
-    def set_output(self, o):
-        self.output = o
-
-    def add_metadata(self, *a, **k):
-        pass
-
-    def set_error(self, *a, **k):
-        pass
-
-
-class _FakeSpanScope:
-    last = None
-
-    def __init__(self, name, input=None, metadata=None, level=None):  # noqa: A002
-        self.input = input
-        self.span = _FakeSpan()
-        _FakeSpanScope.last = self
-
-    async def __aenter__(self):
-        return self.span
-
-    async def __aexit__(self, *a):
-        return False
-
-
-class TestObserveSpanRedaction:
-    async def test_observe_redacts_span_input_and_output_when_denied(self, monkeypatch):
-        from continuum.observability import decorators
+class TestSpanScopeRedaction:
+    def test_span_input_redacted_when_denied(self, monkeypatch):
+        from continuum.observability import trace_context as tc
         from continuum.security.policy_context import use_active_policy
 
-        monkeypatch.setattr(decorators, "SpanScope", _FakeSpanScope)
+        captured: dict = {}
 
-        @decorators.observe(name="llm_chat")
-        async def call(messages):
-            return {"completion": "patient SSN 123-45-6789"}
+        class FakeParent:
+            def span(self, **kw):
+                captured.update(kw)
+                return MagicMock()
+
+        monkeypatch.setattr(tc, "get_parent_client", lambda: FakeParent())
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        ctx = create_run_context(data_labels={"pii"})
+
+        # A tool-call-style span (direct SpanScope, NOT @observe) must be redacted.
+        with use_active_policy(ps, "agent", ctx):
+            with tc.SpanScope("tool.fetch_record", input={"args": {"ssn": "123-45-6789"}}):
+                pass
+
+        assert "123-45-6789" not in str(captured.get("input"))
+        assert "_redacted" in str(captured.get("input"))
+
+    def test_set_output_redacted_when_denied(self):
+        from continuum.observability.trace_context import SpanScope
+        from continuum.security.policy_context import use_active_policy
 
         ps = MagicMock()
         ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
         ctx = create_run_context(data_labels={"pii"})
 
         with use_active_policy(ps, "agent", ctx):
-            result = await call({"messages": [{"role": "user", "content": "my SSN 123-45-6789"}]})
+            span = SpanScope("tool.x")
+            span.set_output({"result": "patient SSN 123-45-6789"})
 
-        # The function's real return value is untouched.
-        assert result == {"completion": "patient SSN 123-45-6789"}
+        assert "123-45-6789" not in str(span._output)
+        assert "_redacted" in str(span._output)
 
-        # But the span captured a redacted input AND output — no raw content leaked.
-        scope = _FakeSpanScope.last
-        assert "123-45-6789" not in str(scope.input)
-        assert "_redacted" in str(scope.input)
-        assert "123-45-6789" not in str(scope.span.output)
-        assert "_redacted" in str(scope.span.output)
+    def test_set_output_passes_token_usage_through_when_no_policy(self):
+        # Regression guard: no policy -> spans pass through; token-usage fields
+        # (which match the "token" secret-key substring) must NOT be masked.
+        from continuum.observability.trace_context import SpanScope
 
-    async def test_observe_passes_through_when_no_policy(self, monkeypatch):
-        from continuum.observability import decorators
-
-        monkeypatch.setattr(decorators, "SpanScope", _FakeSpanScope)
-
-        @decorators.observe(name="llm_chat")
-        async def call(messages):
-            return {"completion": "hello"}
-
-        result = await call({"messages": [{"role": "user", "content": "hi"}]})
-        assert result == {"completion": "hello"}
-        scope = _FakeSpanScope.last
-        # No ambient policy → content passes through to the span (not redacted).
-        assert "hello" in str(scope.span.output)
+        span = SpanScope("llm.x")
+        span.set_output({"usage": {"prompt_tokens": 100, "completion_tokens": 20}})
+        assert span._output["usage"] == {"prompt_tokens": 100, "completion_tokens": 20}
