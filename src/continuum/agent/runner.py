@@ -396,12 +396,19 @@ class AgentRunner:
         if agent.on_start:
             agent.on_start(agent, {"context": context, "input": input})
 
-        messages, user_message_index = await self._message_builder.prepare_messages(
-            agent,
-            input,
-            context,
-            tool_context_state=tool_context_state,
-        )
+        # Publish the policy context around message prep too: prepare_messages can
+        # trigger proactive context compression, which makes its own llm_client.chat()
+        # call for summarization. Without this, that call would run before run()'s
+        # ambient publish and bypass the model-routing gate.
+        from continuum.security.policy_context import use_active_policy
+
+        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context):
+            messages, user_message_index = await self._message_builder.prepare_messages(
+                agent,
+                input,
+                context,
+                tool_context_state=tool_context_state,
+            )
         run_state.messages = [message_to_dict(m) for m in messages]
 
         return PrepareRunResult(
