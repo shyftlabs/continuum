@@ -32,7 +32,22 @@ class IExecutor(ABC):
         context: RunContext,
         run_state: RunState,
     ) -> AgentResponse:
-        """Execute the main conversation loop."""
+        """Execute the main conversation loop.
+
+        Contract: implementations should publish the agent's data-label policy
+        for the duration of the loop so per-agent gating is correct across
+        handoffs (the run switches agents, and each agent may have a different
+        ``policy_store``). The shipped ``Executor`` does this via
+        ``continuum.security.policy_context.use_active_policy``::
+
+            with use_active_policy(agent.policy_store, agent.name, context):
+                ...  # run the loop
+
+        Omitting it is not a security hole — ``AgentRunner.run``/``run_stream``
+        still publish the *entry* agent's policy run-wide, so the gate still
+        fires — but a handed-off agent's turns would then be gated by the entry
+        agent's policy rather than its own.
+        """
         pass
 
 
