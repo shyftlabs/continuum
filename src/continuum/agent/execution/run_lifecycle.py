@@ -44,13 +44,21 @@ class RunLifecycle:
                 logger.debug(f"Using existing trace context: {existing_trace_id}")
             elif not context.trace_id:
                 from continuum.observability import TracingManager
+                from continuum.observability.data_redaction import redact_for_telemetry
 
                 tracing_manager = TracingManager()
                 trace = tracing_manager.create_trace(
                     name=f"agent-run-{agent.name}",
                     user_id=context.user_id,
                     session_id=context.session_id,
-                    input=truncate_data({"query": input_preview[:500]}),
+                    input=truncate_data(
+                        redact_for_telemetry(
+                            {"query": input_preview[:500]},
+                            policy_store=getattr(agent, "policy_store", None),
+                            subject=agent.name,
+                            labels=context.data_labels,
+                        )
+                    ),
                     metadata={
                         "run_id": context.run_id,
                         "agent_name": agent.name,
@@ -89,12 +97,21 @@ class RunLifecycle:
             trace = getattr(context, "_langfuse_trace", None)
             if trace:
                 try:
+                    from continuum.observability.data_redaction import redact_for_telemetry
+
                     trace.update(
                         output=truncate_data(
-                            {
-                                "response": response.content[:1000] if response.content else None,
-                                "status": response.status.value,
-                            }
+                            redact_for_telemetry(
+                                {
+                                    "response": response.content[:1000]
+                                    if response.content
+                                    else None,
+                                    "status": response.status.value,
+                                },
+                                policy_store=getattr(agent, "policy_store", None),
+                                subject=agent.name,
+                                labels=context.data_labels,
+                            )
                         ),
                         metadata={
                             "run_id": context.run_id,
