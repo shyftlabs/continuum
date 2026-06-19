@@ -1587,4 +1587,12 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
-            reset_active_policy(_policy_token)
+            try:
+                reset_active_policy(_policy_token)
+            except ValueError:
+                # Generator finalized in a different context than it started in
+                # (caller abandoned the stream without `aclosing()`, so the GC
+                # finalizer runs this `finally`). The token can't be reset across
+                # contexts; the per-task context copy means there's nothing to
+                # leak, so this is best-effort.
+                pass
