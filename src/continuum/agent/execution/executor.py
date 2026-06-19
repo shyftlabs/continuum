@@ -379,6 +379,7 @@ class Executor(IExecutor):
                     usage=response.usage,
                     snapshot=_snapshot,
                     agent_stack=_agent_stack,
+                    data_labels=context.data_labels,
                 )
 
                 # Log LLM response details

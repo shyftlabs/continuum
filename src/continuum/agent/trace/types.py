@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StepKind(str, Enum):
@@ -93,6 +93,12 @@ class DecisionStep:
     # step. Only populated on LLM_CALL steps when DECISION_TRACE_CHECKPOINT is on
     # (it is heavy); kept in the persisted trace so fork() can replay from here.
     messages_snapshot: list[dict[str, Any]] | None = None
+
+    # Data-sensitivity labels (sorted) active going into this step — the run's
+    # accumulated taint at the resume point. fork() seeds the resumed context
+    # from these so a replayed run is gated like the original (taint isn't lost
+    # for the steps fork replays-from-checkpoint rather than re-executes).
+    data_labels: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

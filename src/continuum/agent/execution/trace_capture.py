@@ -49,10 +49,14 @@ def record_llm_turn(
     usage: Any,
     snapshot: list[dict[str, Any]] | None,
     agent_stack: list[str] | None,
+    data_labels: set[str] | list[str] | None = None,
 ) -> str | None:
     """Record this turn's LLM decision step; returns its id so the turn's tool /
     reasoning / handoff steps can nest under it. No-op (``None``) without a
     recorder. ``usage`` may be ``None`` (e.g. streaming) → zero token counts.
+
+    ``data_labels`` is the run's taint active at this step — stored so fork()
+    can seed the resumed run's context and keep gating it the same way.
     """
     if recorder is None:
         return None
@@ -66,6 +70,7 @@ def record_llm_turn(
         total_tokens=(usage.total_tokens or 0) if usage else 0,
         messages_snapshot=snapshot,
         agent_stack=agent_stack,
+        data_labels=data_labels,
     )
 
 

@@ -674,6 +674,9 @@ class AgentRunner:
         if isinstance(orchestrator, Forkable):
             resume_ctx = create_run_context(max_turns=orchestrator.config.max_turns)
             resume_ctx.disable_memory_writes = True  # a fork is a hypothetical replay
+            # Seed the forked run's taint from the resume step so the gates
+            # (model-routing/telemetry) enforce as they did on the parent.
+            resume_ctx.data_labels = set(step.data_labels or [])
             return await orchestrator.resume_from(
                 parent_trace=parent,
                 from_step=from_step,
@@ -745,6 +748,9 @@ class AgentRunner:
 
         ctx = create_run_context(max_turns=target.config.max_turns)
         ctx.disable_memory_writes = True  # a fork is a hypothetical replay
+        # Seed the forked run's taint from the resume step so a replayed run is
+        # gated like the original (prefix taint isn't lost on fork).
+        ctx.data_labels = set(step.data_labels or [])
         ctx.recorder = TraceRecorder(
             ctx.run_id, target.name, parent.user_query, checkpoint=checkpoint_enabled()
         )
@@ -1075,6 +1081,7 @@ class AgentRunner:
                         usage=None,
                         snapshot=_snapshot,
                         agent_stack=_agent_stack,
+                        data_labels=ctx.data_labels,
                     )
                     if (_ds := latest_step_payload(ctx.recorder)) is not None:
                         yield AgentEvent(
@@ -1270,6 +1277,7 @@ class AgentRunner:
                     usage=None,
                     snapshot=_snapshot,
                     agent_stack=_agent_stack,
+                    data_labels=ctx.data_labels,
                 )
                 if (_ds := latest_step_payload(ctx.recorder)) is not None:
                     yield AgentEvent(
