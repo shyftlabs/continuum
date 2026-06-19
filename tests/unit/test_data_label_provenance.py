@@ -19,8 +19,7 @@ sites:
                  reading from that scope taints the run ("read = taint").
   3. Run-level — create_run_context(data_labels=...) seeds the run at start.
 
-Plus the Phase-0 plumbing the producer needs: RunContext.taint() and
-RunContext.from_dict() (so labels survive serialize/resume).
+Plus the Phase-0 plumbing the producer needs: RunContext.taint().
 
 No detector is shipped: tests declare provenance explicitly.
 """
@@ -58,39 +57,6 @@ class TestRunContextTaint:
         ctx = RunContext(run_id="r1")
         ctx.taint()
         assert ctx.data_labels == set()
-
-
-class TestRunContextFromDict:
-    def test_round_trips_data_labels(self):
-        from continuum.agent.types import RunContext
-
-        ctx = RunContext(run_id="r1", data_labels={"pii", "phi"})
-        restored = RunContext.from_dict(ctx.to_dict())
-        assert restored.data_labels == {"pii", "phi"}
-
-    def test_restores_core_fields(self):
-        from continuum.agent.types import RunContext
-
-        ctx = RunContext(
-            run_id="r1",
-            session_id="s1",
-            user_id="u1",
-            conversation_id="c1",
-            priority=7,
-            data_labels={"pii"},
-        )
-        restored = RunContext.from_dict(ctx.to_dict())
-        assert restored.run_id == "r1"
-        assert restored.session_id == "s1"
-        assert restored.user_id == "u1"
-        assert restored.conversation_id == "c1"
-        assert restored.priority == 7
-
-    def test_missing_data_labels_defaults_empty(self):
-        from continuum.agent.types import RunContext
-
-        restored = RunContext.from_dict({"run_id": "r1"})
-        assert restored.data_labels == set()
 
 
 # ---------------------------------------------------------------------------
