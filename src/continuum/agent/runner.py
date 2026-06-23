@@ -1296,6 +1296,26 @@ class AgentRunner:
                     )
 
                 if tool_calls:
+                    # Pre-taint from the DECLARED labels of EVERY tool in this
+                    # streamed turn BEFORE gating/executing any of them. The
+                    # streaming loop runs tools sequentially via execute_tool_call,
+                    # so without this the tool gate would see the taint state at
+                    # each tool's turn — and a producer+exfil pair could bypass the
+                    # gate by listing the exfil tool first (it'd be checked before
+                    # the producer taints the run). Mirrors execute_tools_batch's
+                    # pre-taint so streaming and non-streaming gate identically
+                    # (order-independent). Declared provenance is known up front.
+                    if agent.config and agent.config.tool_data_labels:
+                        for _tc in tool_calls:
+                            _name = (
+                                _tc.function.name
+                                if hasattr(_tc, "function")
+                                else _tc.get("function", {}).get("name", "")
+                            )
+                            _labels = agent.config.tool_data_labels.get(_name)
+                            if _labels:
+                                ctx.taint(*_labels)
+
                     messages.append(
                         {
                             "role": "assistant",
