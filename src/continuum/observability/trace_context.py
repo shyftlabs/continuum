@@ -501,16 +501,32 @@ class SpanScope:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        error = exc_val if exc_type else None
-        self._end_span(error)
+        self._end_span(self._span_error(exc_type, exc_val))
 
     async def __aenter__(self) -> SpanScope:
         self._create_span()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        error = exc_val if exc_type else None
-        self._end_span(error)
+        self._end_span(self._span_error(exc_type, exc_val))
+
+    @staticmethod
+    def _span_error(exc_type: Any, exc_val: Any) -> Any:
+        """The exception to flag this span with — or None.
+
+        An EXPECTED access-control denial (``PolicyDeniedError`` — a data-label
+        gate) is propagating by design, not failing: the span is NOT marked
+        ERROR for it (it flushes at its normal/declared level, e.g. the WARNING
+        set by the observe decorator). Every other exception marks the span
+        ERROR as before.
+        """
+        if not exc_type:
+            return None
+        from continuum.exceptions import PolicyDeniedError
+
+        if isinstance(exc_val, PolicyDeniedError):
+            return None
+        return exc_val
 
 
 # =============================================================================

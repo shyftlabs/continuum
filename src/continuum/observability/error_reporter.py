@@ -367,6 +367,16 @@ def report_error(
             raise
         ```
     """
+    # Expected access-control denials (data-label / policy gates) are NOT errors —
+    # they are the governance layer working as designed. Do not create a
+    # high-severity error trace or escalate/alert for them (this is the single
+    # chokepoint, so every call site is covered). They remain visible for audit
+    # as "policy denied" events on the span/trace via the observe decorator.
+    from continuum.exceptions import PolicyDeniedError
+
+    if isinstance(error, PolicyDeniedError):
+        return
+
     reporter = get_error_reporter()
     reporter.report(
         error=error,

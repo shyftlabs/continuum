@@ -167,3 +167,33 @@ class TestStoreInMemoryIsBestEffort:
         # Must not raise — memory storage is best-effort.
         await client.add_message("sess-1234abcd", _msg())
         provider.add_message.assert_awaited_once()
+
+
+class TestPolicyDenialIsQuiet:
+    """A data-label policy blocking the long-term write is EXPECTED — it must be
+    logged quietly (INFO, no traceback) and never escalated to error reporting."""
+
+    async def test_memory_access_denied_logged_quietly_not_reported(self):
+        from continuum.agent.exceptions import MemoryAccessDeniedError
+        from continuum.session import client as sc_mod
+
+        denied = AsyncMock(
+            side_effect=MemoryAccessDeniedError(
+                operation="write", scope="agent", policy_name="phi-never-persisted"
+            )
+        )
+        client, _, provider, _ = _make_client(mode="sync", add_mock=denied)
+
+        with (
+            patch("continuum.session.client.report_error") as rep,
+            patch.object(sc_mod.logger, "error") as err,
+            patch.object(sc_mod.logger, "info") as info,
+        ):
+            await client.add_message("sess-1234abcd", _msg())  # must NOT raise
+
+        provider.add_message.assert_awaited_once()  # short-term write still happened
+        rep.assert_not_called()  # not escalated to error reporting
+        err.assert_not_called()  # no ERROR-level log / traceback
+        # the expected denial was logged quietly at INFO, with the policy name
+        matched = [c for c in info.call_args_list if "blocked by policy" in c.args[0]]
+        assert matched and matched[0].args[1] == "phi-never-persisted"

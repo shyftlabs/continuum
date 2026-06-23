@@ -32,6 +32,30 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
+def _record_observe_exception(span: Any, span_name: str, e: BaseException) -> None:
+    """Record an exception on the span before it re-raises.
+
+    Expected access-control denials (``PolicyDeniedError`` — the data-label
+    model/tool/memory gates) are NOT failures: they are recorded as a
+    WARNING-level "policy denied" event (audit-visible in the trace) and are NOT
+    escalated to error reporting, so they don't pollute error dashboards or
+    trigger alerts. Every other exception keeps the normal ERROR + report path.
+    """
+    from continuum.exceptions import PolicyDeniedError
+
+    span.add_metadata("error_type", type(e).__name__)
+    if isinstance(e, PolicyDeniedError):
+        span.level = "WARNING"
+        span.add_metadata("policy_denied", True)
+        span.add_metadata("denial", str(e))
+        return
+
+    span.set_error(str(e))
+    from continuum.observability.error_reporter import report_error
+
+    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+
+
 def _get_function_input(func: Callable[..., Any], args: tuple, kwargs: dict) -> dict[str, Any]:
     """Extract function input as a dictionary."""
     sig = inspect.signature(func)
@@ -128,12 +152,7 @@ def observe(
 
                     return result
                 except Exception as e:
-                    span.set_error(str(e))
-                    span.add_metadata("error_type", type(e).__name__)
-                    # Report error to observability providers
-                    from continuum.observability.error_reporter import report_error
-
-                    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+                    _record_observe_exception(span, span_name, e)
                     raise
 
         @functools.wraps(func)
@@ -163,12 +182,7 @@ def observe(
 
                     return result
                 except Exception as e:
-                    span.set_error(str(e))
-                    span.add_metadata("error_type", type(e).__name__)
-                    # Report error to observability providers
-                    from continuum.observability.error_reporter import report_error
-
-                    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+                    _record_observe_exception(span, span_name, e)
                     raise
 
         if inspect.iscoroutinefunction(func):
@@ -333,21 +347,26 @@ def trace_agent(
                             trace.update(output=_serialize_output(result))
                     return result
                 except Exception as e:
-                    if trace:
-                        if hasattr(trace, "update"):
-                            trace.update(
-                                metadata={
-                                    **agent_metadata,
-                                    "error": str(e),
-                                    "error_type": type(e).__name__,
-                                }
-                            )
-                    from continuum.observability.error_reporter import report_error
+                    from continuum.exceptions import PolicyDeniedError
 
-                    trace_id = trace.id if hasattr(trace, "id") and trace.id else None
-                    report_error(
-                        e, context=f"agent.{trace_name}", trace_id=trace_id, user_id=user_id
-                    )
+                    policy_denied = isinstance(e, PolicyDeniedError)
+                    if trace and hasattr(trace, "update"):
+                        trace.update(
+                            metadata={
+                                **agent_metadata,
+                                # expected denial → audit field, not an "error"
+                                ("policy_denied" if policy_denied else "error"): str(e),
+                                "error_type": type(e).__name__,
+                            }
+                        )
+                    # Expected policy denials are not escalated to error reporting.
+                    if not policy_denied:
+                        from continuum.observability.error_reporter import report_error
+
+                        trace_id = trace.id if hasattr(trace, "id") and trace.id else None
+                        report_error(
+                            e, context=f"agent.{trace_name}", trace_id=trace_id, user_id=user_id
+                        )
                     raise
                 finally:
                     # Flush ProviderManager

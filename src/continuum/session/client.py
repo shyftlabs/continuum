@@ -531,17 +531,29 @@ class SessionClient:
                     f"⚠️ Cannot store memory: Session metadata not found for session_id={session_id[:8] if session_id else 'none'}"
                 )
         except Exception as mem_error:
-            # Memory storage failures should not break session operations
-            logger.error(
-                f"❌ Memory storage failed: {mem_error}",
-                exc_info=True,
-                extra={"session_id": session_id, "role": message.role},
-            )
-            report_error(
-                mem_error,
-                context="session_memory_storage",
-                metadata={"session_id": session_id, "message_role": message.role},
-            )
+            # Memory storage failures should not break session operations.
+            from continuum.agent.exceptions import MemoryAccessDeniedError
+
+            if isinstance(mem_error, MemoryAccessDeniedError):
+                # Expected: a data-label policy blocked the long-term write. This
+                # is the gate working as designed — not a failure. Log quietly
+                # (no traceback) and don't escalate to error reporting.
+                logger.info(
+                    "🛡️ Long-term memory write blocked by policy '%s' "
+                    "(run carried restricted data labels)",
+                    mem_error.context.get("policy_name"),
+                )
+            else:
+                logger.error(
+                    f"❌ Memory storage failed: {mem_error}",
+                    exc_info=True,
+                    extra={"session_id": session_id, "role": message.role},
+                )
+                report_error(
+                    mem_error,
+                    context="session_memory_storage",
+                    metadata={"session_id": session_id, "message_role": message.role},
+                )
 
     @observe(name="session_get_history", capture_output=True)
     async def get_conversation_history(

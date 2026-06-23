@@ -343,6 +343,27 @@ class ToolService(IToolService):
         if not tool_calls:
             return []
 
+        # Provenance pre-taint: fold the DECLARED data labels of every tool in
+        # this batch into the run BEFORE gating/executing any of them. Tool
+        # provenance is declared up front (AgentConfig.tool_data_labels), so the
+        # run is sensitive the moment such a tool is invoked — not only after it
+        # returns. Without this, a batch like [lookup_patient (declares "phi"),
+        # send_referral_email] would gate the exfiltration tool against the
+        # pre-batch (clean) labels — under parallel execution the sibling's taint
+        # lands too late — and a denied tool would slip through. Pre-tainting is
+        # order- and concurrency-independent and fails safe (a declared tool that
+        # errors/returns nothing still taints, which is the conservative choice).
+        if agent.config and agent.config.tool_data_labels:
+            for tc in tool_calls:
+                name = (
+                    tc.function.name
+                    if hasattr(tc, "function")
+                    else tc.get("function", {}).get("name", "")
+                )
+                labels = agent.config.tool_data_labels.get(name)
+                if labels:
+                    context.taint(*labels)
+
         # Single tool - execute directly
         if len(tool_calls) == 1:
             try:

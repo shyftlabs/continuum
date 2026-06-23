@@ -257,6 +257,7 @@ class RunFinalizer:
                 tool_execution_summary=context.metadata.get("tool_execution_summary"),
                 run_id=context.run_id,
                 disable_memory=context.disable_memory_writes,
+                data_labels=context.data_labels,
             )
         except Exception as e:
             logger.warning(f"Failed to save messages to session: {e}")
