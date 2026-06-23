@@ -1,5 +1,5 @@
 """
-Evaluation dataset generator for TaxPilot RAG system.
+Evaluation dataset generator for RAG system.
 
 Builds a golden dataset covering all 7 knowledge base sources:
   - irc          (Cornell LII — IRC sections)
@@ -12,7 +12,7 @@ Builds a golden dataset covering all 7 knowledge base sources:
 
 For IRC and treasury_reg, questions are generated from section titles.
 For case law and treaties, questions are generated from case/treaty names.
-All questions call the TaxPilot RAG API to get real answers + citations.
+All questions call the RAG API to get real answers + citations.
 
 Usage:
     python generate_eval_dataset.py
@@ -566,7 +566,7 @@ async def main(
     output_path: Path,
     run_eval: bool,
 ) -> None:
-    print("=== TaxPilot Evaluation Dataset Generator (Multi-Source) ===\n")
+    print("=== Evaluation Dataset Generator (Multi-Source) ===\n")
 
     all_items: list[dict[str, Any]] = []
 
@@ -627,7 +627,7 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate TaxPilot multi-source evaluation dataset"
+        description="Generate multi-source evaluation dataset"
     )
     parser.add_argument(
         "--samples",

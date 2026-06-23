@@ -240,7 +240,7 @@ class MessageBuilder(IMessageBuilder):
                         f"'{agent.name}': {detected}"
                     )
 
-        # Run product input scanners (e.g. LLM Guard PromptInjection/Gibberish for TaxPilot).
+        # Run product input scanners (e.g. an LLM Guard PromptInjection/Gibberish scanner).
         # Any scanner that returns is_safe=False raises InputBlockedError — the calling router
         # catches this and returns a blocked response without invoking the LLM.
         if isinstance(input, str) and agent.config and agent.config.input_scanners:

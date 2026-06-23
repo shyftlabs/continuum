@@ -1,4 +1,4 @@
-# TaxPilot RAG Evaluation
+# RAG Evaluation
 
 ## Prerequisites
 

@@ -62,7 +62,7 @@ class RunFinalizer:
 
         await self._finalize_decision_trace(context, response)
 
-        # Run product output scanners (e.g. LLM Guard Sensitive/PII for TaxPilot).
+        # Run product output scanners (e.g. an LLM Guard Sensitive/PII scanner).
         # Scanners redact PII in response.content before it is saved to session or returned.
         # Fail-open: if a scanner crashes the response is still returned unmodified.
         if agent.config and agent.config.output_scanners and response.content:
