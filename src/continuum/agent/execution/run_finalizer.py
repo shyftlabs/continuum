@@ -135,6 +135,7 @@ class RunFinalizer:
                 status=response.status.value,
                 completed_at=datetime.now(UTC),
             )
+            trace = self._gate_decision_trace(trace)
             await get_trace_store().save(trace)
 
             detail = trace_detail()
@@ -142,6 +143,27 @@ class RunFinalizer:
                 response.decision_trace = trace.to_dict(detail)
         except Exception as e:
             logger.warning("Decision trace finalization failed (ignored): %s", e)
+
+    @staticmethod
+    def _gate_decision_trace(trace: Any) -> Any:
+        """Redact trace content when the run's data labels deny ``telemetry``.
+
+        The decision trace is a persistence sink like Langfuse, so it honors the
+        same ``telemetry`` policy (a user who denied telemetry for restricted data
+        means the trace too). Reuses the ambient policy published for the run via
+        ``resolve_active_policy``, so no params need threading; labels are read
+        live. On deny, returns a content-redacted copy (skeleton preserved);
+        otherwise returns the trace unchanged.
+        """
+        from continuum.security.policy_context import resolve_active_policy
+
+        store, subject, labels = resolve_active_policy(None, None, None)
+        if store is None or subject is None or not labels:
+            return trace
+        decision = store.check([subject, *sorted(labels)], "telemetry")
+        if decision.allowed:
+            return trace
+        return trace.redacted_copy(policy_name=decision.policy_name)
 
     async def handle_error(
         self,

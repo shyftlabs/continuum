@@ -763,15 +763,22 @@ class AgentRunner:
         run_state.current_agent = target.name
         run_state.messages = list(messages)
 
-        response = await self._executor.execute_loop(
-            agent=target, messages=messages, context=ctx, run_state=run_state
-        )
-        if target.on_end:
-            target.on_end(target, {"context": ctx, "response": response})
+        # Publish the ambient policy for the replay so the forward LLM calls are
+        # model-routing-gated and the decision-trace persist honors the run's
+        # data labels — fork seeds ctx.data_labels but does not run through
+        # AgentRunner.run's publish, so without this the gates would be bypassed.
+        from continuum.security.policy_context import use_active_policy
 
-        await self._finalizer.finalize(
-            target, ctx, run_state, response, 0, None, start_time, run_state.messages
-        )
+        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx):
+            response = await self._executor.execute_loop(
+                agent=target, messages=messages, context=ctx, run_state=run_state
+            )
+            if target.on_end:
+                target.on_end(target, {"context": ctx, "response": response})
+
+            await self._finalizer.finalize(
+                target, ctx, run_state, response, 0, None, start_time, run_state.messages
+            )
         return response
 
     # =========================================================================
