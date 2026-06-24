@@ -105,9 +105,9 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | Feature                 | Description                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
 | PolicyStore             | Deny-overrides ACL engine; glob pattern matching on subject × resource                   |
-| AccessPolicy            | Resource prefixes: `tool:*`, `memory:*`, `data:*`                                        |
+| AccessPolicy            | Resource families: `llm:<model>`, `tool:<name>`, `memory:<scope>`, `telemetry`, `session` (glob or exact) |
 | ToolAccessDeniedError   | Policy denial surfaced to the LLM with a configurable message                            |
-| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate through handoffs and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` (e.g. deny `tool:send_email` for subject `pii`); with no policy store configured they have no effect. Tool access only — not wired into the memory path; to keep sensitive content out of memory use `pre_store_filter` (content redaction), not labels. |
+| Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate forward through a run and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` for the label as subject; with no policy store configured they have no effect. Enforced **end-to-end** across six sinks: model routing (`llm:<model>`), tool calls (`tool:<name>`), long-term memory (`memory:<scope>`), telemetry, session persistence, and the decision trace. Labels come only from declared producers (`tool_data_labels`, memory `scope_data_labels`, run-level `data_labels`, or `ctx.taint()`) — the SDK ships no PII detector. |
 | Input sanitization      | Injection detection at the system boundary                                               |
 | Secret utilities        | Utilities for safe handling of secrets and credentials                                   |
 
