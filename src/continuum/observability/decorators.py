@@ -185,8 +185,78 @@ def observe(
                     _record_observe_exception(span, span_name, e)
                     raise
 
+        @functools.wraps(func)
+        async def async_gen_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+            # Async generators MUST be driven inside the span scope: calling the
+            # function only creates the generator — its body (and any exception,
+            # e.g. a PolicyDeniedError gate) runs lazily as the consumer iterates.
+            # The plain async_wrapper would close the span before the first
+            # __anext__, recording ~0s and never seeing the deny — so streaming
+            # spans (llm_chat_stream) would silently drop the WARNING the
+            # non-streaming path records. Iterate here so the span stays open
+            # across the whole stream and exceptions are recorded.
+            input_data = None
+            if capture_input:
+                try:
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
+                except Exception as e:
+                    logger.debug(f"Failed to capture input: {e}")
+
+            async with SpanScope(
+                span_name,
+                input=input_data,
+                metadata=metadata or {},
+                level=level.value if isinstance(level, SpanLevel) else level,
+            ) as span:
+                collected: list[Any] = []
+                try:
+                    async for item in func(*args, **kwargs):
+                        if capture_output:
+                            collected.append(item)
+                        yield item
+                    if capture_output and collected:
+                        span.set_output(truncate_data(_serialize_output(collected)))
+                except Exception as e:
+                    _record_observe_exception(span, span_name, e)
+                    raise
+
+        @functools.wraps(func)
+        def sync_gen_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+            # Sync analogue of async_gen_wrapper (see note there): drive the
+            # generator inside the span so lazy bodies/exceptions are captured.
+            input_data = None
+            if capture_input:
+                try:
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
+                except Exception as e:
+                    logger.debug(f"Failed to capture input: {e}")
+
+            with SpanScope(
+                span_name,
+                input=input_data,
+                metadata=metadata or {},
+                level=level.value if isinstance(level, SpanLevel) else level,
+            ) as span:
+                collected: list[Any] = []
+                try:
+                    for item in func(*args, **kwargs):
+                        if capture_output:
+                            collected.append(item)
+                        yield item
+                    if capture_output and collected:
+                        span.set_output(truncate_data(_serialize_output(collected)))
+                except Exception as e:
+                    _record_observe_exception(span, span_name, e)
+                    raise
+
+        # Order matters: an async generator is neither a coroutine function nor a
+        # (sync) generator function, so check the most specific kinds first.
+        if inspect.isasyncgenfunction(func):
+            return async_gen_wrapper  # type: ignore
         if inspect.iscoroutinefunction(func):
             return async_wrapper  # type: ignore
+        if inspect.isgeneratorfunction(func):
+            return sync_gen_wrapper  # type: ignore
         return sync_wrapper  # type: ignore
 
     return decorator
