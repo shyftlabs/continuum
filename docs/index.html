@@ -2209,6 +2209,18 @@ handle = <span class="kw">await</span> client.execute_workflow(
     auto_approve_if=<span class="str">"low_risk"</span>,  <span class="cm"># skip approval if condition agent returns this</span>
 )</pre></div>
 
+  <div class="callout callout-info">
+    <strong>HITL approver authorization (<code>decided_by ∈ approvers</code>).</strong> When <code>approvers</code> is non-empty, a decision is honored only if its <code>decided_by</code> is in the list — gating both approvals <em>and</em> rejections. Unauthorized decisions are recorded and ignored; the workflow stays paused until a listed approver resolves it (or it auto-expires at <code>timeout</code>). An empty <code>approvers</code> list means anyone may decide; <code>escalated</code> always routes through. A full workflow with this approval gate lives at <code>playground/temporal-leadflow/</code>.
+  </div>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal.human_in_loop <span class="kw">import</span> <span class="cls">HumanInLoopManager</span>
+
+mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
+
+<span class="cm"># A decision is honored only if decided_by is in approvers:</span>
+<span class="kw">await</span> mgr.<span class="fn">approve</span>(workflow_id, request_id, decided_by=<span class="str">"alice@company.com"</span>)    <span class="cm"># honored</span>
+<span class="kw">await</span> mgr.<span class="fn">reject</span>(workflow_id, request_id, decided_by=<span class="str">"mallory@evil.com"</span>)     <span class="cm"># ignored — not an approver; stays pending</span>
+<span class="kw">await</span> mgr.<span class="fn">escalate</span>(workflow_id, request_id, escalate_to=<span class="str">"carol@company.com"</span>)  <span class="cm"># always allowed (re-targets)</span></pre></div>
+
 
 </section>
 
