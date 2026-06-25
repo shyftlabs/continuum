@@ -51,6 +51,7 @@ class TraceRecorder:
         status: str = "ok",
         error: str | None = None,
         messages_snapshot: list[Any] | None = None,
+        data_labels: set[str] | list[str] | None = None,
     ) -> str:
         """Append a step and return its id (so callers can nest children under it).
 
@@ -79,6 +80,7 @@ class TraceRecorder:
             error=error,
             span_id=get_current_span_id(),
             messages_snapshot=messages_snapshot,
+            data_labels=sorted(data_labels) if data_labels else [],
         )
         self._trace.add(step)
         return step.step_id
@@ -98,6 +100,7 @@ class TraceRecorder:
         decision: Any = None,
         messages_snapshot: list[Any] | None = None,
         agent_stack: list[str] | None = None,
+        data_labels: set[str] | list[str] | None = None,
     ) -> str:
         return self.record(
             StepKind.LLM_CALL,
@@ -112,6 +115,7 @@ class TraceRecorder:
             total_tokens=total_tokens,
             latency_ms=latency_ms,
             messages_snapshot=messages_snapshot if self.checkpoint else None,
+            data_labels=data_labels,
         )
 
     def record_reasoning(

@@ -396,12 +396,19 @@ class AgentRunner:
         if agent.on_start:
             agent.on_start(agent, {"context": context, "input": input})
 
-        messages, user_message_index = await self._message_builder.prepare_messages(
-            agent,
-            input,
-            context,
-            tool_context_state=tool_context_state,
-        )
+        # Publish the policy context around message prep too: prepare_messages can
+        # trigger proactive context compression, which makes its own llm_client.chat()
+        # call for summarization. Without this, that call would run before run()'s
+        # ambient publish and bypass the model-routing gate.
+        from continuum.security.policy_context import use_active_policy
+
+        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context):
+            messages, user_message_index = await self._message_builder.prepare_messages(
+                agent,
+                input,
+                context,
+                tool_context_state=tool_context_state,
+            )
         run_state.messages = [message_to_dict(m) for m in messages]
 
         return PrepareRunResult(
@@ -462,6 +469,13 @@ class AgentRunner:
                 error=str(e),
             )
 
+        # Publish the run's policy context so EVERY llm_client.chat() in this run
+        # — smart-layer triage, workflow orchestration, and the executor — is
+        # gated by the data-label model-routing policy, not just execute_loop.
+        # execute_loop re-publishes per-agent on handoffs (nested set/reset).
+        from continuum.security.policy_context import reset_active_policy, set_active_policy
+
+        _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -589,6 +603,8 @@ class AgentRunner:
                 trace_id=ctx.trace_id,
                 original_error=e,
             ) from e
+        finally:
+            reset_active_policy(_policy_token)
 
     # =========================================================================
     # Fork (time-travel: replay a run from a step with an edit)
@@ -658,6 +674,9 @@ class AgentRunner:
         if isinstance(orchestrator, Forkable):
             resume_ctx = create_run_context(max_turns=orchestrator.config.max_turns)
             resume_ctx.disable_memory_writes = True  # a fork is a hypothetical replay
+            # Seed the forked run's taint from the resume step so the gates
+            # (model-routing/telemetry) enforce as they did on the parent.
+            resume_ctx.data_labels = set(step.data_labels or [])
             return await orchestrator.resume_from(
                 parent_trace=parent,
                 from_step=from_step,
@@ -729,6 +748,9 @@ class AgentRunner:
 
         ctx = create_run_context(max_turns=target.config.max_turns)
         ctx.disable_memory_writes = True  # a fork is a hypothetical replay
+        # Seed the forked run's taint from the resume step so a replayed run is
+        # gated like the original (prefix taint isn't lost on fork).
+        ctx.data_labels = set(step.data_labels or [])
         ctx.recorder = TraceRecorder(
             ctx.run_id, target.name, parent.user_query, checkpoint=checkpoint_enabled()
         )
@@ -741,15 +763,22 @@ class AgentRunner:
         run_state.current_agent = target.name
         run_state.messages = list(messages)
 
-        response = await self._executor.execute_loop(
-            agent=target, messages=messages, context=ctx, run_state=run_state
-        )
-        if target.on_end:
-            target.on_end(target, {"context": ctx, "response": response})
+        # Publish the ambient policy for the replay so the forward LLM calls are
+        # model-routing-gated and the decision-trace persist honors the run's
+        # data labels — fork seeds ctx.data_labels but does not run through
+        # AgentRunner.run's publish, so without this the gates would be bypassed.
+        from continuum.security.policy_context import use_active_policy
 
-        await self._finalizer.finalize(
-            target, ctx, run_state, response, 0, None, start_time, run_state.messages
-        )
+        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx):
+            response = await self._executor.execute_loop(
+                agent=target, messages=messages, context=ctx, run_state=run_state
+            )
+            if target.on_end:
+                target.on_end(target, {"context": ctx, "response": response})
+
+            await self._finalizer.finalize(
+                target, ctx, run_state, response, 0, None, start_time, run_state.messages
+            )
         return response
 
     # =========================================================================
@@ -865,7 +894,20 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Run an agent with streaming output."""
+        """Run an agent with streaming output.
+
+        Note: this is an async generator that publishes the run's data-label
+        policy context (a contextvar) for its duration and resets it in a
+        ``finally``. If a consumer stops iterating early (``break``) without
+        closing the generator, that ``finally`` only runs on GC, so the policy
+        context can briefly linger in the calling task. To guarantee prompt
+        cleanup, wrap consumption in ``contextlib.aclosing``::
+
+            from contextlib import aclosing
+            async with aclosing(runner.run_stream(agent, input)) as stream:
+                async for event in stream:
+                    ...
+        """
         start_time = time.time()
 
         result = await self._prepare_run(
@@ -916,6 +958,11 @@ class AgentRunner:
         )
 
         turn = 0
+        # Publish the run's policy context so every llm_client.chat() in this
+        # streaming run is gated by the data-label model-routing policy.
+        from continuum.security.policy_context import reset_active_policy, set_active_policy
+
+        _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -1041,6 +1088,7 @@ class AgentRunner:
                         usage=None,
                         snapshot=_snapshot,
                         agent_stack=_agent_stack,
+                        data_labels=ctx.data_labels,
                     )
                     if (_ds := latest_step_payload(ctx.recorder)) is not None:
                         yield AgentEvent(
@@ -1236,6 +1284,7 @@ class AgentRunner:
                     usage=None,
                     snapshot=_snapshot,
                     agent_stack=_agent_stack,
+                    data_labels=ctx.data_labels,
                 )
                 if (_ds := latest_step_payload(ctx.recorder)) is not None:
                     yield AgentEvent(
@@ -1247,6 +1296,26 @@ class AgentRunner:
                     )
 
                 if tool_calls:
+                    # Pre-taint from the DECLARED labels of EVERY tool in this
+                    # streamed turn BEFORE gating/executing any of them. The
+                    # streaming loop runs tools sequentially via execute_tool_call,
+                    # so without this the tool gate would see the taint state at
+                    # each tool's turn — and a producer+exfil pair could bypass the
+                    # gate by listing the exfil tool first (it'd be checked before
+                    # the producer taints the run). Mirrors execute_tools_batch's
+                    # pre-taint so streaming and non-streaming gate identically
+                    # (order-independent). Declared provenance is known up front.
+                    if agent.config and agent.config.tool_data_labels:
+                        for _tc in tool_calls:
+                            _name = (
+                                _tc.function.name
+                                if hasattr(_tc, "function")
+                                else _tc.get("function", {}).get("name", "")
+                            )
+                            _labels = agent.config.tool_data_labels.get(_name)
+                            if _labels:
+                                ctx.taint(*_labels)
+
                     messages.append(
                         {
                             "role": "assistant",
@@ -1544,3 +1613,13 @@ class AgentRunner:
                 trace_id=ctx.trace_id,
                 original_error=e,
             ) from e
+        finally:
+            try:
+                reset_active_policy(_policy_token)
+            except ValueError:
+                # Generator finalized in a different context than it started in
+                # (caller abandoned the stream without `aclosing()`, so the GC
+                # finalizer runs this `finally`). The token can't be reset across
+                # contexts; the per-task context copy means there's nothing to
+                # leak, so this is best-effort.
+                pass

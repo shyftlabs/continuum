@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import ReflectionConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.logging import get_logger
 
@@ -70,6 +71,7 @@ class ReflectionAgent(BaseAgent):
 
             raise AgentConfigurationError("ReflectionAgent requires an inner agent to execute")
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

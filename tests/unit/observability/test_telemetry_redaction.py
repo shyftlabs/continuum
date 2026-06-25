@@ -1,0 +1,202 @@
+"""
+Phase 4 — data-label TELEMETRY redaction.
+
+Two protections, both at the trace input/output emission point:
+
+1. Label-driven (mode: redact): when a run is tainted and a policy denies
+   `telemetry` for those labels, the input/output is replaced with a redacted
+   placeholder before it reaches Langfuse — the trace skeleton (timings, tokens,
+   status) is kept, the content is not leaked.
+2. Always-on secret masking: `redact_dict` (API keys / tokens / passwords) is
+   applied even with zero labels — closing a real egress hole that existed
+   because redaction was never wired into telemetry.
+
+The gate reuses the shared resolver, so the ambient run policy works here too.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+from continuum.agent.utils.context_utils import create_run_context
+from continuum.observability.data_redaction import redact_for_telemetry
+from continuum.security.policy import PolicyDecision
+
+
+class TestRedactForTelemetry:
+    def test_no_policy_still_masks_secrets(self):
+        # Label-independent hole: secrets must be masked regardless of policy.
+        out = redact_for_telemetry({"query": "hi", "api_key": "sk-secret123"})
+        assert "sk-secret123" not in str(out)
+        assert out["query"] == "hi"
+
+    def test_denied_label_returns_placeholder(self):
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(
+            allowed=False, policy_name="no_pii_telemetry", reason="deny"
+        )
+        out = redact_for_telemetry(
+            {"query": "my SSN is 123-45-6789"},
+            policy_store=ps,
+            subject="agent",
+            labels={"pii"},
+        )
+        assert "123-45-6789" not in str(out)
+        assert "_redacted" in out
+        ps.check.assert_called_once_with(["agent", "pii"], "telemetry")
+
+    def test_allowed_label_passes_through_but_masks_secrets(self):
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=True, reason="ok")
+        out = redact_for_telemetry(
+            {"query": "hello", "token": "tok-abc123"},
+            policy_store=ps,
+            subject="agent",
+            labels={"pii"},
+        )
+        assert out["query"] == "hello"  # content kept (allowed)
+        assert "tok-abc123" not in str(out)  # but secrets still masked
+
+    def test_uses_ambient_policy_when_not_passed(self):
+        from continuum.security.policy_context import use_active_policy
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        ctx = create_run_context(data_labels={"pii"})
+        with use_active_policy(ps, "agent", ctx):
+            out = redact_for_telemetry({"query": "secret stuff"})  # no policy args
+        assert "_redacted" in out
+        ps.check.assert_called_once_with(["agent", "pii"], "telemetry")
+
+    def test_subject_only_when_no_labels(self):
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=True, reason="ok")
+        redact_for_telemetry({"q": "x"}, policy_store=ps, subject="agent")
+        ps.check.assert_called_once_with("agent", "telemetry")
+
+    def test_mask_secrets_false_passes_structured_data_through(self):
+        # mask_secrets=False (used for spans) must NOT run redact_dict — otherwise
+        # is_sensitive_key matches "token" as a substring and masks token-usage
+        # fields (prompt_tokens/completion_tokens), breaking cost observability.
+        data = {"usage": {"prompt_tokens": 100, "completion_tokens": 20}, "auth_method": "oauth"}
+        out = redact_for_telemetry(data, mask_secrets=False)
+        assert out["usage"] == {"prompt_tokens": 100, "completion_tokens": 20}
+        assert out["auth_method"] == "oauth"
+
+    def test_mask_secrets_false_still_redacts_on_deny(self):
+        # The label gate still fires regardless of mask_secrets.
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        out = redact_for_telemetry(
+            {"usage": {"prompt_tokens": 100}},
+            policy_store=ps,
+            subject="agent",
+            labels={"pii"},
+            mask_secrets=False,
+        )
+        assert "_redacted" in out
+
+
+class TestStartTraceRedaction:
+    async def test_start_trace_redacts_input_when_denied(self, monkeypatch):
+        from continuum.agent.base import BaseAgent
+        from continuum.agent.config import AgentConfig
+        from continuum.agent.execution.run_lifecycle import RunLifecycle
+        from continuum.security.policy import PolicyStore
+
+        captured: dict = {}
+
+        class FakeTrace:
+            id = "t1"
+            langfuse_trace = None
+
+        class FakeTracingManager:
+            def create_trace(self, **kwargs):
+                captured["input"] = kwargs.get("input")
+                return FakeTrace()
+
+        import continuum.observability as obs
+
+        monkeypatch.setattr(obs, "TracingManager", FakeTracingManager)
+
+        agent = BaseAgent(name="a", instructions="t", config=AgentConfig())
+        # A policy that denies telemetry for the "pii" label.
+        store = PolicyStore()
+        from continuum.security.policy import AccessPolicy
+
+        store.add_policy(
+            AccessPolicy(
+                name="no_pii_telemetry",
+                subjects=["pii"],
+                resources=["telemetry"],
+                effect="deny",
+            )
+        )
+        agent.policy_store = store
+        ctx = create_run_context(data_labels={"pii"})
+        run_state = MagicMock()
+
+        lifecycle = RunLifecycle()
+        await lifecycle.start_trace(agent, ctx, run_state, input_preview="my SSN 123-45-6789")
+
+        assert captured["input"] is not None
+        assert "123-45-6789" not in str(captured["input"]), "tainted input reached telemetry"
+        assert "_redacted" in str(captured["input"])
+
+
+# ---------------------------------------------------------------------------
+# SpanScope is the single chokepoint every span passes through (@observe, tool
+# calls, workflow stages, executor). Redaction lives here so ALL of them are
+# covered — including tool-call spans that don't go through @observe.
+# ---------------------------------------------------------------------------
+
+
+class TestSpanScopeRedaction:
+    def test_span_input_redacted_when_denied(self, monkeypatch):
+        from continuum.observability import trace_context as tc
+        from continuum.security.policy_context import use_active_policy
+
+        captured: dict = {}
+
+        class FakeParent:
+            def span(self, **kw):
+                captured.update(kw)
+                return MagicMock()
+
+        monkeypatch.setattr(tc, "get_parent_client", lambda: FakeParent())
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        ctx = create_run_context(data_labels={"pii"})
+
+        # A tool-call-style span (direct SpanScope, NOT @observe) must be redacted.
+        with use_active_policy(ps, "agent", ctx):
+            with tc.SpanScope("tool.fetch_record", input={"args": {"ssn": "123-45-6789"}}):
+                pass
+
+        assert "123-45-6789" not in str(captured.get("input"))
+        assert "_redacted" in str(captured.get("input"))
+
+    def test_set_output_redacted_when_denied(self):
+        from continuum.observability.trace_context import SpanScope
+        from continuum.security.policy_context import use_active_policy
+
+        ps = MagicMock()
+        ps.check.return_value = PolicyDecision(allowed=False, policy_name="p", reason="deny")
+        ctx = create_run_context(data_labels={"pii"})
+
+        with use_active_policy(ps, "agent", ctx):
+            span = SpanScope("tool.x")
+            span.set_output({"result": "patient SSN 123-45-6789"})
+
+        assert "123-45-6789" not in str(span._output)
+        assert "_redacted" in str(span._output)
+
+    def test_set_output_passes_token_usage_through_when_no_policy(self):
+        # Regression guard: no policy -> spans pass through; token-usage fields
+        # (which match the "token" secret-key substring) must NOT be masked.
+        from continuum.observability.trace_context import SpanScope
+
+        span = SpanScope("llm.x")
+        span.set_output({"usage": {"prompt_tokens": 100, "completion_tokens": 20}})
+        assert span._output["usage"] == {"prompt_tokens": 100, "completion_tokens": 20}

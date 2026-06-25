@@ -208,6 +208,24 @@ class OrchestratorError(Exception):
         return None
 
 
+class PolicyDeniedError:
+    """Marker mixin for EXPECTED access-control denials (data-label / policy gates).
+
+    These are not failures — they are the governance layer working as designed
+    (e.g. a PHI-tainted run denied a model, tool, memory, or telemetry resource).
+    Observability treats anything carrying this marker as an expected
+    "policy denied" outcome: it is recorded for audit but NOT logged as an error,
+    NOT escalated to error reporting, and NOT marked as a failed span.
+
+    Concrete deny exceptions (Model/Tool/Memory access-denied) inherit this
+    alongside their normal base so callers can still catch them by their existing
+    type, while observability can special-case them via ``isinstance``.
+
+    Defined here (leaf module, no agent/observability imports) so both the agent
+    exception layer and the observability layer can reference it without cycles.
+    """
+
+
 class ConfigurationError(OrchestratorError):
     """
     Raised when there's a configuration issue.

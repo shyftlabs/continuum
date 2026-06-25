@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import AgentConfig, AgentMemoryConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, RunContext, TokenUsage
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
@@ -157,6 +158,7 @@ class DebateAgent(BaseAgent):
                 "DebateAgent requires pro_agent, con_agent, and judge_agent"
             )
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

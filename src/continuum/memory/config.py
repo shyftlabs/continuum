@@ -314,8 +314,18 @@ class MemoryConfig(BaseModel):
             config = base_config.copy()
             if api_key:
                 config["api_key"] = api_key
+            # Normalize the model name to the routing target so EMBEDDER_MODEL can
+            # stay a single fixed value and only EMBEDDER_API_BASE is toggled:
+            #   * api_base set (gateway) → the gateway expects "<provider>/<model>"
+            #   * no api_base (direct OpenAI) → OpenAI rejects a prefix, use bare
+            # Either stored form ("text-embedding-3-small" or
+            # "openai/text-embedding-3-small") works in both modes.
             if self.embedder_api_base:
+                if "/" not in config["model"]:
+                    config["model"] = f"openai/{config['model']}"
                 config["openai_base_url"] = self.embedder_api_base
+            elif config["model"].startswith("openai/"):
+                config["model"] = config["model"].split("/", 1)[1]
             return "openai", config
 
         # Azure OpenAI

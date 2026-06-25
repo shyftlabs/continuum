@@ -654,6 +654,7 @@
     <a class="sidebar-link" onclick="scrollToAnchor('run-temporal-deploy')">Temporal Workers</a>
     <div class="sidebar-group-label">Safety</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-safety')">Input / Output Scanning</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-data-labels')">Data-Label Enforcement</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-testing')">Testing Guide</a>
   </div>
 
@@ -1826,6 +1827,105 @@ agent = <span class="cls">BaseAgent</span>(
 )</pre></div>
 
 
+  <a class="anchor" id="run-data-labels"></a>
+  <h2>Data-Label Enforcement</h2>
+  <p>Make sensitivity labels such as <code>pii</code>, <code>confidential</code>, or <code>restricted</code> change what a run is <em>allowed to do</em>. A run carries a set of labels (<code>ctx.data_labels</code>); labels are added by <strong>producers</strong> and then <strong>gate</strong> six runtime sinks. Taint is monotonic (only added, propagates forward) and is enforced identically in streaming and non-streaming.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># producer (taint) ─▶ ctx.data_labels = {"pii"} ─▶ gate at each sink (deny?)</span></pre></div>
+
+  <p><strong>Independent of <a onclick="scrollToAnchor('run-safety')" style="cursor:pointer;text-decoration:underline">Input / Output Scanning</a>.</strong> Scanners <em>sanitize text</em>; data labels <em>gate behavior</em>. Neither feeds the other — a scanner never taints a run.</p>
+
+  <h3>Defaults — opt-in &amp; inert</h3>
+  <p>With nothing configured the feature does nothing (zero behavior change, fully backward-compatible): no policy store on the agent, no producers, every run unlabeled. Policy evaluation is <strong>open-default-allow</strong> with <strong>deny-overrides</strong>.</p>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
+    <tr><td><code>BaseAgent(policy_store=…)</code></td><td><code>None</code></td><td>no gates run at all</td></tr>
+    <tr><td><code>AgentConfig.tool_data_labels</code></td><td><code>{}</code></td><td>no tool taints the run</td></tr>
+    <tr><td><code>AgentMemoryConfig.scope_data_labels</code></td><td><code>{}</code></td><td>no memory-read taint</td></tr>
+    <tr><td>run-level <code>data_labels</code></td><td><code>None</code></td><td>run starts clean</td></tr>
+    <tr><td>policy evaluation</td><td>open-default-allow</td><td>unmatched resource → allowed</td></tr>
+  </table>
+
+  <h3>Enable it in three steps</h3>
+  <p><strong>1 · Define policies.</strong> Subjects are matched against <code>[agent.name, *sorted(labels)]</code>, so a rule whose subject is a label fires for <em>any</em> run carrying that label. Resources support fnmatch globs.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.security.policy <span class="kw">import</span> <span class="cls">AccessPolicy</span>, <span class="cls">PolicyStore</span>
+
+store = <span class="cls">PolicyStore</span>()
+store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
+    name=<span class="str">"pii-no-cloud-model"</span>,
+    subjects=[<span class="str">"pii"</span>],                 <span class="cm"># fires whenever the run carries "pii"</span>
+    resources=[<span class="str">"llm:gpt-4o"</span>],         <span class="cm"># the cloud model</span>
+    effect=<span class="str">"deny"</span>,
+    denial_message=<span class="str">"PII may not be sent to the cloud model."</span>,
+))
+store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
+    name=<span class="str">"confidential-no-exfil"</span>,
+    subjects=[<span class="str">"confidential"</span>],
+    resources=[<span class="str">"tool:send_*"</span>, <span class="str">"tool:web_*"</span>],   <span class="cm"># globs supported</span>
+    effect=<span class="str">"deny"</span>,
+    denial_message=<span class="str">"Confidential data may not leave via this tool."</span>,
+))</pre></div>
+
+  <p><strong>2 · Attach the store to the agent.</strong> The runner publishes it as the ambient policy for the whole run, so every sink is gated — you never thread it through call sites.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(
+    name=<span class="str">"assistant"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>,
+    policy_store=store,
+)</pre></div>
+
+  <p><strong>3 · Declare at least one producer</strong> — otherwise nothing is ever labeled and the policies never fire.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># (a) Tool provenance — a tool's result taints the run</span>
+<span class="cls">AgentConfig</span>(tool_data_labels={<span class="str">"lookup_patient"</span>: {<span class="str">"pii"</span>}})
+
+<span class="cm"># (b) Memory-read provenance — reading a scope taints the run</span>
+<span class="cls">AgentMemoryConfig</span>(scope_data_labels={<span class="cls">AgentMemoryScope</span>.USER: {<span class="str">"pii"</span>}})
+
+<span class="cm"># (c) Run-level — request known to carry sensitive data</span>
+ctx = <span class="fn">create_run_context</span>(user_id=<span class="str">"u1"</span>, data_labels={<span class="str">"pii"</span>})
+
+<span class="cm"># (d) Anywhere in your own code</span>
+ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)</pre></div>
+
+  <h3>Sink reference</h3>
+  <p>Write policy <code>resources=[…]</code> using these strings. Each sink checks the policy with subjects <code>[agent.name, *sorted(labels)]</code>.</p>
+  <table>
+    <tr><th>Sink</th><th>Resource string</th><th>What a deny does</th></tr>
+    <tr><td>Model routing</td><td><code>llm:&lt;model&gt;</code></td><td>raises <code>ModelAccessDeniedError</code> (catch → reroute to an allowed model)</td></tr>
+    <tr><td>Tool call</td><td><code>tool:&lt;name&gt;</code> (globs)</td><td>tool result becomes <code>POLICY DENIED: …</code> (tool not run; model sees it)</td></tr>
+    <tr><td>Long-term memory</td><td><code>memory:&lt;scope&gt;</code> or <code>memory:*</code></td><td>write blocked (<code>MemoryAccessDeniedError</code> on explicit add; auto-store skipped)</td></tr>
+    <tr><td>Telemetry</td><td><code>telemetry</code></td><td>payload replaced with <code>{"_redacted": "…"}</code> before egress</td></tr>
+    <tr><td>Short-term session</td><td><code>session</code></td><td>assistant answer stored as a placeholder, not verbatim</td></tr>
+    <tr><td>Decision trace</td><td><code>telemetry</code> (reused)</td><td>trace content redacted before persistence; audit skeleton kept</td></tr>
+  </table>
+
+  <h3>End-to-end</h3>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentConfig</span>, <span class="cls">AgentRunner</span>
+<span class="kw">from</span> continuum.security.policy <span class="kw">import</span> <span class="cls">AccessPolicy</span>, <span class="cls">PolicyStore</span>
+<span class="kw">from</span> continuum.agent.exceptions <span class="kw">import</span> <span class="cls">ModelAccessDeniedError</span>
+
+store = <span class="cls">PolicyStore</span>()
+store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(name=<span class="str">"pii-no-cloud"</span>, subjects=[<span class="str">"pii"</span>],
+                              resources=[<span class="str">"llm:gpt-4o"</span>], effect=<span class="str">"deny"</span>,
+                              denial_message=<span class="str">"no PII on cloud"</span>))
+
+agent = <span class="cls">BaseAgent</span>(name=<span class="str">"clinic"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>,
+                  policy_store=store,
+                  config=<span class="cls">AgentConfig</span>(tool_data_labels={<span class="str">"lookup_patient"</span>: {<span class="str">"pii"</span>}}))
+
+runner = <span class="cls">AgentRunner</span>()  <span class="cm"># one per app; shared across runs</span>
+
+<span class="kw">try</span>:
+    resp = <span class="kw">await</span> runner.<span class="fn">run</span>(agent, <span class="str">"look up patient P-123"</span>)  <span class="cm"># taints pii → gpt-4o denied</span>
+<span class="kw">except</span> <span class="cls">ModelAccessDeniedError</span>:
+    agent.model = <span class="str">"gpt-4o-mini"</span>            <span class="cm"># allowed model</span>
+    resp = <span class="kw">await</span> runner.<span class="fn">run</span>(agent, <span class="str">"look up patient P-123"</span>)</pre></div>
+
+  <div class="callout callout-info">
+    <strong>"Model routing"</strong> is Continuum's gate; the gateway (<a onclick="scrollToAnchor('sec-smart')" style="cursor:pointer;text-decoration:underline">smart layer</a>) is a separate project (AURA) that does its own model routing. When using the gateway, rely on AURA for model routing instead of Continuum's "Model routing" gate.
+  </div>
+
+  <h3>Example</h3>
+  <p>A complete, runnable example lives at <code>playground/data-label-clinic/</code>.</p>
+
+
   <a class="anchor" id="run-testing"></a>
   <h2>Testing Guide</h2>
   <p>Continuum favors integration tests over mocks. The <code>[dev]</code> extra ships <code>fakeredis</code>, <code>respx</code>, and <code>pytest-asyncio</code>.</p>
@@ -2108,6 +2208,18 @@ handle = <span class="kw">await</span> client.execute_workflow(
     timeout=<span class="num">3600</span>,           <span class="cm"># 1 hour, then auto-expires</span>
     auto_approve_if=<span class="str">"low_risk"</span>,  <span class="cm"># skip approval if condition agent returns this</span>
 )</pre></div>
+
+  <div class="callout callout-info">
+    <strong>HITL approver authorization (<code>decided_by ∈ approvers</code>).</strong> When <code>approvers</code> is non-empty, a decision is honored only if its <code>decided_by</code> is in the list — gating both approvals <em>and</em> rejections. Unauthorized decisions are recorded and ignored; the workflow stays paused until a listed approver resolves it (or it auto-expires at <code>timeout</code>). An empty <code>approvers</code> list means anyone may decide; <code>escalated</code> always routes through. A full workflow with this approval gate lives at <code>playground/temporal-leadflow/</code>.
+  </div>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal.human_in_loop <span class="kw">import</span> <span class="cls">HumanInLoopManager</span>
+
+mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
+
+<span class="cm"># A decision is honored only if decided_by is in approvers:</span>
+<span class="kw">await</span> mgr.<span class="fn">approve</span>(workflow_id, request_id, decided_by=<span class="str">"alice@company.com"</span>)    <span class="cm"># honored</span>
+<span class="kw">await</span> mgr.<span class="fn">reject</span>(workflow_id, request_id, decided_by=<span class="str">"mallory@evil.com"</span>)     <span class="cm"># ignored — not an approver; stays pending</span>
+<span class="kw">await</span> mgr.<span class="fn">escalate</span>(workflow_id, request_id, escalate_to=<span class="str">"carol@company.com"</span>)  <span class="cm"># always allowed (re-targets)</span></pre></div>
 
 
 </section>

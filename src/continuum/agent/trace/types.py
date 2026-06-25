@@ -14,12 +14,12 @@ links back to its Langfuse span without depending on Langfuse being enabled.
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StepKind(str, Enum):
@@ -48,6 +48,14 @@ class TraceDetail(str, Enum):
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def redaction_marker(policy_name: str | None) -> str:
+    """The placeholder written in place of redacted trace content."""
+    marker = "[redacted by data-label policy"
+    if policy_name:
+        marker += f" '{policy_name}'"
+    return marker + "]"
 
 
 @dataclass
@@ -94,6 +102,12 @@ class DecisionStep:
     # (it is heavy); kept in the persisted trace so fork() can replay from here.
     messages_snapshot: list[dict[str, Any]] | None = None
 
+    # Data-sensitivity labels (sorted) active going into this step — the run's
+    # accumulated taint at the resume point. fork() seeds the resumed context
+    # from these so a replayed run is gated like the original (taint isn't lost
+    # for the steps fork replays-from-checkpoint rather than re-executes).
+    data_labels: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["kind"] = self.kind.value
@@ -110,6 +124,24 @@ class DecisionStep:
         if isinstance(started, str):
             data["started_at"] = datetime.fromisoformat(started)
         return cls(**data)
+
+    def redacted_copy(self, marker: str) -> DecisionStep:
+        """Return a copy with sensitive *content* blanked, skeleton preserved.
+
+        Content fields (``input``/``output``/``rationale``/``messages_snapshot``)
+        may carry user/tool data, so they are replaced with ``marker`` (snapshot
+        dropped — a redacted trace is intentionally not forkable). Everything that
+        describes *what happened without exposing data* is kept: ``decision`` (a
+        tool name / category / handoff target — not user data), token counts,
+        timings, status, ids, ``agent_stack`` and ``data_labels``.
+        """
+        return replace(
+            self,
+            input=marker if self.input is not None else None,
+            output=marker if self.output is not None else None,
+            rationale=marker if self.rationale is not None else None,
+            messages_snapshot=None,
+        )
 
 
 @dataclass
@@ -137,6 +169,23 @@ class DecisionTrace:
         """Append a step and return it (so callers can keep its id)."""
         self.steps.append(step)
         return step
+
+    def redacted_copy(self, policy_name: str | None = None) -> DecisionTrace:
+        """Return a copy with sensitive content blanked for persistence.
+
+        The decision trace is a persistence sink like Langfuse telemetry; when a
+        run's data labels deny the ``telemetry`` resource, its content must not be
+        stored. This keeps the auditable skeleton (steps, decisions, tokens,
+        timings, lineage, ``data_labels``) while replacing ``user_query``,
+        ``final_response`` and every step's content with a policy marker.
+        """
+        marker = redaction_marker(policy_name)
+        return replace(
+            self,
+            user_query=marker if self.user_query else "",
+            final_response=marker if self.final_response else "",
+            steps=[s.redacted_copy(marker) for s in self.steps],
+        )
 
     def metrics(self) -> dict[str, Any]:
         return {

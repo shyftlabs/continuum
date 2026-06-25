@@ -354,6 +354,16 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .approval-panel p  { color: #fcd34d; font-size: 12px; margin-bottom: 12px; }
   .approval-btns { display: flex; gap: 8px; }
   .approval-btns .btn { width: auto; flex: 1; }
+  .approval-hint { color: #fcd34d; font-size: 12px; margin-bottom: 8px; }
+  .approval-hint code, .approval-blocked code { background: #1c0a02; color: #fde68a;
+                    padding: 1px 5px; border-radius: 4px; }
+  .approver-label { display: flex; align-items: center; gap: 8px; color: #fde68a;
+                    font-size: 12px; margin-bottom: 12px; }
+  .approver-input { background: #1c0a02; border: 1px solid #92400e; color: #fde68a;
+                    border-radius: 6px; padding: 6px 8px; font-size: 12px; flex: 1; }
+  .approval-blocked { color: #fca5a5; font-size: 12px; margin-top: 12px;
+                      background: #450a0a; border: 1px solid #7f1d1d; border-radius: 6px;
+                      padding: 8px 10px; }
 
   /* Call results */
   .call-card { background: #1e293b; border: 1px solid #334155; border-radius: 10px;
@@ -455,6 +465,7 @@ const STEPS = [
 let _campaigns = {};       // id → meta
 let _activeCampaign = null;
 let _pollTimer = null;
+let _approver = 'user';    // persists across re-renders so the input isn't wiped on poll
 
 async function startCampaign() {
   const niche    = document.getElementById('inp-niche').value.trim();
@@ -517,28 +528,44 @@ async function pollStatus(id) {
   } catch(e) {}
 }
 
+function _approverName() {
+  return (_approver && _approver.trim()) || 'user';
+}
+
 async function approveCampaign() {
   const id = _activeCampaign;
   if (!id) return;
+  const decidedBy = _approverName();
   document.getElementById('btn-approve').disabled = true;
   document.getElementById('btn-reject').disabled = true;
   try {
     const res = await fetch(`/campaign/${id}/approve`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({decided_by: 'user', reason: 'Leads look good'}),
+      body: JSON.stringify({decided_by: decidedBy, reason: 'Leads look good'}),
     });
     if (!res.ok) { const e = await res.json(); alert('Error: ' + e.detail); }
-    else pollStatus(id);
+    else {
+      await pollStatus(id);
+      // If the gate is still open, this approver was not authorized.
+      const c = _campaigns[id];
+      if (c && c.status === 'waiting_for_approval') {
+        alert(`Approval by "${decidedBy}" was ignored — not an authorized approver. ` +
+              `The campaign is still awaiting review.`);
+      }
+    }
   } finally {
-    document.getElementById('btn-approve').disabled = false;
-    document.getElementById('btn-reject').disabled = false;
+    const a = document.getElementById('btn-approve');
+    const r = document.getElementById('btn-reject');
+    if (a) a.disabled = false;
+    if (r) r.disabled = false;
   }
 }
 
 async function rejectCampaign() {
   const id = _activeCampaign;
   if (!id) return;
+  const decidedBy = _approverName();
   if (!confirm('Reject this campaign? Outreach will be cancelled.')) return;
   document.getElementById('btn-approve').disabled = true;
   document.getElementById('btn-reject').disabled = true;
@@ -546,13 +573,22 @@ async function rejectCampaign() {
     const res = await fetch(`/campaign/${id}/reject`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({decided_by: 'user', reason: 'Leads not suitable'}),
+      body: JSON.stringify({decided_by: decidedBy, reason: 'Leads not suitable'}),
     });
     if (!res.ok) { const e = await res.json(); alert('Error: ' + e.detail); }
-    else pollStatus(id);
+    else {
+      await pollStatus(id);
+      const c = _campaigns[id];
+      if (c && c.status === 'waiting_for_approval') {
+        alert(`Rejection by "${decidedBy}" was ignored — not an authorized approver. ` +
+              `The campaign is still awaiting review.`);
+      }
+    }
   } finally {
-    document.getElementById('btn-approve').disabled = false;
-    document.getElementById('btn-reject').disabled = false;
+    const a = document.getElementById('btn-approve');
+    const r = document.getElementById('btn-reject');
+    if (a) a.disabled = false;
+    if (r) r.disabled = false;
   }
 }
 
@@ -651,14 +687,29 @@ function renderLeadCards(leads) {
 
 function renderApprovalPanel(c) {
   if (!c || c.status !== 'waiting_for_approval') return '';
+  const approvers = (c.pending_approvals && c.pending_approvals[0] && c.pending_approvals[0].approvers) || [];
+  const allowedHint = approvers.length
+    ? `Allowed approvers: <code>${approvers.join(', ')}</code>`
+    : `<code>approvers</code> is empty — anyone may approve`;
+  const blocked = c.unauthorized_attempts || [];
+  const blockedNotice = blocked.length
+    ? `<p class="approval-blocked">⛔ Ignored ${blocked.length} unauthorized attempt(s): ` +
+      `${blocked.map(b => `<code>${b.decided_by}</code> (${b.decision})`).join(', ')}</p>`
+    : '';
   return `
     <div class="approval-panel">
       <h3>⏸ Human Review Gate</h3>
       <p>The campaign has scored and ranked the leads. Review the list below, then approve to begin voice outreach.</p>
+      <p class="approval-hint">${allowedHint}</p>
+      <label class="approver-label">Approve as:
+        <input id="approver-name" class="approver-input" type="text" value="${_approver}"
+               placeholder="who is deciding?" oninput="_approver = this.value" />
+      </label>
       <div class="approval-btns">
         <button id="btn-approve" class="btn btn-approve" onclick="approveCampaign()">✓ Approve & Call</button>
         <button id="btn-reject"  class="btn btn-reject"  onclick="rejectCampaign()">✕ Reject</button>
       </div>
+      ${blockedNotice}
     </div>`;
 }
 
@@ -736,7 +787,22 @@ function renderMain() {
     </div>`;
   }
 
+  // Capture whether the approver input was focused (and the caret) BEFORE we
+  // replace innerHTML, then restore it after — otherwise the 2.5s poll re-render
+  // would steal focus and reset the caret while the user is typing.
+  const prev = document.getElementById('approver-name');
+  const wasFocused = prev && document.activeElement === prev;
+  const caret = prev ? prev.selectionStart : null;
+
   el.innerHTML = html;
+
+  if (wasFocused) {
+    const next = document.getElementById('approver-name');
+    if (next) {
+      next.focus();
+      if (caret !== null) { try { next.setSelectionRange(caret, caret); } catch (e) {} }
+    }
+  }
 }
 
 function esc(s) {

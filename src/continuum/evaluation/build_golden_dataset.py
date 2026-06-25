@@ -1,12 +1,12 @@
 """
-Golden dataset builder for TaxPilot RAG evaluation.
+Golden dataset builder for RAG evaluation.
 
 Approach:
   1. Sample N distinct documents (source_ref) per source type from pgvector
   2. Fetch ALL chunks for each document and concatenate into full document text
   3. Send full document context to GPT-4o-mini → generate one question whose
      answer is FULLY contained within a single chunk (chunk-scoped answer)
-  4. Call TaxPilot RAG API with the question → get retrieved answer + citations
+  4. Call RAG API with the question → get retrieved answer + citations
   5. Build EvalCase with real ground truth (expected_output from chunk text)
 
 This produces ~410 evaluation cases where:
@@ -461,7 +461,7 @@ async def run_deepeval(cases: list[EvalCase]) -> list[EvalResult]:
 
 
 async def main(output_path: Path, run_eval: bool) -> None:
-    print("=== TaxPilot Golden Dataset Builder ===\n")
+    print("=== Golden Dataset Builder ===\n")
     print("Targets per source type:")
     for st, n in SAMPLE_TARGETS.items():
         print(f"  {st:<15} {n}")
@@ -586,7 +586,7 @@ async def main(output_path: Path, run_eval: bool) -> None:
 
 async def eval_only(cases_path: Path) -> None:
     """Load existing golden_cases.json and run RAGAS + DeepEval without regenerating."""
-    print("=== TaxPilot Golden Dataset Evaluator ===\n")
+    print("=== Golden Dataset Evaluator ===\n")
     print(f"Loading cases from {cases_path}...")
     raw = json.loads(cases_path.read_text())
     cases = [EvalCase.from_dict(c) for c in raw]
@@ -614,7 +614,7 @@ async def eval_only(cases_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build TaxPilot golden evaluation dataset")
+    parser = argparse.ArgumentParser(description="Build golden evaluation dataset")
     parser.add_argument(
         "--output",
         type=str,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from continuum.exceptions import OrchestratorError
+from continuum.exceptions import OrchestratorError, PolicyDeniedError
 
 
 class AgentError(OrchestratorError):
@@ -287,8 +287,9 @@ class AgentToolError(AgentError):
             self.context["tool_args"] = tool_args
 
 
-class ToolAccessDeniedError(AgentToolError):
-    """Raised when an access policy denies a tool call."""
+class ToolAccessDeniedError(AgentToolError, PolicyDeniedError):
+    """Raised when an access policy denies a tool call. Expected governance
+    outcome (see :class:`PolicyDeniedError`), not a failure."""
 
     def __init__(
         self,
@@ -310,8 +311,9 @@ class ToolAccessDeniedError(AgentToolError):
             self.context["denial_message"] = denial_message
 
 
-class MemoryAccessDeniedError(AgentError):
-    """Raised when an access policy denies a memory read or write."""
+class MemoryAccessDeniedError(AgentError, PolicyDeniedError):
+    """Raised when an access policy denies a memory read or write. Expected
+    governance outcome (see :class:`PolicyDeniedError`), not a failure."""
 
     def __init__(
         self,
@@ -329,6 +331,35 @@ class MemoryAccessDeniedError(AgentError):
             self.context["scope"] = scope
         if policy_name:
             self.context["policy_name"] = policy_name
+
+
+class ModelAccessDeniedError(AgentError, PolicyDeniedError):
+    """Raised when an access policy denies routing a run to a model/provider.
+
+    Enforced in LLMClient.chat(): a run tainted with a data label (e.g. "pii")
+    can be blocked from a model via `deny(subjects=["pii"], resources=["llm:..."])`.
+    Expected governance outcome (see :class:`PolicyDeniedError`), not a failure.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        policy_name: str | None = None,
+        subject: str | None = None,
+        denial_message: str = "",
+        **kwargs: Any,
+    ):
+        message = f"Access denied: model '{model}' is blocked by policy"
+        if policy_name:
+            message += f" '{policy_name}'"
+        super().__init__(message, **kwargs)
+        self.context["model"] = model
+        if policy_name:
+            self.context["policy_name"] = policy_name
+        if subject:
+            self.context["subject"] = subject
+        if denial_message:
+            self.context["denial_message"] = denial_message
 
 
 # =============================================================================

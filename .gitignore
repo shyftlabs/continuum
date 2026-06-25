@@ -150,3 +150,9 @@ playground/comparisons/
 src/orchestrator/evaluation/eval-dataset/
 
 playground/local
+
+# extensions
+extensions/
+
+# claude-flow runtime lock (per-session state, not source)
+.claude/scheduled_tasks.lock

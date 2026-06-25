@@ -160,6 +160,29 @@ class ApprovalDecision(BaseModel):
     decided_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
+def is_authorized(step: ApprovalStep, decision: ApprovalDecision) -> bool:
+    """Return True if ``decision`` may be accepted for ``step``.
+
+    The rule (pure, no Temporal runtime so it is unit-testable on its own):
+
+    * Empty ``approvers`` -> unrestricted. An unset allow-list means "anyone may
+      decide", preserving backward compatibility with workflows that never
+      specified approvers.
+    * ``escalated`` decisions are always allowed. Escalation re-targets the
+      approval to a *new* person (who is by definition not on the original
+      allow-list); it routes the request rather than deciding it, so it must
+      not be blocked by the membership check.
+    * Otherwise ``decided_by`` must appear in ``approvers``. This gates both
+      approvals and rejections — only an authorized approver may resolve the
+      step either way.
+    """
+    if not step.approvers:
+        return True
+    if decision.decision == "escalated":
+        return True
+    return decision.decided_by in step.approvers
+
+
 # ---------------------------------------------------------------------------
 # Workflow input / output
 # ---------------------------------------------------------------------------

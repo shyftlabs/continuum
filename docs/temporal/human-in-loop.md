@@ -185,8 +185,18 @@ pending = await hlm.get_pending_approvals("q4-001")
 | Approver submits `approved` before timeout | Continues with the next step |
 | Approver submits `rejected` | Workflow returns `WorkflowResult(status="rejected", content=<last output>, step_results=..., approval_decisions=[<the rejection>])`. `error` is `None`; the rejection reason is on `approval_decisions[-1].reason` |
 | Approver submits `escalated` | `escalation_handler` invoked; workflow keeps waiting until a non-`escalated` decision arrives or timeout fires |
+| Non-approver submits any decision (`decided_by ∉ approvers`) | Ignored and recorded; the step stays pending until an authorized approver decides or the timeout fires |
 | No decision before `timeout_seconds` | Workflow returns `WorkflowResult(status="timed_out", content=<last output>, step_results=..., approval_decisions=...)`. `error` is `None` |
 | Caller calls `client.cancel_workflow(...)` while waiting | Workflow returns `WorkflowResult(status="cancelled")` (Temporal-level cancel; raises inside the workflow) |
+
+**Authorization (`decided_by ∈ approvers`).** When `approvers` is non-empty, a
+decision is honored only if its `decided_by` is in the list — this gates **both
+approvals and rejections**, so an outsider can neither approve nor reject. An
+unauthorized decision is recorded (queryable as the workflow's
+`unauthorized_attempts`) and ignored; the step stays paused until a listed
+approver resolves it or the timeout fires. An **empty `approvers`** list means
+anyone may decide (backward-compatible default). `escalated` decisions are
+exempt — they re-target the request to a new person rather than resolving it.
 
 ---
 

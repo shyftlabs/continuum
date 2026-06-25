@@ -241,6 +241,7 @@ class MemoryClient:
         infer: bool = True,
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemoryAddResult:
         """
         Add memories from messages or text.
@@ -261,12 +262,20 @@ class MemoryClient:
         """
         self._ensure_enabled()
 
-        # Access control check
-        if policy_store is not None and subject is not None:
+        # Access control check. Explicit policy args win; otherwise fall back to
+        # the ambient run policy — the session-save write path doesn't thread
+        # RunContext, so this is how a tainted run's labels gate the write.
+        from continuum.security.policy_context import resolve_active_policy
+
+        eff_store, eff_subject, eff_labels = resolve_active_policy(
+            policy_store, subject, data_labels
+        )
+        if eff_store is not None and eff_subject is not None:
             from continuum.agent.exceptions import MemoryAccessDeniedError
 
             scope_label = agent_id or user_id or "unknown"
-            decision = policy_store.check(subject, f"memory:{scope_label}")
+            subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
+            decision = eff_store.check(subjects, f"memory:{scope_label}")
             if not decision.allowed:
                 raise MemoryAccessDeniedError(
                     operation="write",

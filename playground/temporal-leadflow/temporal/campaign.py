@@ -58,6 +58,7 @@ def build_workflow_input(
             f"Review the scored lead list for '{niche}' in '{location}'. "
             "Approve to begin voice outreach, or reject to cancel the campaign."
         ),
+        approvers=cfg.approvers,
         timeout=cfg.approval_timeout,
     )
 

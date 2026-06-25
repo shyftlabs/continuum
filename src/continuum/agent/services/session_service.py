@@ -44,6 +44,40 @@ class SessionService(ISessionService):
         """Get session client."""
         return self._session_client
 
+    @staticmethod
+    def _session_redaction_placeholder(
+        agent: BaseAgent, data_labels: set[str] | None
+    ) -> str | None:
+        """Return a placeholder string when the agent's policy denies the run's
+        data labels for the ``session`` (short-term memory) resource; else None.
+
+        Uses the agent's ``policy_store`` and the run's final ``data_labels`` —
+        explicit, so it does not depend on ambient-context lifetime during
+        finalization. Open-default: no labels, no policy, or no matching deny → no
+        redaction.
+        """
+        if not data_labels:
+            return None
+        policy_store = getattr(agent, "policy_store", None)
+        if policy_store is None:
+            return None
+        decision = policy_store.check([agent.name, *sorted(data_labels)], "session")
+        if decision.allowed:
+            return None
+        # This placeholder is replayed into later prompts, so the *model* reads it
+        # as its own prior turn. Keep it plain: no internal jargon ("session" /
+        # "short-term memory") and no policy name (which the model could parrot
+        # back to the user). The technical detail goes to the debug log instead.
+        logger.debug(
+            "short-term gate: redacted assistant answer (policy=%s, labels=%s)",
+            getattr(decision, "policy_name", None),
+            sorted(data_labels),
+        )
+        return (
+            "[Response omitted: it contained sensitive information and "
+            "was not retained in this conversation.]"
+        )
+
     @observe(name="save_messages", capture_output=False)
     async def save_messages(
         self,
@@ -55,6 +89,7 @@ class SessionService(ISessionService):
         tool_execution_summary: dict[str, Any] | None = None,
         run_id: str | None = None,
         disable_memory: bool = False,
+        data_labels: set[str] | None = None,
     ) -> None:
         """
         Save new messages to session after run completion.
@@ -62,12 +97,22 @@ class SessionService(ISessionService):
         Filters out tool-related messages to keep session history clean:
         - Saves: user messages, final assistant messages (without tool_calls)
         - Skips: system messages, assistant messages with tool_calls, tool result messages
+
+        Short-term-memory data-label gate: ``data_labels`` are the run's taint at
+        completion. If the agent's policy denies them for the ``session`` resource,
+        the assistant answer is NOT persisted verbatim — a fixed placeholder is
+        stored instead (the run may carry sensitive data and we cannot verify which
+        parts, so we substitute the whole value, mirroring telemetry redaction).
+        The user-facing response is untouched; only the persisted copy changes.
         """
         if not self._session_client or not self._session_client.is_enabled:
             return
 
         try:
             from continuum.llm.types import ChatMessage
+
+            # Resolve the short-term (session) gate once for this turn.
+            session_placeholder = self._session_redaction_placeholder(agent, data_labels)
 
             new_messages = messages[user_message_index:]
             saved_count = 0
@@ -98,7 +143,18 @@ class SessionService(ISessionService):
                     skipped_count += 1
                     continue
 
-                msg = ChatMessage(role=role, content=content)
+                # Short-term gate: a denied (tainted) run's assistant answer is
+                # persisted as a placeholder, not verbatim. The long-term write is
+                # also suppressed for this message (a run too sensitive for the
+                # session store should not be auto-extracted to long-term memory;
+                # long-term is independently gated by `memory:*` as well).
+                persisted_content = content
+                gate_redacted = False
+                if session_placeholder is not None and role == "assistant" and content:
+                    persisted_content = session_placeholder
+                    gate_redacted = True
+
+                msg = ChatMessage(role=role, content=persisted_content)
 
                 msg_metadata: dict[str, Any] = {}
 
@@ -114,6 +170,7 @@ class SessionService(ISessionService):
                 should_store = bool(
                     content
                     and not disable_memory
+                    and not gate_redacted
                     and hasattr(agent, "memory_config")
                     and agent.memory_config
                     and agent.memory_config.store_memories

@@ -981,6 +981,17 @@ class RunContext:
             "priority": self.priority,
         }
 
+    def taint(self, *labels: str) -> None:
+        """Add data-sensitivity labels to this run (provenance tainting).
+
+        Idempotent (set semantics). Labels propagate forward through the run —
+        across handoffs and serialization — so downstream consumers (tool gate,
+        and later model-routing / memory-write / telemetry) can act on them.
+        Producers call this: declared tool/memory-scope provenance, the run-level
+        seed, or any integrator-supplied scanner.
+        """
+        self.data_labels.update(labels)
+
     def branch_copy(self) -> RunContext:
         """
         Create an isolated copy of this context for use in a parallel branch.

@@ -65,6 +65,13 @@ class AgentMemoryConfig:
         default=None, repr=False, compare=False, hash=False
     )
 
+    # Memory-scope provenance — declare which memory scopes hold sensitive data.
+    # Maps scope value ("user"/"agent"/"conversation"/custom) -> labels. When a
+    # retrieval from that scope actually returns data, the run is tainted with
+    # those labels ("read = taint"). Declaration only; no content inspection.
+    #   e.g. {"user": {"pii"}}
+    scope_data_labels: dict[str, set[str]] = field(default_factory=dict)
+
     # Sharing settings (for multi-agent)
     broadcast_learnings: bool = False  # Share important learnings
     broadcast_to: list[str] | None = None  # Specific agents to share with
@@ -232,6 +239,14 @@ class AgentConfig:
     output_scanners: list[Callable[[str, str], tuple[str, bool, str | None]]] = field(
         default_factory=list
     )
+
+    # Tool provenance — declare which tools return labeled (sensitive) data.
+    # Maps tool name -> data-sensitivity labels. When a declared tool returns a
+    # result, the run is tainted with those labels (RunContext.taint), so
+    # downstream consumers can gate on them. The SDK ships no detector: the
+    # integrator declares provenance; the runtime only propagates it.
+    #   e.g. {"fetch_patient_record": {"phi"}}
+    tool_data_labels: dict[str, set[str]] = field(default_factory=dict)
 
     # Dispatch priority for this agent's LLM calls (1=lowest, 10=highest, 5=default).
     # Used as the stage-level weight in TwoLevelDispatcher for internal models:

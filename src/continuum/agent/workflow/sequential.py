@@ -22,6 +22,7 @@ from continuum.agent.types import (
     RunContext,
     TokenUsage,
 )
+from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
 
@@ -95,6 +96,7 @@ class SequentialAgent(BaseAgent):
 
             raise AgentConfigurationError("SequentialAgent requires at least one agent")
 
+    @publish_active_policy
     async def execute(
         self,
         input_text: str,

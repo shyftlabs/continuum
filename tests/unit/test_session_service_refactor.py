@@ -33,6 +33,87 @@ def _msgs(*pairs):
     return [{"role": r, "content": c} for r, c in pairs]
 
 
+def _agent_with_session_deny(name="agent-a", deny_session=True):
+    """Agent whose policy denies the run's labels for the 'session' resource."""
+    from continuum.agent.base import BaseAgent
+    from continuum.agent.config import AgentConfig, AgentMemoryConfig
+    from continuum.security.policy import AccessPolicy, PolicyStore
+
+    store = PolicyStore()
+    if deny_session:
+        store.add_policy(
+            AccessPolicy(
+                name="phi-never-short-term",
+                subjects=["phi"],
+                resources=["session"],
+                effect="deny",
+            )
+        )
+    return BaseAgent(
+        name=name,
+        instructions="test",
+        config=AgentConfig(),
+        memory_config=AgentMemoryConfig(store_memories=False),
+        policy_store=store,
+    )
+
+
+def _persisted(sc):
+    """Map role -> persisted content from the add_message calls."""
+    return {
+        c.kwargs["message"].role: c.kwargs["message"].content for c in sc.add_message.call_args_list
+    }
+
+
+class TestShortTermSessionGate:
+    async def test_tainted_run_persists_placeholder_not_answer(self):
+        svc, sc = _make_service()
+        agent = _agent_with_session_deny()
+        messages = _msgs(
+            ("user", "summarize patient P-123"),
+            ("assistant", "Jane Doe, Type 2 diabetes, SSN 123-45-6789"),
+        )
+
+        await svc.save_messages(
+            agent, messages, user_message_index=0, session_id="s1", data_labels={"phi"}
+        )
+
+        persisted = _persisted(sc)
+        # the assistant answer is NOT stored verbatim
+        assert "Jane Doe" not in persisted["assistant"]
+        assert "sensitive" in persisted["assistant"]
+        # the placeholder is written for the model that re-reads it: no internal
+        # jargon and no policy name leaked into the replayed conversation text
+        assert "phi-never-short-term" not in persisted["assistant"]
+        assert "short-term memory" not in persisted["assistant"]
+        # the user query is persisted unchanged (taint came from the tool, not the user)
+        assert persisted["user"] == "summarize patient P-123"
+
+    async def test_clean_run_persists_real_answer(self):
+        svc, sc = _make_service()
+        agent = _agent_with_session_deny()
+        messages = _msgs(("user", "what are clinic hours?"), ("assistant", "Mon-Fri 8-6"))
+
+        # no labels → open default → real content stored
+        await svc.save_messages(
+            agent, messages, user_message_index=0, session_id="s1", data_labels=set()
+        )
+
+        assert _persisted(sc)["assistant"] == "Mon-Fri 8-6"
+
+    async def test_tainted_but_no_session_policy_persists_real_answer(self):
+        svc, sc = _make_service()
+        agent = _agent_with_session_deny(deny_session=False)  # no session deny rule
+        messages = _msgs(("user", "q"), ("assistant", "Jane Doe diagnosis"))
+
+        await svc.save_messages(
+            agent, messages, user_message_index=0, session_id="s1", data_labels={"phi"}
+        )
+
+        # tainted, but nothing denies `session` → open default → stored verbatim
+        assert _persisted(sc)["assistant"] == "Jane Doe diagnosis"
+
+
 class TestUserMessageIndexFiltering:
     async def test_saves_only_messages_after_index(self):
         svc, sc = _make_service()

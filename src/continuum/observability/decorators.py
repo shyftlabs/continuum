@@ -32,6 +32,30 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
+def _record_observe_exception(span: Any, span_name: str, e: BaseException) -> None:
+    """Record an exception on the span before it re-raises.
+
+    Expected access-control denials (``PolicyDeniedError`` — the data-label
+    model/tool/memory gates) are NOT failures: they are recorded as a
+    WARNING-level "policy denied" event (audit-visible in the trace) and are NOT
+    escalated to error reporting, so they don't pollute error dashboards or
+    trigger alerts. Every other exception keeps the normal ERROR + report path.
+    """
+    from continuum.exceptions import PolicyDeniedError
+
+    span.add_metadata("error_type", type(e).__name__)
+    if isinstance(e, PolicyDeniedError):
+        span.level = "WARNING"
+        span.add_metadata("policy_denied", True)
+        span.add_metadata("denial", str(e))
+        return
+
+    span.set_error(str(e))
+    from continuum.observability.error_reporter import report_error
+
+    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+
+
 def _get_function_input(func: Callable[..., Any], args: tuple, kwargs: dict) -> dict[str, Any]:
     """Extract function input as a dictionary."""
     sig = inspect.signature(func)
@@ -107,6 +131,7 @@ def observe(
             input_data = None
             if capture_input:
                 try:
+                    # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
@@ -122,16 +147,12 @@ def observe(
                     result = func(*args, **kwargs)
 
                     if capture_output:
+                        # Redaction is applied centrally in SpanScope.set_output.
                         span.set_output(truncate_data(_serialize_output(result)))
 
                     return result
                 except Exception as e:
-                    span.set_error(str(e))
-                    span.add_metadata("error_type", type(e).__name__)
-                    # Report error to observability providers
-                    from continuum.observability.error_reporter import report_error
-
-                    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+                    _record_observe_exception(span, span_name, e)
                     raise
 
         @functools.wraps(func)
@@ -140,6 +161,7 @@ def observe(
             input_data = None
             if capture_input:
                 try:
+                    # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
@@ -155,20 +177,86 @@ def observe(
                     result = await func(*args, **kwargs)
 
                     if capture_output:
+                        # Redaction is applied centrally in SpanScope.set_output.
                         span.set_output(truncate_data(_serialize_output(result)))
 
                     return result
                 except Exception as e:
-                    span.set_error(str(e))
-                    span.add_metadata("error_type", type(e).__name__)
-                    # Report error to observability providers
-                    from continuum.observability.error_reporter import report_error
-
-                    report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
+                    _record_observe_exception(span, span_name, e)
                     raise
 
+        @functools.wraps(func)
+        async def async_gen_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+            # Async generators MUST be driven inside the span scope: calling the
+            # function only creates the generator — its body (and any exception,
+            # e.g. a PolicyDeniedError gate) runs lazily as the consumer iterates.
+            # The plain async_wrapper would close the span before the first
+            # __anext__, recording ~0s and never seeing the deny — so streaming
+            # spans (llm_chat_stream) would silently drop the WARNING the
+            # non-streaming path records. Iterate here so the span stays open
+            # across the whole stream and exceptions are recorded.
+            input_data = None
+            if capture_input:
+                try:
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
+                except Exception as e:
+                    logger.debug(f"Failed to capture input: {e}")
+
+            async with SpanScope(
+                span_name,
+                input=input_data,
+                metadata=metadata or {},
+                level=level.value if isinstance(level, SpanLevel) else level,
+            ) as span:
+                collected: list[Any] = []
+                try:
+                    async for item in func(*args, **kwargs):
+                        if capture_output:
+                            collected.append(item)
+                        yield item
+                    if capture_output and collected:
+                        span.set_output(truncate_data(_serialize_output(collected)))
+                except Exception as e:
+                    _record_observe_exception(span, span_name, e)
+                    raise
+
+        @functools.wraps(func)
+        def sync_gen_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+            # Sync analogue of async_gen_wrapper (see note there): drive the
+            # generator inside the span so lazy bodies/exceptions are captured.
+            input_data = None
+            if capture_input:
+                try:
+                    input_data = truncate_data(_get_function_input(func, args, kwargs))
+                except Exception as e:
+                    logger.debug(f"Failed to capture input: {e}")
+
+            with SpanScope(
+                span_name,
+                input=input_data,
+                metadata=metadata or {},
+                level=level.value if isinstance(level, SpanLevel) else level,
+            ) as span:
+                collected: list[Any] = []
+                try:
+                    for item in func(*args, **kwargs):
+                        if capture_output:
+                            collected.append(item)
+                        yield item
+                    if capture_output and collected:
+                        span.set_output(truncate_data(_serialize_output(collected)))
+                except Exception as e:
+                    _record_observe_exception(span, span_name, e)
+                    raise
+
+        # Order matters: an async generator is neither a coroutine function nor a
+        # (sync) generator function, so check the most specific kinds first.
+        if inspect.isasyncgenfunction(func):
+            return async_gen_wrapper  # type: ignore
         if inspect.iscoroutinefunction(func):
             return async_wrapper  # type: ignore
+        if inspect.isgeneratorfunction(func):
+            return sync_gen_wrapper  # type: ignore
         return sync_wrapper  # type: ignore
 
     return decorator
@@ -270,6 +358,7 @@ def trace_agent(
             input_data = None
             if capture_input:
                 try:
+                    # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
@@ -328,21 +417,26 @@ def trace_agent(
                             trace.update(output=_serialize_output(result))
                     return result
                 except Exception as e:
-                    if trace:
-                        if hasattr(trace, "update"):
-                            trace.update(
-                                metadata={
-                                    **agent_metadata,
-                                    "error": str(e),
-                                    "error_type": type(e).__name__,
-                                }
-                            )
-                    from continuum.observability.error_reporter import report_error
+                    from continuum.exceptions import PolicyDeniedError
 
-                    trace_id = trace.id if hasattr(trace, "id") and trace.id else None
-                    report_error(
-                        e, context=f"agent.{trace_name}", trace_id=trace_id, user_id=user_id
-                    )
+                    policy_denied = isinstance(e, PolicyDeniedError)
+                    if trace and hasattr(trace, "update"):
+                        trace.update(
+                            metadata={
+                                **agent_metadata,
+                                # expected denial → audit field, not an "error"
+                                ("policy_denied" if policy_denied else "error"): str(e),
+                                "error_type": type(e).__name__,
+                            }
+                        )
+                    # Expected policy denials are not escalated to error reporting.
+                    if not policy_denied:
+                        from continuum.observability.error_reporter import report_error
+
+                        trace_id = trace.id if hasattr(trace, "id") and trace.id else None
+                        report_error(
+                            e, context=f"agent.{trace_name}", trace_id=trace_id, user_id=user_id
+                        )
                     raise
                 finally:
                     # Flush ProviderManager
@@ -390,6 +484,7 @@ def trace_agent(
             input_data = None
             if capture_input:
                 try:
+                    # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
                     logger.debug(f"Failed to capture input: {e}")
