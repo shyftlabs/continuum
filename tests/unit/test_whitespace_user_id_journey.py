@@ -306,3 +306,24 @@ class TestFullJourney:
 
         assert validate_user_id(WHITESPACE) is None, "whitespace → None at the boundary"
         assert validate_user_id(CLEAN_ID) == CLEAN_ID, "clean id survives validation"
+
+    def test_pipe_allowed_for_auth0_sub_claims(self):
+        """
+        PR #55 review follow-up: Auth0-style JWT 'sub' claims look like
+        'auth0|64abc...'. The pipe is not a Redis key delimiter here, so it is
+        safe to allow — these ids must pass validation unchanged. The colon
+        exclusion (the real delimiter) must still reject.
+        """
+        from continuum.utils.sanitization import (
+            InvalidIdentifierError,
+            validate_conversation_id,
+            validate_user_id,
+        )
+
+        auth0_id = "auth0|64abc123def456"
+        assert validate_user_id(auth0_id) == auth0_id, "Auth0 sub with '|' must be accepted"
+        assert validate_conversation_id(auth0_id) == auth0_id
+
+        # The colon delimiter must still be rejected (cross-tenant key safety).
+        with pytest.raises(InvalidIdentifierError):
+            validate_user_id("u:alice")

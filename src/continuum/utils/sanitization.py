@@ -60,11 +60,13 @@ def sanitize_message_content(message: dict[str, Any]) -> dict[str, Any]:
     return message
 
 
-# Allowlist for user_id and conversation_id: alphanumeric, hyphen, underscore, dot, @
+# Allowlist for user_id and conversation_id: alphanumeric, hyphen, underscore, dot, @, pipe.
 # Colons are explicitly excluded — they are key delimiters in Redis session keys
 # ("c:{conversation_id}:u:{user_id}") and cart_session_id (f"{user_id}:{conversation_id}").
 # A colon in either value would silently collapse into another user's scoping key.
-_ID_ALLOWED_RE = re.compile(r"[^a-zA-Z0-9\-_.@]")
+# Pipe ("|") IS allowed: Auth0-style JWT 'sub' claims look like "auth0|64abc..." and
+# the pipe is not a key delimiter here, so it is safe (PR #55 review follow-up).
+_ID_ALLOWED_RE = re.compile(r"[^a-zA-Z0-9\-_.@|]")
 _ID_MAX_LENGTH = 128
 
 
@@ -112,7 +114,7 @@ def _validate_id(value: str | None, field: str) -> str | None:
             field,
             value,
             f"contains disallowed character {bad.group()!r}; "
-            "allowed characters are letters, digits, and - _ . @",
+            "allowed characters are letters, digits, and - _ . @ |",
         )
     return cleaned
 
