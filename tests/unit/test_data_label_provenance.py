@@ -175,12 +175,20 @@ def _gate_simulating_agent(tool_labels: dict[str, set[str]]):
     agent.on_tool_call = None
     seen: dict[str, set[str]] = {}
 
-    async def fake_exec(tool_calls, trace_id=None, policy_store=None, subject=None, data_labels=None):
+    async def fake_exec(
+        tool_calls, trace_id=None, policy_store=None, subject=None, data_labels=None
+    ):
         tc = tool_calls[0]
         name = tc.function.name
         seen[name] = set(data_labels or ())  # snapshot at the moment this tool is gated
         if name == "send_referral_email" and "phi" in (data_labels or set()):
-            return [{"role": "tool", "tool_call_id": tc.id, "content": "POLICY DENIED: PHI exfiltration"}]
+            return [
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": "POLICY DENIED: PHI exfiltration",
+                }
+            ]
         return [{"role": "tool", "tool_call_id": tc.id, "content": "ok"}]
 
     executor = MagicMock()

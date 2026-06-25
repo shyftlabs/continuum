@@ -626,9 +626,7 @@ async def main(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Generate multi-source evaluation dataset"
-    )
+    parser = argparse.ArgumentParser(description="Generate multi-source evaluation dataset")
     parser.add_argument(
         "--samples",
         type=int,

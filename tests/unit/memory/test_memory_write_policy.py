@@ -83,7 +83,10 @@ class TestMemoryWritePolicy:
 
         with pytest.raises(MemoryAccessDeniedError):
             await mc.add(
-                "remember this", user_id="u1", policy_store=ps, subject="agent",
+                "remember this",
+                user_id="u1",
+                policy_store=ps,
+                subject="agent",
                 data_labels={"pii"},
             )
         mc._provider.add.assert_not_called()
@@ -95,7 +98,10 @@ class TestMemoryWritePolicy:
         mc = _client_with_provider()
 
         await mc.add(
-            "remember this", user_id="u1", policy_store=ps, subject="agent",
+            "remember this",
+            user_id="u1",
+            policy_store=ps,
+            subject="agent",
             data_labels={"pii"},
         )
         mc._provider.add.assert_awaited_once()

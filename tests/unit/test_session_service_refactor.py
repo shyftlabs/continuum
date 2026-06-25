@@ -61,8 +61,7 @@ def _agent_with_session_deny(name="agent-a", deny_session=True):
 def _persisted(sc):
     """Map role -> persisted content from the add_message calls."""
     return {
-        c.kwargs["message"].role: c.kwargs["message"].content
-        for c in sc.add_message.call_args_list
+        c.kwargs["message"].role: c.kwargs["message"].content for c in sc.add_message.call_args_list
     }
 
 

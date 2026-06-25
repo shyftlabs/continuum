@@ -56,9 +56,7 @@ class TestIsAuthorizedPredicate:
     def _decision(self, decided_by, decision="approved"):
         from continuum.temporal.types import ApprovalDecision
 
-        return ApprovalDecision(
-            request_id="approval-123", decision=decision, decided_by=decided_by
-        )
+        return ApprovalDecision(request_id="approval-123", decision=decision, decided_by=decided_by)
 
     def test_listed_approver_is_authorized(self):
         from continuum.temporal.types import is_authorized

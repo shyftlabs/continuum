@@ -83,7 +83,9 @@ class ClinicAgent:
         )
         self._runner.register_agent(self._agent)
         self._initialized = True
-        logger.info(f"✓ ClinicAgent ready — cloud={self.config.cloud_model} onprem={self.config.onprem_model}")
+        logger.info(
+            f"✓ ClinicAgent ready — cloud={self.config.cloud_model} onprem={self.config.onprem_model}"
+        )
 
     async def _connect_mcp(self) -> None:
         logger.info(f"Connecting to MCP server: {self.config.mcp_url}")
@@ -102,9 +104,7 @@ class ClinicAgent:
     def _create_agent(self) -> None:
         memory_client = self._container.memory_client if self._container else None
         memory_enabled = (
-            self.config.enable_memory
-            and memory_client is not None
-            and memory_client.is_enabled
+            self.config.enable_memory and memory_client is not None and memory_client.is_enabled
         )
 
         self._agent = BaseAgent(
@@ -146,9 +146,7 @@ class ClinicAgent:
         if not (sc and sc.is_enabled):
             return None
         try:
-            return await sc.get_or_create_session(
-                user_id=user_id, conversation_id=conversation_id
-            )
+            return await sc.get_or_create_session(user_id=user_id, conversation_id=conversation_id)
         except Exception as e:
             logger.warning(f"session init failed: {e}")
             return None
@@ -480,7 +478,11 @@ class ClinicAgent:
         """
         client = self.memory_client()
         if client is None:
-            return {"ok": False, "skipped": True, "reason": "memory not enabled (start Milvus + MEMORY_ENABLED=true)"}
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": "memory not enabled (start Milvus + MEMORY_ENABLED=true)",
+            }
         try:
             await client.add(
                 text,

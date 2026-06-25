@@ -44,9 +44,7 @@ def _build_stream_runner(llm, ctx):
     rs = RunState(run_id="run-test")
     rs.messages = [{"role": "user", "content": "look up P-123 and email it"}]
     runner._prepare_run = AsyncMock(
-        return_value=PrepareRunResult(
-            success=True, context=ctx, run_state=rs, user_message_index=0
-        )
+        return_value=PrepareRunResult(success=True, context=ctx, run_state=rs, user_message_index=0)
     )
     return runner
 

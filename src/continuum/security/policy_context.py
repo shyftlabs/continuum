@@ -85,9 +85,7 @@ def resolve_active_policy(
     return policy_store, subject, data_labels
 
 
-def set_active_policy(
-    policy_store: Any, subject: str, context: Any
-) -> Token[ActivePolicy | None]:
+def set_active_policy(policy_store: Any, subject: str, context: Any) -> Token[ActivePolicy | None]:
     """Publish the active policy context; returns a token to pass to
     :func:`reset_active_policy`. For use with try/finally where a context
     manager would force re-indenting a large body (e.g. AgentRunner.run)."""

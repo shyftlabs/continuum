@@ -271,9 +271,7 @@ class TestRunnerPublishesAmbientPolicyRunWide:
         captured: dict = {}
 
         async def fake_execute_loop(agent, messages, context, run_state):
-            return AgentResponse(
-                content="ok", agent_name=agent.name, status=ResponseStatus.SUCCESS
-            )
+            return AgentResponse(content="ok", agent_name=agent.name, status=ResponseStatus.SUCCESS)
 
         async def fake_finalize(*args, **kwargs):
             # finalize runs after execute_loop returns — execute_loop's nested

@@ -59,7 +59,9 @@ class TestReportErrorChokepoint:
         with patch("continuum.observability.error_reporter.get_error_reporter") as gr:
             reporter = MagicMock()
             gr.return_value = reporter
-            report_error(MemoryAccessDeniedError(operation="write", policy_name="phi-never-persisted"))
+            report_error(
+                MemoryAccessDeniedError(operation="write", policy_name="phi-never-persisted")
+            )
             reporter.report.assert_not_called()
 
     def test_normal_error_is_forwarded_to_reporter(self):

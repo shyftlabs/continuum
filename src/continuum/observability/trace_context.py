@@ -358,9 +358,7 @@ class SpanScope:
             # otherwise pass through, so token-usage fields aren't masked).
             from continuum.observability.data_redaction import redact_for_telemetry
 
-            truncated_input = redact_for_telemetry(
-                truncate_data(self.input), mask_secrets=False
-            )
+            truncated_input = redact_for_telemetry(truncate_data(self.input), mask_secrets=False)
 
             # If we have a parent client, use it directly
             if parent is not None:

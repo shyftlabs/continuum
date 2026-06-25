@@ -179,9 +179,7 @@ class ClinicConfig:
 
     # --- provenance declarations (the 3 producer sites) ------------------- #
     # Tool provenance: lookup_patient returns a record declared to carry PHI.
-    tool_data_labels: dict[str, set[str]] = field(
-        default_factory=lambda: {"lookup_patient": {PHI}}
-    )
+    tool_data_labels: dict[str, set[str]] = field(default_factory=lambda: {"lookup_patient": {PHI}})
     # Memory-scope provenance (read = taint) is intentionally NOT used here. In
     # this use case PHI enters only via the lookup_patient tool, and the user's
     # long-term memory holds non-sensitive preferences that must NOT taint a run

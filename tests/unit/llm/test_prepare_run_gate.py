@@ -33,9 +33,7 @@ class TestPrepareMessagesGated:
             return ([], 0)  # (messages, user_message_index)
 
         async def fake_loop(agent, messages, context, run_state):
-            return AgentResponse(
-                content="ok", agent_name=agent.name, status=ResponseStatus.SUCCESS
-            )
+            return AgentResponse(content="ok", agent_name=agent.name, status=ResponseStatus.SUCCESS)
 
         async def fake_finalize(*a, **k):
             return None
@@ -51,6 +49,8 @@ class TestPrepareMessagesGated:
         await runner.run(agent, "hello", context=ctx)
 
         ap = captured["ap"]
-        assert ap is not None, "prepare_messages ran without an ambient policy (compression ungated)"
+        assert ap is not None, (
+            "prepare_messages ran without an ambient policy (compression ungated)"
+        )
         assert ap.subject == "prep-agent"
         assert ap.data_labels == {"pii"}

@@ -28,27 +28,44 @@ def _sample_trace() -> DecisionTrace:
     )
     trace.add(
         DecisionStep(
-            step_id="s1", kind=StepKind.LLM_CALL, agent_name="clinic_agent", turn=1,
-            output="I'll look up P-123 then email it.", decision="tool_call",
-            prompt_tokens=800, completion_tokens=120, total_tokens=920, latency_ms=900,
+            step_id="s1",
+            kind=StepKind.LLM_CALL,
+            agent_name="clinic_agent",
+            turn=1,
+            output="I'll look up P-123 then email it.",
+            decision="tool_call",
+            prompt_tokens=800,
+            completion_tokens=120,
+            total_tokens=920,
+            latency_ms=900,
             messages_snapshot=[{"role": "user", "content": "Summarize P-123 …"}],
-            data_labels=["phi"], span_id="sp-1",
+            data_labels=["phi"],
+            span_id="sp-1",
         )
     )
     trace.add(
         DecisionStep(
-            step_id="s2", kind=StepKind.TOOL_CALL, agent_name="clinic_agent", turn=1,
+            step_id="s2",
+            kind=StepKind.TOOL_CALL,
+            agent_name="clinic_agent",
+            turn=1,
             parent_id="s1",
             input={"tool": "lookup_patient", "args": {"patient_id": "P-123"}},
             decision="call lookup_patient",
             output="Jane Doe, DOB 1984-02-11, dx: type-2 diabetes, A1c 8.2",
-            latency_ms=42, span_id="sp-2", data_labels=["phi"],
+            latency_ms=42,
+            span_id="sp-2",
+            data_labels=["phi"],
         )
     )
     trace.add(
         DecisionStep(
-            step_id="s3", kind=StepKind.REASONING, agent_name="clinic_agent", turn=1,
-            parent_id="s1", decision="think",
+            step_id="s3",
+            kind=StepKind.REASONING,
+            agent_name="clinic_agent",
+            turn=1,
+            parent_id="s1",
+            decision="think",
             rationale="The patient's A1c is high; I should flag it.",
             data_labels=["phi"],
         )
