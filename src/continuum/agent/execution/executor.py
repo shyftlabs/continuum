@@ -616,10 +616,14 @@ class Executor(IExecutor):
                                         messages=messages,
                                     )
                             else:
-                                # Handoff failed — clean up stack if return_to_parent
-                                # (push_agent already ran in execute_handoff)
-                                handoff_config = agent.get_handoff(target)
-                                if handoff_config and handoff_config.return_to_parent:
+                                # Handoff failed. execute_handoff pushes the target
+                                # only AFTER its early depth/cycle/registry checks
+                                # pass, so the target is on the stack only in
+                                # post-push failures — where it sits on top. Pop it
+                                # whenever it's on top, regardless of return_to_parent,
+                                # so a failed hop never leaves the target stuck (which
+                                # would trip false cycle detection on a retry).
+                                if run_state.agent_stack and run_state.agent_stack[-1] == target:
                                     run_state.pop_agent()
                                     run_state.current_agent = agent.name
                                 # Add error as tool result so the LLM can react

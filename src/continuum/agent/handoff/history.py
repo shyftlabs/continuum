@@ -58,6 +58,12 @@ def _find_turn_boundary(messages: list[dict[str, Any]], n_turns: int) -> int:
     A turn starts at each user message. All messages within a turn
     (tool calls, tool results, assistant responses) are included.
     """
+    # n_turns <= 0 means "keep no recent turns". Return an index past the end
+    # so messages[boundary:] == []. Without this guard, n_turns == 0 hits
+    # user_indices[-0] (== user_indices[0]) and returns almost the entire
+    # history instead of nothing.
+    if n_turns <= 0:
+        return len(messages)
     user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
     if len(user_indices) <= n_turns:
         return 0
