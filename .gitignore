@@ -150,3 +150,6 @@ playground/comparisons/
 src/orchestrator/evaluation/eval-dataset/
 
 playground/local
+
+# extensions
+extensions/
