@@ -8,6 +8,7 @@ throughout the codebase and Anthropic's native API format.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -30,6 +31,43 @@ from continuum.logging import get_logger
 logger = get_logger(__name__)
 
 _PROVIDER = "anthropic"
+
+# Claude 4.6 and newer use adaptive ("extended") thinking and reject an explicit
+# temperature parameter — the API returns a 400 if one is supplied. We omit
+# temperature for these models. Examples: claude-sonnet-4-6, claude-opus-4-8,
+# claude-fable-5.
+_MIN_TEMPERATURE_FREE_VERSION = (4, 6)
+
+
+def _parse_claude_version(model: str) -> tuple[int, int] | None:
+    """Extract a (major, minor) version from a Claude model id.
+
+    Handles both the new family-first naming ("claude-sonnet-4-6",
+    "claude-opus-4-8", "claude-fable-5") and the legacy version-first naming
+    ("claude-3-5-sonnet-20241022", "claude-3-opus"). A trailing date stamp is
+    ignored. Returns None when no version can be determined.
+    """
+    name = model.removeprefix("anthropic/").removeprefix("claude/")
+
+    # Legacy version-first: "claude-3-5-sonnet", "claude-3-opus".
+    legacy = re.match(r"claude-(\d+)(?:[.-](\d+))?", name)
+    if legacy:
+        return int(legacy.group(1)), int(legacy.group(2) or 0)
+
+    # New family-first: "<family>-<major>[-<minor>]" anywhere in the id.
+    modern = re.search(r"(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?", name)
+    if modern:
+        return int(modern.group(1)), int(modern.group(2) or 0)
+
+    return None
+
+
+def _model_rejects_temperature(model: str) -> bool:
+    """True if the model is Claude 4.6+ and rejects an explicit temperature."""
+    version = _parse_claude_version(model)
+    if version is None:
+        return False
+    return version >= _MIN_TEMPERATURE_FREE_VERSION
 
 
 class AnthropicProvider(BaseProvider):
@@ -188,7 +226,15 @@ class AnthropicProvider(BaseProvider):
         if system:
             kwargs["system"] = system
         if config.temperature is not None:
-            kwargs["temperature"] = config.temperature
+            if _model_rejects_temperature(config.model):
+                logger.debug(
+                    "Omitting temperature=%s for adaptive-thinking model '%s' "
+                    "(Claude 4.6+ rejects the temperature parameter).",
+                    config.temperature,
+                    config.model,
+                )
+            else:
+                kwargs["temperature"] = config.temperature
         if config.top_p is not None:
             kwargs["top_p"] = config.top_p
         if config.stop is not None:
