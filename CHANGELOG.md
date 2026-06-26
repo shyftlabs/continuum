@@ -8,6 +8,19 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- _Nothing yet._
+
+### Changed
+- _Nothing yet._
+
+### Fixed
+- _Nothing yet._
+
+---
+
+## [0.2.4] — 2026-06-26
+
+### Added
 - GitHub issue templates (`bug.yml`, `feature.yml`, `question.yml`) and a chooser config that disables blank issues and routes security reports to a private advisory.
 - Pull request template with Conventional-Commits typing, DCO checkbox, and lint/type/test gates.
 - `CODEOWNERS` for automatic review routing.
@@ -84,6 +97,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 Initial public release. See the repository history for details prior to this changelog being introduced.
 
-[Unreleased]: https://github.com/shyftlabs/continuum/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/shyftlabs/continuum/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/shyftlabs/continuum/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/shyftlabs/continuum/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/shyftlabs/continuum/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/shyftlabs/continuum/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shyftlabs/continuum/releases/tag/v0.2.0
