@@ -3,11 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Continuum — Agent Development Framework</title>
+  <title>Continuum · Agent Development Framework</title>
+  <meta name="description" content="Continuum is a three-layer agent platform: the open-source Continuum Framework runtime, the Aura smart-inference layer, and Provenance governance. Build, run, route, and govern production AI agents." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Continuum · Agent Development Framework" />
+  <meta property="og:description" content="The open-source agent runtime, plus Aura smart inference and Provenance governance. From notebook to enterprise." />
+  <meta property="og:image" content="assets/continuum-logo.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Continuum · Agent Development Framework" />
+  <meta name="twitter:description" content="The open-source agent runtime, plus Aura smart inference and Provenance governance." />
   <link rel="icon" type="image/jpeg" href="assets/logo.jpeg" />
   <link rel="shortcut icon" type="image/jpeg" href="assets/logo.jpeg" />
   <link rel="apple-touch-icon" href="assets/logo.jpeg" />
-  <meta name="theme-color" content="#0d0d0d" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700;800&family=Geist:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
@@ -38,6 +46,7 @@
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--text); background: var(--bg); font-size: 15px; line-height: 1.6;
+      overflow-x: clip; /* safety guard, never let nav crowding cause horizontal page scroll (clip = no sticky side-effects) */
       background-image:
         radial-gradient(circle at 1px 1px, rgba(10,10,10,.04) 1px, transparent 0);
       background-size: 22px 22px;
@@ -58,10 +67,15 @@
       line-height: 1;
     }
     .nav-logo img.mark {
-      width: 30px; height: 30px;
+      width: 28px; height: 28px;
       border-radius: 7px;
       object-fit: cover;
       box-shadow: 0 1px 3px rgba(0,0,0,.12);
+      display: none; /* desktop shows wordmark; mobile swaps to this square mark */
+    }
+    .nav-logo img.wordmark-img {
+      height: 22px; width: auto;
+      object-fit: contain;
       display: block;
     }
     .nav-logo .text { display: flex; flex-direction: column; gap: 3px; line-height: 1; }
@@ -75,7 +89,9 @@
       color: var(--text-secondary);
     }
     .nav-logo .byline em { font-style: normal; font-weight: 600; color: var(--text); }
-    .nav-tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+    .nav-tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; min-width: 0;
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+              mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%); }
     .nav-tabs::-webkit-scrollbar { display: none; }
     .nav-tab {
       padding: 6px 13px; border-radius: 7px; cursor: pointer; font-size: 13.5px; font-weight: 500;
@@ -218,7 +234,7 @@
     }
     .copy-btn:hover { background: white; color: var(--code-bg); border-color: white; }
 
-    /* syntax colours (monochrome — desaturated industrial) */
+    /* syntax colours (monochrome, desaturated industrial) */
     .kw { color: #d4d4d4; font-weight: 500; }
     .fn { color: #ffffff; }
     .str { color: #c4c4c4; }
@@ -327,14 +343,19 @@
       background: var(--bg);
     }
     footer a { color: var(--text-secondary); }
-
-    /* Empty brand slot — takes no space, no clickable area */
-    .nav-logo-empty {
-      display: inline-block;
-      width: 0; height: 0;
-      margin: 0; padding: 0;
-      pointer-events: none;
-    }
+    footer { flex-wrap: wrap; gap: 18px; text-transform: none; letter-spacing: 0; }
+    .footer-brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .footer-logo { height: 22px; width: auto; display: block; }
+    .footer-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+    .footer-meta { font-family: var(--display-font); font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute); white-space: nowrap; }
+    .footer-built { display: inline-flex; align-items: center; }
+    .footer-shyft { height: 17px; width: auto; display: block; opacity: .82; transition: opacity .15s ease; }
+    .footer-built:hover .footer-shyft { opacity: 1; }
+    .footer-social { display: flex; align-items: center; gap: 6px; }
+    .footer-social a { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text-secondary); border: 1px solid transparent; transition: all .15s ease; }
+    .footer-social a:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
+    .footer-social a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .footer-social svg { width: 18px; height: 18px; }
 
     /* ── HAMBURGER (mobile only) ── */
     #hamburger {
@@ -375,7 +396,7 @@
       table { font-size: 13px; }
     }
 
-    /* Mobile (≤ 768px) — sidebar becomes a drawer */
+    /* Mobile (≤ 768px), sidebar becomes a drawer */
     @media (max-width: 768px) {
       /* Topnav layout: hamburger | (empty brand) | tabs (flex-1 + scroll) */
       #topnav { padding: 0 8px; gap: 4px; }
@@ -394,7 +415,8 @@
         gap: 6px;
       }
       .nav-logo .text { display: none; }
-      .nav-logo img.mark { width: 28px; height: 28px; }
+      .nav-logo img.mark { display: block; width: 28px; height: 28px; }
+      .nav-logo img.wordmark-img { display: none; }
 
       /* Tabs claim all remaining horizontal space and scroll inside it */
       .nav-tabs {
@@ -430,14 +452,14 @@
       }
       #sidebar.open { transform: translateX(0); }
 
-      /* Main column takes full width — comfortable side padding */
+      /* Main column takes full width, comfortable side padding */
       #layout { display: block; }
       #main {
         max-width: 100%;
         padding: 20px 20px 56px;
       }
 
-      /* Typography — sized to avoid one-word-per-line on narrow widths */
+      /* Typography, sized to avoid one-word-per-line on narrow widths */
       h1 { font-size: 24px; letter-spacing: -.01em; line-height: 1.15; }
       h2 {
         font-size: 17px; margin: 28px 0 10px;
@@ -455,7 +477,7 @@
       .section-intro { font-size: 15px; margin-bottom: 26px; line-height: 1.55; }
       p, li { font-size: 14.5px; line-height: 1.6; }
 
-      /* Single-column grids — comfortable padding */
+      /* Single-column grids, comfortable padding */
       .cards { grid-template-columns: 1fr; gap: 10px; margin: 20px 0; }
       .card { padding: 16px; }
       .card h3 { font-size: 12px; }
@@ -467,7 +489,7 @@
       .hero-badges { gap: 5px; margin-bottom: 24px; }
       .badge { font-size: 10px; padding: 3px 7px; }
 
-      /* Code — fits common viewports without horizontal scroll surprises */
+      /* Code, fits common viewports without horizontal scroll surprises */
       pre {
         padding: 12px 14px;
         font-size: 12px;
@@ -478,10 +500,10 @@
       p code, li code, td code { font-size: 11.5px; word-break: break-word; }
       .copy-btn { font-size: 9.5px; padding: 2px 7px; top: 8px; right: 8px; }
 
-      /* Callouts — tighter on mobile */
+      /* Callouts, tighter on mobile */
       .callout { padding: 12px 14px; font-size: 13px; margin: 14px 0; }
 
-      /* Tables — allow natural wrap; no more single-line horizontal scroll */
+      /* Tables, allow natural wrap; no more single-line horizontal scroll */
       table { font-size: 12.5px; width: 100%; }
       th, td {
         padding: 8px 10px;
@@ -494,7 +516,7 @@
       .param-table td:first-child,
       .param-table td:nth-child(2) { word-break: break-all; }
 
-      /* Steps — compact rail */
+      /* Steps, compact rail */
       .steps li {
         padding: 12px 12px 12px 44px;
         margin-left: 12px;
@@ -538,6 +560,7 @@
       #hamburger { flex: 0 0 34px; width: 34px; height: 34px; margin-right: 0; }
       .nav-logo { margin-right: 4px; gap: 5px; }
       .nav-logo img.mark { width: 26px; height: 26px; }
+      .nav-logo img.wordmark-img { height: 16px; }
       .nav-tab { padding: 5px 8px; font-size: 12px; }
 
       /* Cards a little tighter */
@@ -548,7 +571,7 @@
       pre { padding: 10px 12px; font-size: 11.5px; }
       .copy-btn { font-size: 9px; padding: 2px 6px; }
 
-      /* Tables — smaller cells */
+      /* Tables, smaller cells */
       table { font-size: 12px; }
       th, td { padding: 7px 9px; }
       th { font-size: 10px; }
@@ -572,9 +595,363 @@
     @supports (-webkit-touch-callout: none) {
       table::-webkit-scrollbar { display: none; }
     }
+
+    /* ════════════════════ SUITE · PREMIUM LAYER (v1.0.0) ════════════════════ */
+
+    /* Aurora, the single accent gradient, reserved for the product suite.
+       Muted, dark, low-saturation cool tones, tuned to the monochrome theme (no neon). */
+    :root {
+      --aurora: linear-gradient(100deg,#30323a 0%,#3b4a60 27%,#355b5e 50%,#444a63 75%,#30323a 100%);
+    }
+    @keyframes aurora-flow { to { background-position: 220% center; } }
+
+    .grad-text {
+      background: var(--aurora); background-size: 220% auto;
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+      animation: aurora-flow 7s linear infinite;
+    }
+    /* Solid fallback where background-clip:text is unsupported, never invisible */
+    @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+      .grad-text { color: var(--text); -webkit-text-fill-color: currentColor; background: none; }
+    }
+
+    /* Skip-to-content (revealed on keyboard focus) */
+    .skip-link {
+      position: fixed; top: 8px; left: 8px; z-index: 200;
+      background: var(--text); color: #fff; padding: 8px 14px; border-radius: 6px;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .04em;
+      text-transform: uppercase; text-decoration: none;
+      transform: translateY(-160%); transition: transform .18s ease;
+    }
+    .skip-link:focus { transform: translateY(0); outline: 2px solid var(--text); outline-offset: 2px; }
+
+    /* Command-style badge (lowercase, monospace) for the install command */
+    .badge-cmd { text-transform: none; font-family: 'JetBrains Mono', monospace; letter-spacing: 0; font-weight: 600; }
+
+    /* Reading-progress bar, pinned to the very top edge */
+    #read-progress {
+      position: fixed; top: 0; left: 0; height: 2px; width: 0;
+      background: var(--aurora); background-size: 220% auto;
+      z-index: 102;
+      transition: width .08s linear; pointer-events: none;
+    }
+
+    /* ── PRODUCT SWITCHER ── */
+    .product-nav {
+      display: flex; align-items: center; gap: 2px; flex-shrink: 0;
+      padding: 3px; margin-right: 4px;
+      border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+    }
+    .product-tab {
+      position: relative; display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 11px; border: none; background: none; cursor: pointer; border-radius: 6px;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700;
+      letter-spacing: .03em; text-transform: uppercase; white-space: nowrap;
+      transition: background .15s ease;
+    }
+    .product-tab:hover { background: var(--surface); }
+    .product-tab.active { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong); }
+    .product-tab.active .grad-text { animation-duration: 5s; filter: saturate(1.15) contrast(1.05); }
+    .product-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .product-tab .soon {
+      font-family: var(--display-font); font-size: 8px; font-weight: 700; letter-spacing: .08em;
+      color: var(--text-mute); -webkit-text-fill-color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 1px 4px;
+    }
+    .product-tab.active .soon { color: var(--text-secondary); -webkit-text-fill-color: var(--text-secondary); border-color: var(--border-strong); }
+
+    .nav-div { width: 1px; height: 22px; background: var(--border); margin: 0 10px; flex-shrink: 0; }
+
+    /* ── NAV RIGHT ACTIONS ── */
+    .nav-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; padding-left: 8px; flex-shrink: 0; }
+    .nav-icon-link {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 6px 11px; border-radius: 7px; text-decoration: none;
+      color: var(--text-secondary); font-size: 13px; font-weight: 500;
+      border: 1px solid transparent; transition: all .15s ease; white-space: nowrap;
+    }
+    .nav-icon-link:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
+    .nav-icon-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .nav-icon-link svg { width: 19px; height: 19px; flex-shrink: 0; }
+    .nav-brand-link { padding: 5px 10px; }
+    .nav-shyft-logo { height: 26px; width: auto; display: block; opacity: 1; transition: opacity .15s ease; }
+    .nav-brand-link:hover .nav-shyft-logo { opacity: 1; }
+    .nav-div-actions { margin: 0 8px; }
+
+    /* ── HOME · PRODUCT SUITE ── */
+    .suite-lead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+    .suite { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0 8px; }
+    .suite-card {
+      position: relative; overflow: hidden; text-align: left; cursor: pointer;
+      border: 1px solid var(--border); border-radius: 2px; padding: 24px 20px 18px; background: var(--bg);
+      transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+    .suite-card::before {
+      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: var(--aurora); background-size: 220% auto; animation: aurora-flow 7s linear infinite; opacity: .92;
+    }
+    .suite-card:hover { border-color: var(--text); transform: translateY(-3px); box-shadow: 0 14px 32px -18px rgba(10,10,10,.32); }
+    .suite-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+    .suite-card .kicker {
+      font-family: var(--display-font); font-size: 9.5px; font-weight: 700; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--text-mute); margin-bottom: 12px;
+    }
+    .suite-card h3 {
+      font-family: var(--display-font); font-size: 20px; font-weight: 700; letter-spacing: 0;
+      text-transform: uppercase; margin: 0 0 8px;
+    }
+    .suite-card p { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.55; }
+    .suite-meta { display: flex; align-items: center; justify-content: space-between; }
+    .suite-status {
+      font-family: var(--display-font); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 2px; border: 1px solid var(--border); color: var(--text-secondary);
+    }
+    .suite-status.live { color: #fff; background: var(--text); border-color: var(--text); }
+    .suite-go { font-family: var(--display-font); font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text); opacity: .55; transition: opacity .15s ease; }
+    .suite-card:hover .suite-go { opacity: 1; }
+    .suite-meta { flex-wrap: wrap; gap: 8px; }
+    .suite-status, .suite-go { white-space: nowrap; }
+
+    /* ── COMING SOON (Provenance) ── */
+    .cs { text-align: center; max-width: 660px; margin: 20px auto; }
+    .cs-badge {
+      display: inline-block; font-family: var(--display-font); font-size: 10px; font-weight: 700;
+      letter-spacing: .16em; text-transform: uppercase; color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 4px 12px; margin-bottom: 24px;
+    }
+    .cs h1 { font-size: 66px; margin-bottom: 18px; line-height: 1; }
+    .cs-sub { font-size: 18px; color: var(--text-secondary); line-height: 1.5; margin: 0 auto 30px; max-width: 540px; text-transform: none; letter-spacing: 0; }
+    .cs-pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 0 auto 34px; max-width: 560px; }
+    .cs-pill {
+      font-family: var(--display-font); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+      border: 1px solid var(--border); border-radius: 2px; padding: 7px 13px; color: var(--text-secondary); background: var(--bg);
+    }
+    .cs-cta {
+      display: inline-flex; align-items: center; gap: 9px; background: var(--text); color: #fff; text-decoration: none;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      padding: 13px 24px; border-radius: 2px; transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .cs-cta:hover { transform: translateY(-2px); box-shadow: 0 16px 32px -16px rgba(10,10,10,.55); }
+
+    /* Premium: gentle section fade-in on tab switch */
+    .page-section.active { animation: section-in .34s ease both; }
+    @keyframes section-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    /* Responsive, new nav + suite */
+    @media (max-width: 1024px) {
+      .suite { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 768px) {
+      .product-nav { margin-right: 4px; padding: 2px; gap: 1px; }
+      .product-tab { padding: 4px 7px; font-size: 10.5px; letter-spacing: .02em; }
+      /* collapse the "Soon" pill into a compact dot so the coming-soon cue survives on mobile */
+      .product-tab .soon { font-size: 0; padding: 0; border: none; width: 5px; height: 5px; border-radius: 50%; background: var(--text-mute); -webkit-text-fill-color: transparent; }
+      .nav-div { display: none; }
+      .nav-actions { padding-left: 4px; }
+      .nav-icon-link { padding: 6px 8px; }
+      .nav-icon-link .label { display: none; }
+      #nav-shyftlabs, .nav-div-actions { display: none; }
+      .cs h1 { font-size: 40px; }
+      .cs-sub { font-size: 15px; }
+      .cs-badge { margin-bottom: 18px; }
+    }
+    @media (max-width: 480px) {
+      .product-tab { padding: 4px 6px; font-size: 10px; }
+      #nav-shyftlabs { display: none; }
+    }
+
+    /* ════════════════ PER-PRODUCT BRANDING · HEROES · FX ════════════════ */
+
+    /* Three muted gradient variations, one cohesive family, distinct per product */
+    :root {
+      --grad-framework: linear-gradient(105deg,#2b2f3a 0%,#33455f 30%,#3a5566 55%,#3d4a63 80%,#2b2f3a 100%);
+      --grad-aura:      linear-gradient(105deg,#2c3a3a 0%,#335b5e 32%,#2f6360 56%,#3a5a57 80%,#2c3a3a 100%);
+      --grad-prov:      linear-gradient(105deg,#332f3e 0%,#444a63 30%,#473f63 55%,#3b3f5e 80%,#332f3e 100%);
+    }
+    /* .grad-text pulls its gradient from --g (set per product context) */
+    .grad-text { background-image: var(--g, var(--aurora)); background-size: 220% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .product-tab[data-section="framework"], #sec-framework, #sb-framework-areas { --g: var(--grad-framework); }
+    #sec-home { --g: var(--grad-framework); }
+    .product-tab[data-section="smart"], #sec-smart { --g: var(--grad-aura); }
+    .product-tab[data-section="provenance"], #sec-provenance { --g: var(--grad-prov); }
+    .suite-card.s-framework { --g: var(--grad-framework); }
+    .suite-card.s-aura { --g: var(--grad-aura); }
+    .suite-card.s-prov { --g: var(--grad-prov); }
+
+    /* ── PRODUCT HERO (shared premium header per product) ── */
+    .product-hero { padding: 4px 0 18px; }
+    .ph-kicker {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--display-font); font-size: 10px; font-weight: 700;
+      letter-spacing: .16em; text-transform: uppercase; color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 4px 11px; margin-bottom: 22px;
+    }
+    .ph-kicker .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--g, var(--aurora)); background-size: 220% auto; }
+    .ph-title {
+      font-family: var(--display-font); font-weight: 700; line-height: .98;
+      font-size: clamp(34px, 5.6vw, 58px); letter-spacing: -.02em; text-transform: uppercase; margin: 0 0 18px;
+    }
+    .ph-sub {
+      font-family: 'Inter', sans-serif; font-size: 18px; color: var(--text-secondary);
+      line-height: 1.5; max-width: 600px; margin: 0 0 22px; text-transform: none; letter-spacing: 0;
+    }
+    .ph-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+    /* ── PROPRIETARY banner (Aura / Provenance) ── */
+    .proprietary {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+      border: 1px solid var(--border-strong); border-radius: 3px; background: var(--surface);
+      padding: 15px 18px 15px 22px; margin: 4px 0 30px; position: relative; overflow: hidden;
+    }
+    .proprietary::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+      background: var(--g, var(--aurora)); background-size: 220% auto;
+    }
+    .proprietary .pr-text { font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; }
+    .proprietary .pr-text strong { color: var(--text); }
+    .pr-tag {
+      font-family: var(--display-font); font-size: 9px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--text); border: 1px solid var(--border-strong);
+      border-radius: 2px; padding: 2px 7px; margin-right: 8px; vertical-align: 1px;
+    }
+    .pr-cta {
+      flex-shrink: 0; display: inline-flex; align-items: center; gap: 8px;
+      background: var(--text); color: #fff; text-decoration: none;
+      font-family: var(--display-font); font-size: 11px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase; padding: 10px 18px; border-radius: 2px;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .pr-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 24px -12px rgba(10,10,10,.5); }
+
+    /* ── ANIMATED CONSTELLATION BACKGROUND ── */
+    #bg-canvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; opacity: .6; }
+
+    /* ── SCROLL REVEAL (classes applied by JS, so content is visible without JS) ── */
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s cubic-bezier(.2,.7,.3,1), transform .6s cubic-bezier(.2,.7,.3,1); }
+    .reveal.in { opacity: 1; transform: none; }
+
+    /* ── FRAMEWORK AREA NAV (sub-sections in the sidebar) ── */
+    #sb-framework-areas { border-bottom: 1px solid var(--border); margin-bottom: 6px; padding-bottom: 8px; }
+    .area-link { font-weight: 500; }
+    .area-link.active { font-weight: 700; }
+
+    /* ── REFINED PRODUCT SWITCHER (segmented control) ── */
+    .product-nav { padding: 0; gap: 4px; border: none; background: none; border-radius: 0; flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; margin-right: 10px; }
+    .product-nav::-webkit-scrollbar { display: none; }
+    .product-tab { padding: 9px 15px; font-size: 13.5px; border-radius: 8px; flex-shrink: 0; letter-spacing: .02em; }
+    .product-tab:hover { background: var(--surface); }
+    .product-tab.active { background: none; box-shadow: none; }
+    .product-tab.active::after {
+      content: ""; position: absolute; left: 15px; right: 15px; bottom: 2px; height: 2.5px; border-radius: 3px;
+      background: var(--g, var(--aurora)); background-size: 220% auto;
+    }
+    .product-tab .soon { margin-left: 1px; }
+
+    /* Focus rings on primary CTAs + sidebar links; pointer for onclick links; label contrast */
+    .pr-cta:focus-visible, .cs-cta:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px rgba(10,10,10,.35); }
+    .sidebar-link:focus-visible, .area-link:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+    .suite-card:focus-visible { transform: translateY(-3px); box-shadow: 0 14px 32px -18px rgba(10,10,10,.32); }
+    .suite-card:focus-visible .suite-go { opacity: 1; }
+    a[onclick] { cursor: pointer; }
+    .ph-kicker, .suite-card .kicker, .cs-badge { color: var(--text-secondary); }
+    .product-tab .soon { color: var(--text-secondary); -webkit-text-fill-color: var(--text-secondary); }
+
+    /* Compact product switcher on small screens (declared AFTER the refined block so it wins) */
+    @media (max-width: 860px) {
+      .product-tab { padding: 5px 10px; font-size: 11.5px; }
+    }
+    @media (max-width: 768px) {
+      .product-nav { padding: 2px; gap: 1px; }
+      .product-tab { padding: 7px 10px; font-size: 12px; letter-spacing: .01em; }
+      .product-tab.active::after { left: 10px; right: 10px; }
+    }
+
+    @media (max-width: 768px) {
+      .ph-sub { font-size: 15px; }
+      .proprietary { padding: 14px 16px; }
+      .pr-cta { padding: 9px 14px; }
+    }
+
+    /* ── HOME · SUITE LANDING ── */
+    .landing-hero { position: relative; padding: 24px 0 34px; }
+    .landing-glow {
+      position: absolute; top: -50px; left: -8%; width: 62%; height: 300px; z-index: -1;
+      background: var(--aurora); background-size: 220% auto; filter: blur(80px); opacity: .11; border-radius: 50%;
+      animation: aurora-flow 9s linear infinite, glow-pulse 6s ease-in-out infinite; pointer-events: none;
+    }
+    @keyframes glow-pulse { 0%, 100% { opacity: .09; } 50% { opacity: .19; } }
+    .landing-title {
+      font-family: var(--display-font); font-weight: 700; text-transform: uppercase;
+      font-size: clamp(34px, 5.6vw, 62px); line-height: 1; letter-spacing: -.02em; margin: 4px 0 16px;
+    }
+    .landing-sub {
+      font-family: 'Inter', sans-serif; font-size: 18px; color: var(--text-secondary);
+      line-height: 1.5; max-width: 600px; margin: 0 0 24px; text-transform: none; letter-spacing: 0;
+    }
+    .landing-sub strong { color: var(--text); }
+    .pr-cta-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+    /* Landing hero CTA row: pip badge matches the button height */
+    .landing-hero .ph-meta { gap: 10px; }
+    .landing-hero .ph-meta .badge-cmd { padding: 11px 16px; font-size: 13px; border-radius: 2px; line-height: 1; }
+    .landing-hero .ph-meta .pr-cta { padding: 11px 18px; }
+    .pr-cta-ghost:hover { background: var(--surface); }
+    .suite-lg { gap: 16px; }
+    .suite-lg .suite-card { padding: 28px 22px 20px; }
+    .suite-lg .suite-card h3 { font-size: 24px; }
+    .suite-lg .suite-card::before { height: 4px; }
+    .suite-lg .suite-card:hover { transform: translateY(-5px); box-shadow: 0 22px 46px -22px rgba(10,10,10,.42); }
+    @media (max-width: 768px) {
+      .landing-glow { width: 92%; height: 200px; filter: blur(48px); }
+    }
+
+    /* Landing detail: stats, flow, CTA */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 36px 0; padding: 22px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .stat-num { font-family: var(--display-font); font-size: 36px; font-weight: 700; letter-spacing: -.02em; line-height: 1; }
+    .stat-label { font-family: var(--display-font); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute); margin-top: 6px; }
+    .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 8px; margin: 18px 0 10px; }
+    .flow-step { border: 1px solid var(--border); border-radius: 2px; padding: 20px 18px; background: var(--bg); transition: border-color .15s ease, transform .15s ease; }
+    .flow-step:hover { border-color: var(--text); transform: translateY(-2px); }
+    .flow-num { font-family: var(--display-font); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-mute); }
+    .flow-step h3 { font-family: var(--display-font); font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0; margin: 10px 0 8px; }
+    .flow-step p { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
+    .flow-arrow { display: flex; align-items: center; justify-content: center; font-family: var(--display-font); font-size: 20px; color: var(--border-strong); }
+    .cta-band { margin: 42px 0 8px; border-radius: 3px; background: var(--text); color: #fff; padding: 38px 32px; text-align: center; }
+    .cta-band h2 { color: #fff; border: none; margin: 0 0 8px; padding: 0; font-size: 28px; text-transform: uppercase; }
+    .cta-band > p { color: rgba(255,255,255,.7); margin: 0 auto 22px; max-width: 460px; }
+    .cta-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; align-items: center; }
+    .cta-btn { display: inline-flex; align-items: center; gap: 8px; background: #fff; color: var(--text); text-decoration: none; font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 12px 20px; border-radius: 2px; transition: transform .15s ease; }
+    .cta-btn:hover { transform: translateY(-2px); }
+    .cta-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    .cta-btn-ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.3); }
+    @media (max-width: 768px) {
+      .stats { grid-template-columns: 1fr 1fr; gap: 14px; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-arrow { transform: rotate(90deg); padding: 2px 0; }
+      .cta-band { padding: 28px 20px; }
+    }
+
+    /* Respect reduced-motion */
+    @media (prefers-reduced-motion: reduce) {
+      .grad-text, #read-progress, .suite-card::before, .landing-glow { animation: none; }
+      .grad-text { background-position: 35% center; }
+      .landing-glow { opacity: .1; }
+      .page-section.active { animation: none; }
+      .suite-card:hover, .suite-lg .suite-card:hover, .cs-cta:hover { transform: none; }
+      .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+      #bg-canvas { display: none; }
+    }
   </style>
 </head>
 <body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- Reading-progress bar (aurora) -->
+<div id="read-progress" aria-hidden="true"></div>
+
+<!-- Minimal animated constellation background -->
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
 
 <!-- ═══════════════════════ TOP NAV ═══════════════════════ -->
 <nav id="topnav">
@@ -585,18 +962,24 @@
       <line x1="3" y1="18" x2="21" y2="18"></line>
     </svg>
   </button>
-  <!-- Brand intentionally empty — fill via Framer props (wordmark / byline / logo) or restore the markup here for a custom build. -->
-  <span class="nav-logo nav-logo-empty" aria-hidden="true"></span>
-  <div class="nav-tabs">
-    <button class="nav-tab active" onclick="showSection('home')">Home</button>
-    <button class="nav-tab" onclick="showSection('build')">Build Agents</button>
-    <button class="nav-tab" onclick="showSection('run')">Run Agents</button>
-    <button class="nav-tab" onclick="showSection('smart')">Smart Inference</button>
-    <button class="nav-tab" onclick="showSection('components')">Components</button>
-    <button class="nav-tab" onclick="showSection('integrations')">Integrations</button>
-    <button class="nav-tab" onclick="showSection('research')">Research</button>
-    <button class="nav-tab" onclick="showSection('examples')">Examples</button>
-    <button class="nav-tab" onclick="showSection('community')">Community</button>
+  <a class="nav-logo" onclick="showSection('home')" aria-label="Continuum home, suite overview">
+    <img class="mark" src="assets/logo.jpeg" alt="" aria-hidden="true" />
+    <img class="wordmark-img" src="assets/continuum-logo.png" alt="Continuum" />
+  </a>
+  <div class="product-nav" aria-label="Continuum product suite">
+    <button class="product-tab" data-section="framework" onclick="showSection('framework')" title="Continuum Framework, the open agent runtime"><span class="grad-text">Continuum Framework</span></button>
+    <button class="product-tab" data-section="smart" onclick="showSection('smart')" title="Aura, the Smart Inference layer"><span class="grad-text">Aura</span></button>
+    <button class="product-tab" data-section="provenance" onclick="showSection('provenance')" title="Provenance, the governance &amp; safety layer (coming soon)"><span class="grad-text">Provenance</span><span class="soon">Soon</span></button>
+  </div>
+  <div class="nav-actions">
+    <a class="nav-icon-link" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" aria-label="Continuum on GitHub">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1-.02-1.96-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.07.78 2.16 0 1.56-.01 2.82-.01 3.2 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
+      <span class="label">GitHub</span>
+    </a>
+    <span class="nav-div nav-div-actions" aria-hidden="true"></span>
+    <a class="nav-icon-link nav-brand-link" id="nav-shyftlabs" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs, the company behind Continuum">
+      <img class="nav-shyft-logo" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" />
+    </a>
   </div>
 </nav>
 
@@ -606,18 +989,45 @@
 <!-- ── SIDEBAR ── -->
 <aside id="sidebar">
 
+  <!-- FRAMEWORK area nav, the framework's sub-sections, shown for any framework area -->
+  <div class="sidebar-group area-nav" id="sb-framework-areas" style="display:none">
+    <div class="sidebar-group-label">Continuum Framework</div>
+    <a class="sidebar-link area-link" data-area="framework" onclick="showSection('framework')">Overview</a>
+    <a class="sidebar-link area-link" data-area="build" onclick="showSection('build')">Build Agents</a>
+    <a class="sidebar-link area-link" data-area="run" onclick="showSection('run')">Run Agents</a>
+    <a class="sidebar-link area-link" data-area="components" onclick="showSection('components')">Components</a>
+    <a class="sidebar-link area-link" data-area="integrations" onclick="showSection('integrations')">Integrations</a>
+    <a class="sidebar-link area-link" data-area="research" onclick="showSection('research')">Research</a>
+    <a class="sidebar-link area-link" data-area="examples" onclick="showSection('examples')">Examples</a>
+    <a class="sidebar-link area-link" data-area="community" onclick="showSection('community')">Community</a>
+  </div>
+
   <!-- HOME sidebar -->
+  <!-- HOME (suite landing) sidebar -->
   <div class="sidebar-group" id="sb-home">
-    <div class="sidebar-group-label">Overview</div>
-    <a class="sidebar-link active" onclick="scrollToAnchor('home-intro')">Introduction</a>
+    <div class="sidebar-group-label">Continuum Suite</div>
+    <a class="sidebar-link active" onclick="scrollToAnchor('home-hero')">Overview</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-suite')">The Three Layers</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-how')">How it works</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-start')">Quickstart</a>
+    <div class="sidebar-group-label">Products</div>
+    <a class="sidebar-link" onclick="showSection('framework')">Continuum Framework</a>
+    <a class="sidebar-link" onclick="showSection('smart')">Aura</a>
+    <a class="sidebar-link" onclick="showSection('provenance')">Provenance</a>
+  </div>
+
+  <!-- CONTINUUM FRAMEWORK sidebar -->
+  <div class="sidebar-group" id="sb-framework" style="display:none">
+    <div class="sidebar-group-label">On this page</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-intro')">Introduction</a>
     <a class="sidebar-link" onclick="scrollToAnchor('home-features')">Key Features</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-quickstart')">Quickstart</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-arch')">Architecture</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-docs')">Full Documentation</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-quickstart')">Get started</a>
   </div>
 
   <!-- BUILD sidebar -->
   <div class="sidebar-group" id="sb-build" style="display:none">
+    <div class="sidebar-group-label">Get Started</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('build-setup')">Installation &amp; setup</a>
     <div class="sidebar-group-label">Agent Design</div>
     <a class="sidebar-link" onclick="scrollToAnchor('build-baseagent')">Base Agent</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-stateless')">Stateless vs Stateful</a>
@@ -654,7 +1064,6 @@
     <a class="sidebar-link" onclick="scrollToAnchor('run-temporal-deploy')">Temporal Workers</a>
     <div class="sidebar-group-label">Safety</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-safety')">Input / Output Scanning</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('run-data-labels')">Data-Label Enforcement</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-testing')">Testing Guide</a>
   </div>
 
@@ -694,7 +1103,7 @@
   <!-- SMART INFERENCE sidebar -->
   <div class="sidebar-group" id="sb-smart" style="display:none">
     <div class="sidebar-group-label">Overview</div>
-    <a class="sidebar-link" onclick="scrollToAnchor('smart-intro')">What is Smart Inference</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('smart-intro')">What is Aura</a>
     <a class="sidebar-link" onclick="scrollToAnchor('smart-how')">How it works</a>
     <a class="sidebar-link" onclick="scrollToAnchor('smart-modes')">Routing Modes</a>
     <div class="sidebar-group-label">Setup</div>
@@ -756,6 +1165,14 @@
     <a class="sidebar-link" onclick="scrollToAnchor('com-contributing')">Contributing</a>
   </div>
 
+  <!-- PROVENANCE sidebar -->
+  <div class="sidebar-group" id="sb-provenance" style="display:none">
+    <div class="sidebar-group-label">Provenance</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-intro')">Overview</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-capabilities')">What's coming</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-early')">Early access</a>
+  </div>
+
 
 </aside>
 
@@ -766,18 +1183,114 @@
 <main id="main">
 
 <!-- ═══════════════════ HOME ═══════════════════ -->
+<!-- ═══════════════════ HOME · SUITE LANDING ═══════════════════ -->
 <section class="page-section active" id="sec-home">
 
+  <a class="anchor" id="home-hero"></a>
+  <div class="landing-hero">
+    <div class="landing-glow" aria-hidden="true"></div>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.0.0</span>
+    <h1 class="landing-title grad-text">Continuum</h1>
+    <p class="landing-sub">The agent platform. Build production AI agents on the open <strong>Framework</strong>, route every call through <strong>Aura</strong>, and govern the whole system with <strong>Provenance</strong>.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue badge-cmd">pip install shyftlabs-continuum</span>
+      <a class="pr-cta" onclick="showSection('framework')">Explore the Framework &#8594;</a>
+      <a class="pr-cta pr-cta-ghost" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-suite"></a>
+  <h2>One platform · <span class="grad-text">three layers</span></h2>
+  <p class="section-intro" style="margin-bottom:18px;">Continuum is a product suite, not a single library. The open <strong>Framework</strong> builds and runs your agents, <strong>Aura</strong> routes every call to the right model, and <strong>Provenance</strong> keeps the whole system governed, safe, and auditable.</p>
+  <div class="suite suite-lg">
+    <div class="suite-card s-framework" role="button" tabindex="0" onclick="showSection('framework')" aria-label="Explore the Continuum Framework">
+      <div class="kicker">01 · Framework</div>
+      <h3 class="grad-text">Continuum</h3>
+      <p>The open-source agent runtime. BaseAgent, 9 composable workflow patterns, durable Temporal jobs, two-tier memory, MCP-native tools, and time-travel decision traces.</p>
+      <div class="suite-meta"><span class="suite-status live">Open source</span><span class="suite-go">Explore →</span></div>
+    </div>
+    <div class="suite-card s-aura" role="button" tabindex="0" onclick="showSection('smart')" aria-label="Explore Aura, the Smart Inference layer">
+      <div class="kicker">02 · Inference</div>
+      <h3 class="grad-text">Aura</h3>
+      <p>The Smart Inference layer. One OpenAI-compatible endpoint to 250+ models across 45+ providers; a classifier picks the cheapest model that clears the quality bar, per prompt.</p>
+      <div class="suite-meta"><span class="suite-status">Proprietary</span><span class="suite-go">Explore →</span></div>
+    </div>
+    <div class="suite-card s-prov" role="button" tabindex="0" onclick="showSection('provenance')" aria-label="Preview Provenance, the governance layer">
+      <div class="kicker">03 · Governance</div>
+      <h3 class="grad-text">Provenance</h3>
+      <p>Prompt management, guardrails, PII redaction, and policy. The governance &amp; security layer that makes every agent decision observable, safe, and compliant.</p>
+      <div class="suite-meta"><span class="suite-status">Coming soon</span><span class="suite-go">Preview →</span></div>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-stats"></a>
+  <div class="stats">
+    <div class="stat"><div class="stat-num grad-text">250+</div><div class="stat-label">Models routed</div></div>
+    <div class="stat"><div class="stat-num grad-text">45+</div><div class="stat-label">LLM providers</div></div>
+    <div class="stat"><div class="stat-num grad-text">9</div><div class="stat-label">Workflow patterns</div></div>
+    <div class="stat"><div class="stat-num grad-text">100%</div><div class="stat-label">Auto-traced</div></div>
+  </div>
+
+  <a class="anchor" id="home-how"></a>
+  <h2>From notebook to production</h2>
+  <p class="section-intro" style="margin-bottom:18px;">Three layers, one workflow. Build your agents, let Aura route every model call, and let Provenance keep the whole system governed and audit-ready.</p>
+  <div class="flow">
+    <div class="flow-step s-framework">
+      <div class="flow-num">01 · Framework</div>
+      <h3 class="grad-text">Build</h3>
+      <p>Define agents with <code>BaseAgent</code>, compose nine workflow patterns, attach MCP tools and two-tier memory.</p>
+    </div>
+    <div class="flow-arrow" aria-hidden="true">&#8594;</div>
+    <div class="flow-step s-aura">
+      <div class="flow-num">02 · Aura</div>
+      <h3 class="grad-text">Route</h3>
+      <p>One OpenAI-compatible endpoint. A classifier picks the cheapest model that clears the quality bar, per prompt.</p>
+    </div>
+    <div class="flow-arrow" aria-hidden="true">&#8594;</div>
+    <div class="flow-step s-prov">
+      <div class="flow-num">03 · Provenance</div>
+      <h3 class="grad-text">Govern</h3>
+      <p>Prompt versioning, guardrails, PII redaction, and policy, so every decision is observable and audit-ready.</p>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-start"></a>
+  <h2>Up and running in minutes</h2>
+  <p>Install the open-source framework and ship your first agent in a few lines. Aura and Provenance plug in when you need them.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># pip install shyftlabs-continuum</span>
+<span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+
+agent = <span class="cls">BaseAgent</span>(name=<span class="str">"assistant"</span>, instructions=<span class="str">"You are helpful."</span>, model=<span class="str">"gpt-4o-mini"</span>)
+response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().run(agent, <span class="str">"Hello!"</span>)
+<span class="fn">print</span>(response.content)</pre></div>
+
+  <a class="anchor" id="home-cta"></a>
+  <div class="cta-band">
+    <h2>Build on Continuum</h2>
+    <p>Open-source framework today. Proprietary inference and governance when you scale.</p>
+    <div class="cta-actions">
+      <span class="badge badge-cmd" style="background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.28); color:#fff;">pip install shyftlabs-continuum</span>
+      <a class="cta-btn" onclick="showSection('framework')">Explore the Framework &#8594;</a>
+      <a class="cta-btn cta-btn-ghost" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+
+</section>
+
+<section class="page-section" id="sec-framework">
+
   <a class="anchor" id="home-intro"></a>
-  <div class="hero">
-    <h1>The agent runtime<br>for builders who ship.</h1>
-    <p class="tagline">Production-grade reasoning, durable workflows, cost-aware routing, and full observability — out of the box. Continuum is the bridge from notebook to enterprise.</p>
-    <div class="hero-badges">
-      <span class="badge badge-blue">Python 3.13</span>
-      <span class="badge badge-green">250+ models via Smart Inference</span>
-      <span class="badge badge-purple">MCP-native tools</span>
-      <span class="badge badge-blue">Temporal · Durable workflows</span>
-      <span class="badge badge-green">Langfuse · Auto-traced</span>
+  <div class="product-hero">
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.0.0</span>
+    <h1 class="ph-title grad-text">Continuum Framework</h1>
+    <p class="ph-sub">The open-source agent runtime for builders who ship. Production-grade reasoning, durable multi-agent workflows, two-tier memory, and full observability, out of the box.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue badge-cmd">pip install shyftlabs-continuum</span>
+      <span class="badge badge-green">Python 3.13</span>
+      <span class="badge badge-purple">250+ models via Aura</span>
+      <span class="badge badge-blue">Temporal · durable workflows</span>
+      <span class="badge badge-green">Langfuse · auto-traced</span>
       <span class="badge badge-purple">9 multi-agent patterns</span>
     </div>
   </div>
@@ -787,7 +1300,7 @@
   <div class="cards">
     <div class="card filled">
       <div class="card-icon" style="color:#fff">◆</div>
-      <h3>Smart Inference routing</h3>
+      <h3>Aura · Smart Inference routing</h3>
       <p>One OpenAI-compatible endpoint, 250+ models. A classifier scores every prompt; the router picks the cheapest model that clears the quality bar. Per-agent <code style="background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.2)">strict / modest / quality</code> tiers.</p>
     </div>
     <div class="card">
@@ -798,12 +1311,12 @@
     <div class="card">
       <div class="card-icon">▤</div>
       <h3>9 composable workflow patterns</h3>
-      <p>Sequential · Parallel · Loop · Reflection · Router · Planner · Debate · Scatter · SupervisedSequential. Mix and nest freely — every step is independently traceable.</p>
+      <p>Sequential · Parallel · Loop · Reflection · Router · Planner · Debate · Scatter · SupervisedSequential. Mix and nest freely, every step is independently traceable.</p>
     </div>
     <div class="card filled">
       <div class="card-icon" style="color:#fff">◇</div>
       <h3>MCP-native tooling</h3>
-      <p>Stdio, SSE, or StreamableHTTP — connect any MCP server with zero adapters. Top-<em>k</em> Tool Attention promotes only the relevant tools each turn, cutting prompt tokens 30–60%.</p>
+      <p>Stdio, SSE, or StreamableHTTP, connect any MCP server with zero adapters. Top-<em>k</em> Tool Attention promotes only the relevant tools each turn, cutting prompt tokens 30–60%.</p>
     </div>
     <div class="card">
       <div class="card-icon">◐</div>
@@ -817,8 +1330,8 @@
     </div>
     <div class="card">
       <div class="card-icon">◈</div>
-      <h3>Safety hooks built in</h3>
-      <p>Pluggable input/output PII redaction and content scanners (bring your own — none run until configured). Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
+      <h3>Safe by default</h3>
+      <p>Input/output PII redaction. Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
     </div>
     <div class="card">
       <div class="card-icon">▢</div>
@@ -828,18 +1341,50 @@
   </div>
 
   <a class="anchor" id="home-quickstart"></a>
-  <h2>Quickstart</h2>
+  <h2>Get started</h2>
+  <p class="section-intro" style="margin-bottom:14px;">Install the open-source framework from PyPI and have your first agent running in a few lines. Full setup, the environment reference, and the end-to-end walkthrough live under <a onclick="showSection('build')">Build Agents</a>.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13</span>
+pip install shyftlabs-continuum</pre></div>
+  <div class="ph-meta" style="margin-top:16px;">
+    <a class="pr-cta" onclick="showSection('build')">Build your first agent &#8594;</a>
+    <a class="pr-cta" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" style="background:var(--bg); color:var(--text); border:1px solid var(--border-strong);">View on GitHub</a>
+  </div>
+
+</section>
+
+
+<!-- ═══════════════════ BUILD AGENTS ═══════════════════ -->
+<section class="page-section" id="sec-build">
+
+  <a class="anchor" id="build-install"></a>
+  <h1>Build Agents</h1>
+  <p class="section-intro">From a minimal single agent to complex multi-agent workflows, everything starts with <code>BaseAgent</code>.</p>
+
+  <div style="display:flex; gap:12px; margin: 16px 0 0;">
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank" rel="noopener"><code>playground/gateway-local-shop</code></a>, one agent with MCP tools over HTTP.
+    </div>
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a>.
+    </div>
+  </div>
+
+  <a class="anchor" id="build-setup"></a>
+  <h2>Installation &amp; setup</h2>
   <ol class="steps">
     <li>
       <strong>Install</strong><br>
-      git clone continuum(<a href="https://github.com/shyftlabs/continuum" target="_blank">https://github.com/shyftlabs/continuum</a>) into your local computer, enter the project, then:
+      The fastest path, install the released package straight from PyPI:
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
-python3.13 -m venv .venv    
+python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-
-optional:
-pip install -e '.[temporal]' </div>
+pip install shyftlabs-continuum                 <span class="cm"># latest release</span>
+pip install <span class="str">"shyftlabs-continuum[temporal,eval]"</span>    <span class="cm"># optional extras</span></pre></div>
+      <p style="margin:12px 0 6px;">Prefer to work from source? Clone <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">the repository</a> and install it editable:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>git clone https://github.com/shyftlabs/continuum.git
+cd continuum
+python3.13 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e <span class="str">".[dev]"</span>                          <span class="cm"># add [temporal] / [eval] as needed</span></pre></div>
     </li>
     <li>
       <strong>Setup environment and spin up infrastructure</strong>
@@ -931,13 +1476,13 @@ ANONYMIZED_TELEMETRY=false
 TOKENIZERS_PARALLELISM=false</pre></div>
 
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Finally, spin up the infrastructure:</p>
-      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>continuum up               <span class="cm"># Redis + Qdrant (minimal); `continuum up full` adds Langfuse · Temporal · Milvus</span></pre></div>
+      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>docker compose up -d       <span class="cm"># Redis (:6380) + Milvus (:19530)</span></pre></div>
     </li>
     <li>
       <strong>Create and run your first agent</strong>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> asyncio
-<span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
-<span class="kw">from</span> continuum.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+<span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"assistant"</span>,
@@ -954,61 +1499,9 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
     </li>
   </ol>
 
-  <a class="anchor" id="home-arch"></a>
-  <h2>Architecture</h2>
-  <p>Continuum is structured as layered modules, each independently usable:</p>
-  <table>
-    <tr><th>Module</th><th>Import path</th><th>Purpose</th></tr>
-    <tr><td><code>agent</code></td><td><code>continuum.agent</code></td><td>BaseAgent, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><code>llm</code></td><td><code>continuum.llm</code></td><td>LLMClient, provider routing, structured output, context compression</td></tr>
-    <tr><td><code>memory</code></td><td><code>continuum.memory</code></td><td>mem0 + Qdrant/Milvus long-term memory</td></tr>
-    <tr><td><code>session</code></td><td><code>continuum.session</code></td><td>Redis-backed conversation history</td></tr>
-    <tr><td><code>tools</code></td><td><code>continuum.tools</code></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><code>observability</code></td><td><code>continuum.observability</code></td><td>Langfuse tracing, metrics, error reporting</td></tr>
-    <tr><td><code>temporal</code></td><td><code>continuum.temporal</code></td><td>Durable workflows, approval gates</td></tr>
-    <tr><td><code>core</code></td><td><code>continuum.core</code></td><td>DI Container, lifecycle, health checks</td></tr>
-  </table>
-
-  <a class="anchor" id="home-docs"></a>
-  <h2>Full Documentation</h2>
-  <p>Each module has a detailed markdown reference in the repository:</p>
-  <table>
-    <tr><th>Doc</th><th>Covers</th></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
-  </table>
-
-</section>
-
-
-<!-- ═══════════════════ BUILD AGENTS ═══════════════════ -->
-<section class="page-section" id="sec-build">
-
-  <a class="anchor" id="build-install"></a>
-  <h1>Build Agents</h1>
-  <p class="section-intro">From a minimal single agent to complex multi-agent workflows — everything starts with <code>BaseAgent</code>.</p>
-
-  <div style="display:flex; gap:12px; margin: 16px 0 0;">
-    <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
-    </div>
-    <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>.
-    </div>
-  </div>
-
   <a class="anchor" id="build-baseagent"></a>
   <h2>Base Agent</h2>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"support-bot"</span>,
@@ -1018,7 +1511,7 @@ agent = <span class="cls">BaseAgent</span>(
 )
 </pre></div>
 
-  <p><code>BaseAgent</code> is a dataclass. Every field has a sensible default — only <code>name</code> and <code>instructions</code> are required in practice.</p>
+  <p><code>BaseAgent</code> is a dataclass. Every field has a sensible default, only <code>name</code> and <code>instructions</code> are required in practice.</p>
 
   <table class="param-table">
     <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
@@ -1031,11 +1524,11 @@ agent = <span class="cls">BaseAgent</span>(
     <tr><td>mcp_servers</td><td>list[MCPServer]</td><td>MCP servers whose tools are dynamically loaded</td></tr>
     <tr><td>handoffs</td><td>list[Handoff]</td><td>Agents this agent can delegate to</td></tr>
     <tr><td>memory_config</td><td>AgentMemoryConfig</td><td>Long-term memory search/store behavior</td></tr>
-    <tr><td>config</td><td>AgentConfig</td><td>Execution config — turns, timeouts, retries, react_mode</td></tr>
+    <tr><td>config</td><td>AgentConfig</td><td>Execution config, turns, timeouts, retries, react_mode</td></tr>
     <tr><td>output_schema</td><td>type[BaseModel] | None</td><td>Pydantic model for structured output</td></tr>
     <tr><td>input_schema</td><td>type[BaseModel] | None</td><td>Validates input before execution</td></tr>
     <tr><td>template_vars</td><td>dict</td><td>Static values injected into <code>{slot}</code> placeholders</td></tr>
-    <tr><td>examples</td><td>list[dict]</td><td>Few-shot examples — each needs <code>input</code> and <code>output</code> keys</td></tr>
+    <tr><td>examples</td><td>list[dict]</td><td>Few-shot examples, each needs <code>input</code> and <code>output</code> keys</td></tr>
     <tr><td>instruction_modifiers</td><td>list[Callable]</td><td>Dynamic prompt modifiers applied at runtime</td></tr>
     <tr><td>metadata</td><td>dict</td><td>Arbitrary key-value metadata</td></tr>
     <tr><td>tags</td><td>list[str]</td><td>Categorization tags for filtering / routing</td></tr>
@@ -1045,7 +1538,7 @@ agent = <span class="cls">BaseAgent</span>(
 
   <h3>Stateless vs Stateful</h3>
   <p>Based on your needs, your agent can be stateless or stateful; if stateless, disable long-term and short-term memories; if stateful, you may only need either long-term memories(Memory) or short-term memories(Session) or both, you can control them by setting the parameters in <code>AgentConfig</code> and <code>AgentMemoryConfig</code>.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Stateless — no Redis, no mem0 calls (fastest for prototypes)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Stateless, no Redis, no mem0 calls (fastest for prototypes)</span>
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"stateless"</span>,
     instructions=<span class="str">"..."</span>,
@@ -1053,7 +1546,7 @@ agent = <span class="cls">BaseAgent</span>(
     config=<span class="cls">AgentConfig</span>(log_to_session=<span class="cls">False</span>, session_history_turns=<span class="num">0</span>),
 )
 
-<span class="cm"># Stateful — loads last 20 turns + long-term memories (default)</span>
+<span class="cm"># Stateful, loads last 20 turns + long-term memories (default)</span>
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"stateful"</span>,
     instructions=<span class="str">"..."</span>,
@@ -1064,20 +1557,20 @@ agent = <span class="cls">BaseAgent</span>(
 <p style="font-weight: bold; margin-bottom: 0.5rem;">Memory (default):</p>
       <ul style="list-style-type: disc; margin-left: 0; padding-left: 1.2rem; margin-bottom: 1rem; color: #374151;">
         <li style="margin-bottom: 0.5rem;">
-          <code>search_memories=True</code> — looks up <code>long-term memories</code> before responding
+          <code>search_memories=True</code>, looks up <code>long-term memories</code> before responding
         </li>
         <li>
-          <code>store_memories=True</code> — saves <code>long-term memories</code> after responding
+          <code>store_memories=True</code>, saves <code>long-term memories</code> after responding
         </li>
       </ul>
 
       <p style="font-weight: bold; margin-bottom: 0.5rem;">Session (default):</p>
       <ul style="list-style-type: disc; margin-left: 0; padding-left: 1.2rem; margin-bottom: 1.5rem; color: #374151;">
         <li style="margin-bottom: 0.5rem;">
-          <code>log_to_session=True</code> — saves to session history (<code>short-term memory</code>)
+          <code>log_to_session=True</code>, saves to session history (<code>short-term memory</code>)
         </li>
         <li>
-          <code>session_history_turns=None</code> — loads last 20 turns of history (<code>short-term memory</code>)
+          <code>session_history_turns=None</code>, loads last 20 turns of history (<code>short-term memory</code>)
         </li>
       </ul>
 
@@ -1085,7 +1578,7 @@ agent = <span class="cls">BaseAgent</span>(
   <table>
     <tr><th>Value</th><th>Behaviour</th></tr>
     <tr><td><code>None</code> (default)</td><td>Load last <strong>20</strong> turns from Redis</td></tr>
-    <tr><td><code>0</code></td><td><strong>Skip</strong> Redis entirely — load nothing</td></tr>
+    <tr><td><code>0</code></td><td><strong>Skip</strong> Redis entirely, load nothing</td></tr>
     <tr><td><code>5</code></td><td>Load last <strong>5</strong> turns from Redis</td></tr>
   </table>
 
@@ -1161,10 +1654,10 @@ review: <span class="cls">Review</span> = response.structured_output
 
   <a class="anchor" id="build-workflows"></a>
   <h2>Multi-Agent Workflows</h2>
-  <p>Continuum ships 9 built-in workflow patterns. Each has a class-based form and a factory shorthand. All patterns are composable — you can nest them or combine them with handoffs.</p>
+  <p>Continuum ships 9 built-in workflow patterns. Each has a class-based form and a factory shorthand. All patterns are composable, you can nest them or combine them with handoffs.</p>
 
   <div class="workflow-grid">
-    <div class="workflow-card"><div class="wf-name">Sequential</div><div class="wf-desc">Pipeline — each agent's output feeds the next</div></div>
+    <div class="workflow-card"><div class="wf-name">Sequential</div><div class="wf-desc">Pipeline, each agent's output feeds the next</div></div>
     <div class="workflow-card"><div class="wf-name">Parallel</div><div class="wf-desc">All agents run concurrently on the same input</div></div>
     <div class="workflow-card"><div class="wf-name">Loop</div><div class="wf-desc">Iterates until a termination condition is met</div></div>
     <div class="workflow-card"><div class="wf-name">Reflection</div><div class="wf-desc">Agent runs, critic evaluates, agent retries if needed</div></div>
@@ -1176,7 +1669,7 @@ review: <span class="cls">Review</span> = response.structured_output
 
   <a class="anchor" id="build-custom"></a>
   <h3>Custom Workflow</h3>
-  <p>We strongly recommend building custom workflows using <code>BaseAgent</code> directly for anything closely tied to your project's business logic. A custom agent gives you full control over the flow, session saving, and memory behaviour — you decide which sub-agents are stateless and which are stateful.</p>
+  <p>We strongly recommend building custom workflows using <code>BaseAgent</code> directly for anything closely tied to your project's business logic. A custom agent gives you full control over the flow, session saving, and memory behaviour, you decide which sub-agents are stateless and which are stateful.</p>
   <p><strong>Example: <code>ParallelCoordinatorAgent</code> in <code>playground/multi-agent-shop/workflows.py</code></strong></p>
   <p>Instead of using <code>ParallelAgent</code> directly, the playground defines a custom <code>BaseAgent</code> subclass that orchestrates parallel search and synthesis manually:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">class</span> <span class="cls">ParallelCoordinatorAgent</span>(<span class="cls">BaseAgent</span>):
@@ -1208,14 +1701,14 @@ review: <span class="cls">Review</span> = response.structured_output
             assistant_message=final.content,
         )</pre></div>
 
-  <p>This gives the parallel workers a clean stateless context (no Redis calls) while the synthesiser still loads session history and memory — something the built-in <code>ParallelAgent</code> cannot do out of the box.</p>
+  <p>This gives the parallel workers a clean stateless context (no Redis calls) while the synthesiser still loads session history and memory, something the built-in <code>ParallelAgent</code> cannot do out of the box.</p>
 
   <a class="anchor" id="build-sequential"></a>
   <h3>Built-in Workflows</h3>
 
   <h4>Sequential Workflow</h4>
-  <p>Executes agents as a pipeline — each agent receives the previous agent's output.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">SequentialAgent</span>
+  <p>Executes agents as a pipeline, each agent receives the previous agent's output.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">SequentialAgent</span>
 
 pipeline = <span class="cls">SequentialAgent</span>(
     name=<span class="str">"research-pipeline"</span>,
@@ -1224,7 +1717,7 @@ pipeline = <span class="cls">SequentialAgent</span>(
 )</pre></div>
 
   <p>Or use the factory shorthand:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_sequential_agent
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_sequential_agent
 
 researcher = <span class="cls">BaseAgent</span>(name=<span class="str">"researcher"</span>, instructions=<span class="str">"Research the topic. Output key facts."</span>, model=<span class="str">"gpt-4o-mini"</span>)
 writer     = <span class="cls">BaseAgent</span>(name=<span class="str">"writer"</span>,     instructions=<span class="str">"Write a short report from the facts."</span>,  model=<span class="str">"gpt-4o-mini"</span>)
@@ -1240,8 +1733,8 @@ response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().
   <a class="anchor" id="build-parallel"></a>
   <h4>Parallel Workflow</h4>
   <p>All agents receive the same input and run concurrently. Results are merged by strategy.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">ParallelAgent</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">ParallelConfig</span>, <span class="cls">MergeStrategy</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">ParallelAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">ParallelConfig</span>, <span class="cls">MergeStrategy</span>
 
 fan_out = <span class="cls">ParallelAgent</span>(
     name=<span class="str">"multi-analyst"</span>,
@@ -1261,8 +1754,8 @@ fan_out = <span class="cls">ParallelAgent</span>(
   </table>
 
   <p>Factory shorthand:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> create_parallel_agent
-<span class="kw">from</span> continuum.agent.types <span class="kw">import</span> <span class="cls">MergeStrategy</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> create_parallel_agent
+<span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">MergeStrategy</span>
 
 parallel = <span class="fn">create_parallel_agent</span>(
     name=<span class="str">"parallel-analysts"</span>,
@@ -1273,8 +1766,8 @@ parallel = <span class="fn">create_parallel_agent</span>(
   <a class="anchor" id="build-loop"></a>
   <h4>Loop Workflow</h4>
   <p>Iterates an agent until a termination condition is satisfied.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">LoopAgent</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">TerminationConfig</span>, <span class="cls">TerminationType</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">LoopAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">TerminationConfig</span>, <span class="cls">TerminationType</span>
 
 loop = <span class="cls">LoopAgent</span>(
     name=<span class="str">"refinement-loop"</span>,
@@ -1296,8 +1789,8 @@ loop = <span class="cls">LoopAgent</span>(
   </table>
 
   <p>Factory shorthand with <code>OUTPUT_MATCH</code>:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> create_loop_agent
-<span class="kw">from</span> continuum.agent.types <span class="kw">import</span> <span class="cls">TerminationType</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> create_loop_agent
+<span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">TerminationType</span>
 
 loop = <span class="fn">create_loop_agent</span>(
     name=<span class="str">"refinement-loop"</span>,
@@ -1310,8 +1803,8 @@ loop = <span class="fn">create_loop_agent</span>(
   <a class="anchor" id="build-reflection"></a>
   <h4>Reflection Workflow</h4>
   <p>The agent runs, a critic evaluates the output, and the agent retries if the critique is <code>NEEDS IMPROVEMENT</code>.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">ReflectionAgent</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">ReflectionConfig</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">ReflectionAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">ReflectionConfig</span>
 
 reflective = <span class="cls">ReflectionAgent</span>(
     name=<span class="str">"quality-writer"</span>,
@@ -1326,7 +1819,7 @@ reflective = <span class="cls">ReflectionAgent</span>(
   <a class="anchor" id="build-router"></a>
   <h4>Router Workflow</h4>
   <p>Routes requests to specialist agents based on content. Three strategies: LLM, rule-based, or hybrid.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">RouterAgent</span>, <span class="cls">Route</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">RouterAgent</span>, <span class="cls">Route</span>
 
 router = <span class="cls">RouterAgent</span>(
     name=<span class="str">"triage"</span>,
@@ -1339,8 +1832,8 @@ router = <span class="cls">RouterAgent</span>(
     fallback_agent_name=<span class="str">"general-agent"</span>,
 )</pre></div>
 
-  <p>Or use the factory with tuple-based routes (recommended — the old <code>Route(target=...)</code> API is removed):</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_router_agent
+  <p>Or use the factory with tuple-based routes (recommended, the old <code>Route(target=...)</code> API is removed):</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_router_agent
 
 billing   = <span class="cls">BaseAgent</span>(name=<span class="str">"billing-agent"</span>,   instructions=<span class="str">"Handle billing questions."</span>)
 technical = <span class="cls">BaseAgent</span>(name=<span class="str">"technical-agent"</span>, instructions=<span class="str">"Handle technical support."</span>)
@@ -1363,9 +1856,9 @@ response = <span class="kw">await</span> runner.run(router, <span class="str">"M
 
   <a class="anchor" id="build-planner"></a>
   <h4>Planner Workflow</h4>
-  <p>Decomposes a goal into sub-tasks and executes them — either with a single agent or by routing each step to a specialist from a pool.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">PlannerAgent</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">PlanningConfig</span>
+  <p>Decomposes a goal into sub-tasks and executes them, either with a single agent or by routing each step to a specialist from a pool.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.workflow <span class="kw">import</span> <span class="cls">PlannerAgent</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">PlanningConfig</span>
 
 <span class="cm"># Agent-pool mode: LLM routes each step to a specialist</span>
 planner = <span class="cls">PlannerAgent</span>(
@@ -1379,7 +1872,7 @@ planner = <span class="cls">PlannerAgent</span>(
 )</pre></div>
 
   <a class="anchor" id="build-advanced-wf"></a>
-  <h4>Debate, Scatter &amp; SupervisedSequential</h4>
+  <h4>Advanced patterns</h4>
   <div class="workflow-grid">
     <div class="workflow-card">
       <div class="wf-name">DebateAgent</div>
@@ -1402,7 +1895,7 @@ planner = <span class="cls">PlannerAgent</span>(
   <a class="anchor" id="build-handoffs"></a>
   <h3>Handoffs</h3>
   <p>An agent can delegate to another agent mid-conversation. Handoffs appear to the LLM as callable tools.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>
 
 triage = <span class="cls">BaseAgent</span>(
     name=<span class="str">"triage"</span>,
@@ -1428,9 +1921,9 @@ triage = <span class="cls">BaseAgent</span>(
     <tr><td><code>FULL</code></td><td>Complete conversation history</td><td>Short conversations, full context needed</td></tr>
     <tr><td><code>SUMMARY</code></td><td>LLM-generated abstract of the conversation</td><td>Long conversations, context window limits</td></tr>
     <tr><td><code>RECENT_N</code></td><td>Last N turns only</td><td>When only recent context matters</td></tr>
-    <tr><td><code>HYBRID</code></td><td>Summary of older messages + full recent N turns</td><td>Best of both — default recommendation</td></tr>
+    <tr><td><code>HYBRID</code></td><td>Summary of older messages + full recent N turns</td><td>Best of both, default recommendation</td></tr>
   </table>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>, <span class="cls">HistorySummarizationMode</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.handoff <span class="kw">import</span> <span class="cls">Handoff</span>, <span class="cls">HistorySummarizationMode</span>
 
 <span class="cls">Handoff</span>(
     target_agent=<span class="str">"specialist"</span>,
@@ -1447,22 +1940,22 @@ triage = <span class="cls">BaseAgent</span>(
 <section class="page-section" id="sec-run">
 
   <h1>Run Agents</h1>
-  <p class="section-intro"><code>AgentRunner</code> is the execution engine — it orchestrates LLM calls, tool invocations, memory retrieval, and handoffs.</p>
+  <p class="section-intro"><code>AgentRunner</code> is the execution engine, it orchestrates LLM calls, tool invocations, memory retrieval, and handoffs.</p>
 
   <div style="display:flex; gap:12px; margin: 16px 0 0;">
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank" rel="noopener"><code>playground/gateway-local-shop</code></a>, one agent with MCP tools over HTTP.
     </div>
     <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a>
     </div>
   </div>
 
   <a class="anchor" id="run-runner"></a>
   <h2>AgentRunner</h2>
   <p>Create one <code>AgentRunner</code> instance per application. It manages internal service clients and can be shared across concurrent runs.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">RunnerConfig</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+<span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">RunnerConfig</span>
 
 runner = <span class="cls">AgentRunner</span>(
     config=<span class="cls">RunnerConfig</span>(
@@ -1479,7 +1972,7 @@ runner = <span class="cls">AgentRunner</span>(
     agent,
     <span class="str">"What is my account balance?"</span>,
     user_id=<span class="str">"user-123"</span>,
-    session_id=<span class="str">"sess-456"</span>,  <span class="cm"># optional — loads Redis history</span>
+    session_id=<span class="str">"sess-456"</span>,  <span class="cm"># optional, loads Redis history</span>
     conversation_id=<span class="str">"conv-789"</span>,
     max_turns=<span class="num">15</span>,
     metadata={<span class="str">"channel"</span>: <span class="str">"web"</span>},
@@ -1495,7 +1988,7 @@ runner = <span class="cls">AgentRunner</span>(
   <a class="anchor" id="run-stream"></a>
   <h2>Streaming</h2>
   <p>Use <code>run_stream()</code> to yield tokens and events as they occur. Ideal for WebSocket or SSE endpoints.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.types <span class="kw">import</span> <span class="cls">EventType</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.types <span class="kw">import</span> <span class="cls">EventType</span>
 
 <span class="kw">async for</span> event <span class="kw">in</span> runner.run_stream(agent, <span class="str">"Explain quantum entanglement."</span>, user_id=<span class="str">"u-1"</span>):
     <span class="kw">if</span> event.type == <span class="cls">EventType</span>.CONTENT_DELTA:
@@ -1505,7 +1998,7 @@ runner = <span class="cls">AgentRunner</span>(
         <span class="fn">print</span>(<span class="str">f"\n[calling tool: {event.data['tool_name']}]"</span>)
 
     <span class="kw">elif</span> event.type == <span class="cls">EventType</span>.RUN_END:
-        <span class="fn">print</span>(<span class="str">f"\nDone — {event.data['usage']['total_tokens']} tokens"</span>)</pre></div>
+        <span class="fn">print</span>(<span class="str">f"\nDone, {event.data['usage']['total_tokens']} tokens"</span>)</pre></div>
 
   <a class="anchor" id="run-events"></a>
   <h3>EventType Reference</h3>
@@ -1527,10 +2020,10 @@ runner = <span class="cls">AgentRunner</span>(
   <a class="anchor" id="run-session"></a>
   <h2>Session History</h2>
   <p>Pass a <code>session_id</code> to automatically load and save conversation history from Redis.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Turn 1 — user's first message</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Turn 1, user's first message</span>
 response1 = <span class="kw">await</span> runner.run(agent, <span class="str">"My name is Alice."</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
 
-<span class="cm"># Turn 2 — agent remembers context from Redis</span>
+<span class="cm"># Turn 2, agent remembers context from Redis</span>
 response2 = <span class="kw">await</span> runner.run(agent, <span class="str">"What's my name?"</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
 <span class="cm"># → "Your name is Alice."</span></pre></div>
 
@@ -1543,7 +2036,7 @@ response2 = <span class="kw">await</span> runner.run(agent, <span class="str">"W
 session_id = <span class="kw">await</span> session_client.get_or_create_session(
     session_id=session_id,          <span class="cm"># pass existing ID to resume</span>
     user_id=<span class="str">"user-123"</span>,
-    conversation_id=<span class="str">"conv-456"</span>,   <span class="cm"># optional — see below</span>
+    conversation_id=<span class="str">"conv-456"</span>,   <span class="cm"># optional, see below</span>
 )
 
 <span class="cm"># Step 2: run with that session_id</span>
@@ -1573,7 +2066,7 @@ response = <span class="kw">await</span> runner.run(
 
   <a class="anchor" id="run-session-multi"></a>
   <h3>Multi-agent session saving pattern</h3>
-  <p>Every workflow agent calls <code>runner.run()</code> once or multiple times internally. Without intervention, each sub-agent call auto-saves a turn — creating noisy intermediate history the user never saw. Prevent this with <code>suppress_session_log</code> + <code>save_turn()</code>:</p>
+  <p>Every workflow agent calls <code>runner.run()</code> once or multiple times internally. Without intervention, each sub-agent call auto-saves a turn, creating noisy intermediate history the user never saw. Prevent this with <code>suppress_session_log</code> + <code>save_turn()</code>:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">async def</span> <span class="fn">execute</span>(self, input_text, runner, context) -> <span class="cls">AgentResponse</span>:
     context.suppress_session_log = <span class="cls">True</span>  <span class="cm"># blocks auto-save for ALL sub-agent runs</span>
 
@@ -1597,21 +2090,21 @@ response = <span class="kw">await</span> runner.run(
 
   <a class="anchor" id="run-final"></a>
   <h3>Deciding which agent's output is the final response</h3>
-  <p>In a multi-agent workflow, you must explicitly decide which agent's output is the final response — this is what you pass to <code>save_turn()</code>. Here are two examples</p>
+  <p>In a multi-agent workflow, you must explicitly decide which agent's output is the final response, this is what you pass to <code>save_turn()</code>. Here are two examples</p>
   <p><strong>Sequential:</strong> agents run one after another, each passing output to the next. The <em>last</em> agent may produce the final response:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">await</span> runner.<span class="fn">save_turn</span>(session_id, user_input, last_agent_response.content)</pre></div>
 
-  <p><strong>Handoff / Router:</strong> sub-agents do work and their results are injected back into the top-level agent's message list. The top-level agent then synthesizes its own final response — so the <em>top-level agent's</em> output is what to save, not the sub-agents' intermediate results:</p>
+  <p><strong>Handoff / Router:</strong> sub-agents do work and their results are injected back into the top-level agent's message list. The top-level agent then synthesizes its own final response, so the <em>top-level agent's</em> output is what to save, not the sub-agents' intermediate results:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">await</span> runner.<span class="fn">save_turn</span>(session_id, user_input, top_level_agent_response.content)</pre></div>
 
   <div class="callout callout-warn">
-    <strong>Saving the wrong output:</strong> If you save an intermediate agent's output by mistake, session history will contain turns the user never saw — and future turns will load them as prior context.
+    <strong>Saving the wrong output:</strong> If you save an intermediate agent's output by mistake, session history will contain turns the user never saw, and future turns will load them as prior context.
   </div>
 
   <a class="anchor" id="run-context"></a>
   <h2>Context Management</h2>
   <p>When a conversation approaches the model's context window, Continuum automatically compresses older messages.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ContextManagementConfig</span>, <span class="cls">CompressionStrategy</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ContextManagementConfig</span>, <span class="cls">CompressionStrategy</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"long-conv"</span>,
@@ -1629,24 +2122,24 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="run-trace"></a>
   <h2>Time-Travel (Decision Trace)</h2>
-  <p>Continuum can record every decision in a run — each LLM call, tool call, handoff, and workflow step — as a structured, replayable <em>ledger</em>. Once recorded, you can rewind to any step, edit it, and re-execute only what's downstream; everything upstream replays from the saved checkpoint. <em>git rebase, for an agent run.</em></p>
+  <p>Continuum can record every decision in a run, each LLM call, tool call, handoff, and workflow step, as a structured, replayable <em>ledger</em>. Once recorded, you can rewind to any step, edit it, and re-execute only what's downstream; everything upstream replays from the saved checkpoint. <em>git rebase, for an agent run.</em></p>
   <div class="callout callout-info">
-    <strong>Two halves:</strong> <b>record</b> (the trace — what happened) and <b>what-if</b> (fork — rewind, change one input, replay). The feature is off by default and costs one boolean check per turn when disabled.
+    <strong>Two halves:</strong> <b>record</b> (the trace, what happened) and <b>what-if</b> (fork, rewind, change one input, replay). The feature is off by default and costs one boolean check per turn when disabled.
   </div>
   <div class="callout callout-tip">
-    <strong>Worked examples: </strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/decision-trace-timetravel" target="_blank"><code>playground/decision-trace-timetravel</code></a> runs across all nine workflow patterns (+ handoff), so you can fork and compare each one.
+    <strong>Worked examples: </strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/decision-trace-glassbox" target="_blank" rel="noopener"><code>playground/decision-trace-glassbox</code></a> runs across all nine workflow patterns (+ handoff), so you can fork and compare each one.
   </div>
 
   <a class="anchor" id="run-trace-enable"></a>
   <h3>Enable &amp; configure</h3>
   <p>Disabled by default. Opt in with environment variables (or set the same fields on <code>settings</code> programmatically). Recording is independent of <em>forkability</em>: turn on <code>CHECKPOINT</code> only when you want to rewind, since it stores per-step message snapshots.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env — everything off unless you opt in</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env, everything off unless you opt in</span>
 DECISION_TRACE_ENABLED=true
 DECISION_TRACE_DETAIL=full         <span class="cm"># off | full</span>
 DECISION_TRACE_STORE=redis         <span class="cm"># redis | memory | null</span>
 DECISION_TRACE_CHECKPOINT=true     <span class="cm"># per-step snapshots → enables fork/rewind</span>
 DECISION_TRACE_TTL_DAYS=14         <span class="cm"># auto-expiry of persisted traces</span></pre></div>
-  <p>…or flip the same switches programmatically before the first run — which is what the <code>decision-trace-timetravel</code> playground does:</p>
+  <p>…or flip the same switches programmatically before the first run, which is what the <code>decision-trace-glassbox</code> playground does:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.config <span class="kw">import</span> settings
 settings.decision_trace_enabled = <span class="cls">True</span>
 settings.decision_trace_checkpoint = <span class="cls">True</span>   <span class="cm"># only if you want fork/rewind</span>
@@ -1662,7 +2155,7 @@ settings.decision_trace_store = <span class="str">"redis"</span></pre></div>
     </tbody>
   </table>
   <div class="callout callout-tip">
-    <strong>A note on storage cost.</strong> <code>CHECKPOINT=true</code> stores a full message snapshot at every step, so a persisted trace can be sizeable and Redis usage grows with run volume. That's the price of being able to rewind — and it's worth it when you need it. To keep it modest: leave <code>CHECKPOINT</code> off unless you actually fork, and rely on <code>TTL_DAYS</code> to auto-expire old traces. Note that <code>DETAIL</code> only affects the trace <em>returned on the response</em> — the persisted trace is always full — so it isn't a storage lever. With the whole feature off (the default), nothing is stored at all.
+    <strong>A note on storage cost.</strong> <code>CHECKPOINT=true</code> stores a full message snapshot at every step, so a persisted trace can be sizeable and Redis usage grows with run volume. That's the price of being able to rewind, and it's worth it when you need it. To keep it modest: leave <code>CHECKPOINT</code> off unless you actually fork, and rely on <code>TTL_DAYS</code> to auto-expire old traces. Note that <code>DETAIL</code> only affects the trace <em>returned on the response</em>, the persisted trace is always full, so it isn't a storage lever. With the whole feature off (the default), nothing is stored at all.
   </div>
 
   <a class="anchor" id="run-trace-inspect"></a>
@@ -1682,7 +2175,7 @@ data = stored.<span class="fn">to_dict</span>(<span class="cls">TraceDetail</spa
 
   <a class="anchor" id="run-trace-fork"></a>
   <h2>Fork &amp; rewind</h2>
-  <p><code>runner.fork()</code> resumes a past run at <code>from_step</code>: steps before it replay from the saved checkpoint (no LLM or tool calls), an optional <code>override</code> edits that step, and the loop re-executes forward. The parent run is never mutated — the fork is a new run that records its lineage.</p>
+  <p><code>runner.fork()</code> resumes a past run at <code>from_step</code>: steps before it replay from the saved checkpoint (no LLM or tool calls), an optional <code>override</code> edits that step, and the loop re-executes forward. The parent run is never mutated, the fork is a new run that records its lineage.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Rewind run X to a step, change one input, re-run only what's downstream</span>
 forked = <span class="kw">await</span> runner.fork(
     run_id,
@@ -1701,17 +2194,17 @@ forked = <span class="kw">await</span> runner.fork(
   <p>The <code>override</code> applies a small, well-defined edit to the restored messages before the loop re-runs:</p>
   <table class="param-table">
     <tbody>
-      <tr><td>system</td><td>str</td><td>Replace (or prepend) the system instruction — a "what-if the policy were…" edit.</td></tr>
-      <tr><td>set_tool_result</td><td>{tool_call_id, content}</td><td>Override a recorded tool result — the "what if the tool had returned X?" knob.</td></tr>
+      <tr><td>system</td><td>str</td><td>Replace (or prepend) the system instruction, a "what-if the policy were…" edit.</td></tr>
+      <tr><td>set_tool_result</td><td>{tool_call_id, content}</td><td>Override a recorded tool result, the "what if the tool had returned X?" knob.</td></tr>
       <tr><td>replace_last_user</td><td>str</td><td>Replace the most recent user message content.</td></tr>
       <tr><td>append</td><td>message dict</td><td>Append an extra message (e.g. one more instruction).</td></tr>
     </tbody>
   </table>
-  <p>Forking works across multi-agent runs too: it resumes the agent that produced the step and restores the handoff stack. <strong>All nine workflow orchestrators</strong> — <code>Sequential</code>, <code>Router</code>, <code>Loop</code>, <code>Reflection</code>, <code>Supervised</code>, <code>Planner</code>, <code>Parallel</code>, <code>Scatter</code>, and <code>Debate</code> — implement the <code>Forkable</code> protocol and resume from the stage that owns the step. Pipeline patterns replay earlier stages from cache; concurrent patterns (<code>Parallel</code>, <code>Scatter</code>, <code>Debate</code>) re-run only the forked branch and replay sibling branches' outputs from the saved trace.</p>
+  <p>Forking works across multi-agent runs too: it resumes the agent that produced the step and restores the handoff stack. <strong>All nine workflow orchestrators</strong>, <code>Sequential</code>, <code>Router</code>, <code>Loop</code>, <code>Reflection</code>, <code>Supervised</code>, <code>Planner</code>, <code>Parallel</code>, <code>Scatter</code>, and <code>Debate</code>, implement the <code>Forkable</code> protocol and resume from the stage that owns the step. Pipeline patterns replay earlier stages from cache; concurrent patterns (<code>Parallel</code>, <code>Scatter</code>, <code>Debate</code>) re-run only the forked branch and replay sibling branches' outputs from the saved trace.</p>
 
   <a class="anchor" id="run-trace-branch"></a>
   <h3>Branch &amp; diff</h3>
-  <p>Because upstream replays from cache, forking the same step at several values is cheap — run them concurrently and compare. <code>diff_traces()</code> reports what changed between two runs.</p>
+  <p>Because upstream replays from cache, forking the same step at several values is cheap, run them concurrently and compare. <code>diff_traces()</code> reports what changed between two runs.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> asyncio
 <span class="kw">from</span> orchestrator.agent.trace <span class="kw">import</span> diff_traces
 <span class="kw">from</span> orchestrator.agent.trace.config <span class="kw">import</span> get_trace_store
@@ -1729,35 +2222,35 @@ delta = <span class="fn">diff_traces</span>(parent, child)   <span class="cm"># 
 
   <a class="anchor" id="run-trace-store"></a>
   <h3>Storage backends</h3>
-  <p><code>DECISION_TRACE_STORE</code> chooses where a finished trace is saved so it can be reloaded — and forked — later. A Redis backend that can't connect falls back to <code>null</code> so persistence never breaks a run.</p>
+  <p><code>DECISION_TRACE_STORE</code> chooses where a finished trace is saved so it can be reloaded, and forked, later. A Redis backend that can't connect falls back to <code>null</code> so persistence never breaks a run.</p>
   <table>
     <thead><tr><th>Backend</th><th>Where traces live</th><th>Survives restart / multi-process</th><th>Supports fork?</th></tr></thead>
     <tbody>
-      <tr><td><code>redis</code> (default)</td><td>External Redis server</td><td>Yes / Yes — needs Redis running</td><td>Yes</td></tr>
-      <tr><td><code>memory</code></td><td>A dict inside the running process</td><td>No / No — zero setup</td><td>Yes, in the same process</td></tr>
-      <tr><td><code>null</code></td><td>Discarded (no-op)</td><td>— not persisted</td><td>No — nothing to reload</td></tr>
+      <tr><td><code>redis</code> (default)</td><td>External Redis server</td><td>Yes / Yes, needs Redis running</td><td>Yes</td></tr>
+      <tr><td><code>memory</code></td><td>A dict inside the running process</td><td>No / No, zero setup</td><td>Yes, in the same process</td></tr>
+      <tr><td><code>null</code></td><td>Discarded (no-op)</td><td>Not persisted</td><td>No, nothing to reload</td></tr>
     </tbody>
   </table>
   <div class="callout callout-info">
-    Decision Trace is an <em>execution ledger</em> the runtime reads back to resume runs — separate from <a onclick="showSection('integrations'); scrollToAnchor('int-langfuse')">Langfuse</a>, the human-facing observability sink, which keeps running in parallel.
+    Decision Trace is an <em>execution ledger</em> the runtime reads back to resume runs, separate from <a onclick="showSection('integrations'); scrollToAnchor('int-langfuse')">Langfuse</a>, the human-facing observability sink, which keeps running in parallel.
   </div>
 
   <a class="anchor" id="run-trace-limits"></a>
   <h3>Limitations</h3>
   <div class="callout callout-warn">
     <ul style="margin:0; padding-left:18px;">
-      <li><strong>Return-to-parent handoffs aren't forkable.</strong> Resuming the child can't reconstruct the parent's final answer, so forking a step inside one raises a clear error — use <code>return_to_parent=False</code> for handoffs you intend to fork. However, you can rerun an upstream agent before the parent agent with return_to_parent=True.</li>
-      <li><strong>Overrides depend on how a stage resumes.</strong> Workflow orchestrators re-run the resumed stage <em>fresh</em> — they re-call its tools — so <code>set_tool_result</code> is ignored there; use <code>replace_last_user</code> or <code>system</code> to change a workflow stage's input. <code>set_tool_result</code> only takes effect where the fork <em>replays the snapshot verbatim</em> (single-agent and handoff resume).</li>
+      <li><strong>Return-to-parent handoffs aren't forkable.</strong> Resuming the child can't reconstruct the parent's final answer, so forking a step inside one raises a clear error, use <code>return_to_parent=False</code> for handoffs you intend to fork. However, you can rerun an upstream agent before the parent agent with return_to_parent=True.</li>
+      <li><strong>Overrides depend on how a stage resumes.</strong> Workflow orchestrators re-run the resumed stage <em>fresh</em>, they re-call its tools, so <code>set_tool_result</code> is ignored there; use <code>replace_last_user</code> or <code>system</code> to change a workflow stage's input. <code>set_tool_result</code> only takes effect where the fork <em>replays the snapshot verbatim</em> (single-agent and handoff resume).</li>
       <li><strong>Parallel can't rewind from its merge step.</strong> Forking a <em>branch</em> works in every concurrent pattern, but re-running only the final merge is supported by <code>Scatter</code> (gather-stage fork) and not yet by <code>Parallel</code>. Fork a branch instead, or use <code>Scatter</code> if you need to re-merge cached branch outputs.</li>
-      <li><strong>Planner mid-plan forks need an embedded plan.</strong> Forking a mid-plan step re-uses the plan recorded in the parent trace; traces recorded before plan-embedding existed can't mid-plan fork — fork from the plan stage (stage 0) to re-plan and re-execute instead.</li>
-      <li><strong>LLM nondeterminism.</strong> Re-executed steps are fresh model calls, so their <em>wording</em> can differ between runs even where your edit had no effect — a diff may show cosmetic text changes. Keep outcome-determining logic in tools and use <code>temperature=0</code> so verdicts and numbers stay stable; treat narrative diffs as informational.</li>
+      <li><strong>Planner mid-plan forks need an embedded plan.</strong> Forking a mid-plan step re-uses the plan recorded in the parent trace; traces recorded before plan-embedding existed can't mid-plan fork, fork from the plan stage (stage 0) to re-plan and re-execute instead.</li>
+      <li><strong>LLM nondeterminism.</strong> Re-executed steps are fresh model calls, so their <em>wording</em> can differ between runs even where your edit had no effect, a diff may show cosmetic text changes. Keep outcome-determining logic in tools and use <code>temperature=0</code> so verdicts and numbers stay stable; treat narrative diffs as informational.</li>
     </ul>
   </div>
 
   <a class="anchor" id="run-lifecycle"></a>
   <h2>App Lifecycle</h2>
-  <p>Use <code>OrchestratorLifecycle</code> to initialise and cleanly shut down all shared services (Redis, Langfuse, vector store). Use <code>Container</code> to inject custom clients — useful in tests and multi-tenant setups.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.core <span class="kw">import</span> <span class="cls">OrchestratorLifecycle</span>, <span class="cls">Container</span>
+  <p>Use <code>OrchestratorLifecycle</code> to initialise and cleanly shut down all shared services (Redis, Langfuse, vector store). Use <code>Container</code> to inject custom clients, useful in tests and multi-tenant setups.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">OrchestratorLifecycle</span>, <span class="cls">Container</span>
 
 lifecycle = <span class="cls">OrchestratorLifecycle</span>()
 <span class="kw">await</span> lifecycle.startup()   <span class="cm"># connects Redis, Langfuse, vector store</span>
@@ -1769,7 +2262,7 @@ health = <span class="kw">await</span> lifecycle.health_check()
 <span class="kw">await</span> lifecycle.shutdown()  <span class="cm"># flushes Langfuse, closes Redis connections</span></pre></div>
 
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Inject custom clients (e.g. in tests or multi-tenant setups)</span>
-<span class="kw">from</span> continuum.core <span class="kw">import</span> <span class="cls">Container</span>
+<span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">Container</span>
 
 container = <span class="cls">Container</span>()
 container.<span class="fn">set_llm_client</span>(my_llm_client)
@@ -1781,8 +2274,8 @@ runner = <span class="cls">AgentRunner</span>(container=container)</pre></div>
   <a class="anchor" id="run-fastapi"></a>
   <h2>FastAPI Server</h2>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> fastapi <span class="kw">import</span> <span class="cls">FastAPI</span>
-<span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
-<span class="kw">from</span> continuum.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+<span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
 
 app = <span class="cls">FastAPI</span>()
 runner = <span class="cls">AgentRunner</span>()
@@ -1800,7 +2293,7 @@ agent = <span class="cls">BaseAgent</span>(name=<span class="str">"api-agent"</s
 
   <a class="anchor" id="run-temporal-deploy"></a>
   <h2>Temporal Workers</h2>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal <span class="kw">import</span> <span class="cls">WorkerManager</span>, <span class="cls">AgentRegistry</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal <span class="kw">import</span> <span class="cls">WorkerManager</span>, <span class="cls">AgentRegistry</span>
 
 registry = <span class="cls">AgentRegistry</span>()
 registry.register(my_agent)
@@ -1827,112 +2320,13 @@ agent = <span class="cls">BaseAgent</span>(
 )</pre></div>
 
 
-  <a class="anchor" id="run-data-labels"></a>
-  <h2>Data-Label Enforcement</h2>
-  <p>Make sensitivity labels such as <code>pii</code>, <code>confidential</code>, or <code>restricted</code> change what a run is <em>allowed to do</em>. A run carries a set of labels (<code>ctx.data_labels</code>); labels are added by <strong>producers</strong> and then <strong>gate</strong> six runtime sinks. Taint is monotonic (only added, propagates forward) and is enforced identically in streaming and non-streaming.</p>
-  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># producer (taint) ─▶ ctx.data_labels = {"pii"} ─▶ gate at each sink (deny?)</span></pre></div>
-
-  <p><strong>Independent of <a onclick="scrollToAnchor('run-safety')" style="cursor:pointer;text-decoration:underline">Input / Output Scanning</a>.</strong> Scanners <em>sanitize text</em>; data labels <em>gate behavior</em>. Neither feeds the other — a scanner never taints a run.</p>
-
-  <h3>Defaults — opt-in &amp; inert</h3>
-  <p>With nothing configured the feature does nothing (zero behavior change, fully backward-compatible): no policy store on the agent, no producers, every run unlabeled. Policy evaluation is <strong>open-default-allow</strong> with <strong>deny-overrides</strong>.</p>
-  <table>
-    <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
-    <tr><td><code>BaseAgent(policy_store=…)</code></td><td><code>None</code></td><td>no gates run at all</td></tr>
-    <tr><td><code>AgentConfig.tool_data_labels</code></td><td><code>{}</code></td><td>no tool taints the run</td></tr>
-    <tr><td><code>AgentMemoryConfig.scope_data_labels</code></td><td><code>{}</code></td><td>no memory-read taint</td></tr>
-    <tr><td>run-level <code>data_labels</code></td><td><code>None</code></td><td>run starts clean</td></tr>
-    <tr><td>policy evaluation</td><td>open-default-allow</td><td>unmatched resource → allowed</td></tr>
-  </table>
-
-  <h3>Enable it in three steps</h3>
-  <p><strong>1 · Define policies.</strong> Subjects are matched against <code>[agent.name, *sorted(labels)]</code>, so a rule whose subject is a label fires for <em>any</em> run carrying that label. Resources support fnmatch globs.</p>
-  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.security.policy <span class="kw">import</span> <span class="cls">AccessPolicy</span>, <span class="cls">PolicyStore</span>
-
-store = <span class="cls">PolicyStore</span>()
-store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
-    name=<span class="str">"pii-no-cloud-model"</span>,
-    subjects=[<span class="str">"pii"</span>],                 <span class="cm"># fires whenever the run carries "pii"</span>
-    resources=[<span class="str">"llm:gpt-4o"</span>],         <span class="cm"># the cloud model</span>
-    effect=<span class="str">"deny"</span>,
-    denial_message=<span class="str">"PII may not be sent to the cloud model."</span>,
-))
-store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
-    name=<span class="str">"confidential-no-exfil"</span>,
-    subjects=[<span class="str">"confidential"</span>],
-    resources=[<span class="str">"tool:send_*"</span>, <span class="str">"tool:web_*"</span>],   <span class="cm"># globs supported</span>
-    effect=<span class="str">"deny"</span>,
-    denial_message=<span class="str">"Confidential data may not leave via this tool."</span>,
-))</pre></div>
-
-  <p><strong>2 · Attach the store to the agent.</strong> The runner publishes it as the ambient policy for the whole run, so every sink is gated — you never thread it through call sites.</p>
-  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(
-    name=<span class="str">"assistant"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>,
-    policy_store=store,
-)</pre></div>
-
-  <p><strong>3 · Declare at least one producer</strong> — otherwise nothing is ever labeled and the policies never fire.</p>
-  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># (a) Tool provenance — a tool's result taints the run</span>
-<span class="cls">AgentConfig</span>(tool_data_labels={<span class="str">"lookup_patient"</span>: {<span class="str">"pii"</span>}})
-
-<span class="cm"># (b) Memory-read provenance — reading a scope taints the run</span>
-<span class="cls">AgentMemoryConfig</span>(scope_data_labels={<span class="cls">AgentMemoryScope</span>.USER: {<span class="str">"pii"</span>}})
-
-<span class="cm"># (c) Run-level — request known to carry sensitive data</span>
-ctx = <span class="fn">create_run_context</span>(user_id=<span class="str">"u1"</span>, data_labels={<span class="str">"pii"</span>})
-
-<span class="cm"># (d) Anywhere in your own code</span>
-ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)</pre></div>
-
-  <h3>Sink reference</h3>
-  <p>Write policy <code>resources=[…]</code> using these strings. Each sink checks the policy with subjects <code>[agent.name, *sorted(labels)]</code>.</p>
-  <table>
-    <tr><th>Sink</th><th>Resource string</th><th>What a deny does</th></tr>
-    <tr><td>Model routing</td><td><code>llm:&lt;model&gt;</code></td><td>raises <code>ModelAccessDeniedError</code> (catch → reroute to an allowed model)</td></tr>
-    <tr><td>Tool call</td><td><code>tool:&lt;name&gt;</code> (globs)</td><td>tool result becomes <code>POLICY DENIED: …</code> (tool not run; model sees it)</td></tr>
-    <tr><td>Long-term memory</td><td><code>memory:&lt;scope&gt;</code> or <code>memory:*</code></td><td>write blocked (<code>MemoryAccessDeniedError</code> on explicit add; auto-store skipped)</td></tr>
-    <tr><td>Telemetry</td><td><code>telemetry</code></td><td>payload replaced with <code>{"_redacted": "…"}</code> before egress</td></tr>
-    <tr><td>Short-term session</td><td><code>session</code></td><td>assistant answer stored as a placeholder, not verbatim</td></tr>
-    <tr><td>Decision trace</td><td><code>telemetry</code> (reused)</td><td>trace content redacted before persistence; audit skeleton kept</td></tr>
-  </table>
-
-  <h3>End-to-end</h3>
-  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentConfig</span>, <span class="cls">AgentRunner</span>
-<span class="kw">from</span> continuum.security.policy <span class="kw">import</span> <span class="cls">AccessPolicy</span>, <span class="cls">PolicyStore</span>
-<span class="kw">from</span> continuum.agent.exceptions <span class="kw">import</span> <span class="cls">ModelAccessDeniedError</span>
-
-store = <span class="cls">PolicyStore</span>()
-store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(name=<span class="str">"pii-no-cloud"</span>, subjects=[<span class="str">"pii"</span>],
-                              resources=[<span class="str">"llm:gpt-4o"</span>], effect=<span class="str">"deny"</span>,
-                              denial_message=<span class="str">"no PII on cloud"</span>))
-
-agent = <span class="cls">BaseAgent</span>(name=<span class="str">"clinic"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>,
-                  policy_store=store,
-                  config=<span class="cls">AgentConfig</span>(tool_data_labels={<span class="str">"lookup_patient"</span>: {<span class="str">"pii"</span>}}))
-
-runner = <span class="cls">AgentRunner</span>()  <span class="cm"># one per app; shared across runs</span>
-
-<span class="kw">try</span>:
-    resp = <span class="kw">await</span> runner.<span class="fn">run</span>(agent, <span class="str">"look up patient P-123"</span>)  <span class="cm"># taints pii → gpt-4o denied</span>
-<span class="kw">except</span> <span class="cls">ModelAccessDeniedError</span>:
-    agent.model = <span class="str">"gpt-4o-mini"</span>            <span class="cm"># allowed model</span>
-    resp = <span class="kw">await</span> runner.<span class="fn">run</span>(agent, <span class="str">"look up patient P-123"</span>)</pre></div>
-
-  <div class="callout callout-info">
-    <strong>"Model routing"</strong> is Continuum's gate; the gateway (<a onclick="scrollToAnchor('sec-smart')" style="cursor:pointer;text-decoration:underline">smart layer</a>) is a separate project (AURA) that does its own model routing. When using the gateway, rely on AURA for model routing instead of Continuum's "Model routing" gate.
-  </div>
-
-  <h3>Example</h3>
-  <p>A complete, runnable example lives at <code>playground/data-label-clinic/</code>.</p>
-
-
   <a class="anchor" id="run-testing"></a>
   <h2>Testing Guide</h2>
   <p>Continuum favors integration tests over mocks. The <code>[dev]</code> extra ships <code>fakeredis</code>, <code>respx</code>, and <code>pytest-asyncio</code>.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># conftest.py</span>
 <span class="kw">import</span> pytest
 <span class="kw">import</span> fakeredis.aioredis <span class="kw">as</span> fakeredis
-<span class="kw">from</span> continuum.core <span class="kw">import</span> <span class="cls">Container</span>
+<span class="kw">from</span> orchestrator.core <span class="kw">import</span> <span class="cls">Container</span>
 
 <span class="op">@</span>pytest.fixture
 <span class="kw">async def</span> <span class="fn">container</span>():
@@ -1958,12 +2352,12 @@ runner = <span class="cls">AgentRunner</span>()  <span class="cm"># one per app;
 <section class="page-section" id="sec-components">
 
   <h1>Components</h1>
-  <p class="section-intro">Continuum's building blocks — tools, memory, sessions, durable workflows.</p>
+  <p class="section-intro">Continuum's building blocks, tools, memory, sessions, durable workflows.</p>
 
   <a class="anchor" id="comp-mcp"></a>
   <h2>MCP Servers</h2>
   <p>Every tool is exposed via the Model Context Protocol. Three transport types are supported:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools <span class="kw">import</span> <span class="cls">MCPServerStdio</span>, <span class="cls">MCPServerSse</span>, <span class="cls">MCPServerStreamableHttp</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPServerStdio</span>, <span class="cls">MCPServerSse</span>, <span class="cls">MCPServerStreamableHttp</span>
 
 <span class="cm"># Spawn a subprocess (local Python script or shell command)</span>
 fs_server = <span class="cls">MCPServerStdio</span>(command=<span class="str">"python"</span>, args=[<span class="str">"-m"</span>, <span class="str">"mcp_filesystem"</span>])
@@ -1982,7 +2376,7 @@ agent = <span class="cls">BaseAgent</span>(
 
   <h3>Passing tools explicitly with MCPUtil</h3>
   <p>If you need the tool definitions as Python objects (e.g. to inspect, filter, or pass them manually), use <code>MCPUtil.get_function_tools()</code>:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools <span class="kw">import</span> <span class="cls">MCPUtil</span>, <span class="cls">ToolExecutor</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPUtil</span>, <span class="cls">ToolExecutor</span>
 
 <span class="cm"># Get tool definitions from a connected server</span>
 tool_defs = <span class="kw">await</span> <span class="cls">MCPUtil</span>.<span class="fn">get_function_tools</span>(server)
@@ -2000,8 +2394,8 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="comp-tool-filtering"></a>
   <h2>Tool Filtering</h2>
-  <p>When you have many MCP tools, semantic tool filtering sends only the relevant subset to the LLM each turn — reducing token cost and noise.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ToolAttentionConfig</span>
+  <p>When you have many MCP tools, semantic tool filtering sends only the relevant subset to the LLM each turn, reducing token cost and noise.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">ToolAttentionConfig</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"commerce-agent"</span>,
@@ -2017,8 +2411,8 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="comp-tool-context"></a>
   <h2>Tool Context Injection</h2>
-  <p>Some tools return a value (e.g. <code>session_id</code>, <code>cart_token</code>) that subsequent tool calls need as input. <code>ToolContextState</code> captures these values automatically and injects them into later calls — no agent prompt changes required.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools <span class="kw">import</span> <span class="cls">MCPServerStreamableHttp</span>
+  <p>Some tools return a value (e.g. <code>session_id</code>, <code>cart_token</code>) that subsequent tool calls need as input. <code>ToolContextState</code> captures these values automatically and injects them into later calls, no agent prompt changes required.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools <span class="kw">import</span> <span class="cls">MCPServerStreamableHttp</span>
 
 <span class="cm"># Capture session_id from the login tool result, inject into every subsequent call</span>
 shop_server = <span class="cls">MCPServerStreamableHttp</span>(
@@ -2042,9 +2436,9 @@ shop_server = <span class="cls">MCPServerStreamableHttp</span>(
 
   <a class="anchor" id="comp-memory"></a>
   <h2>Long-term Memory</h2>
-  <p>Continuum uses <a href="#int-langfuse">mem0</a> + Milvus(default) or Qdrant  for persistent semantic memory. Facts are automatically extracted from conversations and stored as embeddings.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
-<span class="kw">from</span> continuum.memory.scopes <span class="kw">import</span> <span class="cls">MemoryScope</span>
+  <p>Continuum uses <strong>mem0</strong> + Milvus (default) or Qdrant for persistent semantic memory. Facts are automatically extracted from conversations and stored as embeddings.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent.config <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
+<span class="kw">from</span> orchestrator.memory.scopes <span class="kw">import</span> <span class="cls">MemoryScope</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"memory-agent"</span>,
@@ -2061,7 +2455,7 @@ agent = <span class="cls">BaseAgent</span>(
 
   <h3>Controlling what gets stored</h3>
   <p>Use <code>extraction_prompt</code> to tell mem0 exactly which facts to extract. Use <code>pre_store_filter</code> to remove PII or irrelevant facts <em>after</em> they are stored.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># extraction_prompt — override mem0's default extraction logic</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># extraction_prompt, override mem0's default extraction logic</span>
 <span class="cls">AgentMemoryConfig</span>(
     store_memories=<span class="cls">True</span>,
     extraction_prompt=(
@@ -2070,14 +2464,14 @@ agent = <span class="cls">BaseAgent</span>(
     ),
 )
 
-<span class="cm"># pre_store_filter — runs after storage; facts not returned are deleted</span>
+<span class="cm"># pre_store_filter, runs after storage; facts not returned are deleted</span>
 <span class="kw">def</span> <span class="fn">remove_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
     <span class="kw">return</span> [f <span class="kw">for</span> f <span class="kw">in</span> facts <span class="kw">if</span> <span class="str">"credit card"</span> <span class="kw">not in</span> f]
 
 <span class="cls">AgentMemoryConfig</span>(store_memories=<span class="cls">True</span>, pre_store_filter=remove_pii)</pre></div>
 
   <h3>Memory management API</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.core.container <span class="kw">import</span> get_container
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.core.container <span class="kw">import</span> get_container
 
 memory_client = <span class="fn">get_container</span>().memory_client
 
@@ -2096,7 +2490,7 @@ results = <span class="kw">await</span> memory_client.search(<span class="str">"
 <span class="kw">await</span> memory_client.delete_all(user_id=<span class="str">"user-123"</span>)</pre></div>
 
   <div class="callout callout-tip">
-    <strong>Privacy tip:</strong> Consider exposing memory management in your frontend — let users view and delete what the AI remembers about them. This matters for GDPR compliance and user trust and experience.
+    <strong>Privacy tip:</strong> Consider exposing memory management in your frontend, let users view and delete what the AI remembers about them. This matters for GDPR compliance and user trust and experience.
   </div>
 
   <a class="anchor" id="comp-memory-scope"></a>
@@ -2112,7 +2506,7 @@ results = <span class="kw">await</span> memory_client.search(<span class="str">"
   <a class="anchor" id="comp-intelligent-memory"></a>
   <h2>IntelligentMemoryClient</h2>
   <p>A drop-in replacement for <code>MemoryClient</code> that adds <strong>importance scoring</strong>, <strong>time-based decay</strong>, entity extraction, and user profiles. Low-relevance or stale memories are down-weighted before being injected into the prompt.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.memory <span class="kw">import</span> <span class="cls">IntelligentMemoryClient</span>, <span class="cls">IntelligenceConfig</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.memory <span class="kw">import</span> <span class="cls">IntelligentMemoryClient</span>, <span class="cls">IntelligenceConfig</span>
 
 memory = <span class="cls">IntelligentMemoryClient</span>(
     intelligence_config=<span class="cls">IntelligenceConfig</span>(
@@ -2136,8 +2530,8 @@ results = <span class="kw">await</span> memory.search(<span class="str">"user pr
 
   <a class="anchor" id="comp-session"></a>
   <h2>Sessions (Redis)</h2>
-  <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically — you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> <span class="cls">SessionClient</span>
+  <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically, you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.session <span class="kw">import</span> <span class="cls">SessionClient</span>
 
 session = <span class="cls">SessionClient</span>()
 
@@ -2156,9 +2550,9 @@ messages = <span class="kw">await</span> session.get_conversation_history(sessio
   <a class="anchor" id="comp-temporal"></a>
   <h2>Temporal Integration</h2>
   <p>Build durable workflows that survive process restarts, with automatic retries and audit trails.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal <span class="kw">import</span> <span class="cls">TemporalClient</span>
-<span class="kw">from</span> continuum.temporal.workflows <span class="kw">import</span> <span class="cls">AgentWorkflow</span>
-<span class="kw">from</span> continuum.temporal.types <span class="kw">import</span> <span class="cls">AgentStep</span>, <span class="cls">ApprovalStep</span>, <span class="cls">ParallelStep</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal <span class="kw">import</span> <span class="cls">TemporalClient</span>
+<span class="kw">from</span> orchestrator.temporal.workflows <span class="kw">import</span> <span class="cls">AgentWorkflow</span>
+<span class="kw">from</span> orchestrator.temporal.types <span class="kw">import</span> <span class="cls">AgentStep</span>, <span class="cls">ApprovalStep</span>, <span class="cls">ParallelStep</span>
 
 steps = [
     <span class="cls">AgentStep</span>(agent_name=<span class="str">"researcher"</span>, input=<span class="str">"Analyze market trends"</span>),
@@ -2186,7 +2580,7 @@ handle = <span class="kw">await</span> client.execute_workflow(<span class="cls"
   <a class="anchor" id="comp-loop-workflow"></a>
   <h2>Loop Workflow (Temporal)</h2>
   <p>For iterative agentic work that must survive restarts, use <code>LoopAgentWorkflow</code>. The loop runs on Temporal and persists state between iterations.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal.workflows <span class="kw">import</span> <span class="cls">LoopAgentWorkflow</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.temporal.workflows <span class="kw">import</span> <span class="cls">LoopAgentWorkflow</span>
 
 handle = <span class="kw">await</span> client.execute_workflow(
     <span class="cls">LoopAgentWorkflow</span>,
@@ -2201,25 +2595,13 @@ handle = <span class="kw">await</span> client.execute_workflow(
 
   <a class="anchor" id="comp-hitl"></a>
   <h2>Human-in-the-Loop</h2>
-  <p>Workflows pause at <code>ApprovalStep</code> and send a notification to approvers. The workflow resumes only when approved — or auto-approves after timeout.</p>
+  <p>Workflows pause at <code>ApprovalStep</code> and send a notification to approvers. The workflow resumes only when approved, or auto-approves after timeout.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cls">ApprovalStep</span>(
     description=<span class="str">"Approve the generated email before sending to customers"</span>,
     approvers=[<span class="str">"alice@company.com"</span>, <span class="str">"bob@company.com"</span>],
     timeout=<span class="num">3600</span>,           <span class="cm"># 1 hour, then auto-expires</span>
     auto_approve_if=<span class="str">"low_risk"</span>,  <span class="cm"># skip approval if condition agent returns this</span>
 )</pre></div>
-
-  <div class="callout callout-info">
-    <strong>HITL approver authorization (<code>decided_by ∈ approvers</code>).</strong> When <code>approvers</code> is non-empty, a decision is honored only if its <code>decided_by</code> is in the list — gating both approvals <em>and</em> rejections. Unauthorized decisions are recorded and ignored; the workflow stays paused until a listed approver resolves it (or it auto-expires at <code>timeout</code>). An empty <code>approvers</code> list means anyone may decide; <code>escalated</code> always routes through. A full workflow with this approval gate lives at <code>playground/temporal-leadflow/</code>.
-  </div>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal.human_in_loop <span class="kw">import</span> <span class="cls">HumanInLoopManager</span>
-
-mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
-
-<span class="cm"># A decision is honored only if decided_by is in approvers:</span>
-<span class="kw">await</span> mgr.<span class="fn">approve</span>(workflow_id, request_id, decided_by=<span class="str">"alice@company.com"</span>)    <span class="cm"># honored</span>
-<span class="kw">await</span> mgr.<span class="fn">reject</span>(workflow_id, request_id, decided_by=<span class="str">"mallory@evil.com"</span>)     <span class="cm"># ignored — not an approver; stays pending</span>
-<span class="kw">await</span> mgr.<span class="fn">escalate</span>(workflow_id, request_id, escalate_to=<span class="str">"carol@company.com"</span>)  <span class="cm"># always allowed (re-targets)</span></pre></div>
 
 
 </section>
@@ -2232,7 +2614,7 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
   <p class="section-intro">Continuum calls LLM providers directly via their official SDKs.</p>
 
   <h2>Provider Routing</h2>
-  <p>Continuum routes to providers automatically based on the model string prefix — no configuration needed.</p>
+  <p>Continuum routes to providers automatically based on the model string prefix, no configuration needed.</p>
   <table>
     <tr><th>Model name prefix</th><th>Provider</th><th>Examples</th></tr>
     <tr><td><code>claude-…</code> or <code>anthropic/…</code></td><td>Anthropic</td><td><code>claude-sonnet-4-5</code>, <code>claude-opus-4-5</code></td></tr>
@@ -2246,12 +2628,12 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(name=<span class="str">"gpt-agent"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"gpt-4o"</span>)</pre></div>
   <table>
     <tr><th>Model</th><th>Context</th><th>Notes</th></tr>
-    <tr><td><code>gpt-5</code></td><td>—</td><td>Latest, highest capability</td></tr>
+    <tr><td><code>gpt-5</code></td><td>400k</td><td>Latest, highest capability</td></tr>
     <tr><td><code>gpt-4o</code></td><td>128k</td><td>Strong overall quality</td></tr>
     <tr><td><code>gpt-4o-mini</code></td><td>128k</td><td>Default model, fast &amp; cheap</td></tr>
-    <tr><td><code>o3-mini</code></td><td>—</td><td>Reasoning model</td></tr>
+    <tr><td><code>o3-mini</code></td><td>200k</td><td>Reasoning model</td></tr>
   </table>
-  <p>Required env: <code>OPENAI_API_KEY</code> — also used by mem0's default embedder.</p>
+  <p>Required env: <code>OPENAI_API_KEY</code>, also used by mem0's default embedder.</p>
 
   <a class="anchor" id="int-anthropic"></a>
   <h2>Anthropic</h2>
@@ -2259,7 +2641,7 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>agent = <span class="cls">BaseAgent</span>(name=<span class="str">"claude-agent"</span>, instructions=<span class="str">"..."</span>, model=<span class="str">"claude-sonnet-4-5"</span>)</pre></div>
   <table>
     <tr><th>Model</th><th>Notes</th></tr>
-    <tr><td><code>claude-sonnet-4-5</code></td><td>Recommended — best balance</td></tr>
+    <tr><td><code>claude-sonnet-4-5</code></td><td>Recommended, best balance</td></tr>
     <tr><td><code>claude-opus-4-5</code></td><td>Highest capability</td></tr>
     <tr><td><code>claude-haiku-4-5</code></td><td>Fastest &amp; cheapest</td></tr>
   </table>
@@ -2279,8 +2661,8 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
 
   <a class="anchor" id="int-azure"></a>
   <h2>Azure OpenAI</h2>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
-<span class="kw">from</span> continuum.llm <span class="kw">import</span> <span class="cls">LLMConfig</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> orchestrator.llm <span class="kw">import</span> <span class="cls">LLMConfig</span>
 <span class="kw">import</span> os
 
 config = <span class="cls">LLMConfig</span>(
@@ -2295,7 +2677,7 @@ agent = <span class="cls">BaseAgent</span>(name=<span class="str">"azure-agent"<
   <a class="anchor" id="int-fallback"></a>
   <h3>Automatic Fallback</h3>
   <p>When <code>LLM_ENABLE_FALLBACK=true</code> (default), any provider error transparently retries on <code>FALLBACK_LLM_MODEL</code>. Set it to a different provider to get cross-provider resilience:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env — primary OpenAI, fallback to Gemini</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env, primary OpenAI, fallback to Gemini</span>
 DEFAULT_LLM_MODEL=gpt-4o
 FALLBACK_LLM_MODEL=gemini/gemini-1.5-flash
 LLM_ENABLE_FALLBACK=true</pre></div>
@@ -2313,25 +2695,25 @@ LANGFUSE_HOST=http://localhost:3000</pre></div>
 
   <a class="anchor" id="int-observe"></a>
   <h2>Tracing Decorators</h2>
-  <p>Three decorators create Langfuse spans for custom functions — all imported from <code>continuum.observability</code>.</p>
-  <h3>@observe — generic span</h3>
+  <p>Three decorators create Langfuse spans for custom functions, all imported from <code>orchestrator.observability</code>.</p>
+  <h3>@observe, generic span</h3>
   <p>Add custom spans to any async function:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.observability <span class="kw">import</span> observe
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> observe
 
 <span class="op">@</span><span class="fn">observe</span>(<span class="str">"preprocess_input"</span>)
 <span class="kw">async def</span> <span class="fn">preprocess</span>(text: <span class="fn">str</span>) -> <span class="fn">str</span>:
     <span class="kw">return</span> text.strip().lower()</pre></div>
 
-  <h3>@trace_tool — for tool / API functions</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.observability <span class="kw">import</span> trace_tool
+  <h3>@trace_tool, for tool / API functions</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> trace_tool
 
 <span class="op">@</span><span class="fn">trace_tool</span>(<span class="str">"search_products"</span>)
 <span class="kw">async def</span> <span class="fn">search_products</span>(query: <span class="fn">str</span>):
     <span class="cm"># creates a tool-type span with input/output captured</span>
     <span class="kw">return</span> <span class="kw">await</span> db.<span class="fn">search</span>(query)</pre></div>
 
-  <h3>@trace_agent — for custom agent wrappers</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.observability <span class="kw">import</span> trace_agent
+  <h3>@trace_agent, for custom agent wrappers</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.observability <span class="kw">import</span> trace_agent
 
 <span class="op">@</span><span class="fn">trace_agent</span>(<span class="str">"my-specialist"</span>)
 <span class="kw">async def</span> <span class="fn">run_specialist</span>(input: <span class="fn">str</span>):
@@ -2356,7 +2738,7 @@ QDRANT_COLLECTION=orchestrator_memories</pre></div>
 
   <a class="anchor" id="int-milvus"></a>
   <h2>Milvus <span class="tag tag-new">default</span></h2>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env (default — no change needed if using docker compose)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># .env (default, no change needed if using docker compose)</span>
 VECTOR_STORE_PROVIDER=milvus
 MILVUS_HOST=localhost
 MILVUS_PORT=19530</pre></div>
@@ -2366,19 +2748,25 @@ MILVUS_PORT=19530</pre></div>
 
 
 
-<!-- ═══════════════════ COMMUNITY ═══════════════════ -->
-<!-- ═══════════════════ SMART INFERENCE ═══════════════════ -->
+<!-- ═══════════════════ AURA · SMART INFERENCE ═══════════════════ -->
 <section class="page-section" id="sec-smart">
 
   <a class="anchor" id="smart-intro"></a>
-  <h1>Smart Inference</h1>
-  <p class="section-intro">A cost-aware, classifier-driven routing layer that picks the optimal model per prompt. Continuum agents call one OpenAI-compatible endpoint; Smart Inference dispatches across 250+ models on 45+ providers with per-1M-token pricing, budget ledger, and dynamic output caps baked into the request path.</p>
+  <div class="product-hero">
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Proprietary</span>
+    <h1 class="ph-title grad-text">Aura</h1>
+    <p class="ph-sub">The Smart Inference layer. A cost-aware, classifier-driven router that picks the optimal model per prompt, so your agents hit one OpenAI-compatible endpoint while Aura dispatches across 250+ models on 45+ providers, with per-1M-token pricing, a budget ledger, and dynamic output caps in the request path.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue">OpenAI-compatible</span>
+      <span class="badge badge-green">Sub-millisecond overhead</span>
+      <span class="badge badge-purple">Classifier · Router · Budget</span>
+      <span class="badge badge-blue">250+ models</span>
+    </div>
+  </div>
 
-  <div class="hero-badges" style="margin-bottom: 24px;">
-    <span class="badge badge-blue">OpenAI-compatible</span>
-    <span class="badge badge-green">Sub-millisecond overhead</span>
-    <span class="badge badge-purple">Classifier · Router · Budget</span>
-    <span class="badge badge-blue">250+ models</span>
+  <div class="proprietary">
+    <div class="pr-text"><span class="pr-tag">Proprietary</span><strong>Aura is a proprietary Continuum product.</strong> The reference below shows how agents wire into the gateway. For an endpoint, a virtual key, and access, reach out to the Shyftlabs team.</div>
+    <a class="pr-cta" href="https://shyftlabs.io/" target="_blank" rel="noopener">Reach out to Shyftlabs →</a>
   </div>
 
   <div class="callout callout-tip">
@@ -2388,7 +2776,7 @@ MILVUS_PORT=19530</pre></div>
   <a class="anchor" id="smart-how"></a>
   <h2>How it works</h2>
   <p>Every <code>POST /v1/chat/completions</code> request flows through a fixed middleware pipeline. Each stage is independently observable and skipped cleanly when its feature flag is off.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Request lifecycle (Continuum agent → Smart Inference gateway → provider)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Request lifecycle (Continuum agent → Aura gateway → provider)</span>
 
 inbound request
   ─► requireValidKey            <span class="cm"># bearer → virtualKey lookup, fail-closed 401</span>
@@ -2412,20 +2800,20 @@ client ◄┘</pre></div>
   <table>
     <tr><th>Mode</th><th>Tier</th><th>Optimises for</th><th>Typical pick</th></tr>
     <tr><td><code>strict</code></td><td>cheap</td><td>lowest cost</td><td>smallest model that clears the capability gate (gpt-4o-mini / gemini-flash / haiku class)</td></tr>
-    <tr><td><code>modest</code></td><td>mid</td><td>quality / cost balance</td><td>mid-tier with the best q/cost — claude-sonnet, gpt-4o</td></tr>
+    <tr><td><code>modest</code></td><td>mid</td><td>quality / cost balance</td><td>mid-tier with the best q/cost, claude-sonnet, gpt-4o</td></tr>
     <tr><td><code>quality</code></td><td>quality</td><td>highest quality</td><td>top-tier candidates available in the registry</td></tr>
   </table>
   <div class="callout callout-info">
-    <strong>Capped by the registry.</strong> The router can only pick from <code>src/services/router/registry.json</code>. Models not in the registry are unreachable via <code>auto</code> — pin them explicitly with <code>&lt;provider&gt;/&lt;model_id&gt;</code> if needed.
+    <strong>Capped by the registry.</strong> The router can only pick from <code>src/services/router/registry.json</code>. Models not in the registry are unreachable via <code>auto</code>; pin them explicitly with <code>&lt;provider&gt;/&lt;model_id&gt;</code> if needed.
   </div>
 
   <a class="anchor" id="smart-setup"></a>
   <h2>Wire Continuum to the Gateway</h2>
-  <p>Continuum routes all LLM calls through Smart Inference when <code>SMART_GATEWAY_URL</code> is set. There is nothing else to import or subclass — <code>GatewayProvider</code> automatically replaces the per-provider clients.</p>
+  <p>Continuum routes all LLM calls through Aura when <code>SMART_GATEWAY_URL</code> is set. There is nothing else to import or subclass; <code>GatewayProvider</code> automatically replaces the per-provider clients.</p>
 
   <a class="anchor" id="smart-env"></a>
   <h3>Environment variables</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side, .env</span>
 SMART_GATEWAY_URL=https://continuum.shyftops.io/v1     <span class="cm"># gateway base URL</span>
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key       <span class="cm"># bearer (matches a virtual key)</span>
 SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modest | quality</span></pre></div>
@@ -2433,7 +2821,7 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
   <a class="anchor" id="smart-virtualkey"></a>
   <h3>Virtual key (bearer)</h3>
   <p>The gateway authenticates the client by bearer and looks up the upstream provider key, budget, and allowed-models from <code>conf.integrations[]</code>.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm">// Smart Inference side — conf.json (excerpt)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm">// Smart Inference side, conf.json (excerpt)</span>
 {
   <span class="str">"integrations"</span>: [
     {
@@ -2454,7 +2842,7 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
 }</pre></div>
 
   <div class="callout callout-warn">
-    <strong>Process env vs <code>.env</code> file.</strong> <code>npm run start:node</code> does <em>not</em> dotenv-load the gateway. Either <code>set -a; source .env; set +a</code> before starting, or pin secrets in <code>docker-compose.yaml</code>'s <code>environment:</code> block. A virtual key whose <code>api_key_env</code> resolves to <code>undefined</code> is silently dropped from the index — every request to it returns <code>401</code>.
+    <strong>Process env vs <code>.env</code> file.</strong> <code>npm run start:node</code> does <em>not</em> dotenv-load the gateway. Either <code>set -a; source .env; set +a</code> before starting, or pin secrets in <code>docker-compose.yaml</code>'s <code>environment:</code> block. A virtual key whose <code>api_key_env</code> resolves to <code>undefined</code> is silently dropped from the index, and every request to it returns <code>401</code>.
   </div>
 
   <a class="anchor" id="smart-model"></a>
@@ -2462,19 +2850,19 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
   <p>The <code>model</code> field in the request body is parsed by <code>modelResolver.ts</code>. Five grammars are supported:</p>
   <table class="param-table">
     <tr><th>Form</th><th>Meaning</th></tr>
-    <tr><td>auto</td><td>—</td><td>gateway-wide auto-routing, default tier</td></tr>
-    <tr><td>auto/&lt;tier&gt;</td><td>—</td><td>gateway-wide, specific tier (cheap/mid/quality)</td></tr>
-    <tr><td>&lt;provider&gt;/auto</td><td>—</td><td>provider-scoped auto-routing, default tier</td></tr>
-    <tr><td>&lt;provider&gt;/auto/&lt;tier&gt;</td><td>—</td><td>provider-scoped, specific tier</td></tr>
-    <tr><td>&lt;provider&gt;/&lt;model_id&gt;</td><td>—</td><td>explicit pin — bypasses model selection</td></tr>
+    <tr><td>auto</td><td>gateway-wide auto-routing, default tier</td></tr>
+    <tr><td>auto/&lt;tier&gt;</td><td>gateway-wide, specific tier (cheap/mid/quality)</td></tr>
+    <tr><td>&lt;provider&gt;/auto</td><td>provider-scoped auto-routing, default tier</td></tr>
+    <tr><td>&lt;provider&gt;/auto/&lt;tier&gt;</td><td>provider-scoped, specific tier</td></tr>
+    <tr><td>&lt;provider&gt;/&lt;model_id&gt;</td><td>explicit pin, bypasses model selection</td></tr>
   </table>
 
   <a class="anchor" id="smart-code"></a>
   <h2>Agent code</h2>
   <p>From the agent's perspective, nothing changes. Set <code>agent_model</code> to a routing intent and optionally pick a mode.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>
 
-<span class="cm"># Auto-routing — gateway picks the model per turn.</span>
+<span class="cm"># Auto-routing, gateway picks the model per turn.</span>
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"shop-assistant"</span>,
     instructions=<span class="str">"You are a friendly pet shop assistant."</span>,
@@ -2514,27 +2902,27 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
   <p>The gateway echoes its routing decision on every response. Useful for tracing and dashboards.</p>
   <table class="param-table">
     <tr><th>Header</th><th>Type</th><th>Example</th></tr>
-    <tr><td>x-portkey-router-mode</td><td>string</td><td><code>modest</code></td></tr>
-    <tr><td>x-portkey-router-complexity</td><td>string</td><td><code>medium</code></td></tr>
-    <tr><td>x-portkey-router-domain</td><td>string</td><td><code>general</code></td></tr>
-    <tr><td>x-portkey-router-picker</td><td>string</td><td><code>category</code> · <code>pareto</code></td></tr>
-    <tr><td>x-portkey-router-pool-size-before</td><td>number</td><td><code>20</code></td></tr>
-    <tr><td>x-portkey-router-pool-size-after</td><td>number</td><td><code>14</code></td></tr>
-    <tr><td>x-portkey-router-attempts</td><td>list</td><td><code>claude-sonnet-4-6@anthropic:200</code></td></tr>
-    <tr><td>x-portkey-router-handover</td><td>string</td><td><code>none</code> · <code>injected</code></td></tr>
-    <tr><td>x-portkey-budget-state</td><td>string</td><td><code>ok</code> · <code>warn</code></td></tr>
-    <tr><td>x-portkey-cache-status</td><td>string</td><td><code>HIT</code> · <code>MISS</code> · <code>DISABLED</code></td></tr>
-    <tr><td>x-portkey-trace-id</td><td>uuid</td><td>—</td></tr>
+    <tr><td>x-aura-router-mode</td><td>string</td><td><code>modest</code></td></tr>
+    <tr><td>x-aura-router-complexity</td><td>string</td><td><code>medium</code></td></tr>
+    <tr><td>x-aura-router-domain</td><td>string</td><td><code>general</code></td></tr>
+    <tr><td>x-aura-router-picker</td><td>string</td><td><code>category</code> · <code>pareto</code></td></tr>
+    <tr><td>x-aura-router-pool-size-before</td><td>number</td><td><code>20</code></td></tr>
+    <tr><td>x-aura-router-pool-size-after</td><td>number</td><td><code>14</code></td></tr>
+    <tr><td>x-aura-router-attempts</td><td>list</td><td><code>claude-sonnet-4-6@anthropic:200</code></td></tr>
+    <tr><td>x-aura-router-handover</td><td>string</td><td><code>none</code> · <code>injected</code></td></tr>
+    <tr><td>x-aura-budget-state</td><td>string</td><td><code>ok</code> · <code>warn</code></td></tr>
+    <tr><td>x-aura-cache-status</td><td>string</td><td><code>HIT</code> · <code>MISS</code> · <code>DISABLED</code></td></tr>
+    <tr><td>x-aura-trace-id</td><td>uuid</td><td><code>3a7f1b9e&#8230;</code></td></tr>
   </table>
 
   <a class="anchor" id="smart-tips"></a>
   <h2>Tips &amp; gotchas</h2>
   <ul>
-    <li><strong>Handover</strong> — when the router picks a different model between turns in the same <code>session_id</code>, the gateway injects a one-line system note so the new model keeps prior context. Always pass <code>metadata.session_id</code> for multi-turn agents.</li>
-    <li><strong>Cooldown</strong> — 429/503 from a candidate temporarily removes it from the pool (default 15s, honoring upstream <code>Retry-After</code> up to 5 min).</li>
-    <li><strong>Semantic cache</strong> — cosine ≥ 0.95 hits on near-duplicate prompts. Streams and tool calls bypass cache by design. Enable via <code>conf.cache.semantic.enabled = true</code>.</li>
-    <li><strong>Streaming tool calls</strong> — current versions of Smart Inference forward provider chunks 1:1. If you stream <em>and</em> use tools, aggregate tool_call argument fragments client-side until <code>finish_reason="tool_calls"</code>.</li>
-    <li><strong>Budgets</strong> — gated by <code>budgets.enabled</code>. When on, requests are pre-checked against the bearer's <code>budget_usd</code> and the integration's session/project caps.</li>
+    <li><strong>Handover</strong>, when the router picks a different model between turns in the same <code>session_id</code>, the gateway injects a one-line system note so the new model keeps prior context. Always pass <code>metadata.session_id</code> for multi-turn agents.</li>
+    <li><strong>Cooldown</strong>, 429/503 from a candidate temporarily removes it from the pool (default 15s, honoring upstream <code>Retry-After</code> up to 5 min).</li>
+    <li><strong>Semantic cache</strong>, cosine ≥ 0.95 hits on near-duplicate prompts. Streams and tool calls bypass cache by design. Enable via <code>conf.cache.semantic.enabled = true</code>.</li>
+    <li><strong>Streaming tool calls</strong>, current versions of Aura forward provider chunks 1:1. If you stream <em>and</em> use tools, aggregate tool_call argument fragments client-side until <code>finish_reason="tool_calls"</code>.</li>
+    <li><strong>Budgets</strong>, gated by <code>budgets.enabled</code>. When on, requests are pre-checked against the bearer's <code>budget_usd</code> and the integration's session/project caps.</li>
   </ul>
 
 </section>
@@ -2545,7 +2933,7 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
 
   <a class="anchor" id="rs-intro"></a>
   <h1>Continuum Research</h1>
-  <p class="section-intro">The mechanisms behind reliable agents at scale — what makes Continuum more than a thin LLM wrapper. Each topic links a runtime concern to the module that implements it, with citations to the source files.</p>
+  <p class="section-intro">The mechanisms behind reliable agents at scale, what makes Continuum more than a thin LLM wrapper. Each topic links a runtime concern to the module that implements it, with citations to the source files.</p>
 
   <div class="hero-badges" style="margin-bottom: 24px;">
     <span class="badge badge-purple">Internals</span>
@@ -2558,9 +2946,9 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
   <p>Continuum is a runtime, not a framework. Four principles guide every module:</p>
   <ol>
     <li><strong>Code-first, no YAML.</strong> Agents are Python dataclasses. The compiler is your friend.</li>
-    <li><strong>Async-native.</strong> Every I/O hop is non-blocking — LLM, MCP tools, Redis, vector store, Langfuse.</li>
+    <li><strong>Async-native.</strong> Every I/O hop is non-blocking, LLM, MCP tools, Redis, vector store, Langfuse.</li>
     <li><strong>Protocol-based abstractions.</strong> Replace any layer (LLM, memory, session, observability) by swapping the protocol implementation. No deep inheritance trees.</li>
-    <li><strong>Trace everything.</strong> Auto-tracing isn't a feature — it's a constraint. If a behaviour can't be traced, it shouldn't ship.</li>
+    <li><strong>Trace everything.</strong> Auto-tracing isn't a feature, it's a constraint. If a behaviour can't be traced, it shouldn't ship.</li>
   </ol>
 
   <a class="anchor" id="rs-tool-attention"></a>
@@ -2571,14 +2959,14 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
     <tr><th>Field</th><th>Type</th><th>Default</th><th>Effect</th></tr>
     <tr><td>k</td><td>int</td><td>3</td><td>How many tools to promote per turn</td></tr>
     <tr><td>min_tools</td><td>int</td><td>5</td><td>Skip attention when the agent has fewer tools than this</td></tr>
-    <tr><td>NEED_TOOL fallback</td><td>—</td><td>auto</td><td>If the LLM signals a missing tool, expand the candidate set and retry</td></tr>
+    <tr><td>NEED_TOOL fallback</td><td>enum</td><td>auto</td><td>If the LLM signals a missing tool, expand the candidate set and retry</td></tr>
   </table>
 
   <div class="callout callout-tip">
     <strong>Optional dependency.</strong> Tool Attention requires <code>sentence-transformers</code>, which is not installed by default. Install it with <code>pip install -e ".[embeddings]"</code> or <code>pip install sentence-transformers</code>. If not installed, tool-attention is silently disabled and all tools are loaded instead.
   </div>
 
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
 
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"ops"</span>,
@@ -2623,7 +3011,7 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="rs-model-tier"></a>
   <h2>Smart layer · model_tier routing</h2>
-  <p>An alternative to Smart Inference's gateway-side router — Continuum can route inline via <code>RouterAgent(routing_strategy="model_tier")</code>. A tier classifier (small LLM or heuristic) reads each prompt and dispatches to one of several pre-defined model tiers.</p>
+  <p>An alternative to Aura's gateway-side router, Continuum can route inline via <code>RouterAgent(routing_strategy="model_tier")</code>. A tier classifier (small LLM or heuristic) reads each prompt and dispatches to one of several pre-defined model tiers.</p>
   <p>When <code>SMART_LAYER_ENABLED=true</code> and the strategy is <code>model_tier</code>, the router:</p>
   <ol>
     <li>Runs the tier classifier on the prompt → returns <code>cheap</code> / <code>mid</code> / <code>quality</code></li>
@@ -2638,7 +3026,7 @@ agent = <span class="cls">BaseAgent</span>(
   <table>
     <tr><th>Classifier</th><th>Where it runs</th><th>Best for</th></tr>
     <tr><td><code>light_only</code></td><td>regex + length heuristics</td><td>zero-latency baseline; never calls an LLM</td></tr>
-    <tr><td><code>qwen</code></td><td>HuggingFace Router API — <code>Qwen3-4B-Instruct</code></td><td>cloud routing without spinning a model</td></tr>
+    <tr><td><code>qwen</code></td><td>HuggingFace Router API, <code>Qwen3-4B-Instruct</code></td><td>cloud routing without spinning a model</td></tr>
     <tr><td><code>qwen_local</code></td><td>local OpenAI-compatible endpoint (MLX, vLLM)</td><td>air-gapped or zero-cost</td></tr>
   </table>
   <p>Set <code>LLM_ROUTE_TIER_CLASSIFIER_HEURISTIC_SHORTCUT=false</code> to skip the keyword shortcut and always run the classifier LLM.</p>
@@ -2651,7 +3039,7 @@ agent = <span class="cls">BaseAgent</span>(
     <tr><td><code>FULL</code></td><td>Verbatim message array</td><td>Specialist needs all detail</td></tr>
     <tr><td><code>SUMMARY</code></td><td>LLM-generated summary + open question</td><td>Long conversations, narrow specialist</td></tr>
     <tr><td><code>RECENT_N</code></td><td>Last N turns only</td><td>Topic just changed; old context is noise</td></tr>
-    <tr><td><code>HYBRID</code></td><td>Summary of older turns + last N verbatim</td><td>Default — best balance for most flows</td></tr>
+    <tr><td><code>HYBRID</code></td><td>Summary of older turns + last N verbatim</td><td>Default, best balance for most flows</td></tr>
   </table>
   <p>Continuum also tracks handoff <strong>depth</strong>, detects <strong>cycles</strong> (A→B→A→B), and emits <code>HANDOFF_RETURN</code> events when control returns to a parent agent.</p>
 
@@ -2661,8 +3049,8 @@ agent = <span class="cls">BaseAgent</span>(
   <table>
     <tr><th>Scope</th><th>Keyed by</th><th>Reach</th><th>Multi-tenant safe?</th></tr>
     <tr><td><code>USER</code></td><td>user_id</td><td>Per-user across all agents</td><td>✓ default</td></tr>
-    <tr><td><code>AGENT</code></td><td>agent_name</td><td>Per-agent across all users</td><td>One-way — shared by users</td></tr>
-    <tr><td><code>SHARED</code></td><td>—</td><td>Global knowledge base</td><td>No — explicitly shared</td></tr>
+    <tr><td><code>AGENT</code></td><td>agent_name</td><td>Per-agent across all users</td><td>One-way, shared by users</td></tr>
+    <tr><td><code>SHARED</code></td><td>shared_key</td><td>Global knowledge base</td><td>No, explicitly shared</td></tr>
     <tr><td><code>CONVERSATION</code></td><td>conversation_id</td><td>Ephemeral, single thread</td><td>✓</td></tr>
   </table>
 
@@ -2670,27 +3058,21 @@ agent = <span class="cls">BaseAgent</span>(
   <h2>IntelligentMemoryClient</h2>
   <p>A drop-in replacement for the standard <code>MemoryClient</code> that adds three behaviours:</p>
   <ul>
-    <li><strong>Adaptive extraction</strong> — uses a per-agent extraction prompt to filter what gets stored (e.g. "only pet preferences, never one-off cart actions").</li>
-    <li><strong>Relevance re-ranking</strong> — re-ranks recalled memories using a small LLM scorer before injecting them into the prompt.</li>
-    <li><strong>Deduplication</strong> — merges semantically equivalent memories to prevent drift.</li>
+    <li><strong>Adaptive extraction</strong>, uses a per-agent extraction prompt to filter what gets stored (e.g. "only pet preferences, never one-off cart actions").</li>
+    <li><strong>Relevance re-ranking</strong>, re-ranks recalled memories using a small LLM scorer before injecting them into the prompt.</li>
+    <li><strong>Deduplication</strong>, merges semantically equivalent memories to prevent drift.</li>
   </ul>
 
   <a class="anchor" id="rs-pii"></a>
   <h2>PII filtering on memory writes</h2>
-  <p>Continuum does not ship a built-in PII scrubber — you supply your own redaction logic via <code>pre_store_filter</code>, which runs over extracted facts before they are written to memory. Return the facts with PII masked, or drop them entirely. With no filter configured, facts are stored unmodified.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> re
-<span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
+  <p>Before a memory is stored, Continuum can run it through a PII scrubber that redacts emails, phone numbers, SSNs, and credit cards. Configure via the memory client:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.memory <span class="kw">import</span> <span class="cls">MemoryClient</span>, <span class="cls">PIIPolicy</span>
 
-<span class="cm"># pre_store_filter — runs over extracted facts; mask or drop PII before storage</span>
-<span class="kw">def</span> <span class="fn">redact_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
-    <span class="kw">return</span> [re.<span class="fn">sub</span>(<span class="str">r'\d{3}-\d{2}-\d{4}'</span>, <span class="str">'[SSN]'</span>, f) <span class="kw">for</span> f <span class="kw">in</span> facts]
-
-memory_config = <span class="cls">AgentMemoryConfig</span>(store_memories=<span class="cls">True</span>, pre_store_filter=redact_pii)</pre></div>
-  <p>To redact model <em>responses</em> (not memory), attach callables to <code>output_scanners</code> on <code>AgentConfig</code> (see <strong>Input / Output Scanning</strong>). Both are bring-your-own hooks: with none configured, no redaction occurs.</p>
+memory = <span class="cls">MemoryClient</span>(pii_policy=<span class="cls">PIIPolicy</span>.REDACT)</pre></div>
 
   <a class="anchor" id="rs-artifacts"></a>
   <h2>Run artifacts</h2>
-  <p>MCP tools can return <code>structuredContent</code> — JSON payloads alongside their text output. Continuum captures these as run artifacts, exposing them on <code>AgentResponse.artifacts</code> for the application to consume (UI widgets, downstream pipelines, audit logs).</p>
+  <p>MCP tools can return <code>structuredContent</code>, JSON payloads alongside their text output. Continuum captures these as run artifacts, exposing them on <code>AgentResponse.artifacts</code> for the application to consume (UI widgets, downstream pipelines, audit logs).</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>response = <span class="kw">await</span> runner.<span class="fn">run</span>(agent, <span class="str">"checkout"</span>, user_id=<span class="str">"alice"</span>)
 <span class="kw">for</span> art <span class="kw">in</span> response.artifacts:
     <span class="fn">print</span>(art.tool_name, art.structured_content)
@@ -2700,15 +3082,15 @@ memory_config = <span class="cls">AgentMemoryConfig</span>(store_memories=<span 
   <h2>Evaluation framework</h2>
   <p>Continuum ships with two opt-in eval stacks (<code>pip install -e ".[eval]"</code>):</p>
   <ul>
-    <li><strong>DeepEval</strong> — criterion-based evaluation with customisable metrics (faithfulness, correctness, toxicity).</li>
-    <li><strong>RAGAS</strong> — RAG-specific metrics (context precision, recall, answer relevance).</li>
-    <li><strong>EvaluatorAgent</strong> — a specialised <code>BaseAgent</code> whose job is grading other agents' outputs.</li>
+    <li><strong>DeepEval</strong>, criterion-based evaluation with customisable metrics (faithfulness, correctness, toxicity).</li>
+    <li><strong>RAGAS</strong>, RAG-specific metrics (context precision, recall, answer relevance).</li>
+    <li><strong>EvaluatorAgent</strong>, a specialised <code>BaseAgent</code> whose job is grading other agents' outputs.</li>
   </ul>
 
   <a class="anchor" id="rs-golden"></a>
   <h2>Golden datasets from Langfuse</h2>
-  <p>Build regression test sets directly from production traces. The <code>continuum.evaluation.golden</code> module pulls traces matching a filter (e.g. tagged <code>good_response</code> in the Langfuse UI) and materialises them as a pytest dataset.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.evaluation <span class="kw">import</span> <span class="fn">build_golden_dataset</span>
+  <p>Build regression test sets directly from production traces. The <code>orchestrator.evaluation.golden</code> module pulls traces matching a filter (e.g. tagged <code>good_response</code> in the Langfuse UI) and materialises them as a pytest dataset.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.evaluation <span class="kw">import</span> <span class="fn">build_golden_dataset</span>
 
 dataset = <span class="kw">await</span> <span class="fn">build_golden_dataset</span>(
     project=<span class="str">"shop-assistant"</span>,
@@ -2725,23 +3107,23 @@ dataset = <span class="kw">await</span> <span class="fn">build_golden_dataset</s
 
   <a class="anchor" id="ex-intro"></a>
   <h1>Example · Pet Shop Assistant</h1>
-  <p class="section-intro">An end-to-end walkthrough: an agent backed by an MCP shop server, routed through Smart Inference, with Langfuse tracing and Redis-backed sessions. Copy the snippets in order and you'll have a working chat UI in under 10 minutes.</p>
+  <p class="section-intro">An end-to-end walkthrough: an agent backed by an MCP shop server, routed through Aura, with Langfuse tracing and Redis-backed sessions. Copy the snippets in order and you'll have a working chat UI in under 10 minutes.</p>
 
   <div class="hero-badges" style="margin-bottom: 20px;">
     <span class="badge badge-blue">BaseAgent</span>
     <span class="badge badge-green">MCP tools</span>
-    <span class="badge badge-purple">Smart Inference</span>
+    <span class="badge badge-purple">Aura</span>
     <span class="badge badge-blue">FastAPI Web UI</span>
   </div>
 
   <div class="callout callout-tip">
-    <strong>Source.</strong> The complete code lives at <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
+    <strong>Source.</strong> The complete code lives at <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank" rel="noopener"><code>playground/gateway-local-shop/</code></a>. This page is the annotated tour.
   </div>
 
   <a class="anchor" id="ex-arch"></a>
   <h2>Architecture</h2>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>┌──────────────┐    HTTP    ┌────────────────┐    OpenAI    ┌──────────────────┐
-│  Browser     │ ─────────► │  FastAPI UI    │              │  Smart Inference │
+│  Browser     │ ─────────► │  FastAPI UI    │              │  Aura            │
 │  /chat       │   POST     │  (web.py :8081)│              │  Gateway :8787   │
 └──────────────┘            └────────┬───────┘              └────────┬─────────┘
                                      │                               │
@@ -2774,11 +3156,11 @@ Session/memory:  Redis (:6380)  ·  Milvus (:19530)</pre></div>
   <a class="anchor" id="ex-infra"></a>
   <h2>2 · Spin up infra</h2>
   <ol class="steps">
-    <li><strong>Continuum stack</strong> — Redis, Milvus, Langfuse, ClickHouse, Postgres, MinIO
+    <li><strong>Continuum stack</strong>, Redis, Milvus, Langfuse, ClickHouse, Postgres, MinIO
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>cd continuum
-continuum up full</pre></div>
+docker compose up -d redis-sdk milvus milvus-etcd postgres clickhouse minio langfuse-web langfuse-worker</pre></div>
     </li>
-    <li><strong>Smart Inference gateway</strong> — build, then run from Docker (sharing Continuum's Langfuse Redis)
+    <li><strong>Aura gateway</strong>, build, then run from Docker (sharing Continuum's Langfuse Redis)
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>cd ../continuum-backend-smart-inference
 nvm use 22 &amp;&amp; npm install &amp;&amp; npm run build
 docker compose up -d gateway</pre></div>
@@ -2787,7 +3169,7 @@ docker compose up -d gateway</pre></div>
 
   <a class="anchor" id="ex-env"></a>
   <h2>3 · Configure env</h2>
-  <p><strong>Continuum</strong> (<code>continuum/.env</code>) — point at the gateway and the local Langfuse:</p>
+  <p><strong>Continuum</strong> (<code>continuum/.env</code>), point at the gateway and the local Langfuse:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># LLM / routing</span>
 SMART_GATEWAY_URL=http://localhost:8787/v1
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key
@@ -2804,7 +3186,7 @@ SESSION_REDIS_PORT=6380
 VECTOR_STORE_PROVIDER=milvus
 MILVUS_PORT=19530</pre></div>
 
-  <p><strong>Smart Inference</strong> (<code>continuum-backend-smart-inference/.env</code>) — real provider keys:</p>
+  <p><strong>Aura</strong> (<code>continuum-backend-smart-inference/.env</code>), real provider keys:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>OPENAI_API_KEY=sk-…
 ANTHROPIC_API_KEY=sk-ant-…
 GEMINI_API_KEY=AIza…
@@ -2846,12 +3228,12 @@ _carts: <span class="cls">dict</span>[<span class="cls">str</span>, <span class=
 
   <a class="anchor" id="ex-agent"></a>
   <h2>5 · Agent + config</h2>
-  <p>The agent connects to the MCP server, defines memory + session policy, and uses Smart Inference auto-routing.</p>
+  <p>The agent connects to the MCP server, defines memory + session policy, and uses Aura auto-routing.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># playground/gateway-local-shop/agent.py (excerpt)</span>
-<span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">AgentMemoryConfig</span>, <span class="cls">AgentMemoryScope</span>, \
+<span class="kw">from</span> orchestrator <span class="kw">import</span> <span class="cls">AgentConfig</span>, <span class="cls">AgentMemoryConfig</span>, <span class="cls">AgentMemoryScope</span>, \
     <span class="cls">AgentRunner</span>, <span class="cls">BaseAgent</span>, <span class="cls">MCPServerStreamableHttp</span>, <span class="cls">ToolExecutor</span>
-<span class="kw">from</span> continuum.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
-<span class="kw">from</span> continuum.tools.types <span class="kw">import</span> <span class="cls">ToolContextConfig</span>, <span class="cls">ToolContextVariable</span>
+<span class="kw">from</span> orchestrator.tools.tool_attention.config <span class="kw">import</span> <span class="cls">ToolAttentionConfig</span>
+<span class="kw">from</span> orchestrator.tools.types <span class="kw">import</span> <span class="cls">ToolContextConfig</span>, <span class="cls">ToolContextVariable</span>
 
 mcp_server = <span class="cls">MCPServerStreamableHttp</span>(
     params={<span class="str">"url"</span>: <span class="str">"http://localhost:8888/mcp"</span>},
@@ -2905,7 +3287,7 @@ agent = <span class="cls">BaseAgent</span>(
 asyncio.<span class="fn">run</span>(main())</pre></div>
 
   <h3>FastAPI Web UI</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># web.py — POST /chat returns the agent's reply as JSON</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># web.py, POST /chat returns the agent's reply as JSON</span>
 <span class="op">@</span>app.<span class="fn">post</span>(<span class="str">"/chat"</span>)
 <span class="kw">async def</span> <span class="fn">chat</span>(req: <span class="cls">ChatRequest</span>):
     response = <span class="kw">await</span> shop_agent.<span class="fn">chat</span>(
@@ -2919,7 +3301,7 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
 
   <a class="anchor" id="ex-run"></a>
   <h2>7 · Run a conversation</h2>
-  <p>Type any of these into the chat — the agent will route to the right tool automatically.</p>
+  <p>Type any of these into the chat, the agent will route to the right tool automatically.</p>
   <table>
     <tr><th>Prompt</th><th>What the agent does</th></tr>
     <tr><td><em>show me dog toys</em></td><td><code>search_products(animal="dog", category="toys")</code> → product list</td></tr>
@@ -2935,10 +3317,10 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
   <a class="anchor" id="ex-customise"></a>
   <h2>Make it yours</h2>
   <ul>
-    <li><strong>Swap the domain</strong> — replace the MCP server with one that exposes your tools (Slack, Jira, internal APIs). The agent code doesn't change.</li>
-    <li><strong>Tighten the tier</strong> — set <code>gateway_mode="strict"</code> to drop latency to ~2–4s/turn (cheap-tier models).</li>
-    <li><strong>Persist memories</strong> — keep <code>memory_config</code> on and the agent will remember per-user facts across sessions.</li>
-    <li><strong>Add a workflow</strong> — wrap the agent in a <a onclick="showSection('build'); setTimeout(()=>scrollToAnchor('build-workflows'), 80)">RouterAgent</a> with a billing-specialist sibling and a triage agent.</li>
+    <li><strong>Swap the domain</strong>, replace the MCP server with one that exposes your tools (Slack, Jira, internal APIs). The agent code doesn't change.</li>
+    <li><strong>Tighten the tier</strong>, set <code>gateway_mode="strict"</code> to drop latency to ~2–4s/turn (cheap-tier models).</li>
+    <li><strong>Persist memories</strong>, keep <code>memory_config</code> on and the agent will remember per-user facts across sessions.</li>
+    <li><strong>Add a workflow</strong>, wrap the agent in a <a onclick="showSection('build'); setTimeout(()=>scrollToAnchor('build-workflows'), 80)">RouterAgent</a> with a billing-specialist sibling and a triage agent.</li>
   </ul>
 
 </section>
@@ -2952,24 +3334,50 @@ asyncio.<span class="fn">run</span>(main())</pre></div>
   <a class="anchor" id="com-contributing"></a>
   <h2>Contributing</h2>
   <ol class="steps">
-    <li><strong>Fork &amp; clone</strong> — work in a feature branch</li>
+    <li><strong>Fork &amp; clone</strong>, work in a feature branch</li>
     <li><strong>Install dev dependencies</strong>
 <pre>pip install -e <span class="str">".[dev,temporal,eval]"</span></pre>
     </li>
-    <li><strong>Write tests</strong> — unit + integration, no mocking the database
+    <li><strong>Write tests</strong>, unit + integration, no mocking the database
 <pre>pytest tests/ -v</pre>
     </li>
     <li><strong>Lint &amp; type-check</strong>
 <pre>ruff check src/
 mypy src/</pre>
     </li>
-    <li><strong>Submit a PR</strong> — describe what changed and why, reference the relevant docs section</li>
+    <li><strong>Submit a PR</strong>, describe what changed and why, reference the relevant docs section</li>
   </ol>
 
   <div class="callout callout-warn">
-    <strong>Integration tests over mocks:</strong> Continuum integration tests hit real services (Redis, Qdrant/Milvus). Run <code>continuum up</code> before running the test suite.
+    <strong>Integration tests over mocks:</strong> Continuum integration tests hit real services (Redis, Qdrant/Milvus). Run <code>docker compose up -d</code> before running the test suite.
   </div>
 
+
+</section>
+
+<!-- ═══════════════════ PROVENANCE · COMING SOON ═══════════════════ -->
+<section class="page-section" id="sec-provenance">
+
+  <a class="anchor" id="prov-intro"></a>
+  <div class="cs">
+    <span class="cs-badge">Coming soon · Continuum Suite · Proprietary</span>
+    <h1 class="grad-text">Provenance</h1>
+    <p class="cs-sub">The trust layer for agents in production. Prompt versioning, guardrails, PII redaction, and policy, so every decision your agents make is governed, observable, and audit-ready.</p>
+
+    <a class="anchor" id="prov-capabilities"></a>
+    <div class="cs-pills">
+      <span class="cs-pill">Prompt Management</span>
+      <span class="cs-pill">Guardrails</span>
+      <span class="cs-pill">PII Redaction</span>
+      <span class="cs-pill">Policy &amp; Governance</span>
+      <span class="cs-pill">Audit Trails</span>
+      <span class="cs-pill">Access Control</span>
+    </div>
+
+    <a class="anchor" id="prov-early"></a>
+    <a class="cs-cta" href="https://shyftlabs.io/" target="_blank" rel="noopener">Request early access →</a>
+    <p style="margin-top:22px; font-size:13px; color:var(--text-mute);">Need governance sooner? <a href="https://shyftlabs.io/" target="_blank" rel="noopener">Talk to the team at Shyftlabs</a>. Provenance is rolling out to design partners first.</p>
+  </div>
 
 </section>
 
@@ -2977,13 +3385,22 @@ mypy src/</pre>
 </div>
 
 <footer>
-  <span>Continuum v0.2.0 · Shyftlabs</span>
-  <span>Python 3.13+ · <a href="https://github.com/shyftlabs/continuum">GitHub</a></span>
+  <div class="footer-brand">
+    <a href="https://continuum.shyftlabs.io" target="_blank" rel="noopener" aria-label="Continuum"><img class="footer-logo" src="assets/continuum-logo.png" alt="Continuum" /></a>
+    <span class="footer-divider" aria-hidden="true"></span>
+    <span class="footer-meta">v1.0.0 · Built by</span>
+    <a class="footer-built" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs"><img class="footer-shyft" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" /></a>
+  </div>
+  <div class="footer-social">
+    <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" aria-label="Continuum on GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1-.02-1.96-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.07.78 2.16 0 1.56-.01 2.82-.01 3.2 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg></a>
+    <a href="https://www.linkedin.com/company/shyftlabsio/" target="_blank" rel="noopener" aria-label="Shyftlabs on LinkedIn"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.8 0 0 .78 0 1.74v20.52C0 23.22.8 24 1.77 24h20.45c.97 0 1.78-.78 1.78-1.74V1.74C24 .78 23.2 0 22.22 0z"/></svg></a>
+    <a href="https://x.com/ShyftLabs_io" target="_blank" rel="noopener" aria-label="Shyftlabs on X"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+  </div>
 </footer>
 
 <!-- ═══════════════════ JS ═══════════════════ -->
 <script>
-  const sections = ['home', 'build', 'run', 'smart', 'components', 'integrations', 'research', 'examples', 'community'];
+  const sections = ['home', 'framework', 'build', 'run', 'smart', 'components', 'integrations', 'research', 'examples', 'community', 'provenance'];
 
   // ───── Mobile drawer ─────
   function isMobile() { return window.innerWidth <= 768; }
@@ -3025,31 +3442,47 @@ mypy src/</pre>
     }
   });
 
+  // Continuum Framework owns all of these areas; Aura and Provenance are standalone products.
+  const FRAMEWORK_AREAS = ['framework', 'build', 'run', 'components', 'integrations', 'research', 'examples', 'community'];
+
   function showSection(name) {
-    // Hide all sections
+    // Hide every section + its sidebar, and the framework area-nav
     sections.forEach(s => {
       const sec = document.getElementById('sec-' + s);
       if (sec) sec.classList.remove('active');
       const sb = document.getElementById('sb-' + s);
       if (sb) sb.style.display = 'none';
     });
+    const areaNav = document.getElementById('sb-framework-areas');
+    if (areaNav) areaNav.style.display = 'none';
 
-    // Show target
+    // Show the target section + its sub-section sidebar
     const sec = document.getElementById('sec-' + name);
     if (sec) sec.classList.add('active');
     const sb = document.getElementById('sb-' + name);
     if (sb) sb.style.display = 'block';
 
-    // Update nav tabs
-    document.querySelectorAll('.nav-tab').forEach((t, i) => {
-      t.classList.toggle('active', sections[i] === name);
+    // Framework areas share one persistent area-nav (the framework's sub-sections)
+    if (areaNav && FRAMEWORK_AREAS.includes(name)) {
+      areaNav.style.display = 'block';
+      areaNav.querySelectorAll('.area-link').forEach(l =>
+        l.classList.toggle('active', l.dataset.area === name));
+    }
+
+    // Product switcher follows the PRODUCT: Framework=all areas, Aura=smart, Provenance=provenance
+    const currentProduct = name === 'smart' ? 'smart' : name === 'provenance' ? 'provenance' : (FRAMEWORK_AREAS.includes(name) ? 'framework' : null);
+    document.querySelectorAll('.product-tab').forEach((t) => {
+      const on = t.dataset.section === currentProduct;
+      t.classList.toggle('active', on);
+      if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
 
-    // Scroll to top
+    // Reset scroll + re-arm scroll-reveal for the newly shown content
     document.getElementById('main').scrollTop = 0;
     window.scrollTo(0, 0);
+    if (window.armReveal) window.armReveal();
 
-    // Update sidebar active link
+    // Activate the first sub-section link
     const links = document.querySelectorAll('#sb-' + name + ' .sidebar-link');
     if (links.length > 0) {
       links.forEach(l => l.classList.remove('active'));
@@ -3059,18 +3492,22 @@ mypy src/</pre>
     closeSidebarIfMobile();
   }
 
+  // Parse the exact anchor id out of a sidebar link's onclick (avoids substring prefix bugs)
+  function linkAnchor(l) {
+    const m = (l.getAttribute('onclick') || '').match(/scrollToAnchor\('([^']+)'\)/);
+    return m ? m[1] : null;
+  }
+
   function scrollToAnchor(anchorId) {
     const el = document.getElementById(anchorId);
     if (el) {
       const y = el.getBoundingClientRect().top + window.scrollY - 70;
       window.scrollTo({ top: y, behavior: 'smooth' });
     }
-    // Update sidebar active
+    // Update sidebar active (exact match; leave area-nav links, which use showSection, untouched)
     document.querySelectorAll('.sidebar-link').forEach(l => {
-      l.classList.remove('active');
-      if (l.getAttribute('onclick') && l.getAttribute('onclick').includes(anchorId)) {
-        l.classList.add('active');
-      }
+      const a = linkAnchor(l);
+      if (a !== null) l.classList.toggle('active', a === anchorId);
     });
 
     closeSidebarIfMobile();
@@ -3081,29 +3518,119 @@ mypy src/</pre>
     const wrapper = btn.closest('.code-wrapper') || btn.parentElement;
     const pre = wrapper.querySelector('pre') || btn.parentElement;
     const text = pre.innerText.trim();
+    if (!navigator.clipboard) return;
     navigator.clipboard.writeText(text).then(() => {
       btn.textContent = 'copied!';
       setTimeout(() => btn.textContent = 'copy', 1500);
-    });
+    }).catch(() => {});
   }
 
-  // Scrollspy — update sidebar as user scrolls
+  // Scrollspy, update sidebar as user scrolls
   window.addEventListener('scroll', () => {
-    const anchors = document.querySelectorAll('.anchor');
+    // Reading-progress bar
+    const bar = document.getElementById('read-progress');
+    if (bar) {
+      const doc = document.documentElement;
+      const max = (doc.scrollHeight - window.innerHeight) || 1;
+      bar.style.width = Math.max(0, Math.min(100, (window.scrollY / max) * 100)) + '%';
+    }
+    const anchors = document.querySelectorAll('.page-section.active .anchor');
     let current = null;
     anchors.forEach(a => {
       if (window.scrollY >= a.offsetTop - 90) current = a.id;
     });
     if (current) {
       document.querySelectorAll('.sidebar-link').forEach(l => {
-        const oc = l.getAttribute('onclick') || '';
-        l.classList.toggle('active', oc.includes(current));
+        const a = linkAnchor(l);
+        if (a !== null) l.classList.toggle('active', a === current);
       });
     }
   });
 
-  // Show home sidebar on load
-  document.getElementById('sb-home').style.display = 'block';
+  // Suite cards (role=button), Enter/Space activate, like a real button
+  document.querySelectorAll('.suite-card').forEach(card => {
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+    });
+  });
+
+  // href-less onclick anchors (sidebar TOC + inline cross-links), make them keyboard-operable
+  document.querySelectorAll('a[onclick]:not([href])').forEach(a => {
+    if (!a.hasAttribute('tabindex')) a.setAttribute('tabindex', '0');
+    if (!a.hasAttribute('role')) a.setAttribute('role', 'link');
+    a.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); }
+    });
+  });
+
+  // ───── Minimal constellation background (vanilla canvas, monochrome) ─────
+  (function constellation() {
+    const canvas = document.getElementById('bg-canvas');
+    if (!canvas) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const ctx = canvas.getContext('2d');
+    let w, h, dpr, pts = [], raf, t;
+    function size() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.width = Math.floor(innerWidth * dpr);
+      h = canvas.height = Math.floor(innerHeight * dpr);
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
+      const count = Math.max(18, Math.min(60, Math.round(innerWidth * innerHeight / 28000)));
+      pts = Array.from({ length: count }, () => ({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.16 * dpr,
+        vy: (Math.random() - 0.5) * 0.16 * dpr,
+        r: (Math.random() * 1.1 + 0.6) * dpr,
+      }));
+    }
+    function frame() {
+      ctx.clearRect(0, 0, w, h);
+      const link = 132 * dpr;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0 || p.x > w) p.vx *= -1;
+        if (p.y < 0 || p.y > h) p.vy *= -1;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(24,28,38,0.28)'; ctx.fill();
+        for (let j = i + 1; j < pts.length; j++) {
+          const q = pts[j], dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
+          if (d < link) {
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = 'rgba(48,56,74,' + (0.11 * (1 - d / link)).toFixed(3) + ')';
+            ctx.lineWidth = dpr * 0.6; ctx.stroke();
+          }
+        }
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    size(); frame();
+    window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(size, 200); });
+  })();
+
+  // ───── Scroll reveal (IntersectionObserver; classes added by JS so no-JS stays visible) ─────
+  (function () {
+    if ((window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) || !('IntersectionObserver' in window)) {
+      window.armReveal = function () {}; return;
+    }
+    const SEL = 'h2, .cards, .suite, .code-wrapper, .callout, table, .steps, .workflow-grid, .cs-pills, .proprietary, .ph-meta, .stats, .flow, .cta-band';
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { rootMargin: '0px 0px -7% 0px', threshold: 0.05 });
+    window.armReveal = function () {
+      const active = document.querySelector('.page-section.active');
+      if (!active) return;
+      active.querySelectorAll(SEL).forEach(el => {
+        el.classList.add('reveal');
+        if (el.getBoundingClientRect().top < innerHeight * 0.92) el.classList.add('in'); // in view: show now
+        else io.observe(el); // below the fold: fade up on scroll
+      });
+    };
+  })();
+
+  // Initialise on the Continuum Framework / Overview view
+  showSection('home');
 </script>
 </body>
 </html>

@@ -21,7 +21,7 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Open LLM provider registry — `register_provider(prefix, factory)` and `register_default_provider(factory)` let new backends extend model-name routing without editing core (`get_provider` now resolves via longest-prefix match against the registry).
 
 ### Changed
-- _Nothing yet._
+- README now renders correctly on the PyPI project page: the logo and all repository links use absolute URLs (PyPI does not resolve repo-relative paths), and the version badge is a dynamic `pypi/v` shield instead of a hardcoded number that drifted out of date.
 
 ### Fixed
 - Docker healthchecks for `qdrant` (now probes `/readyz` over bash `/dev/tcp`, since the image ships no `curl`) and `temporal` (`BIND_ON_IP=0.0.0.0` so the localhost healthcheck can reach the frontend) — both previously reported `unhealthy` while serving correctly.
