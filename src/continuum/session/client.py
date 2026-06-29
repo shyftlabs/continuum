@@ -7,6 +7,7 @@ Provides a high-level API for managing conversations and memory.
 Tracing is handled automatically via the @observe decorator.
 """
 
+import asyncio
 import threading
 from typing import Any
 
@@ -24,6 +25,7 @@ from continuum.session.exceptions import (
     SessionNotFoundError,
 )
 from continuum.session.providers import create_provider, list_providers
+from continuum.session.providers.memory import MemorySessionProvider
 from continuum.session.types import ChatMessage, SessionMetadata
 
 logger = get_logger(__name__)
@@ -120,6 +122,12 @@ class SessionClient:
         self._background_tasks = background_tasks
         self._initialized = False
         self._lock = threading.Lock()
+        # An explicitly supplied provider is trusted as-is — never probed or
+        # swapped for the in-memory fallback. A provider chosen lazily by the
+        # client (the default path) is resolved once on first async use.
+        self._explicit_provider = provider is not None
+        self._provider_resolved = provider is not None
+        self._resolve_lock = asyncio.Lock()
 
         if auto_initialize:
             self.initialize()
@@ -179,8 +187,70 @@ class SessionClient:
         return self._session_config.enabled
 
     def set_provider(self, provider: BaseSessionProvider) -> None:
-        """Set the session provider."""
+        """Set the session provider explicitly (trusted; never probed/swapped)."""
         self._provider = provider
+        self._explicit_provider = True
+        self._provider_resolved = True
+
+    async def _aprovider(self) -> BaseSessionProvider:
+        """Resolve the active session provider, lazily and exactly once.
+
+        On first use, chooses between Redis and the in-memory fallback:
+        connectivity is probed once (not per request), and an unconfigured or
+        unreachable Redis degrades to a non-durable in-memory provider with a
+        single warning. An explicitly injected provider is returned untouched.
+        """
+        if self._provider is not None and self._provider_resolved:
+            return self._provider
+
+        async with self._resolve_lock:
+            if self._provider is not None and self._provider_resolved:
+                return self._provider
+            provider = await self._resolve_provider()
+            self._provider = provider
+            self._provider_resolved = True
+            return provider
+
+    async def _resolve_provider(self) -> BaseSessionProvider:
+        """Pick the concrete provider based on configuration and reachability."""
+        cfg = self._session_config
+
+        # Explicitly requested in-memory provider — chosen, not a degradation.
+        if cfg.provider == "memory":
+            logger.info("Session provider initialized: memory (in-process)")
+            return MemorySessionProvider(cfg)
+
+        # Redis host/credentials not configured — degrade quietly to in-memory.
+        if not cfg.is_configured():
+            return self._make_memory_fallback("Redis is not configured")
+
+        # Configured: build the Redis provider lazily and probe it once.
+        try:
+            redis_provider = create_provider(cfg.provider, cfg)
+        except Exception as e:  # provider class missing (e.g. redis not installed)
+            return self._make_memory_fallback(f"Redis provider unavailable ({e})")
+
+        aping = getattr(redis_provider, "aping", None)
+        reachable = await aping() if aping is not None else True
+        if reachable:
+            logger.info(
+                "Session provider initialized: %s",
+                getattr(redis_provider, "provider_name", cfg.provider),
+            )
+            return redis_provider
+
+        return self._make_memory_fallback("Redis is unreachable")
+
+    def _make_memory_fallback(self, reason: str) -> BaseSessionProvider:
+        """Build the in-memory provider and emit a single degradation warning."""
+        logger.warning(
+            "Session persistence falling back to non-durable in-memory store: %s. "
+            "Sessions will not survive a restart and are not shared across workers. "
+            "Set SESSION_ENABLED=false to silence this, or configure Redis "
+            "(SESSION_REDIS_HOST / SESSION_REDIS_PORT) for durable sessions.",
+            reason,
+        )
+        return MemorySessionProvider(self._session_config)
 
     def _initialize_provider(self) -> None:
         """Initialize the session provider using the registry."""
@@ -230,9 +300,10 @@ class SessionClient:
             if self._initialized:
                 return True
 
-            # Initialize session provider (if not already provided via constructor)
-            if self._session_config.enabled and not self._provider:
-                self._initialize_provider()
+            # NOTE: the session provider is intentionally NOT created here.
+            # Connecting is deferred to first use (_aprovider) so that merely
+            # constructing the client never opens a connection, and a disabled
+            # or unreachable Redis costs no eager connection attempt.
 
             # Initialize memory client from Container (if not provided)
             if not self._memory_client:
@@ -280,7 +351,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            session_id = await self.provider.get_or_create_session(
+            session_id = await (await self._aprovider()).get_or_create_session(
                 session_id=session_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -335,7 +406,7 @@ class SessionClient:
 
         try:
             # Add to short-term memory (via provider)
-            await self.provider.add_message(
+            await (await self._aprovider()).add_message(
                 session_id=session_id,
                 message=message,
                 metadata=metadata,
@@ -449,7 +520,7 @@ class SessionClient:
         """
         try:
             # Get session metadata to extract user_id and agent_id
-            session_metadata = await self.provider.get_session_metadata(session_id)
+            session_metadata = await (await self._aprovider()).get_session_metadata(session_id)
 
             if session_metadata:
                 # Build memory metadata for observability
@@ -578,7 +649,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            messages = await self.provider.get_messages(
+            messages = await (await self._aprovider()).get_messages(
                 session_id=session_id,
                 limit=limit,
             )
@@ -631,7 +702,7 @@ class SessionClient:
 
         try:
             # Get session metadata to extract user_id and agent_id
-            session_metadata = await self.provider.get_session_metadata(session_id)
+            session_metadata = await (await self._aprovider()).get_session_metadata(session_id)
 
             if not session_metadata:
                 logger.warning(f"Session metadata not found: {session_id}")
@@ -678,7 +749,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await self.provider.clear_session(session_id=session_id)
+            result = await (await self._aprovider()).clear_session(session_id=session_id)
             return result
 
         except Exception as e:
@@ -712,7 +783,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await self.provider.delete_session(session_id=session_id)
+            result = await (await self._aprovider()).delete_session(session_id=session_id)
             return result
 
         except Exception as e:
@@ -746,7 +817,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            return await self.provider.get_session_metadata(session_id=session_id)
+            return await (await self._aprovider()).get_session_metadata(session_id=session_id)
 
         except Exception as e:
             logger.error(f"Failed to get session metadata: {e}")
@@ -785,7 +856,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await self.provider.update_session_metadata(session_id, metadata)
+            result = await (await self._aprovider()).update_session_metadata(session_id, metadata)
             if not result:
                 logger.warning(f"Session not found when updating metadata: {session_id}")
             return result

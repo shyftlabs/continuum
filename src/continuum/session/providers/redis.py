@@ -181,6 +181,24 @@ class RedisSessionProvider(BaseSessionProvider):
                 self._initialized = True
                 return False
 
+    async def aping(self) -> bool:
+        """Best-effort connectivity probe — returns False on any failure, never raises.
+
+        Ensures the (lazy) connection pool exists, then issues a single PING.
+        The session client uses this once, on first use, to decide between Redis
+        and the in-memory fallback — so an unreachable Redis costs one quiet probe
+        instead of an error logged on every request.
+        """
+        try:
+            if not self._initialized:
+                self.initialize()
+            if self._redis is None:
+                return False
+            await self._redis.ping()
+            return True
+        except Exception:
+            return False
+
     def _ensure_enabled(self) -> None:
         """Raise error if sessions are not enabled."""
         if not self.is_initialized:

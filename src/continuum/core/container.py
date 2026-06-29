@@ -270,20 +270,20 @@ class Container:
         return self._background_tasks
 
     def _initialize_session_client(self) -> None:
-        """Initialize the session client and provider."""
+        """Initialize the session client.
+
+        The provider is intentionally NOT created here. SessionClient resolves it
+        lazily on first use — probing Redis once and degrading to a non-durable
+        in-memory provider if Redis is disabled, unconfigured, or unreachable —
+        so constructing the container never opens a connection.
+        """
         from continuum.session import SessionClient, SessionConfig
-        from continuum.session.providers import create_provider
 
         config_dict = self._config.session_config or {}
         config = SessionConfig(**config_dict)
 
-        # Create provider from registry
-        provider = create_provider(config.provider, config)
-
-        # Pass the provider to SessionClient
         self._session_client = SessionClient(
             session_config=config,
-            provider=provider,
             background_tasks=self.background_tasks,
         )
         self._session_initialized = True
