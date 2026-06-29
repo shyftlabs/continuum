@@ -36,6 +36,12 @@ class TestParseClaudeVersion:
             ("claude-haiku-4-5-20251001", (4, 5)),
             ("claude-fable-5", (5, 0)),
             ("anthropic/claude-opus-4-8", (4, 8)),
+            # Real IDs with a date stamp but NO minor version: the 8-digit date
+            # must NOT be mistaken for the minor (regression for the 4.0 bug).
+            ("claude-opus-4-20250514", (4, 0)),
+            ("claude-sonnet-4-20250514", (4, 0)),
+            # Case-insensitive (real IDs are lowercase, but be defensive).
+            ("Claude-Opus-4-8", (4, 8)),
             # Legacy version-first naming
             ("claude-3-5-sonnet-20241022", (3, 5)),
             ("claude-3-opus-20240229", (3, 0)),
@@ -43,10 +49,21 @@ class TestParseClaudeVersion:
             # Unparseable
             ("gpt-4o", None),
             ("some-random-model", None),
+            # --- separator / format robustness ---
+            ("claude-opus-4.8", (4, 8)),  # dot minor
+            ("claude-3-5-sonnet@20241022", (3, 5)),  # Vertex @ date stamp
+            # --- defensive ---
+            ("", None),
         ],
     )
     def test_parse(self, model: str, expected: tuple[int, int] | None) -> None:
         assert _parse_claude_version(model) == expected
+
+
+class TestParseClaudeVersionDefensive:
+    def test_none_does_not_crash(self) -> None:
+        # currently raises AttributeError
+        assert _parse_claude_version(model=None) is None
 
 
 class TestModelRejectsTemperature:
@@ -57,6 +74,7 @@ class TestModelRejectsTemperature:
             "claude-opus-4-8",
             "claude-fable-5",
             "anthropic/claude-opus-4-8",
+            "Claude-Opus-4-8",  # uppercase
         ],
     )
     def test_rejects_46_plus(self, model: str) -> None:
@@ -68,6 +86,8 @@ class TestModelRejectsTemperature:
             "claude-haiku-4-5-20251001",  # 4.5 < 4.6
             "claude-3-5-sonnet-20241022",
             "claude-3-opus-20240229",
+            "claude-opus-4-20250514",  # Opus 4.0 (date stamp, no minor)
+            "claude-sonnet-4-20250514",  # Sonnet 4.0 (date stamp, no minor)
             "gpt-4o",  # non-Claude / unparseable -> keep temperature
         ],
     )

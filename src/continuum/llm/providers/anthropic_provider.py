@@ -39,6 +39,9 @@ _PROVIDER = "anthropic"
 _MIN_TEMPERATURE_FREE_VERSION = (4, 6)
 
 
+# TODO: modern regex hardcodes opus|sonnet|haiku|fable. A future Claude
+# family that is 4.6+ adaptive will return None and wrongly KEEP temperature
+# -> 400. Needs a follow-up: enumerate new families or a version-only fallback.
 def _parse_claude_version(model: str) -> tuple[int, int] | None:
     """Extract a (major, minor) version from a Claude model id.
 
@@ -47,15 +50,26 @@ def _parse_claude_version(model: str) -> tuple[int, int] | None:
     ("claude-3-5-sonnet-20241022", "claude-3-opus"). A trailing date stamp is
     ignored. Returns None when no version can be determined.
     """
-    name = model.removeprefix("anthropic/").removeprefix("claude/")
+    if not model:
+        return None
+
+    name = model.lower().removeprefix("anthropic/").removeprefix("claude/")
+
+    # The minor version is 1-2 digits that are NOT immediately followed by more
+    # digits. The negative lookahead is what stops a trailing release date stamp
+    # (e.g. "-20250514" in "claude-opus-4-20250514") from being mis-read as a
+    # minor version — without it, that date would parse as minor=20250514 and
+    # the model would be wrongly classified as 4.6+.
+    minor = r"(\d{1,2})(?!\d)"
 
     # Legacy version-first: "claude-3-5-sonnet", "claude-3-opus".
-    legacy = re.match(r"claude-(\d+)(?:[.-](\d+))?", name)
+    legacy = re.match(rf"claude-(\d+)(?:[.-]{minor})?", name)
     if legacy:
         return int(legacy.group(1)), int(legacy.group(2) or 0)
 
     # New family-first: "<family>-<major>[-<minor>]" anywhere in the id.
-    modern = re.search(r"(?:opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?", name)
+    # Accept "." or "-" before the minor so "claude-opus-4.8" parses like "...-4-8".
+    modern = re.search(rf"(?:opus|sonnet|haiku|fable)-(\d+)(?:[.-]{minor})?", name)
     if modern:
         return int(modern.group(1)), int(modern.group(2) or 0)
 
