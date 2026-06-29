@@ -13,8 +13,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
-import redis.asyncio as redis
-
+from continuum.connectors.redis import RedisConnector
 from continuum.logging import get_logger
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
@@ -81,6 +80,8 @@ class RedisSessionProvider(BaseSessionProvider):
         self._config = config
         self._redis: Any = None  # redis.Redis instance
         self._pool: Any = None  # redis.ConnectionPool instance
+        # The connector is the single place the Redis client/pool is built.
+        self._connector = RedisConnector(config)
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -129,34 +130,13 @@ class RedisSessionProvider(BaseSessionProvider):
                 return False
 
             try:
-                # Prepare connection arguments
-                conn_kwargs = {
-                    "host": self._config.redis_host,
-                    "port": self._config.redis_port,
-                    "password": self._config.redis_password,
-                    "db": self._config.redis_db,
-                    "max_connections": self._config.redis_max_connections,
-                    "decode_responses": True,
-                    "socket_connect_timeout": 5,
-                    "socket_timeout": 5,
-                    # When all connections are in use, wait up to this many seconds for
-                    # one to free up instead of raising MaxConnectionsError immediately.
-                    "timeout": 5,
-                }
-
-                if self._config.redis_ssl:
-                    conn_kwargs["ssl"] = True
-
-                # Use a BlockingConnectionPool so bursts above max_connections queue and
-                # wait for a free connection (up to `timeout`s) rather than dropping the
-                # request. Prevents silent write loss under concurrent load (S-001).
-                self._pool = redis.BlockingConnectionPool(**conn_kwargs)
-
-                # Create async Redis connection using pool
-                self._redis = redis.Redis(
-                    connection_pool=self._pool,
-                    decode_responses=True,
-                )
+                # The RedisConnector owns the client/pool construction (single
+                # source of truth for connection params, mode, and auth). It uses
+                # a BlockingConnectionPool so bursts above max_connections queue
+                # for a free connection rather than dropping the request
+                # (prevents silent write loss under concurrent load, S-001).
+                self._redis = self._connector.build_client()
+                self._pool = self._connector.pool
 
                 self._initialized = True
                 logger.info(

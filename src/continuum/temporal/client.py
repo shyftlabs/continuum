@@ -19,11 +19,6 @@ except ImportError as _err:
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
-try:
-    from temporalio.contrib.pydantic import pydantic_data_converter
-except ImportError:
-    pydantic_data_converter = None
-
 from continuum.logging import get_logger
 from continuum.temporal.config import TemporalConfig
 from continuum.temporal.exceptions import TemporalConnectionError
@@ -39,23 +34,15 @@ class TemporalClient:
         self._client: Client | None = None
 
     async def connect(self, host: str | None = None, namespace: str | None = None) -> None:
-        """Connect to Temporal server. Uses settings defaults if not provided."""
-        target_host = host or self._config.host
-        target_ns = namespace or self._config.namespace
+        """Connect to Temporal server. Uses settings defaults if not provided.
 
-        try:
-            connect_kw: dict[str, Any] = {}
-            if pydantic_data_converter is not None:
-                connect_kw["data_converter"] = pydantic_data_converter
-            self._client = await Client.connect(target_host, namespace=target_ns, **connect_kw)
-            logger.info(f"Connected to Temporal at {target_host} (ns={target_ns})")
-        except Exception as e:
-            raise TemporalConnectionError(
-                f"Failed to connect to Temporal at {target_host}: {e}",
-                host=target_host,
-                namespace=target_ns,
-                original_error=e,
-            ) from e
+        Delegates the actual connection (TLS / API key / data converter) to the
+        TemporalConnector, the single source of truth for Temporal connections.
+        """
+        from continuum.connectors.temporal import TemporalConnector
+
+        connector = TemporalConnector(self._config)
+        self._client = await connector.connect(host=host, namespace=namespace)
 
     async def disconnect(self) -> None:
         """Disconnect from Temporal server.

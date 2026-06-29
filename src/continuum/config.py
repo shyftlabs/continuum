@@ -228,6 +228,10 @@ class Settings(BaseSettings):
     temporal_enabled: bool = False
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
+    # Temporal Cloud / TLS connection (local docker needs neither). When an API
+    # key is set, TLS is implied. See TemporalConnector for mode inference.
+    temporal_tls: bool = False  # TEMPORAL_TLS — enable TLS (managed/cloud)
+    temporal_api_key: str | None = None  # TEMPORAL_API_KEY — Temporal Cloud API key
     temporal_task_queue: str = "orchestrator-agents"
     temporal_enable_human_in_loop: bool = True
     temporal_approval_timeout_seconds: int = 86400  # 24h default

@@ -413,32 +413,12 @@ class MemoryConfig(BaseModel):
         # Build embedder configuration
         embedder_provider, embedder_config = self._build_embedder_config()
 
-        # Build vector store config based on selected provider
-        if self.vector_store_provider == "milvus":
-            milvus_vs_config: dict[str, Any] = {
-                "collection_name": self.milvus_collection,
-                "embedding_model_dims": self.embedding_dims,
-                "url": f"http://{self.milvus_host}:{self.milvus_port}",
-            }
-            if self.milvus_token:
-                milvus_vs_config["token"] = self.milvus_token
-            vector_store_block: dict[str, Any] = {
-                "provider": "milvus",
-                "config": milvus_vs_config,
-            }
-        else:
-            qdrant_vs_config: dict[str, Any] = {
-                "host": self.qdrant_host,
-                "port": self.qdrant_port,
-                "collection_name": self.qdrant_collection,
-                "embedding_model_dims": self.embedding_dims,
-            }
-            if self.qdrant_api_key:
-                qdrant_vs_config["api_key"] = self.qdrant_api_key
-            vector_store_block = {
-                "provider": "qdrant",
-                "config": qdrant_vs_config,
-            }
+        # The VectorStoreConnector is the single source of truth for the
+        # vector-store connection (host/port/auth/mode). mem0 builds its own
+        # client from this block; the connector also provides health probing.
+        from continuum.connectors.vector_store import VectorStoreConnector
+
+        vector_store_block = VectorStoreConnector(self).to_mem0_block()
 
         config: dict[str, Any] = {
             "version": "v1.1",

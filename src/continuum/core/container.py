@@ -261,6 +261,20 @@ class Container:
         return None
 
     @property
+    def connectors(self) -> dict[str, Any]:
+        """Return the registered external-service connectors (redis, vector_store, temporal).
+
+        Ensures the built-in connectors are registered on first access. Each
+        exposes a uniform interface (enabled / configured / mode / connect /
+        aping / describe) and is the single source of truth for that service's
+        connection. Use ``continuum.connectors.health_check_all()`` to probe all.
+        """
+        from continuum.connectors.registry import all_connectors, register_default_connectors
+
+        register_default_connectors()
+        return all_connectors()
+
+    @property
     def background_tasks(self) -> BackgroundTaskRegistry:
         """Get the shared background task registry.
 
