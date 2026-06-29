@@ -59,6 +59,7 @@ def register_default_connectors(*, replace: bool = True) -> None:
     Idempotent by default (``replace=True``). Each is constructed from the
     global settings; consumers can re-register with a custom-config instance.
     """
+    from continuum.connectors.langfuse import LangfuseConnector
     from continuum.connectors.redis import RedisConnector
     from continuum.connectors.temporal import TemporalConnector
     from continuum.connectors.vector_store import VectorStoreConnector
@@ -66,6 +67,7 @@ def register_default_connectors(*, replace: bool = True) -> None:
     register_connector("redis", RedisConnector(), replace=replace)
     register_connector("vector_store", VectorStoreConnector(), replace=replace)
     register_connector("temporal", TemporalConnector(), replace=replace)
+    register_connector("langfuse", LangfuseConnector(), replace=replace)
 
 
 def unregister_connector(name: str) -> None:
