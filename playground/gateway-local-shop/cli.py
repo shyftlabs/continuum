@@ -110,8 +110,17 @@ async def main():
                     elif cmd == "/help":
                         print_help()
                     elif cmd == "/session":
+                        from continuum.core.container import get_container
+
                         print(f"\n  User ID:         {user_id}")
-                        print(f"  Conversation ID: {conversation_id}\n")
+                        print(f"  Conversation ID: {conversation_id}")
+                        scl = get_container().session_client
+                        if scl is not None:
+                            print(f"  Fallback mode:   {scl.config.fallback_mode}")
+                            print(f"  Degraded:        {scl.persistence_degraded}")
+                        else:
+                            print("  Sessions:        disabled")
+                        print()
                     elif cmd == "/connectors":
                         await print_connectors()
                     elif cmd == "/clear":
