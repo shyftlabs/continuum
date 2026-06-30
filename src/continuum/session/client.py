@@ -129,6 +129,10 @@ class SessionClient:
         self._explicit_provider = provider is not None
         self._provider_resolved = provider is not None
         self._resolve_lock = asyncio.Lock()
+        # True once the client has fallen back from Redis to the in-memory store
+        # (a health signal for monitoring/alerting). Not set when an in-memory
+        # provider is chosen on purpose.
+        self._degraded = False
 
         if auto_initialize:
             self.initialize()
@@ -187,6 +191,18 @@ class SessionClient:
         """Check if sessions are enabled."""
         return self._session_config.enabled
 
+    @property
+    def persistence_degraded(self) -> bool:
+        """True when sessions have fallen back from Redis to the in-memory store.
+
+        A monitoring/alerting signal: in production, surface this as a metric and
+        alert on it — it means session persistence is non-durable right now
+        (Redis unconfigured / unreachable, or it failed mid-session). It is NOT
+        set when the in-memory provider was selected on purpose
+        (``provider='memory'``).
+        """
+        return self._degraded
+
     def set_provider(self, provider: BaseSessionProvider) -> None:
         """Set the session provider explicitly (trusted; never probed/swapped)."""
         self._provider = provider
@@ -221,15 +237,15 @@ class SessionClient:
             logger.info("Session provider initialized: memory (in-process)")
             return MemorySessionProvider(cfg)
 
-        # Redis host/credentials not configured — degrade quietly to in-memory.
+        # Redis host/credentials not configured — degrade (or fail) per policy.
         if not cfg.is_configured():
-            return self._make_memory_fallback("Redis is not configured")
+            return self._fallback_or_fail("Redis is not configured")
 
         # Configured: build the Redis provider lazily and probe it once.
         try:
             redis_provider = create_provider(cfg.provider, cfg)
         except Exception as e:  # provider class missing (e.g. redis not installed)
-            return self._make_memory_fallback(f"Redis provider unavailable ({e})")
+            return self._fallback_or_fail(f"Redis provider unavailable ({e})")
 
         aping = getattr(redis_provider, "aping", None)
         reachable = await aping() if aping is not None else True
@@ -240,7 +256,19 @@ class SessionClient:
             )
             return redis_provider
 
-        return self._make_memory_fallback("Redis is unreachable")
+        return self._fallback_or_fail("Redis is unreachable")
+
+    def _fallback_or_fail(self, reason: str) -> BaseSessionProvider:
+        """Apply the configured fallback policy when Redis is unavailable.
+
+        'degrade' → in-memory fallback (marks persistence_degraded).
+        'fail'    → raise SessionConnectionError instead of degrading.
+        """
+        if self._session_config.fallback_mode == "fail":
+            raise SessionConnectionError(
+                f"Session persistence unavailable and SESSION_FALLBACK_MODE=fail: {reason}"
+            )
+        return self._make_memory_fallback(reason)
 
     def _make_memory_fallback(self, reason: str) -> BaseSessionProvider:
         """Build the in-memory provider and emit a single degradation warning."""
@@ -251,6 +279,8 @@ class SessionClient:
             "(SESSION_REDIS_HOST / SESSION_REDIS_PORT) for durable sessions.",
             reason,
         )
+        # Mark the health signal: we are now serving non-durable in-memory state.
+        self._degraded = True
         return MemorySessionProvider(self._session_config)
 
     def _degrade_to_memory(self, reason: str) -> None:
@@ -278,9 +308,13 @@ class SessionClient:
         try:
             return await getattr(provider, method)(*args, **kwargs)
         except SessionConnectionError as e:
-            # Already in-memory, or a caller-supplied provider — nothing to fall
-            # back to; let the error surface.
-            if self._explicit_provider or isinstance(provider, MemorySessionProvider):
+            # Already in-memory, a caller-supplied provider, or fail-mode policy —
+            # nothing to fall back to; let the error surface.
+            if (
+                self._explicit_provider
+                or isinstance(provider, MemorySessionProvider)
+                or self._session_config.fallback_mode == "fail"
+            ):
                 raise
             self._degrade_to_memory(f"Redis became unreachable mid-session ({e})")
             return await getattr(self._provider, method)(*args, **kwargs)

@@ -123,6 +123,18 @@ class SessionConfig(BaseModel):
         ),
     )
 
+    # Behavior when Redis persistence is unavailable: 'degrade' (in-memory
+    # fallback, keep serving) or 'fail' (raise instead of silently degrading).
+    fallback_mode: Literal["degrade", "fail"] = Field(
+        default_factory=lambda: settings.session_fallback_mode,
+        description=(
+            "What to do when Redis persistence is unavailable. 'degrade' falls "
+            "back to a non-durable in-memory store and keeps serving (the client "
+            "reports persistence_degraded=True for monitoring); 'fail' raises "
+            "SessionConnectionError instead of silently degrading."
+        ),
+    )
+
     # Long-term Memory Write Behavior
     memory_write_mode: Literal["sync", "background"] = Field(
         default_factory=lambda: settings.session_memory_write_mode,
