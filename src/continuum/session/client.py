@@ -254,6 +254,7 @@ class SessionClient:
                 "Session provider initialized: %s",
                 getattr(redis_provider, "provider_name", cfg.provider),
             )
+            self._emit_degraded_metric(False)
             return redis_provider
 
         return self._fallback_or_fail("Redis is unreachable")
@@ -281,7 +282,23 @@ class SessionClient:
         )
         # Mark the health signal: we are now serving non-durable in-memory state.
         self._degraded = True
+        self._emit_degraded_metric(True)
         return MemorySessionProvider(self._session_config)
+
+    def _emit_degraded_metric(self, degraded: bool) -> None:
+        """Emit a gauge so monitoring can alert on session-persistence degradation.
+
+        1.0 = serving non-durable in-memory sessions; 0.0 = healthy (Redis).
+        Best-effort: metrics must never break session operations.
+        """
+        try:
+            from continuum.observability.metrics import get_metrics_collector
+
+            get_metrics_collector().record_metric(
+                "session_persistence_degraded", 1.0 if degraded else 0.0
+            )
+        except Exception:  # noqa: BLE001 — metrics are best-effort
+            pass
 
     def _degrade_to_memory(self, reason: str) -> None:
         """Swap the active provider to in-memory after a mid-session connection loss.
