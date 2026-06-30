@@ -225,7 +225,22 @@ class HealthCheck:
         try:
             from continuum.core.container import get_container
 
-            session_client = get_container().session_client
+            container = get_container()
+            # A health check must OBSERVE, not initialize. Accessing the
+            # session_client property would create it — which cascades to the
+            # memory client and eagerly connects the vector store, potentially
+            # blocking (e.g. Milvus still warming up). Only read it if it already
+            # exists; otherwise nothing has degraded yet.
+            if not container.has_session_client():
+                return HealthCheckResult(
+                    name="session_persistence",
+                    status=HealthStatus.HEALTHY,
+                    message="Session client not initialized yet",
+                    latency_ms=(time.time() - start_time) * 1000,
+                    details={"enabled": True, "persistence_degraded": False, "initialized": False},
+                )
+
+            session_client = container.session_client
             degraded = bool(session_client and session_client.persistence_degraded)
             latency = (time.time() - start_time) * 1000
             if degraded:

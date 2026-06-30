@@ -63,6 +63,25 @@ class TestHealthCheck:
 
         assert "session_persistence" in HealthCheck()._checks
 
+    async def test_does_not_create_session_client(self, monkeypatch):
+        # A health check must observe, not initialize: it must NOT force-create
+        # the session client (which would cascade to the memory client and
+        # eagerly connect the vector store — a real hang risk during startup).
+        from continuum.core import health as health_mod
+        from continuum.core.container import get_container, reset_container
+        from continuum.core.health import HealthCheck, HealthStatus
+
+        monkeypatch.setattr(health_mod.settings, "session_enabled", True)
+        reset_container()
+        try:
+            assert get_container().has_session_client() is False
+            result = await HealthCheck()._check_session_persistence()
+            assert result.status is HealthStatus.HEALTHY
+            # Still not created — the check observed without initializing.
+            assert get_container().has_session_client() is False
+        finally:
+            reset_container()
+
 
 class TestMetric:
     async def test_degrade_emits_gauge_1(self, monkeypatch):
