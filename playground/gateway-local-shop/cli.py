@@ -27,6 +27,7 @@ def print_help():
 Commands:
   /session    - Show session info
   /connectors - Show external-service connectors (mode + health)
+  /health     - Show session-persistence health check + degraded metric
   /clear      - Clear screen
   /help       - Show this help
   /quit       - Exit
@@ -65,6 +66,22 @@ async def print_connectors():
         r = report[name]
         print(f"  • {name:<13} {r['status']}")
     print()
+
+
+async def print_health():
+    """Show the session-persistence health check (#1) and the degraded gauge (#2),
+    so the observability wiring is visible from inside the shop.
+    """
+    from continuum.core.health import HealthCheck
+    from continuum.observability.metrics import get_metrics_collector
+
+    result = await HealthCheck()._check_session_persistence()
+    print(f"\n  session_persistence: {result.status.value} — {result.message}")
+    print(f"  details: {result.details}")
+
+    samples = get_metrics_collector()._custom_metrics.get("session_persistence_degraded", [])
+    latest = samples[-1] if samples else "(not emitted yet)"
+    print(f"  metric session_persistence_degraded = {latest}\n")
 
 
 async def main():
@@ -123,6 +140,8 @@ async def main():
                         print()
                     elif cmd == "/connectors":
                         await print_connectors()
+                    elif cmd == "/health":
+                        await print_health()
                     elif cmd == "/clear":
                         os.system("clear")
                     else:
