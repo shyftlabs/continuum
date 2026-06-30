@@ -171,7 +171,7 @@ class TestUnconfiguredFallback:
     async def test_falls_back_to_memory_with_single_warning(self, monkeypatch):
         spy = _spy_client_logger(monkeypatch)
         err = _spy_report_error(monkeypatch)
-        cfg = SessionConfig(enabled=True, redis_host="")  # not configured
+        cfg = SessionConfig(enabled=True, redis_host="", fallback_mode="degrade")  # not configured
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
         sid = await client.get_or_create_session(user_id="alice")
@@ -201,7 +201,9 @@ class TestUnreachableFallback:
             AsyncMock(return_value=False),
             raising=False,
         )
-        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380)
+        cfg = SessionConfig(
+            enabled=True, redis_host="localhost", redis_port=6380, fallback_mode="degrade"
+        )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
         sid = await client.get_or_create_session(user_id="alice")

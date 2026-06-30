@@ -74,6 +74,17 @@ class TestFailMode:
         assert sc.persistence_degraded is False
 
 
-class TestDefaultModeIsDegrade:
-    def test_default_fallback_mode(self):
-        assert SessionConfig(enabled=True).fallback_mode == "degrade"
+class TestDefaultMode:
+    def test_fallback_mode_defaults_from_settings(self):
+        # Env-independent: the field must default from global settings (whatever
+        # the ambient SESSION_FALLBACK_MODE is), not a hard-coded literal.
+        from continuum.config import settings
+
+        assert SessionConfig(enabled=True).fallback_mode == settings.session_fallback_mode
+
+    def test_settings_default_is_degrade(self, monkeypatch):
+        # The Settings *default* (no env override) is 'degrade'.
+        from continuum.config import Settings
+
+        monkeypatch.delenv("SESSION_FALLBACK_MODE", raising=False)
+        assert Settings().session_fallback_mode == "degrade"

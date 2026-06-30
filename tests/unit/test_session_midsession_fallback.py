@@ -51,7 +51,7 @@ class TestMidSessionDegrade:
         )
         logspy, errspy = _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True), auto_initialize=False)
+        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
 
         results = []
         for _ in range(5):
@@ -75,7 +75,7 @@ class TestMidSessionDegrade:
         )
         _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True), auto_initialize=False)
+        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
 
         sid = await sc.get_or_create_session(user_id="shopper-2")  # triggers degrade
         await sc.add_message(sid, _msg("user", "hello"))
@@ -96,13 +96,56 @@ class TestLogicalErrorsDoNotDegrade:
         )
         _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True), auto_initialize=False)
+        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
 
         with pytest.raises(SessionNotFoundError):
             await sc.get_conversation_history("x")
 
         # Still on Redis — a missing session is not a reason to drop persistence.
         assert isinstance(sc._provider, RedisSessionProvider)
+
+
+class TestMemoryWriteSkipsOnSessionStoreDown:
+    """The long-term memory write reads session metadata from Redis first. When
+    that read fails because the session store is down (SessionConnectionError),
+    it must be reported as a *skipped* memory write due to the session backend —
+    a concise warning — NOT a scary 'Memory storage failed' ERROR + traceback +
+    error report (which mislabels a Redis outage as a vector-store failure).
+    """
+
+    async def test_session_store_down_skips_quietly(self, monkeypatch):
+        provider = MagicMock()
+        provider.get_session_metadata = AsyncMock(
+            side_effect=SessionConnectionError("Timeout reading from localhost:6380")
+        )
+        provider.is_initialized = True
+
+        logspy = MagicMock()
+        errspy = MagicMock()
+        monkeypatch.setattr("continuum.session.client.logger", logspy)
+        monkeypatch.setattr("continuum.session.client.report_error", errspy)
+
+        # Injected provider → never degrades; the SessionConnectionError surfaces
+        # into _store_in_memory exactly as it does in fail-mode with Redis down.
+        sc = SessionClient(
+            session_config=SessionConfig(enabled=True, fallback_mode="degrade"), provider=provider, auto_initialize=False
+        )
+
+        await sc._store_in_memory(
+            session_id="s1",
+            message=_msg("user", "hi"),
+            agent_id=None,
+            metadata=None,
+            extraction_prompt=None,
+            pre_store_filter=None,
+            on_stored=None,
+        )
+
+        # Concise skip, not a scary failure: one warning, no error, no report.
+        assert logspy.error.call_count == 0
+        assert errspy.call_count == 0
+        assert logspy.warning.call_count == 1
+        assert "session store" in str(logspy.warning.call_args).lower()
 
 
 class TestRealProviderDegradeIsQuiet:

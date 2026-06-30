@@ -683,6 +683,18 @@ class SessionClient:
                     "(run carried restricted data labels)",
                     mem_error.context.get("policy_name"),
                 )
+            elif isinstance(mem_error, SessionConnectionError):
+                # The long-term memory write reads session metadata from the
+                # session store (Redis) first. If THAT is unavailable, this is a
+                # session-backend outage surfacing here — not a vector-store
+                # failure. Skip the write with a concise warning (no traceback,
+                # no error report); the Redis-down cause is already surfaced by
+                # the session path itself.
+                logger.warning(
+                    "Skipping long-term memory write: session store unavailable "
+                    "(%s). The session backend, not the vector store, is the cause.",
+                    mem_error,
+                )
             else:
                 logger.error(
                     f"❌ Memory storage failed: {mem_error}",
