@@ -8,6 +8,10 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- **Connector module** (`continuum.connectors`) — a uniform, pluggable layer for external-service connections (Redis, vector store, Temporal, Langfuse). Every connector shares one interface (`is_enabled` / `is_configured` / `mode` / `connect` / `aping` / `describe`) and registers in a shared registry, so services are configured and probed consistently via API keys, local Docker, or custom hosts. Connection **mode** (`local_docker` / `cloud` / `custom` / `disabled`) is inferred from config — TLS/API-key → cloud, localhost → local-docker. Adding a service is one file plus one registration line. `health_check_all()` probes every enabled connector (disabled ones cost zero connection attempts). New config: `TEMPORAL_TLS`, `TEMPORAL_API_KEY`. LLM providers are intentionally excluded (a per-request router, not a persistent connection). Documented in [`docs/connectors.md`](docs/connectors.md).
+- **In-memory session provider** (`provider="memory"`) — a non-durable, zero-dependency `MemorySessionProvider` mirroring Redis semantics (deterministic ids, sliding-window, metadata); never raises connection errors. Serves both explicit ephemeral/test flows and the automatic fallback target.
+- **`SESSION_FALLBACK_MODE`** switch (`degrade` | `fail`, default `degrade`) — `degrade` falls back to the in-memory store and keeps serving when Redis is unreachable (at first use *or* mid-session); `fail` raises `SessionConnectionError` instead of silently degrading. Documented in [`docs/session.md`](docs/session.md) §10.
+- **Persistence-degraded observability** — `SessionClient.persistence_degraded` flag, a `session_persistence` health check (flips `healthy → degraded` on fallback, observing without force-creating the client), and a `session_persistence_degraded` gauge metric (`1.0` degraded / `0.0` healthy). Documented in [`docs/observability.md`](docs/observability.md).
 - GitHub issue templates (`bug.yml`, `feature.yml`, `question.yml`) and a chooser config that disables blank issues and routes security reports to a private advisory.
 - Pull request template with Conventional-Commits typing, DCO checkbox, and lint/type/test gates.
 - `CODEOWNERS` for automatic review routing.
@@ -21,6 +25,7 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Open LLM provider registry — `register_provider(prefix, factory)` and `register_default_provider(factory)` let new backends extend model-name routing without editing core (`get_provider` now resolves via longest-prefix match against the registry).
 
 ### Changed
+- **Session persistence now initializes lazily** — the `SessionClient` no longer connects to Redis at construction; the provider is resolved on first use. Disabled or unconfigured persistence makes **no** connection attempt and logs **no** warnings, and startup no longer blocks on a slow/absent Redis. When Redis is unreachable the client degrades to the in-memory store with a **single** warning instead of an error per request, and the Redis provider's op-level failures dropped from `error` to `debug` on the degrade path.
 - README now renders correctly on the PyPI project page: the logo and all repository links use absolute URLs (PyPI does not resolve repo-relative paths), and the version badge is a dynamic `pypi/v` shield instead of a hardcoded number that drifted out of date.
 
 ### Fixed

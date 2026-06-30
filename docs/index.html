@@ -1084,6 +1084,8 @@
     <a class="sidebar-link" onclick="scrollToAnchor('comp-temporal')">Temporal Integration</a>
     <a class="sidebar-link" onclick="scrollToAnchor('comp-hitl')">Human-in-the-Loop</a>
     <a class="sidebar-link" onclick="scrollToAnchor('comp-loop-workflow')">Loop Workflow</a>
+    <div class="sidebar-group-label">Connectors</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-connectors')">Connectors</a>
   </div>
 
   <!-- INTEGRATIONS sidebar -->
@@ -1338,6 +1340,11 @@ response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().
       <div class="card-icon">▢</div>
       <h3>Production primitives</h3>
       <p>Dependency-injection container, health checks for every dependency, lifecycle hooks, FastAPI helpers, fakeredis for tests. Async-native, protocol-based, code-first.</p>
+    </div>
+    <div class="card filled">
+      <div class="card-icon" style="color:#fff">⬡</div>
+      <h3>Pluggable connectors</h3>
+      <p>One uniform layer for every external service, Redis, vector store (Milvus/Qdrant), Temporal, Langfuse. Connect via API keys, local Docker, or a custom host; the connection <em>mode</em> is inferred automatically, and one call health-probes them all. Add a new service in a single file.</p>
     </div>
   </div>
 
@@ -2631,6 +2638,7 @@ results = <span class="kw">await</span> memory.search(<span class="str">"user pr
   <a class="anchor" id="comp-session"></a>
   <h2>Sessions (Redis)</h2>
   <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically — you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
+  <p>Persistence initializes <strong>lazily</strong> — no connection is attempted (and no warnings logged) until the first session op, so a disabled or unconfigured Redis costs nothing. If Redis is unreachable, the client degrades to a non-durable in-memory store and keeps serving with a single warning instead of an error per request. Which you want is a choice: <code>degrade</code> (the default) keeps the app running through the outage, while <code>fail</code> raises instead — surfacing the error loudly so you can catch and debug it. Set <code>SESSION_FALLBACK_MODE</code> to opt in; it defaults to <code>degrade</code>. Either way the fallback flips a <code>session_persistence</code> health check to <code>degraded</code> and a <code>session_persistence_degraded</code> gauge to <code>1.0</code> for alerting.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> <span class="cls">SessionClient</span>
 
 session = <span class="cls">SessionClient</span>()
@@ -2714,6 +2722,93 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
 <span class="kw">await</span> mgr.<span class="fn">approve</span>(workflow_id, request_id, decided_by=<span class="str">"alice@company.com"</span>)    <span class="cm"># honored</span>
 <span class="kw">await</span> mgr.<span class="fn">reject</span>(workflow_id, request_id, decided_by=<span class="str">"mallory@evil.com"</span>)     <span class="cm"># ignored — not an approver; stays pending</span>
 <span class="kw">await</span> mgr.<span class="fn">escalate</span>(workflow_id, request_id, escalate_to=<span class="str">"carol@company.com"</span>)  <span class="cm"># always allowed (re-targets)</span></pre></div>
+
+  <a class="anchor" id="comp-connectors"></a>
+  <h2>Connectors</h2>
+  <p>One uniform layer for every external service — Redis, the vector store (Milvus/Qdrant), Temporal, and Langfuse. Each connector exposes the same interface (<code>is_enabled</code> / <code>is_configured</code> / <code>mode</code> / <code>connect</code> / <code>aping</code> / <code>describe</code>) and registers in a shared registry, so services are configured and probed consistently. Most app code never touches connectors directly — the session, memory, temporal, and observability layers consume them internally; you reach for this module to <strong>inspect</strong>, <strong>probe</strong>, or <strong>add</strong> a service.</p>
+
+  <h3>Connection modes</h3>
+  <p>Every connector reports a <code>mode</code> <strong>inferred from configuration</strong> — no manual flag. This is what makes "connect via API keys, local Docker, or a custom host" just work.</p>
+  <table>
+    <tr><th>Mode</th><th>When</th><th>Inferred from</th></tr>
+    <tr><td><code>local_docker</code></td><td>Default host/ports (e.g. <code>continuum up</code>)</td><td>Host is <code>localhost</code> / the compose service name</td></tr>
+    <tr><td><code>cloud</code></td><td>Managed / API-key endpoint</td><td>An API key / token is set, or TLS is on</td></tr>
+    <tr><td><code>custom</code></td><td>Explicit non-default host, no cloud credential</td><td>Host set but matches neither above</td></tr>
+    <tr><td><code>disabled</code></td><td>Turned off</td><td>The service's <code>enabled</code> flag is <code>False</code></td></tr>
+  </table>
+
+  <h3>Inspect &amp; probe</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.connectors <span class="kw">import</span> get_connector, health_check_all, list_connectors
+
+list_connectors()              <span class="cm"># ['langfuse', 'redis', 'temporal', 'vector_store']</span>
+
+redis = get_connector(<span class="str">"redis"</span>)
+redis.describe()               <span class="cm"># {'name': 'redis', 'mode': 'local_docker', 'host': ..., 'password': '****'}</span>
+<span class="kw">await</span> redis.aping()             <span class="cm"># True / False — never raises</span>
+
+<span class="cm"># Probe every enabled service at once (disabled ones cost zero connection attempts):</span>
+report = <span class="kw">await</span> health_check_all()</pre></div>
+  <p>Secrets come back masked in <code>describe()</code>, so the output is safe to log.</p>
+
+  <h3>Add a new service</h3>
+  <p>The cost is always <strong>config first, then one connector file, then one registration line</strong> — it does not grow as more connectors are added.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># 1 — Settings fields (src/continuum/config.py → class Settings) so they're env-configurable</span>
+s3_enabled: bool = <span class="kw">False</span>
+s3_endpoint: str = <span class="str">"http://localhost:9000"</span>   <span class="cm"># local docker (minio)</span>
+s3_access_key: str | <span class="kw">None</span> = <span class="kw">None</span>           <span class="cm"># api key → cloud</span>
+
+<span class="cm"># 2 — The connector (src/continuum/connectors/s3.py)</span>
+<span class="kw">from</span> continuum.config <span class="kw">import</span> settings
+<span class="kw">from</span> continuum.connectors.base <span class="kw">import</span> <span class="cls">BaseConnector</span>, <span class="cls">ConnectionMode</span>
+<span class="kw">from</span> continuum.utils.secrets <span class="kw">import</span> mask_value
+
+<span class="kw">class</span> <span class="cls">S3Connector</span>(<span class="cls">BaseConnector</span>[<span class="cls">Any</span>]):
+    name = <span class="str">"s3"</span>
+
+    <span class="op">@</span>property
+    <span class="kw">def</span> <span class="fn">is_enabled</span>(self) -> bool: <span class="kw">return</span> settings.s3_enabled
+    <span class="kw">def</span> <span class="fn">is_configured</span>(self) -> bool: <span class="kw">return</span> bool(settings.s3_endpoint)
+
+    <span class="op">@</span>property
+    <span class="kw">def</span> <span class="fn">mode</span>(self) -> <span class="cls">ConnectionMode</span>:
+        <span class="kw">if not</span> settings.s3_enabled: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.DISABLED
+        <span class="kw">if</span> settings.s3_access_key: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.CLOUD      <span class="cm"># api key → cloud</span>
+        <span class="kw">if</span> <span class="str">"localhost"</span> <span class="kw">in</span> settings.s3_endpoint: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.LOCAL_DOCKER
+        <span class="kw">return</span> <span class="cls">ConnectionMode</span>.CUSTOM
+
+    <span class="kw">async def</span> <span class="fn">connect</span>(self) -> <span class="cls">Any</span>:
+        <span class="kw">import</span> boto3
+        <span class="kw">return</span> boto3.client(
+            <span class="str">"s3"</span>,
+            endpoint_url=settings.s3_endpoint,
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
+        )
+
+    <span class="kw">async def</span> <span class="fn">aping</span>(self) -> bool:
+        <span class="kw">try</span>:
+            (<span class="kw">await</span> self.connect()).list_buckets(); <span class="kw">return</span> <span class="kw">True</span>
+        <span class="kw">except</span> Exception: <span class="kw">return</span> <span class="kw">False</span>
+
+    <span class="kw">def</span> <span class="fn">describe</span>(self) -> dict:
+        d = super().describe()
+        d.update(endpoint=settings.s3_endpoint,
+                 access_key=mask_value(settings.s3_access_key) <span class="kw">if</span> settings.s3_access_key <span class="kw">else</span> <span class="kw">None</span>)
+        <span class="kw">return</span> d
+
+<span class="cm"># 3 — Register it (registry.py → register_default_connectors(), one line)</span>
+<span class="kw">from</span> continuum.connectors.s3 <span class="kw">import</span> <span class="cls">S3Connector</span>
+register_connector(<span class="str">"s3"</span>, <span class="cls">S3Connector</span>(), replace=replace)
+
+<span class="cm"># 4 — Use it</span>
+<span class="kw">from</span> continuum.core.container <span class="kw">import</span> get_container
+s3 = get_container().connectors[<span class="str">"s3"</span>]   <span class="cm"># or get_connector("s3")</span>
+client = <span class="kw">await</span> s3.connect()              <span class="cm"># live client (you own it)</span></pre></div>
+  <p>It's now automatically in <code>health_check_all()</code>, gets uniform mode/describe/secret-masking, and is configurable via env. Override <code>aping</code> / <code>describe</code> when a cheaper probe or richer masked diagnostics exist.</p>
+
+  <div class="callout callout-info">
+    <strong>Which flavor?</strong> If <em>you own the client</em> (S3, Postgres, Redis, Temporal), <code>connect()</code> returns the live client and consumers call it. If <em>a library owns the client</em> (like mem0), expose a <code>to_&lt;lib&gt;_block()</code> config method the library consumes and use <code>connect()</code> only for a health-probe client — the <code>vector_store</code> pattern. <strong>LLM providers are intentionally not connectors</strong>: they're a per-request router (model-prefix routing, fallback chains), not a persistent connection.
+  </div>
 
 
 </section>
