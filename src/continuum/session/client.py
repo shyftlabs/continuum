@@ -19,6 +19,7 @@ from continuum.observability.error_reporter import report_error
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import (
+    SessionConnectionError,
     SessionError,
     SessionMessageLimitError,
     SessionNotEnabledError,
@@ -252,6 +253,38 @@ class SessionClient:
         )
         return MemorySessionProvider(self._session_config)
 
+    def _degrade_to_memory(self, reason: str) -> None:
+        """Swap the active provider to in-memory after a mid-session connection loss.
+
+        Idempotent: once degraded, further connection errors don't re-warn. The
+        warning is emitted exactly once, so a Redis that dies mid-session costs
+        one log line, not an error per request.
+        """
+        if isinstance(self._provider, MemorySessionProvider):
+            return
+        self._provider = self._make_memory_fallback(reason)
+        self._provider_resolved = True
+
+    async def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Invoke a provider method, degrading to in-memory on a connection loss.
+
+        Resolves the provider (lazy, once), runs the method, and — if the
+        resolved Redis provider raises a connection/timeout error mid-session —
+        switches to the in-memory provider and retries the call there. Logical
+        errors (SessionNotFoundError / SessionMessageLimitError) and an
+        explicitly injected provider are never degraded.
+        """
+        provider = await self._aprovider()
+        try:
+            return await getattr(provider, method)(*args, **kwargs)
+        except SessionConnectionError as e:
+            # Already in-memory, or a caller-supplied provider — nothing to fall
+            # back to; let the error surface.
+            if self._explicit_provider or isinstance(provider, MemorySessionProvider):
+                raise
+            self._degrade_to_memory(f"Redis became unreachable mid-session ({e})")
+            return await getattr(self._provider, method)(*args, **kwargs)
+
     def _initialize_provider(self) -> None:
         """Initialize the session provider using the registry."""
         if self._provider is not None:
@@ -351,7 +384,8 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            session_id = await (await self._aprovider()).get_or_create_session(
+            session_id = await self._call(
+                "get_or_create_session",
                 session_id=session_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -406,7 +440,8 @@ class SessionClient:
 
         try:
             # Add to short-term memory (via provider)
-            await (await self._aprovider()).add_message(
+            await self._call(
+                "add_message",
                 session_id=session_id,
                 message=message,
                 metadata=metadata,
@@ -520,7 +555,7 @@ class SessionClient:
         """
         try:
             # Get session metadata to extract user_id and agent_id
-            session_metadata = await (await self._aprovider()).get_session_metadata(session_id)
+            session_metadata = await self._call("get_session_metadata", session_id)
 
             if session_metadata:
                 # Build memory metadata for observability
@@ -649,7 +684,8 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            messages = await (await self._aprovider()).get_messages(
+            messages: list[ChatMessage] = await self._call(
+                "get_messages",
                 session_id=session_id,
                 limit=limit,
             )
@@ -702,7 +738,7 @@ class SessionClient:
 
         try:
             # Get session metadata to extract user_id and agent_id
-            session_metadata = await (await self._aprovider()).get_session_metadata(session_id)
+            session_metadata = await self._call("get_session_metadata", session_id)
 
             if not session_metadata:
                 logger.warning(f"Session metadata not found: {session_id}")
@@ -749,7 +785,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await (await self._aprovider()).clear_session(session_id=session_id)
+            result: bool = await self._call("clear_session", session_id=session_id)
             return result
 
         except Exception as e:
@@ -783,7 +819,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await (await self._aprovider()).delete_session(session_id=session_id)
+            result: bool = await self._call("delete_session", session_id=session_id)
             return result
 
         except Exception as e:
@@ -817,7 +853,10 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            return await (await self._aprovider()).get_session_metadata(session_id=session_id)
+            metadata_result: SessionMetadata | None = await self._call(
+                "get_session_metadata", session_id=session_id
+            )
+            return metadata_result
 
         except Exception as e:
             logger.error(f"Failed to get session metadata: {e}")
@@ -856,7 +895,7 @@ class SessionClient:
         self._ensure_enabled()
 
         try:
-            result = await (await self._aprovider()).update_session_metadata(session_id, metadata)
+            result: bool = await self._call("update_session_metadata", session_id, metadata)
             if not result:
                 logger.warning(f"Session not found when updating metadata: {session_id}")
             return result
