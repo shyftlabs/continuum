@@ -10,6 +10,7 @@ NOT trigger a degrade.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -102,3 +103,49 @@ class TestLogicalErrorsDoNotDegrade:
 
         # Still on Redis — a missing session is not a reason to drop persistence.
         assert isinstance(sc._provider, RedisSessionProvider)
+
+
+class TestRealProviderDegradeIsQuiet:
+    """Exercise the REAL Redis provider (dead port) so provider-level logging is
+    actually executed — a method-level mock would bypass it and give false
+    confidence. The whole stack must be quiet on the degrade path: no ERROR logs
+    and no report_error from EITHER the provider or the client.
+    """
+
+    async def test_real_redis_failure_degrades_quietly(self, monkeypatch):
+        # Resolve to the real Redis provider (probe "passes")...
+        monkeypatch.setattr(RedisSessionProvider, "aping", AsyncMock(return_value=True))
+        # ...but real ops hit a closed port → real connection error inside the provider.
+        # NOTE: the provider no longer imports report_error at all (quiet by
+        # design), so only the client's report_error is spy-able.
+        report_client = MagicMock()
+        monkeypatch.setattr("continuum.session.client.report_error", report_client)
+
+        errors: list[str] = []
+
+        class _ErrCounter(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if record.levelno >= logging.ERROR:
+                    errors.append(record.name)
+
+        handler = _ErrCounter()
+        watched = ("continuum.session.providers.redis", "continuum.session.client")
+        for name in watched:
+            logging.getLogger(name).addHandler(handler)
+        try:
+            cfg = SessionConfig(
+                enabled=True, redis_host="127.0.0.1", redis_port=6399, fallback_mode="degrade"
+            )
+            sc = SessionClient(session_config=cfg, auto_initialize=False)
+            sids = [await sc.get_or_create_session(user_id="a") for _ in range(3)]
+        finally:
+            for name in watched:
+                logging.getLogger(name).removeHandler(handler)
+
+        assert all(sids)
+        assert isinstance(sc._provider, MemorySessionProvider)
+        assert sc.persistence_degraded is True
+        # The degrade path must be quiet end-to-end: no ERROR logs from the
+        # provider OR the client, and no error reports.
+        assert errors == [], f"unexpected ERROR logs on degrade path: {errors}"
+        assert report_client.call_count == 0

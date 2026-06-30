@@ -16,7 +16,6 @@ from typing import Any
 from continuum.connectors.redis import RedisConnector
 from continuum.logging import get_logger
 from continuum.observability.decorators import observe
-from continuum.observability.error_reporter import report_error
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import (
@@ -316,12 +315,10 @@ class RedisSessionProvider(BaseSessionProvider):
         except (SessionNotEnabledError, SessionConnectionError):
             raise
         except Exception as e:
-            logger.error(f"Failed to get or create session: {e}")
-            report_error(
-                e,
-                context="session_provider_get_or_create",
-                metadata={"session_id": resolved_session_id, "user_id": user_id},
-            )
+            # Surface as SessionConnectionError; the caller (SessionClient) owns
+            # logging/reporting and decides whether to degrade quietly or fail.
+            # Keep this layer quiet so the fallback path has no error spam.
+            logger.debug(f"Redis get_or_create_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get or create session: {str(e)}",
                 session_id=resolved_session_id,
@@ -444,12 +441,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except (SessionNotFoundError, SessionMessageLimitError):
             raise
         except Exception as e:
-            logger.error(f"Failed to add message to session: {e}")
-            report_error(
-                e,
-                context="session_provider_add_message",
-                metadata={"session_id": session_id, "message_role": message.role},
-            )
+            logger.debug(f"Redis add_message failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to add message to session: {str(e)}",
                 session_id=session_id,
@@ -546,12 +538,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except SessionNotFoundError:
             raise
         except Exception as e:
-            logger.error(f"Failed to get messages from session: {e}")
-            report_error(
-                e,
-                context="session_provider_get_messages",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis get_messages failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get messages from session: {str(e)}",
                 session_id=session_id,
@@ -590,12 +577,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return metadata
 
         except Exception as e:
-            logger.error(f"Failed to get session metadata: {e}")
-            report_error(
-                e,
-                context="session_provider_get_metadata",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis get_session_metadata failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get session metadata: {str(e)}",
                 session_id=session_id,
@@ -637,12 +619,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to update session metadata: {e}")
-            report_error(
-                e,
-                context="session_provider_update_metadata",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis update_session_metadata failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to update session metadata: {str(e)}",
                 session_id=session_id,
@@ -692,12 +669,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to clear session: {e}")
-            report_error(
-                e,
-                context="session_provider_clear",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis clear_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to clear session: {str(e)}",
                 session_id=session_id,
@@ -734,12 +706,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to delete session: {e}")
-            report_error(
-                e,
-                context="session_provider_delete",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis delete_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to delete session: {str(e)}",
                 session_id=session_id,
