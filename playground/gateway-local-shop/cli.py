@@ -13,6 +13,7 @@ Usage:
 import asyncio
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
@@ -24,11 +25,11 @@ from continuum import LogLevel, setup_logging
 def print_help():
     print("""
 Commands:
-  /tools    - List MCP tools discovered from server
-  /session  - Show session info
-  /clear    - Clear screen
-  /help     - Show this help
-  /quit     - Exit
+  /session    - Show session info
+  /connectors - Show external-service connectors (mode + health)
+  /clear      - Clear screen
+  /help       - Show this help
+  /quit       - Exit
 
 Example queries:
   "show me dog toys"
@@ -36,6 +37,34 @@ Example queries:
   "what's in my cart?"
   "checkout"
 """)
+
+
+async def print_connectors():
+    """Show the SDK's external-service connectors: each one's connection mode
+    (local_docker / cloud / custom / disabled) plus a live health probe.
+
+    This exercises the connector module end to end — get_container().connectors,
+    each connector's describe(), and health_check_all() — from inside the shop.
+    """
+    from continuum.connectors import health_check_all
+    from continuum.core.container import get_container
+
+    connectors = get_container().connectors
+    print("\nConnectors (configured connection per service):")
+    for name in sorted(connectors):
+        d = connectors[name].describe()
+        host = d.get("host") or d.get("endpoint") or "-"
+        print(
+            f"  • {name:<13} mode={d['mode']:<12} "
+            f"enabled={d['enabled']!s:<5} configured={d['configured']!s:<5} host={host}"
+        )
+
+    print("\nLive health probe (health_check_all):")
+    report = await health_check_all()
+    for name in sorted(report):
+        r = report[name]
+        print(f"  • {name:<13} {r['status']}")
+    print()
 
 
 async def main():
@@ -49,14 +78,17 @@ async def main():
     print("  python server.py   (in another terminal)")
     print()
 
-    user_id = input("Enter user ID (or Enter for auto): ").strip() or None
+    user_id = input("Enter user ID (or Enter for auto): ").strip() or f"cli-{uuid.uuid4().hex[:8]}"
+    # The agent takes user_id / conversation_id per chat() call, so we hold them
+    # here for the lifetime of this CLI session.
+    conversation_id = f"cli-conv-{uuid.uuid4().hex[:8]}"
 
     print("\nConnecting to local MCP server...")
     try:
-        agent = await create_shop_agent(user_id=user_id)
-        print(f"✓ Ready! {len(agent.tools)} tools loaded.")
-        print(f"  Session: {agent.session_id or 'N/A'}")
-        print(f"  User:    {agent.user_id}")
+        agent = await create_shop_agent()
+        print("✓ Ready!")
+        print(f"  User:         {user_id}")
+        print(f"  Conversation: {conversation_id}")
         print("\nType /help for commands or start chatting!\n")
     except Exception as e:
         print(f"\nFailed to connect: {e}")
@@ -77,15 +109,11 @@ async def main():
                         break
                     elif cmd == "/help":
                         print_help()
-                    elif cmd == "/tools":
-                        print(f"\nAvailable Tools ({len(agent.tools)}):")
-                        for t in agent.tools:
-                            f = t.get("function", {})
-                            print(f"  • {f.get('name', '?')} — {f.get('description', '')[:80]}")
-                        print()
                     elif cmd == "/session":
-                        print(f"\n  User ID:    {agent.user_id}")
-                        print(f"  Session ID: {agent.session_id or 'N/A'}\n")
+                        print(f"\n  User ID:         {user_id}")
+                        print(f"  Conversation ID: {conversation_id}\n")
+                    elif cmd == "/connectors":
+                        await print_connectors()
                     elif cmd == "/clear":
                         os.system("clear")
                     else:
@@ -93,8 +121,9 @@ async def main():
                     continue
 
                 print("\nThinking...")
-                # Pass session_id so the agent can use it for cart operations
-                response = await agent.chat(f"[session_id={agent.session_id}] {user_input}")
+                response = await agent.chat(
+                    user_input, user_id=user_id, conversation_id=conversation_id
+                )
                 print(f"\nAssistant: {response}\n")
 
             except KeyboardInterrupt:
