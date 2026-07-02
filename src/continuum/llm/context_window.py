@@ -147,6 +147,16 @@ class ContextWindowManager:
         "gemini-pro": 32000,
     }
 
+    # Provider-family fallbacks (tokens). Modern models within a family share a
+    # context window, so when no exact key above matches we default by family
+    # before giving up on 4096. This avoids the stale-exact-name trap: a new id
+    # like "claude-opus-4-8" (hyphen minor, not in the table) still gets Claude's
+    # 200k instead of the crippling 4096 fallback. Checked by substring.
+    FAMILY_DEFAULTS: dict[str, int] = {
+        "claude": 200000,
+        "gemini": 1000000,
+    }
+
     def __init__(
         self,
         default_buffer_percent: float = 0.25,
@@ -208,7 +218,9 @@ class ContextWindowManager:
         Order:
         1. Hardcoded table (fast, covers all known models)
         2. Gemini API (for unknown Gemini models — API returns inputTokenLimit)
-        3. Conservative fallback: 4096
+        3. Provider-family default (e.g. any "claude" → 200k) — future-proofs new
+           model names within a known family
+        4. Conservative fallback: 4096
         """
         max_tokens: int | None = None
         max_input_tokens: int | None = None
@@ -232,7 +244,19 @@ class ContextWindowManager:
                     f"Fetched Gemini limits for {model}: input={max_input_tokens}, output={max_output_tokens}"
                 )
 
-        # 3. Conservative fallback
+        # 3. Provider-family default — a new model within a known family (e.g.
+        #    "claude-opus-4-8") shares the family's window even if it's not yet
+        #    in the exact table.
+        if max_tokens is None:
+            for family, family_max in self.FAMILY_DEFAULTS.items():
+                if family in model_lower:
+                    max_tokens = family_max
+                    logger.debug(
+                        f"Using {family}-family default limit for {model}: {max_tokens}"
+                    )
+                    break
+
+        # 4. Conservative fallback
         if max_tokens is None:
             max_tokens = 4096
             logger.warning(
