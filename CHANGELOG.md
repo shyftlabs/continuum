@@ -7,6 +7,8 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-02
+
 ### Added
 - **Connector module** (`continuum.connectors`) — a uniform, pluggable layer for external-service connections (Redis, vector store, Temporal, Langfuse). Every connector shares one interface (`is_enabled` / `is_configured` / `mode` / `connect` / `aping` / `describe`) and registers in a shared registry, so services are configured and probed consistently via API keys, local Docker, or custom hosts. Connection **mode** (`local_docker` / `cloud` / `custom` / `disabled`) is inferred from config — TLS/API-key → cloud, localhost → local-docker. Adding a service is one file plus one registration line. `health_check_all()` probes every enabled connector (disabled ones cost zero connection attempts). New config: `TEMPORAL_TLS`, `TEMPORAL_API_KEY`. LLM providers are intentionally excluded (a per-request router, not a persistent connection). Documented in [`docs/connectors.md`](docs/connectors.md).
 - **In-memory session provider** (`provider="memory"`) — a non-durable, zero-dependency `MemorySessionProvider` mirroring Redis semantics (deterministic ids, sliding-window, metadata); never raises connection errors. Serves both explicit ephemeral/test flows and the automatic fallback target.
