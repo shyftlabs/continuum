@@ -6,6 +6,7 @@ is what TemporalClient.connect delegates to.
 
 from __future__ import annotations
 
+import importlib.util
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +15,14 @@ from continuum.connectors.base import ConnectionMode
 from continuum.connectors.temporal import TemporalConnector
 from continuum.temporal.config import TemporalConfig
 from continuum.temporal.exceptions import TemporalConnectionError
+
+# The `temporalio` SDK is an optional extra (shyftlabs-continuum[temporal]) and is
+# not installed in the default CI env. Tests that patch/import temporalio directly
+# are skipped when it is absent; the pure config/mode tests below still run.
+_HAS_TEMPORALIO = importlib.util.find_spec("temporalio") is not None
+_requires_temporalio = pytest.mark.skipif(
+    not _HAS_TEMPORALIO, reason="temporalio extra not installed"
+)
 
 
 class TestModeInference:
@@ -50,6 +59,7 @@ class TestConfigured:
         assert not TemporalConnector(TemporalConfig(enabled=True, host="")).is_configured()
 
 
+@_requires_temporalio
 class TestConnect:
     async def test_connect_passes_tls_and_api_key(self, monkeypatch):
         sentinel = object()
@@ -78,6 +88,7 @@ class TestConnect:
             await c.connect()
 
 
+@_requires_temporalio
 class TestApingIsQuiet:
     async def test_aping_true_on_connect(self, monkeypatch):
         monkeypatch.setattr("temporalio.client.Client.connect", AsyncMock(return_value=object()))
@@ -103,6 +114,7 @@ class TestDescribeMasksSecrets:
         assert "supersecretkey" not in str(d)
 
 
+@_requires_temporalio
 class TestTemporalClientDelegates:
     async def test_client_connect_uses_connector(self, monkeypatch):
         sentinel = object()
