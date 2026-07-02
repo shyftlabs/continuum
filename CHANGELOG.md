@@ -31,6 +31,7 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - README now renders correctly on the PyPI project page: the logo and all repository links use absolute URLs (PyPI does not resolve repo-relative paths), and the version badge is a dynamic `pypi/v` shield instead of a hardcoded number that drifted out of date.
 
 ### Fixed
+- **Anthropic temperature compatibility** — Claude 4.6+ adaptive-thinking models (e.g. Claude Opus 4.8) reject an explicit `temperature` parameter with a 400, which previously killed any agent pointed at them. The provider now sends `temperature` normally and, if the API rejects it, strips it and retries once, caching the model so later calls omit it up front (one wasted round-trip per model per process, at most). This is error-driven — the API is the authority — so new/unknown models are handled automatically with no model-name hardcoding.
 - Docker healthchecks for `qdrant` (now probes `/readyz` over bash `/dev/tcp`, since the image ships no `curl`) and `temporal` (`BIND_ON_IP=0.0.0.0` so the localhost healthcheck can reach the frontend) — both previously reported `unhealthy` while serving correctly.
 - `continuum down`/`status`/`logs` now activate all compose profiles, so profiled containers from `minimal`/`standard` are no longer orphaned.
 - `structured_output` is now populated across all providers in both `run()` and `run_stream()`; previously it was left empty on several provider paths.
