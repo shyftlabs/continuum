@@ -251,9 +251,7 @@ class ContextWindowManager:
             for family, family_max in self.FAMILY_DEFAULTS.items():
                 if family in model_lower:
                     max_tokens = family_max
-                    logger.debug(
-                        f"Using {family}-family default limit for {model}: {max_tokens}"
-                    )
+                    logger.debug(f"Using {family}-family default limit for {model}: {max_tokens}")
                     break
 
         # 4. Conservative fallback

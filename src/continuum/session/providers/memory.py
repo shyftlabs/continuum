@@ -192,9 +192,7 @@ class MemorySessionProvider(BaseSessionProvider):
             meta.message_count = len(entry["messages"])
             return meta
 
-    async def update_session_metadata(
-        self, session_id: str, metadata: SessionMetadata
-    ) -> bool:
+    async def update_session_metadata(self, session_id: str, metadata: SessionMetadata) -> bool:
         with self._lock:
             entry = self._store.get(session_id)
             if entry is None:

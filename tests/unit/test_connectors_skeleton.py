@@ -23,7 +23,9 @@ from continuum.connectors.registry import (
 class _DummyConnector(BaseConnector[str]):
     name = "dummy"
 
-    def __init__(self, *, enabled=True, configured=True, reachable=True, mode=ConnectionMode.CUSTOM):
+    def __init__(
+        self, *, enabled=True, configured=True, reachable=True, mode=ConnectionMode.CUSTOM
+    ):
         self._enabled = enabled
         self._configured = configured
         self._reachable = reachable

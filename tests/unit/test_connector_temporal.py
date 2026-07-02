@@ -42,7 +42,9 @@ class TestModeInference:
 
 class TestConfigured:
     def test_configured_when_host_present(self):
-        assert TemporalConnector(TemporalConfig(enabled=True, host="localhost:7233")).is_configured()
+        assert TemporalConnector(
+            TemporalConfig(enabled=True, host="localhost:7233")
+        ).is_configured()
 
     def test_unconfigured_when_host_empty(self):
         assert not TemporalConnector(TemporalConfig(enabled=True, host="")).is_configured()
@@ -78,9 +80,7 @@ class TestConnect:
 
 class TestApingIsQuiet:
     async def test_aping_true_on_connect(self, monkeypatch):
-        monkeypatch.setattr(
-            "temporalio.client.Client.connect", AsyncMock(return_value=object())
-        )
+        monkeypatch.setattr("temporalio.client.Client.connect", AsyncMock(return_value=object()))
         c = TemporalConnector(TemporalConfig(enabled=True, host="localhost:7233"))
         assert await c.aping() is True
 

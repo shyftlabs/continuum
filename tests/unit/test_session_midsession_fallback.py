@@ -51,7 +51,10 @@ class TestMidSessionDegrade:
         )
         logspy, errspy = _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
+        sc = SessionClient(
+            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            auto_initialize=False,
+        )
 
         results = []
         for _ in range(5):
@@ -75,7 +78,10 @@ class TestMidSessionDegrade:
         )
         _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
+        sc = SessionClient(
+            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            auto_initialize=False,
+        )
 
         sid = await sc.get_or_create_session(user_id="shopper-2")  # triggers degrade
         await sc.add_message(sid, _msg("user", "hello"))
@@ -96,7 +102,10 @@ class TestLogicalErrorsDoNotDegrade:
         )
         _spies(monkeypatch)
 
-        sc = SessionClient(session_config=SessionConfig(enabled=True, fallback_mode="degrade"), auto_initialize=False)
+        sc = SessionClient(
+            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            auto_initialize=False,
+        )
 
         with pytest.raises(SessionNotFoundError):
             await sc.get_conversation_history("x")
@@ -128,7 +137,9 @@ class TestMemoryWriteSkipsOnSessionStoreDown:
         # Injected provider → never degrades; the SessionConnectionError surfaces
         # into _store_in_memory exactly as it does in fail-mode with Redis down.
         sc = SessionClient(
-            session_config=SessionConfig(enabled=True, fallback_mode="degrade"), provider=provider, auto_initialize=False
+            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            provider=provider,
+            auto_initialize=False,
         )
 
         await sc._store_in_memory(

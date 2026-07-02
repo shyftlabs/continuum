@@ -352,9 +352,7 @@ class AnthropicProvider(BaseProvider):
             self._handle_exception(e, config.model)
             raise
 
-    async def _do_astream(
-        self, kwargs: dict[str, Any], model: str
-    ) -> AsyncIterator[StreamChunk]:
+    async def _do_astream(self, kwargs: dict[str, Any], model: str) -> AsyncIterator[StreamChunk]:
         async with self._async_client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield StreamChunk(content=text, is_finished=False)

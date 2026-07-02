@@ -45,7 +45,11 @@ class TestConfigured:
 class TestDescribeMasksSecrets:
     def test_keys_masked(self):
         c = LangfuseConnector(
-            _cfg(public_key="pk-publicsecret", secret_key="sk-supersecret", host="http://localhost:3000")
+            _cfg(
+                public_key="pk-publicsecret",
+                secret_key="sk-supersecret",
+                host="http://localhost:3000",
+            )
         )
         d = c.describe()
         assert d["name"] == "langfuse"

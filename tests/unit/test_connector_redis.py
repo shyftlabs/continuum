@@ -19,9 +19,7 @@ class TestModeInference:
         assert c.mode is ConnectionMode.LOCAL_DOCKER
 
     def test_ssl_is_cloud(self):
-        c = RedisConnector(
-            SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True)
-        )
+        c = RedisConnector(SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True))
         assert c.mode is ConnectionMode.CLOUD
 
     def test_remote_without_ssl_is_custom(self):

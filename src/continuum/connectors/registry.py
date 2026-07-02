@@ -18,9 +18,7 @@ logger = get_logger(__name__)
 _REGISTRY: dict[str, BaseConnector[Any]] = {}
 
 
-def register_connector(
-    name: str, connector: BaseConnector[Any], *, replace: bool = False
-) -> None:
+def register_connector(name: str, connector: BaseConnector[Any], *, replace: bool = False) -> None:
     """Register a connector under ``name``.
 
     Raises ValueError if the name is already taken unless ``replace=True``.
