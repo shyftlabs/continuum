@@ -99,7 +99,8 @@ class BaseAgent:
 
     # Model configuration
     model: str = field(default_factory=lambda: settings.default_llm_model)
-    temperature: float = 0.7
+    # None omits temperature from LLM calls (for providers/models that reject it).
+    temperature: float | None = 0.7
     max_tokens: int | None = None
     gateway_mode: str | None = (
         None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE

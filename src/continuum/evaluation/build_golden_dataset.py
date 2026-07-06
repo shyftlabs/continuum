@@ -197,6 +197,7 @@ def generate_qa_from_document(
     source_ref: str,
     section_title: str,
     chunks: list[dict],
+    temperature: float = 0.3,
 ) -> dict[str, Any] | None:
     """
     Call GPT-4o-mini to generate one (question, answer, chunk_index) triple
@@ -249,7 +250,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=temperature,
             response_format={"type": "json_object"},
             timeout=30,
         )

@@ -72,8 +72,9 @@ class OpenAIProvider(BaseProvider):
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._normalize_model(config.model),
-            "temperature": config.temperature,
         }
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
         if config.max_tokens is not None:
             kwargs["max_tokens"] = config.max_tokens
         if config.top_p is not None:

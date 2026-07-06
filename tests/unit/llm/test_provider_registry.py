@@ -166,3 +166,28 @@ class TestExtensionAPI:
         register_provider("gemini/", _tag_factory("my-gemini"))
         provider = get_provider(LLMConfig(model="gemini/gemini-2.5-flash"))
         assert provider.tag == "my-gemini"
+
+
+# ---------------------------------------------------------------------------
+# temperature=None must be omitted so providers/models that reject it never
+# receive the parameter (mirrors Anthropic's existing guard).
+# ---------------------------------------------------------------------------
+
+
+class TestTemperatureOmission:
+    @pytest.mark.parametrize("provider_path,model", [
+        ("continuum.llm.providers.openai_provider.OpenAIProvider", "gpt-4o-mini"),
+        ("continuum.llm.providers.gemini_provider.GeminiProvider", "gemini/gemini-2.5-flash"),
+    ])
+    def test_temperature_omitted_when_none(self, provider_path, model):
+        import importlib
+
+        mod_name, cls_name = provider_path.rsplit(".", 1)
+        cls = getattr(importlib.import_module(mod_name), cls_name)
+        provider = cls(api_key="test-key")
+
+        omitted = provider._build_kwargs(LLMConfig(model=model, temperature=None), None, None)
+        assert "temperature" not in omitted
+
+        present = provider._build_kwargs(LLMConfig(model=model, temperature=0.4), None, None)
+        assert present["temperature"] == 0.4

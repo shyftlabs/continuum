@@ -24,7 +24,8 @@ class LLMConfig(BaseModel):
     )
 
     # Generation Parameters
-    temperature: float = Field(default_factory=lambda: settings.default_llm_temperature)
+    # None omits the parameter entirely (for providers/models that reject it).
+    temperature: float | None = Field(default_factory=lambda: settings.default_llm_temperature)
     max_tokens: int | None = Field(default_factory=lambda: settings.default_llm_max_tokens)
     top_p: float | None = None
     frequency_penalty: float | None = None
@@ -67,10 +68,14 @@ class LLMConfig(BaseModel):
         """Convert config to kwargs for LLM completion call."""
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "temperature": self.temperature,
             "timeout": self.timeout,
             "num_retries": self.max_retries,
         }
+
+        # Omit temperature when None so providers that reject the parameter
+        # (e.g. some reasoning models) are not sent it.
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
 
         if self.enable_fallback and self.fallback_models:
             kwargs["fallbacks"] = self.fallback_models
