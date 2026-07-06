@@ -89,7 +89,18 @@ class RedisConnector(BaseConnector["Redis"]):
             "timeout": 5,
         }
         if self._config.redis_ssl:
-            conn_kwargs["ssl"] = True
+            # A pool selects TLS via connection_class=SSLConnection — NOT an
+            # `ssl=True` kwarg. `ssl=True` is a convenience only on redis.Redis()/
+            # from_url(); forwarded to a pool it reaches AbstractConnection.__init__
+            # and raises TypeError lazily on first command (S-TLS).
+            conn_kwargs["connection_class"] = redis.SSLConnection
+            # Pass cert knobs ONLY when explicitly set. Passing ssl_cert_reqs=None
+            # would map to CERT_NONE (verification OFF); omitting it keeps redis-py's
+            # verifying default ('required'). ssl_ca_certs=None means system CA store.
+            if self._config.redis_ssl_cert_reqs is not None:
+                conn_kwargs["ssl_cert_reqs"] = self._config.redis_ssl_cert_reqs
+            if self._config.redis_ssl_ca_certs is not None:
+                conn_kwargs["ssl_ca_certs"] = self._config.redis_ssl_ca_certs
 
         self._pool = redis.BlockingConnectionPool(**conn_kwargs)
         self._client = redis.Redis(connection_pool=self._pool, decode_responses=True)

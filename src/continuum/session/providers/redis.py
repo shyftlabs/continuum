@@ -83,6 +83,9 @@ class RedisSessionProvider(BaseSessionProvider):
         self._connector = RedisConnector(config)
         self._initialized = False
         self._lock = threading.Lock()
+        # Reason the most recent aping() failed (None on success). Lets the
+        # SessionClient report the real cause instead of a generic "unreachable".
+        self._last_probe_error: str | None = None
 
         if auto_initialize:
             self.initialize()
@@ -101,6 +104,15 @@ class RedisSessionProvider(BaseSessionProvider):
     def is_initialized(self) -> bool:
         """Check if the provider is initialized and ready."""
         return self._config.enabled and self._initialized and self._redis is not None
+
+    @property
+    def last_probe_error(self) -> str | None:
+        """Reason the most recent aping() failed, or None if it succeeded.
+
+        Lets the SessionClient report the actual cause (auth error, TLS handshake,
+        bad config) instead of a blanket 'Redis is unreachable'.
+        """
+        return self._last_probe_error
 
     def initialize(self) -> bool:
         """
@@ -172,10 +184,16 @@ class RedisSessionProvider(BaseSessionProvider):
             if not self._initialized:
                 self.initialize()
             if self._redis is None:
+                self._last_probe_error = (
+                    "Redis client not initialized (sessions disabled or misconfigured)"
+                )
                 return False
             await self._redis.ping()
+            self._last_probe_error = None  # success clears any prior reason
             return True
-        except Exception:
+        except Exception as e:  # contract preserved: probe never raises
+            self._last_probe_error = f"{type(e).__name__}: {e}"
+            logger.debug("Redis session probe failed: %s", self._last_probe_error)
             return False
 
     def _ensure_enabled(self) -> None:

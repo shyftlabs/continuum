@@ -257,7 +257,12 @@ class SessionClient:
             self._emit_degraded_metric(False)
             return redis_provider
 
-        return self._fallback_or_fail("Redis is unreachable")
+        # Prefer the concrete cause the probe recorded (auth/TLS/config error);
+        # fall back to the generic wording only when none was supplied.
+        reason = getattr(redis_provider, "last_probe_error", None)
+        return self._fallback_or_fail(
+            f"Redis probe failed: {reason}" if reason else "Redis is unreachable"
+        )
 
     def _fallback_or_fail(self, reason: str) -> BaseSessionProvider:
         """Apply the configured fallback policy when Redis is unavailable.
