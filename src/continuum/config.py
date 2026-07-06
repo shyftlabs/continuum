@@ -189,6 +189,15 @@ class Settings(BaseSettings):
     session_redis_password: str | None = None  # Redis password (matches docker-compose default)
     session_redis_db: int = 0  # Redis database number
     session_redis_ssl: bool = False  # Enable SSL/TLS for Redis
+    # TLS certificate verification policy, passed through to redis-py's
+    # SSLConnection only when set. None (default) => omit the kwarg => redis-py's
+    # verifying default ('required'). Managed endpoints (ElastiCache) need
+    # nothing here. Set 'none'/'optional' only for self-signed / private-CA test
+    # endpoints. NOTE: passing 'none' disables verification — opt-in, never default.
+    session_redis_ssl_cert_reqs: str | None = None
+    # Path to a CA bundle for verifying the Redis server cert. None (default) =>
+    # omit the kwarg => redis-py uses the system CA store. Set for private-CA endpoints.
+    session_redis_ssl_ca_certs: str | None = None
     session_redis_max_connections: int = (
         10  # Redis pool size (configurable via env; floored at the safe minimum)
     )

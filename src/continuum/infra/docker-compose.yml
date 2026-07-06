@@ -173,6 +173,37 @@ services:
     networks:
       - orchestrator-network
 
+  # TLS-enabled Redis for exercising the SSL session path (S-TLS regression).
+  # Opt-in only — start with:  docker compose --profile tls-test up redis-sdk-tls
+  # Certs are generated (git-ignored) by tests/integration/redis_tls/gen_certs.sh.
+  redis-sdk-tls:
+    profiles: ["tls-test"]
+    image: docker.io/redis:7
+    container_name: orchestrator-redis-sdk-tls
+    restart: unless-stopped
+    command: >
+      redis-server
+      --port 0
+      --tls-port 6379
+      --tls-cert-file /certs/redis.crt
+      --tls-key-file /certs/redis.key
+      --tls-ca-cert-file /certs/ca.crt
+      --tls-auth-clients no
+      --maxmemory-policy noeviction
+      --maxmemory 256mb
+    ports:
+      - "${SESSION_REDIS_TLS_PORT:-6381}:6379"
+    volumes:
+      - ../../../tests/integration/redis_tls/certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli --tls --cert /certs/redis.crt --key /certs/redis.key --cacert /certs/ca.crt ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - orchestrator-network
+
   postgres:
     profiles: ["standard", "full"]
     image: docker.io/postgres:${POSTGRES_VERSION:-17}

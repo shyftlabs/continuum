@@ -156,3 +156,6 @@ extensions/
 
 # claude-flow runtime lock (per-session state, not source)
 .claude/scheduled_tasks.lock
+
+# Redis TLS test certs (generated locally by tests/integration/redis_tls/gen_certs.sh — never commit)
+tests/integration/redis_tls/certs/
