@@ -175,10 +175,13 @@ class TestExtensionAPI:
 
 
 class TestTemperatureOmission:
-    @pytest.mark.parametrize("provider_path,model", [
-        ("continuum.llm.providers.openai_provider.OpenAIProvider", "gpt-4o-mini"),
-        ("continuum.llm.providers.gemini_provider.GeminiProvider", "gemini/gemini-2.5-flash"),
-    ])
+    @pytest.mark.parametrize(
+        "provider_path,model",
+        [
+            ("continuum.llm.providers.openai_provider.OpenAIProvider", "gpt-4o-mini"),
+            ("continuum.llm.providers.gemini_provider.GeminiProvider", "gemini/gemini-2.5-flash"),
+        ],
+    )
     def test_temperature_omitted_when_none(self, provider_path, model):
         import importlib
 

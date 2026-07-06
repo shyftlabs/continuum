@@ -464,7 +464,9 @@ class RouterConfig:
         None  # gpt_4o_mini default id; qwen/qwen_local require explicit id
     )
     tier_classifier_max_tokens: int = 128
-    tier_classifier_temperature: float | None = 0.1  # Temperature for the tier-classifier call (None omits it)
+    tier_classifier_temperature: float | None = (
+        0.1  # Temperature for the tier-classifier call (None omits it)
+    )
     # Keyword / length heuristics before the classifier LLM (disable to always call the classifier).
     tier_classifier_heuristic_shortcut: bool = True
     tier_router_api_base: str | None = (
