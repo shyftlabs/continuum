@@ -247,6 +247,54 @@ summary = get_metrics_summary()
 
 `reset_metrics()` between tests.
 
+### Custom gauges
+
+`record_metric(name, value)` records an arbitrary numeric sample under `name`
+(retrievable via `get_metrics_collector()._custom_metrics[name]`). Continuum
+uses this for operational gauges:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `session_persistence_degraded` | gauge `0.0`/`1.0` | `1.0` while the session client has fallen back from Redis to the non-durable in-memory store; `0.0` when persistence is healthy. Emitted on every transition (degrade → `1.0`, healthy resolution → `0.0`). |
+
+Alert on `session_persistence_degraded == 1.0` to catch silent loss of session
+durability. See [session.md §10](session.md#10--lazy-initialization--in-memory-fallback)
+for what triggers it.
+
+---
+
+## 6b · Health checks
+
+Health checks live in `continuum.core.health`, alongside metrics because they
+serve the same operational dashboards.
+
+```python
+from continuum.core.health import HealthCheck, HealthStatus
+
+report = await HealthCheck().run_all()        # all registered checks
+```
+
+Each check returns a `HealthCheckResult` (`name`, `status`, `message`,
+`latency_ms`, `details`). Statuses: `HEALTHY`, `DEGRADED`, `UNHEALTHY`,
+`UNKNOWN`.
+
+### `session_persistence`
+
+Registered by default. Reports whether session persistence has **degraded to
+the in-memory store** — distinct from a raw Redis ping, because it reflects what
+the `SessionClient` actually did:
+
+| Condition | Status | Message |
+|---|---|---|
+| Sessions disabled | `HEALTHY` | `Sessions disabled (SESSION_ENABLED=false)` |
+| Client not yet created (lazy) | `HEALTHY` | `Session client not initialized yet` |
+| Durable backend active | `HEALTHY` | `Session persistence active (durable backend)` |
+| Fell back to in-memory | `DEGRADED` | `Session persistence degraded to non-durable in-memory store` |
+
+The check **observes without initializing** — it never force-creates the session
+client (which would cascade to the memory client and eagerly connect the vector
+store, risking a startup hang). It reads the client only if it already exists.
+
 ---
 
 ## 7 · Error reporting

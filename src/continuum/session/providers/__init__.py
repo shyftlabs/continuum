@@ -17,6 +17,10 @@ Adding New Providers:
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
 
+# In-memory provider has no external dependencies — always available. Used as
+# the graceful-degradation fallback when Redis is disabled/unconfigured/unreachable.
+from continuum.session.providers.memory import MemorySessionProvider
+
 # Provider registry maps provider names to their classes
 PROVIDER_REGISTRY: dict[str, type[BaseSessionProvider]] = {}
 
@@ -91,6 +95,7 @@ def is_redis_available() -> bool:
 
 
 # Register default providers at module load
+register_provider("memory", MemorySessionProvider)
 if _REDIS_AVAILABLE and RedisSessionProvider is not None:
     register_provider("redis", RedisSessionProvider)
 
@@ -106,6 +111,8 @@ __all__ = [
     "create_provider",
     "list_providers",
     "is_redis_available",
+    # Providers
+    "MemorySessionProvider",
     # Providers (conditional)
     "RedisSessionProvider",
 ]

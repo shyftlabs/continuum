@@ -601,6 +601,10 @@ function generateStatusline() {
   }
   lines.push(header);
 
+  // Compact mode: single-line statusline (header only). The multi-line
+  // DDD/Swarm/Architecture/AgentDB panel below is intentionally skipped.
+  return header;
+
   // Separator
   lines.push(c.dim + '\u2500'.repeat(53) + c.reset);
 

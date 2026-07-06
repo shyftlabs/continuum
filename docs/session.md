@@ -5,6 +5,10 @@ and multi-tenant key-prefix isolation. `AgentRunner` uses sessions
 automatically when you pass a `session_id` — most app code never calls
 `SessionClient` directly.
 
+Persistence is initialized **lazily** (no connection until the first session
+op) and degrades cleanly to a non-durable in-memory store if Redis is
+unreachable — see [§10](#10--lazy-initialization--in-memory-fallback).
+
 ---
 
 ## 1 · Quick start
@@ -51,6 +55,10 @@ messages to long-term memory — see Section 5.
 - `config: SessionConfig`
 - `memory_client: MemoryClient` — pulled from the global container
 - `is_enabled: bool`
+- `persistence_degraded: bool` — `True` once the client has fallen back from
+  Redis to the in-memory store at runtime (see §10). Stays `False` when
+  `"memory"` was chosen on purpose — it flags an *unplanned* loss of durability,
+  not in-memory use itself.
 
 ### Methods
 
@@ -90,7 +98,7 @@ reset_global_session()                            # for tests
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `provider` | `str` | `"redis"` | Currently the only built-in provider |
+| `provider` | `str` | `"redis"` | Built-in: `"redis"` (durable) and `"memory"` (in-process, non-durable) |
 | `enabled` | `bool` | `settings.session_enabled` | Master switch |
 | `redis_host` | `str` | `settings.session_redis_host` | |
 | `redis_port` | `int` | `settings.session_redis_port` | **Default `6380`**, not `6379` |
@@ -103,6 +111,7 @@ reset_global_session()                            # for tests
 | `key_prefix` | `str` | `settings.session_key_prefix` | Default `"orchestrator:session"` |
 | `message_limit_strategy` | `Literal["error","sliding_window"]` | `"sliding_window"` | When `max_messages` is hit |
 | `sliding_window_trim_count` | `int` | `100` | How many oldest messages to drop |
+| `fallback_mode` | `Literal["degrade","fail"]` | `settings.session_fallback_mode` (`"degrade"`) | What to do when Redis is unreachable — see §10 |
 
 Methods:
 - `is_configured() -> bool`
@@ -183,6 +192,14 @@ built-in `RedisSessionProvider` implements this with:
 `is_redis_available()` returns `False` if `redis` isn't installed
 (unlikely — `redis` is a hard runtime dependency).
 
+The second built-in is `MemorySessionProvider` (`provider="memory"`): an
+in-process store that mirrors the same semantics (deterministic session ids,
+sliding-window trim, metadata) but holds everything in a plain dict. It is
+**non-durable** — state is lost when the process exits — and it never raises a
+connection error. It serves two roles: an explicit zero-dependency provider for
+ephemeral or test flows, and the automatic fallback target when Redis is
+unreachable (see §10).
+
 To swap in a custom provider:
 
 ```python
@@ -259,3 +276,51 @@ await client.delete_session(sid)
 - **Sliding-window trim drops 100 oldest messages by default** when
   `max_messages` is hit. If you'd rather error out, set
   `message_limit_strategy="error"` and catch `SessionMessageLimitError`.
+
+---
+
+## 10 · Lazy initialization & in-memory fallback
+
+The session client **never connects to Redis at construction time**. The
+provider is resolved lazily on the first session operation. Two consequences:
+
+- **Disabled or unconfigured persistence costs nothing.** If sessions are off,
+  or no Redis host is set, no connection is attempted and no warnings are
+  logged — the feature is silent when it isn't in use.
+- **Startup never blocks** on a slow or absent Redis.
+
+### What happens when Redis is unreachable
+
+There are two moments persistence can fail, both governed by `fallback_mode`:
+
+1. **At first use** — the lazy connect/ping fails (Redis down or misconfigured).
+2. **Mid-session** — Redis was reachable, then drops out partway through a
+   conversation. Any session op that raises `SessionConnectionError` triggers
+   the same handling.
+
+| `fallback_mode` | Behavior on failure |
+|---|---|
+| `"degrade"` *(default)* | Swap to `MemorySessionProvider` and keep serving. Durability is lost, but the request succeeds. The client sets `persistence_degraded = True` and emits the `session_persistence_degraded` gauge. **One** warning is logged for the transition — not one error per request. |
+| `"fail"` | Raise `SessionConnectionError` instead of silently degrading. Use this when a session write *must* be durable and you'd rather surface the outage. |
+
+Set it via the `SESSION_FALLBACK_MODE` environment variable (`degrade` | `fail`)
+or per-client with `SessionConfig(fallback_mode=...)`.
+
+### Observing the degraded state
+
+Degradation is intentionally quiet on the request path, so it is surfaced for
+operators two ways (see [observability.md](observability.md)):
+
+- **Health check** `session_persistence` flips from `healthy` to `degraded`.
+- **Metric** `session_persistence_degraded` is a gauge: `1.0` while degraded,
+  `0.0` when healthy.
+
+```python
+client = SessionClient(session_config=SessionConfig(fallback_mode="degrade"))
+sid = await client.get_or_create_session(user_id="u1")  # Redis down → in-memory
+assert client.persistence_degraded is True               # durability lost, still serving
+```
+
+> **`persistence_degraded` vs. `provider="memory"`** — choosing the in-memory
+> provider on purpose is *not* a degradation, so the flag stays `False`. The
+> flag means specifically "we wanted Redis and couldn't get it."

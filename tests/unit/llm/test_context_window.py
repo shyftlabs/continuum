@@ -74,3 +74,21 @@ class TestContextWindowManager:
         cwm = ContextWindowManager()
         limits = cwm.get_model_limits("unknown-model-xyz")
         assert limits.max_tokens > 0
+
+    def test_new_claude_model_uses_family_default(self):
+        """A Claude id not in the exact table (hyphen minor) must get 200k, not 4096."""
+        cwm = ContextWindowManager()
+        assert cwm.get_model_limits("claude-opus-4-8").max_tokens == 200000
+        assert cwm.get_model_limits("claude-fable-5").max_tokens == 200000
+        assert cwm.get_model_limits("anthropic/claude-sonnet-4-6").max_tokens == 200000
+
+    def test_unknown_non_family_model_uses_conservative_default(self):
+        """A model outside any known family still falls back to 4096."""
+        cwm = ContextWindowManager()
+        assert cwm.get_model_limits("totally-unknown-model-x").max_tokens == 4096
+
+    def test_unknown_gemini_falls_back_to_family_when_api_unavailable(self, monkeypatch):
+        """If the Gemini API lookup yields nothing, the gemini family default applies."""
+        cwm = ContextWindowManager()
+        monkeypatch.setattr(cwm, "_fetch_gemini_limits", lambda model: None)
+        assert cwm.get_model_limits("gemini-9-ultra").max_tokens == 1000000

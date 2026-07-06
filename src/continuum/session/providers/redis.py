@@ -13,11 +13,9 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
-import redis.asyncio as redis
-
+from continuum.connectors.redis import RedisConnector
 from continuum.logging import get_logger
 from continuum.observability.decorators import observe
-from continuum.observability.error_reporter import report_error
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import (
@@ -81,8 +79,13 @@ class RedisSessionProvider(BaseSessionProvider):
         self._config = config
         self._redis: Any = None  # redis.Redis instance
         self._pool: Any = None  # redis.ConnectionPool instance
+        # The connector is the single place the Redis client/pool is built.
+        self._connector = RedisConnector(config)
         self._initialized = False
         self._lock = threading.Lock()
+        # Reason the most recent aping() failed (None on success). Lets the
+        # SessionClient report the real cause instead of a generic "unreachable".
+        self._last_probe_error: str | None = None
 
         if auto_initialize:
             self.initialize()
@@ -101,6 +104,15 @@ class RedisSessionProvider(BaseSessionProvider):
     def is_initialized(self) -> bool:
         """Check if the provider is initialized and ready."""
         return self._config.enabled and self._initialized and self._redis is not None
+
+    @property
+    def last_probe_error(self) -> str | None:
+        """Reason the most recent aping() failed, or None if it succeeded.
+
+        Lets the SessionClient report the actual cause (auth error, TLS handshake,
+        bad config) instead of a blanket 'Redis is unreachable'.
+        """
+        return self._last_probe_error
 
     def initialize(self) -> bool:
         """
@@ -129,34 +141,13 @@ class RedisSessionProvider(BaseSessionProvider):
                 return False
 
             try:
-                # Prepare connection arguments
-                conn_kwargs = {
-                    "host": self._config.redis_host,
-                    "port": self._config.redis_port,
-                    "password": self._config.redis_password,
-                    "db": self._config.redis_db,
-                    "max_connections": self._config.redis_max_connections,
-                    "decode_responses": True,
-                    "socket_connect_timeout": 5,
-                    "socket_timeout": 5,
-                    # When all connections are in use, wait up to this many seconds for
-                    # one to free up instead of raising MaxConnectionsError immediately.
-                    "timeout": 5,
-                }
-
-                if self._config.redis_ssl:
-                    conn_kwargs["ssl"] = True
-
-                # Use a BlockingConnectionPool so bursts above max_connections queue and
-                # wait for a free connection (up to `timeout`s) rather than dropping the
-                # request. Prevents silent write loss under concurrent load (S-001).
-                self._pool = redis.BlockingConnectionPool(**conn_kwargs)
-
-                # Create async Redis connection using pool
-                self._redis = redis.Redis(
-                    connection_pool=self._pool,
-                    decode_responses=True,
-                )
+                # The RedisConnector owns the client/pool construction (single
+                # source of truth for connection params, mode, and auth). It uses
+                # a BlockingConnectionPool so bursts above max_connections queue
+                # for a free connection rather than dropping the request
+                # (prevents silent write loss under concurrent load, S-001).
+                self._redis = self._connector.build_client()
+                self._pool = self._connector.pool
 
                 self._initialized = True
                 logger.info(
@@ -180,6 +171,30 @@ class RedisSessionProvider(BaseSessionProvider):
                 logger.error(f"Failed to initialize Redis Session Provider: {error_msg}")
                 self._initialized = True
                 return False
+
+    async def aping(self) -> bool:
+        """Best-effort connectivity probe — returns False on any failure, never raises.
+
+        Ensures the (lazy) connection pool exists, then issues a single PING.
+        The session client uses this once, on first use, to decide between Redis
+        and the in-memory fallback — so an unreachable Redis costs one quiet probe
+        instead of an error logged on every request.
+        """
+        try:
+            if not self._initialized:
+                self.initialize()
+            if self._redis is None:
+                self._last_probe_error = (
+                    "Redis client not initialized (sessions disabled or misconfigured)"
+                )
+                return False
+            await self._redis.ping()
+            self._last_probe_error = None  # success clears any prior reason
+            return True
+        except Exception as e:  # contract preserved: probe never raises
+            self._last_probe_error = f"{type(e).__name__}: {e}"
+            logger.debug("Redis session probe failed: %s", self._last_probe_error)
+            return False
 
     def _ensure_enabled(self) -> None:
         """Raise error if sessions are not enabled."""
@@ -318,12 +333,10 @@ class RedisSessionProvider(BaseSessionProvider):
         except (SessionNotEnabledError, SessionConnectionError):
             raise
         except Exception as e:
-            logger.error(f"Failed to get or create session: {e}")
-            report_error(
-                e,
-                context="session_provider_get_or_create",
-                metadata={"session_id": resolved_session_id, "user_id": user_id},
-            )
+            # Surface as SessionConnectionError; the caller (SessionClient) owns
+            # logging/reporting and decides whether to degrade quietly or fail.
+            # Keep this layer quiet so the fallback path has no error spam.
+            logger.debug(f"Redis get_or_create_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get or create session: {str(e)}",
                 session_id=resolved_session_id,
@@ -446,12 +459,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except (SessionNotFoundError, SessionMessageLimitError):
             raise
         except Exception as e:
-            logger.error(f"Failed to add message to session: {e}")
-            report_error(
-                e,
-                context="session_provider_add_message",
-                metadata={"session_id": session_id, "message_role": message.role},
-            )
+            logger.debug(f"Redis add_message failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to add message to session: {str(e)}",
                 session_id=session_id,
@@ -548,12 +556,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except SessionNotFoundError:
             raise
         except Exception as e:
-            logger.error(f"Failed to get messages from session: {e}")
-            report_error(
-                e,
-                context="session_provider_get_messages",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis get_messages failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get messages from session: {str(e)}",
                 session_id=session_id,
@@ -592,12 +595,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return metadata
 
         except Exception as e:
-            logger.error(f"Failed to get session metadata: {e}")
-            report_error(
-                e,
-                context="session_provider_get_metadata",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis get_session_metadata failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to get session metadata: {str(e)}",
                 session_id=session_id,
@@ -639,12 +637,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to update session metadata: {e}")
-            report_error(
-                e,
-                context="session_provider_update_metadata",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis update_session_metadata failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to update session metadata: {str(e)}",
                 session_id=session_id,
@@ -694,12 +687,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to clear session: {e}")
-            report_error(
-                e,
-                context="session_provider_clear",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis clear_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to clear session: {str(e)}",
                 session_id=session_id,
@@ -736,12 +724,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return True
 
         except Exception as e:
-            logger.error(f"Failed to delete session: {e}")
-            report_error(
-                e,
-                context="session_provider_delete",
-                metadata={"session_id": session_id},
-            )
+            logger.debug(f"Redis delete_session failed (surfacing to caller): {e}")
             raise SessionConnectionError(
                 f"Failed to delete session: {str(e)}",
                 session_id=session_id,
