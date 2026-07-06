@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/continuum-logo-dark.png" />
-  <img src="docs/assets/continuum-logo.png" alt="Continuum" width="460" />
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/shyftlabs/continuum/main/docs/assets/continuum-logo-dark.png" />
+  <img src="https://raw.githubusercontent.com/shyftlabs/continuum/main/docs/assets/continuum-logo.png" alt="Continuum" width="460" />
 </picture>
 
 ##### by **[ShyftLabs](https://shyftlabs.io/)**
@@ -14,15 +14,15 @@ Build, run, and deploy reliable AI agents at enterprise scale — multi-LLM rout
 <br />
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-0a0a0a.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Apache_2.0-0a0a0a.svg?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-0a0a0a.svg?style=for-the-badge)](https://github.com/shyftlabs/continuum/releases)
+[![License](https://img.shields.io/badge/license-Apache_2.0-0a0a0a.svg?style=for-the-badge)](https://github.com/shyftlabs/continuum/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/shyftlabs-continuum?style=for-the-badge&color=0a0a0a&label=pypi)](https://pypi.org/project/shyftlabs-continuum/)
 
 [![CI](https://img.shields.io/github/actions/workflow/status/shyftlabs/continuum/ci.yml?branch=main&label=CI&logo=github)](https://github.com/shyftlabs/continuum/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-continuum.shyftlabs.io-blue?logo=readthedocs&logoColor=white)](https://docs.continuum.shyftlabs.io/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-v2.1-ff69b4.svg)](CODE_OF_CONDUCT.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/shyftlabs/continuum/blob/main/CONTRIBUTING.md)
+[![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-v2.1-ff69b4.svg)](https://github.com/shyftlabs/continuum/blob/main/CODE_OF_CONDUCT.md)
 
-[**📖 Documentation**](https://docs.continuum.shyftlabs.io/) · [**⚡ Quick start**](#-quick-start) · [**⚙️ Configuration**](#️-configuring-continuum) · [**🧩 Components**](#-components) · [**🧪 Examples**](#-examples) · [**🤝 Contributing**](CONTRIBUTING.md)
+[**📖 Documentation**](https://docs.continuum.shyftlabs.io/) · [**⚡ Quick start**](#-quick-start) · [**⚙️ Configuration**](#️-configuring-continuum) · [**🧩 Components**](#-components) · [**🧪 Examples**](#-examples) · [**🤝 Contributing**](https://github.com/shyftlabs/continuum/blob/main/CONTRIBUTING.md)
 
 </div>
 
@@ -106,7 +106,7 @@ asyncio.run(main())
 
 ## ⚙️ Configuring Continuum
 
-Continuum is configured through environment variables (copy [`.env.template`](.env.template) → `.env`). Set keys only for the providers and components you use — everything else has sensible defaults. The most common settings:
+Continuum is configured through environment variables (copy [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) → `.env`). Set keys only for the providers and components you use — everything else has sensible defaults. The most common settings:
 
 #### LLM providers & routing
 
@@ -150,7 +150,7 @@ Continuum is configured through environment variables (copy [`.env.template`](.e
 | `TEMPORAL_ENABLED` | Enable durable workflow orchestration | `false` |
 | `TEMPORAL_HOST` | Temporal frontend | `localhost:7233` |
 
-> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings. See [`.env.template`](.env.template) for the complete, annotated reference.
+> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings. See [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) for the complete, annotated reference.
 
 ## 🧩 Components
 
@@ -169,11 +169,11 @@ Continuum is configured through environment variables (copy [`.env.template`](.e
 
 Full documentation lives at **[docs.continuum.shyftlabs.io](https://docs.continuum.shyftlabs.io/)** — guides for building & running agents, Smart Inference, memory, tools/MCP, workflows, handoffs, streaming, evaluation, and the research behind it.
 
-Markdown sources are also in [`docs/`](docs/) if you prefer reading on GitHub — e.g. [`agent.md`](docs/agent.md), [`memory.md`](docs/memory.md), [`tools.md`](docs/tools.md), and the integration [`GUIDE.md`](docs/GUIDE.md).
+Markdown sources are also in [`docs/`](https://github.com/shyftlabs/continuum/tree/main/docs) if you prefer reading on GitHub — e.g. [`agent.md`](https://github.com/shyftlabs/continuum/blob/main/docs/agent.md), [`memory.md`](https://github.com/shyftlabs/continuum/blob/main/docs/memory.md), [`tools.md`](https://github.com/shyftlabs/continuum/blob/main/docs/tools.md), and the integration [`GUIDE.md`](https://github.com/shyftlabs/continuum/blob/main/docs/GUIDE.md).
 
 ## 🧪 Examples
 
-Runnable demos live under [`playground/`](playground/):
+Runnable demos live under [`playground/`](https://github.com/shyftlabs/continuum/tree/main/playground):
 
 - **`gateway-local-shop`** — an MCP server + agent + chat UI for a pet-shop assistant (end-to-end: server → agent → UI).
 - **`gateway-multi-agent-shop`** — a multi-agent workflow variant with routing and handoffs.
@@ -181,15 +181,15 @@ Runnable demos live under [`playground/`](playground/):
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the branch model, Conventional Commits, DCO sign-off, and local setup. By participating you agree to our [Code of Conduct](CODE_OF_CONDUCT.md).
+Contributions are welcome! Please read [`CONTRIBUTING.md`](https://github.com/shyftlabs/continuum/blob/main/CONTRIBUTING.md) for the branch model, Conventional Commits, DCO sign-off, and local setup. By participating you agree to our [Code of Conduct](https://github.com/shyftlabs/continuum/blob/main/CODE_OF_CONDUCT.md).
 
-- 🐛 **Bugs & features** — use the [issue templates](.github/ISSUE_TEMPLATE)
+- 🐛 **Bugs & features** — use the [issue templates](https://github.com/shyftlabs/continuum/tree/main/.github/ISSUE_TEMPLATE)
 - 💬 **Questions & ideas** — [GitHub Discussions](https://github.com/shyftlabs/continuum/discussions)
-- 🔒 **Security** — report privately via [`SECURITY.md`](SECURITY.md), never a public issue
+- 🔒 **Security** — report privately via [`SECURITY.md`](https://github.com/shyftlabs/continuum/blob/main/SECURITY.md), never a public issue
 
 ## 📄 License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io/)
+Licensed under the [Apache License, Version 2.0](https://github.com/shyftlabs/continuum/blob/main/LICENSE). Copyright © 2025–2026 [ShyftLabs Inc.](https://shyftlabs.io/)
 
 For commercial / enterprise inquiries — SLAs, indemnification, hosted offerings, custom features — contact **[continuum@shyftlabs.io](mailto:continuum@shyftlabs.io)**.
 

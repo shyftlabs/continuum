@@ -114,6 +114,7 @@ class HealthCheck:
         self._checks["langfuse"] = self._check_langfuse
         self._checks["llm"] = self._check_llm
         self._checks["temporal"] = self._check_temporal
+        self._checks["session_persistence"] = self._check_session_persistence
 
     def register_check(
         self,
@@ -202,6 +203,66 @@ class HealthCheck:
                 name=name,
                 status=HealthStatus.UNHEALTHY,
                 message=f"Health check failed: {str(e)}",
+            )
+
+    async def _check_session_persistence(self) -> HealthCheckResult:
+        """Report whether session persistence has degraded to in-memory.
+
+        Distinct from the raw Redis check: this reflects whether the SessionClient
+        actually fell back to the non-durable in-memory store (so it can be
+        alerted on independently of Redis reachability).
+        """
+        start_time = time.time()
+
+        if not settings.session_enabled:
+            return HealthCheckResult(
+                name="session_persistence",
+                status=HealthStatus.HEALTHY,
+                message="Sessions disabled (SESSION_ENABLED=false)",
+                details={"enabled": False, "persistence_degraded": False},
+            )
+
+        try:
+            from continuum.core.container import get_container
+
+            container = get_container()
+            # A health check must OBSERVE, not initialize. Accessing the
+            # session_client property would create it — which cascades to the
+            # memory client and eagerly connects the vector store, potentially
+            # blocking (e.g. Milvus still warming up). Only read it if it already
+            # exists; otherwise nothing has degraded yet.
+            if not container.has_session_client():
+                return HealthCheckResult(
+                    name="session_persistence",
+                    status=HealthStatus.HEALTHY,
+                    message="Session client not initialized yet",
+                    latency_ms=(time.time() - start_time) * 1000,
+                    details={"enabled": True, "persistence_degraded": False, "initialized": False},
+                )
+
+            session_client = container.session_client
+            degraded = bool(session_client and session_client.persistence_degraded)
+            latency = (time.time() - start_time) * 1000
+            if degraded:
+                return HealthCheckResult(
+                    name="session_persistence",
+                    status=HealthStatus.DEGRADED,
+                    message="Session persistence degraded to non-durable in-memory store",
+                    latency_ms=latency,
+                    details={"enabled": True, "persistence_degraded": True},
+                )
+            return HealthCheckResult(
+                name="session_persistence",
+                status=HealthStatus.HEALTHY,
+                message="Session persistence active (durable backend)",
+                latency_ms=latency,
+                details={"enabled": True, "persistence_degraded": False},
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name="session_persistence",
+                status=HealthStatus.UNKNOWN,
+                message=f"Could not determine session persistence state: {e}",
             )
 
     async def check_redis(self) -> HealthCheckResult:

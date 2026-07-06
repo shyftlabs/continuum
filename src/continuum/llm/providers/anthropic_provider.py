@@ -35,12 +35,47 @@ _PROVIDER = "anthropic"
 class AnthropicProvider(BaseProvider):
     """Calls Anthropic Claude directly via the anthropic SDK."""
 
+    # Models learned at runtime to reject an explicit `temperature` parameter
+    # (Claude 4.6+ adaptive-thinking models return a 400 if one is supplied).
+    # Populated on the first such 400; consulted by _build_kwargs thereafter so
+    # subsequent calls omit temperature up front instead of retrying every time.
+    #
+    # CLASS-level on purpose: get_provider() constructs a fresh AnthropicProvider
+    # on every LLM call, so an instance-level cache would never survive between
+    # requests and every call would re-pay the retry. A class attribute persists
+    # for the process lifetime and is shared across all instances (the rejection
+    # is a property of the model, not of the client/key).
+    _temp_unsupported: set[str] = set()
+
     def __init__(self, api_key: str | None = None):
         self._client = anthropic.Anthropic(api_key=api_key)
         self._async_client = anthropic.AsyncAnthropic(api_key=api_key)
 
     def _normalize_model(self, model: str) -> str:
         return model.removeprefix("anthropic/").removeprefix("claude/")
+
+    @staticmethod
+    def _is_temperature_rejection(e: Exception) -> bool:
+        """True if `e` is a 400 specifically about the temperature parameter."""
+        return isinstance(e, anthropic.BadRequestError) and "temperature" in str(e).lower()
+
+    def _mark_temp_unsupported(self, kwargs: dict[str, Any]) -> bool:
+        """Record that this model rejects temperature and strip it from `kwargs`.
+
+        Returns True if temperature was present and removed (so a retry is worth
+        attempting), False otherwise (nothing changed — do not retry).
+        """
+        if "temperature" not in kwargs:
+            return False
+        model = kwargs.get("model", "")
+        self._temp_unsupported.add(model)
+        kwargs.pop("temperature")
+        logger.warning(
+            "Model '%s' rejected an explicit temperature; retrying without it and "
+            "omitting it for this model for the rest of this process.",
+            model,
+        )
+        return True
 
     def _split_messages(
         self, messages: list[dict[str, Any]]
@@ -187,7 +222,10 @@ class AnthropicProvider(BaseProvider):
             system = (system + "\nRespond with valid JSON only.").strip()
         if system:
             kwargs["system"] = system
-        if config.temperature is not None:
+        if (
+            config.temperature is not None
+            and self._normalize_model(config.model) not in self._temp_unsupported
+        ):
             kwargs["temperature"] = config.temperature
         if config.top_p is not None:
             kwargs["top_p"] = config.top_p
@@ -249,6 +287,15 @@ class AnthropicProvider(BaseProvider):
             response = self._client.messages.create(**kwargs)
             return LLMResponse.from_anthropic_response(response, config.model)
         except Exception as e:
+            # Error-driven drop: if the model rejected temperature, strip it and
+            # retry once. The model is cached so future calls skip it up front.
+            if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
+                try:
+                    response = self._client.messages.create(**kwargs)
+                    return LLMResponse.from_anthropic_response(response, config.model)
+                except Exception as e2:
+                    self._handle_exception(e2, config.model)
+                    raise
             self._handle_exception(e, config.model)
             raise
 
@@ -264,8 +311,23 @@ class AnthropicProvider(BaseProvider):
             response = await self._async_client.messages.create(**kwargs)
             return LLMResponse.from_anthropic_response(response, config.model)
         except Exception as e:
+            if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
+                try:
+                    response = await self._async_client.messages.create(**kwargs)
+                    return LLMResponse.from_anthropic_response(response, config.model)
+                except Exception as e2:
+                    self._handle_exception(e2, config.model)
+                    raise
             self._handle_exception(e, config.model)
             raise
+
+    def _do_stream(self, kwargs: dict[str, Any], model: str) -> Iterator[StreamChunk]:
+        with self._client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield StreamChunk(content=text, is_finished=False)
+            # Yield a final chunk with finish reason
+            final = stream.get_final_message()
+            yield StreamChunk.from_anthropic_response(final, model)
 
     def stream(
         self,
@@ -276,15 +338,26 @@ class AnthropicProvider(BaseProvider):
     ) -> Iterator[StreamChunk]:
         kwargs = self._build_kwargs(messages, config, tools, tool_choice)
         try:
-            with self._client.messages.stream(**kwargs) as stream:
-                for text in stream.text_stream:
-                    yield StreamChunk(content=text, is_finished=False)
-                # Yield a final chunk with finish reason
-                final = stream.get_final_message()
-                yield StreamChunk.from_anthropic_response(final, config.model)
+            yield from self._do_stream(kwargs, config.model)
         except Exception as e:
+            # A temperature-400 fires on stream open, before any chunk is yielded,
+            # so retrying without temperature cannot double-emit content.
+            if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
+                try:
+                    yield from self._do_stream(kwargs, config.model)
+                    return
+                except Exception as e2:
+                    self._handle_exception(e2, config.model)
+                    raise
             self._handle_exception(e, config.model)
             raise
+
+    async def _do_astream(self, kwargs: dict[str, Any], model: str) -> AsyncIterator[StreamChunk]:
+        async with self._async_client.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                yield StreamChunk(content=text, is_finished=False)
+            final = await stream.get_final_message()
+            yield StreamChunk.from_anthropic_response(final, model)
 
     async def astream(
         self,
@@ -295,11 +368,16 @@ class AnthropicProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         kwargs = self._build_kwargs(messages, config, tools, tool_choice)
         try:
-            async with self._async_client.messages.stream(**kwargs) as stream:
-                async for text in stream.text_stream:
-                    yield StreamChunk(content=text, is_finished=False)
-                final = await stream.get_final_message()
-                yield StreamChunk.from_anthropic_response(final, config.model)
+            async for chunk in self._do_astream(kwargs, config.model):
+                yield chunk
         except Exception as e:
+            if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
+                try:
+                    async for chunk in self._do_astream(kwargs, config.model):
+                        yield chunk
+                    return
+                except Exception as e2:
+                    self._handle_exception(e2, config.model)
+                    raise
             self._handle_exception(e, config.model)
             raise

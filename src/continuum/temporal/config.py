@@ -23,6 +23,8 @@ class TemporalConfig:
     enabled: bool = False
     host: str = "localhost:7233"
     namespace: str = "default"
+    tls: bool = False
+    api_key: str | None = None
     task_queue: str = "orchestrator-agents"
     enable_human_in_loop: bool = True
     approval_timeout_seconds: int = 86400
@@ -37,6 +39,8 @@ class TemporalConfig:
             enabled=settings.temporal_enabled,
             host=settings.temporal_host,
             namespace=settings.temporal_namespace,
+            tls=settings.temporal_tls,
+            api_key=settings.temporal_api_key,
             task_queue=settings.temporal_task_queue,
             enable_human_in_loop=settings.temporal_enable_human_in_loop,
             approval_timeout_seconds=settings.temporal_approval_timeout_seconds,
