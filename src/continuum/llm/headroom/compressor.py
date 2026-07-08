@@ -11,6 +11,7 @@ Phase 2 (CCR retrieval) is evidence-gated — see
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any
 
@@ -18,6 +19,23 @@ from continuum.llm.headroom.client import CompressionStats, HeadroomClient
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
+
+# CCR retrieval markers embedded in compressed content, e.g.
+#   "[2501 lines compressed to 7. Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]"
+# Needed because the /v1/compress `ccr_hashes` response field is UNRELIABLE —
+# verified empty even when markers are inserted (log/search compressor path,
+# sidecar v0.29.0). Hashes are the union of the field and this scan.
+_MARKER_HASH_RE = re.compile(r"hash=([0-9a-f]{24})")
+
+
+def _scan_marker_hashes(messages: list[dict[str, Any]]) -> set[str]:
+    """Extract CCR marker hashes from message content (any content shape)."""
+    found: set[str] = set()
+    for msg in messages:
+        content = msg.get("content")
+        if content:
+            found.update(_MARKER_HASH_RE.findall(str(content)))
+    return found
 
 
 class HeadroomCompressor:
@@ -78,8 +96,12 @@ class HeadroomCompressor:
                 (1 - stats.compression_ratio) * 100,
                 stats.transforms_applied,
             )
-        if ccr_hashes:
-            self._issued_hashes.update(ccr_hashes)
+        # Union of both hash sources (decision #6): the response field alone
+        # is unreliable — it was observed empty while markers WERE inserted.
+        issued = set(ccr_hashes) | _scan_marker_hashes(compressed)
+        if issued:
+            self._issued_hashes.update(issued)
+            logger.info("headroom: CCR issued %d retrievable hash(es)", len(issued))
         return compressed
 
 

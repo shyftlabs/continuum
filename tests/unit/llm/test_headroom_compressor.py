@@ -104,3 +104,51 @@ class TestFailurePolicy:
         await compressor.apply(ORIGINAL, model="gpt-4o")
         assert compressor.issued_hashes == set()
         assert compressor.last_stats is None
+
+
+class TestHashSourceUnion:
+    """Decision #6: `ccr_hashes` is unreliable (empty even when markers exist —
+    verified live 2026-07-08 on the log/search path). Hashes must come from
+    BOTH the response field AND a regex over marker text, union'd."""
+
+    MARKED = [
+        {"role": "user", "content": "Analyze this."},
+        {"role": "tool", "tool_call_id": "c1",
+         "content": "lines...\n[2501 lines compressed to 7. "
+                     "Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]"},
+    ]
+
+    async def test_marker_hash_recorded_when_field_empty(self):
+        """The real observed bug: marker in text, ccr_hashes=[]."""
+        client = _mock_client(result=(self.MARKED, STATS, []))
+        compressor = HeadroomCompressor(client=client, fail_open=True)
+        await compressor.apply(ORIGINAL, model="gpt-4o")
+        assert compressor.issued_hashes == {"7e443033ad1ff3f9ca0b8c49"}
+
+    async def test_union_of_field_and_markers(self):
+        client = _mock_client(result=(self.MARKED, STATS, ["aaaa1111aaaa1111aaaa1111"]))
+        compressor = HeadroomCompressor(client=client, fail_open=True)
+        await compressor.apply(ORIGINAL, model="gpt-4o")
+        assert compressor.issued_hashes == {
+            "aaaa1111aaaa1111aaaa1111",
+            "7e443033ad1ff3f9ca0b8c49",
+        }
+
+    async def test_no_false_positives_on_plain_content(self):
+        """Ordinary content with no marker must record nothing."""
+        client = _mock_client(result=(COMPRESSED, STATS, []))
+        compressor = HeadroomCompressor(client=client, fail_open=True)
+        await compressor.apply(ORIGINAL, model="gpt-4o")
+        assert compressor.issued_hashes == set()
+
+    async def test_marker_scan_handles_non_string_content(self):
+        """Block-style content (lists/None) must not crash the scan."""
+        weird = [
+            {"role": "assistant", "content": None},
+            {"role": "user", "content": [{"type": "text",
+             "text": "see [1 item compressed. Retrieve more: hash=bbbb2222bbbb2222bbbb2222]"}]},
+        ]
+        client = _mock_client(result=(weird, STATS, []))
+        compressor = HeadroomCompressor(client=client, fail_open=True)
+        await compressor.apply(ORIGINAL, model="gpt-4o")
+        assert compressor.issued_hashes == {"bbbb2222bbbb2222bbbb2222"}
