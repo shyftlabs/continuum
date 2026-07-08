@@ -37,6 +37,7 @@ dependencies = [
     "openai>=1.50.0",
     "anthropic>=0.40.0",
     "google-genai>=1.0.0",
+    "httpx>=0.27.0",  # Explicit dependency — llm/headroom sidecar client (was transitive via SDKs)
     "tiktoken>=0.7.0",
     "langfuse>=2.57.0,<3.0.0",
     "pydantic>=2.10.0",
