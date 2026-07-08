@@ -300,9 +300,16 @@ class ProgressiveContextManager:
         # Get model limits
         limits = self._context_window_manager.get_model_limits(model)
         current_tokens = self._context_window_manager.count_tokens(messages, model)
-        threshold_tokens = int(
-            limits.effective_input_limit * effective_config.compression_threshold
-        )
+        # With Headroom on, this manager is a rare last-resort safety net behind
+        # Headroom's cache-friendly per-turn compression: raise the trigger so
+        # the (cache-hostile, history-rewriting) summarization only fires near
+        # the true limit. max() — never lowers a user's higher threshold. The
+        # seam runs Headroom BEFORE this check, so `current_tokens` is already
+        # the post-Headroom count.
+        threshold_ratio = effective_config.compression_threshold
+        if settings.headroom_enabled:
+            threshold_ratio = max(threshold_ratio, settings.headroom_context_threshold)
+        threshold_tokens = int(limits.effective_input_limit * threshold_ratio)
 
         # Check if compression needed
         if current_tokens <= threshold_tokens:

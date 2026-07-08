@@ -251,6 +251,11 @@ class Settings(BaseSettings):
     headroom_api_key: str | None = None  # HEADROOM_API_KEY — bearer token if the sidecar sets one
     headroom_fail_open: bool = True  # True: sidecar error → forward uncompressed (recommended)
     headroom_timeout_seconds: float = 30.0  # Compress timeout (large payloads take seconds)
+    # When Headroom is on, raise the summarizer's trigger so the (cache-hostile,
+    # history-rewriting) summarizer fires only as a rare last resort behind
+    # Headroom's cache-friendly per-turn compression. max() semantics — never
+    # lowers an explicitly higher context_compression_threshold.
+    headroom_context_threshold: float = 0.92
 
     # -------------------------------------------------------------------------
     # Temporal Configuration (Optional - requires `pip install shyftlabs-continuum[temporal]`)
