@@ -241,6 +241,18 @@ class Settings(BaseSettings):
     context_cache_ttl_seconds: int = 3600  # Cache TTL for summaries (1 hour)
 
     # -------------------------------------------------------------------------
+    # Headroom Compression (Optional sidecar — run `headroom proxy` locally)
+    # -------------------------------------------------------------------------
+    # Off by default: requires a running sidecar (its API is loopback-only, so
+    # it must run on the same host). Applies to async calls (chat/chat_stream)
+    # only. See gap-analysis/headroom-native-integration-plan.md.
+    headroom_enabled: bool = False
+    headroom_api_base: str = "http://127.0.0.1:8787"  # HEADROOM_API_BASE — must be loopback
+    headroom_api_key: str | None = None  # HEADROOM_API_KEY — bearer token if the sidecar sets one
+    headroom_fail_open: bool = True  # True: sidecar error → forward uncompressed (recommended)
+    headroom_timeout_seconds: float = 30.0  # Compress timeout (large payloads take seconds)
+
+    # -------------------------------------------------------------------------
     # Temporal Configuration (Optional - requires `pip install shyftlabs-continuum[temporal]`)
     # -------------------------------------------------------------------------
     temporal_enabled: bool = False

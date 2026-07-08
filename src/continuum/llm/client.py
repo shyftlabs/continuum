@@ -309,6 +309,21 @@ class LLMClient:
         else:
             messages_dict = self._convert_messages(messages)
 
+        # Headroom sidecar compression — runs BEFORE the summarizer so its
+        # threshold check sees post-Headroom token counts (cache-friendly
+        # payload compression every turn; LLM summarization only as a rare
+        # last resort). Fail-open/fail-closed policy lives inside apply():
+        # fail-open never raises; fail-closed raises deliberately, so no
+        # try/except here beyond what apply() itself decides.
+        from continuum.config import settings as _settings
+
+        if _settings.headroom_enabled:
+            from continuum.llm.headroom.compressor import get_headroom_compressor
+
+            messages_dict = await get_headroom_compressor().apply(
+                messages_dict, effective_config.model
+            )
+
         # Context compression
         try:
             from continuum.llm.context_management import get_progressive_context_manager
@@ -458,6 +473,16 @@ class LLMClient:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
         effective_config = config or self.default_config
         messages_dict = self._convert_messages(messages)
+
+        # Headroom sidecar compression — before the summarizer, same as chat().
+        from continuum.config import settings as _settings
+
+        if _settings.headroom_enabled:
+            from continuum.llm.headroom.compressor import get_headroom_compressor
+
+            messages_dict = await get_headroom_compressor().apply(
+                messages_dict, effective_config.model
+            )
 
         # Context compression before streaming
         try:
