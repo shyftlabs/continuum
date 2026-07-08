@@ -1334,6 +1334,50 @@ class AgentRunner:
                         )
                         tool_call_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
 
+                        # Headroom CCR: intercept continuum_retrieve BEFORE the
+                        # emit/record points below — internal decompression
+                        # plumbing must not leak TOOL_CALL_* events or decision
+                        # steps, nor reach ToolService. Mirrors the handoff
+                        # special-case pattern. (Same interception as executor.py.)
+                        from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+                        if tool_name == RETRIEVE_TOOL_NAME:
+                            import json as _json
+
+                            from continuum.llm.headroom.compressor import (
+                                get_headroom_compressor,
+                            )
+
+                            raw_args = (
+                                tc.function.arguments
+                                if hasattr(tc, "function")
+                                else tc.get("function", {}).get("arguments", "{}")
+                            )
+                            try:
+                                _args = (
+                                    _json.loads(raw_args)
+                                    if isinstance(raw_args, str)
+                                    else (raw_args or {})
+                                )
+                            except Exception:
+                                _args = {}
+                            _content = await get_headroom_compressor().resolve_retrieve(
+                                str(_args.get("hash", "")), _args.get("query")
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "content": _content,
+                                }
+                            )
+                            # Purely-retrieve turn = plumbing, not agent work:
+                            # exempt from the max_turns budget (guarded — only
+                            # when the retrieve is the turn's sole tool call).
+                            if len(tool_calls) == 1:
+                                turn -= 1
+                            continue
+
                         is_handoff, target = agent.is_handoff_tool_call(tool_name)
                         if is_handoff and target:
                             yield AgentEvent(

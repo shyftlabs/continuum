@@ -483,6 +483,70 @@ class Executor(IExecutor):
                             }
                         )
 
+                    # Headroom CCR: intercept continuum_retrieve BEFORE dispatch —
+                    # it is internal plumbing (fetch originals of compressed
+                    # content from the sidecar), never a real tool. Handling it
+                    # here keeps it out of ToolService (policy gate), the
+                    # decision trace, and tool events. Mirrors the think/handoff
+                    # special-casing above.
+                    from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+                    def _tc_name(tc: Any) -> str:
+                        return (
+                            tc.function.name
+                            if hasattr(tc, "function")
+                            else tc.get("function", {}).get("name", "")
+                        )
+
+                    retrieve_calls = [
+                        tc for tc in regular_tool_calls if _tc_name(tc) == RETRIEVE_TOOL_NAME
+                    ]
+                    if retrieve_calls:
+                        import json as _json
+
+                        from continuum.llm.headroom.compressor import (
+                            get_headroom_compressor,
+                        )
+
+                        regular_tool_calls = [
+                            tc
+                            for tc in regular_tool_calls
+                            if _tc_name(tc) != RETRIEVE_TOOL_NAME
+                        ]
+                        compressor = get_headroom_compressor()
+                        for tc in retrieve_calls:
+                            tc_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
+                            raw_args = (
+                                tc.function.arguments
+                                if hasattr(tc, "function")
+                                else tc.get("function", {}).get("arguments", "{}")
+                            )
+                            try:
+                                args = (
+                                    _json.loads(raw_args)
+                                    if isinstance(raw_args, str)
+                                    else (raw_args or {})
+                                )
+                            except Exception:
+                                args = {}
+                            content = await compressor.resolve_retrieve(
+                                str(args.get("hash", "")), args.get("query")
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc_id,
+                                    "content": content,
+                                }
+                            )
+                        # A purely-retrieve turn is decompression plumbing, not
+                        # agent work — don't let it consume the max_turns budget.
+                        # Guarded: any real tool/handoff/think in the same turn
+                        # keeps normal counting (a model can't dodge the cap by
+                        # pairing calls with a retrieve).
+                        if not regular_tool_calls and not handoff_calls and not think_calls:
+                            turn -= 1
+
                     # Execute regular tools
                     if regular_tool_calls and self._tool_handler:
                         # Create summary for this turn's tool executions

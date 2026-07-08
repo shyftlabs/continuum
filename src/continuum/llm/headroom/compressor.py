@@ -38,6 +38,38 @@ def _scan_marker_hashes(messages: list[dict[str, Any]]) -> set[str]:
     return found
 
 
+# Reserved internal tool the model calls to fetch originals of compressed
+# content. Registered at agent startup (stable tool list => stable prompt
+# cache) and INTERCEPTED in the tool loop — never dispatched to ToolService.
+RETRIEVE_TOOL_NAME = "continuum_retrieve"
+
+RETRIEVE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": RETRIEVE_TOOL_NAME,
+        "description": (
+            "Retrieve the original uncompressed content behind a compression "
+            "marker like '[... compressed ... Retrieve more: hash=abc123]'. "
+            "Call this only when the compressed view is insufficient to answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "The hex hash from the compression marker",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional: what you are looking for in the original",
+                },
+            },
+            "required": ["hash"],
+        },
+    },
+}
+
+
 class HeadroomCompressor:
     """Applies sidecar compression to an outgoing message list.
 
@@ -102,7 +134,68 @@ class HeadroomCompressor:
         if issued:
             self._issued_hashes.update(issued)
             logger.info("headroom: CCR issued %d retrievable hash(es)", len(issued))
+
+        # Anti-doom-loop: NEVER re-compress a continuum_retrieve result. The
+        # model retrieved the original precisely because the compressed view
+        # was insufficient — compressing it again before the model sees it
+        # would erase the retrieval (observed live: retrieve → recompress →
+        # empty answer). Restore those tool messages' original content.
+        compressed = self._restore_retrieve_results(messages, compressed)
         return compressed
+
+    @staticmethod
+    def _restore_retrieve_results(
+        original: list[dict[str, Any]], compressed: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Restore original content of retrieve-result tool messages."""
+
+        def _tc_fields(tc: Any) -> tuple[str, str]:
+            if hasattr(tc, "function"):
+                return getattr(tc, "id", ""), tc.function.name
+            fn = tc.get("function") or {}
+            return tc.get("id", ""), fn.get("name", "")
+
+        retrieve_ids = {
+            tc_id
+            for m in original
+            if m.get("role") == "assistant"
+            for tc_id, name in (_tc_fields(tc) for tc in (m.get("tool_calls") or []))
+            if name == RETRIEVE_TOOL_NAME
+        }
+        if not retrieve_ids or len(original) != len(compressed):
+            return compressed
+        for i, msg in enumerate(original):
+            if msg.get("role") == "tool" and msg.get("tool_call_id") in retrieve_ids:
+                if compressed[i].get("content") != msg.get("content"):
+                    compressed[i] = {**compressed[i], "content": msg.get("content")}
+                    logger.debug("headroom: protected retrieve result at index %d", i)
+        return compressed
+
+    async def resolve_retrieve(self, hash_value: str, query: str | None = None) -> str:
+        """Resolve a model-issued `continuum_retrieve` call. Never raises.
+
+        SECURITY (anti-forgery — do NOT remove): the LLM chooses this hash and
+        can hallucinate or replay one from another context. Only serve hashes
+        this compressor itself recorded as issued, else a fabricated hash could
+        pull back another request's cached originals from the shared sidecar
+        store. Failures are fail-open text so the agent loop continues.
+        """
+        if hash_value not in self._issued_hashes:
+            logger.warning(f"headroom: rejected un-issued retrieve hash {hash_value!r}")
+            return (
+                f"[continuum_retrieve: hash {hash_value!r} was not issued in this "
+                "context. If the data came from a tool, re-run that tool instead.]"
+            )
+        try:
+            content = await self._client.retrieve(hash_value, query)
+        except Exception as e:
+            logger.warning(f"headroom: retrieve failed for {hash_value}: {e}")
+            return (
+                "[continuum_retrieve: retrieval failed (content may have expired). "
+                "If the data came from a tool, re-run that tool instead.]"
+            )
+        logger.info("headroom: retrieved original for hash %s (%d chars)", hash_value, len(content))
+        return content
 
 
 # Process-global compressor (Phase 1: hash bookkeeping is observability-only,

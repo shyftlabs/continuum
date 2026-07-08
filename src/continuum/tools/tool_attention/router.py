@@ -17,7 +17,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_BUILTIN_ALWAYS_PROMOTE = {"think"}
+# continuum_retrieve: Headroom's internal CCR tool — semantic search can never
+# rank it (the Milvus snapshot embeds tools once at startup) and the model must
+# always be able to call it when a compression marker is present.
+_BUILTIN_ALWAYS_PROMOTE = {"think", "continuum_retrieve"}
 
 # Last-run debug snapshot — updated each time apply_tool_attention fires.
 # Playground/web debug endpoint reads from this.
