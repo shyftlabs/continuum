@@ -483,7 +483,7 @@ class Executor(IExecutor):
                             }
                         )
 
-                    # Headroom CCR: intercept continuum_retrieve BEFORE dispatch —
+                    # Headroom CCR: intercept continuum_headroom_retrieve BEFORE dispatch —
                     # it is internal plumbing (fetch originals of compressed
                     # content from the sidecar), never a real tool. Handling it
                     # here keeps it out of ToolService (policy gate), the

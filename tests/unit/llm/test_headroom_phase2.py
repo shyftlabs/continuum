@@ -107,7 +107,7 @@ class TestStartupRegistration:
 
 
 class TestRetrieveResultProtection:
-    """Anti-doom-loop: a continuum_retrieve result must never be re-compressed
+    """Anti-doom-loop: a continuum_headroom_retrieve result must never be re-compressed
     (observed live: retrieve -> recompress -> the original vanishes again)."""
 
     ORIGINAL_LOG = "line1\n" * 5000 + "NEEDLE-XYZ"

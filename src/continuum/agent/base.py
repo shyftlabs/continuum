@@ -341,7 +341,7 @@ class BaseAgent:
         if self.config and self.config.react_mode and has_regular_tools:
             tools.insert(0, _THINK_TOOL)
 
-        # Headroom CCR: register continuum_retrieve at STARTUP (not per-turn) so
+        # Headroom CCR: register continuum_headroom_retrieve at STARTUP (not per-turn) so
         # the tool list — and tool_attention's cached summary prefix — stays
         # byte-stable across turns. The call is intercepted in the executor
         # loops, never dispatched to ToolService.

@@ -2,7 +2,7 @@
 
 Phase-1 scope: pre-call compression with fail-open/fail-closed policy and
 per-run hash bookkeeping from the response's ``ccr_hashes`` field.
-No `continuum_retrieve` tool injection (Phase 2, evidence-gated).
+No `continuum_headroom_retrieve` tool injection (Phase 2, evidence-gated).
 """
 
 from __future__ import annotations

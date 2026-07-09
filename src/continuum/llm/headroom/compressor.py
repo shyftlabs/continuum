@@ -4,7 +4,7 @@ Owns the fail-open/fail-closed policy and per-run hash bookkeeping. One
 instance per run/agent (the ``issued_hashes`` scope is the anti-forgery
 boundary for the future Phase-2 retrieve tool).
 
-Phase-1 scope is compress-only: no ``continuum_retrieve`` tool injection.
+Phase-1 scope is compress-only: no ``continuum_headroom_retrieve`` tool injection.
 Phase 2 (CCR retrieval) is evidence-gated — see
 ``gap-analysis/headroom-native-integration-plan.md``.
 """
@@ -41,7 +41,7 @@ def _scan_marker_hashes(messages: list[dict[str, Any]]) -> set[str]:
 # Reserved internal tool the model calls to fetch originals of compressed
 # content. Registered at agent startup (stable tool list => stable prompt
 # cache) and INTERCEPTED in the tool loop — never dispatched to ToolService.
-RETRIEVE_TOOL_NAME = "continuum_retrieve"
+RETRIEVE_TOOL_NAME = "continuum_headroom_retrieve"
 
 RETRIEVE_TOOL: dict[str, Any] = {
     "type": "function",
@@ -176,7 +176,7 @@ class HeadroomCompressor:
             self._issued_hashes.update(issued)
             logger.info("headroom: CCR issued %d retrievable hash(es)", len(issued))
 
-        # Anti-doom-loop: NEVER re-compress a continuum_retrieve result. The
+        # Anti-doom-loop: NEVER re-compress a continuum_headroom_retrieve result. The
         # model retrieved the original precisely because the compressed view
         # was insufficient — compressing it again before the model sees it
         # would erase the retrieval (observed live: retrieve → recompress →
@@ -214,7 +214,7 @@ class HeadroomCompressor:
         return compressed
 
     async def resolve_retrieve(self, hash_value: str, query: str | None = None) -> str:
-        """Resolve a model-issued `continuum_retrieve` call. Never raises.
+        """Resolve a model-issued `continuum_headroom_retrieve` call. Never raises.
 
         SECURITY (anti-forgery — do NOT remove): the LLM chooses this hash and
         can hallucinate or replay one from another context. Only serve hashes
@@ -225,7 +225,7 @@ class HeadroomCompressor:
         if hash_value not in self._issued_hashes:
             logger.warning(f"headroom: rejected un-issued retrieve hash {hash_value!r}")
             return (
-                f"[continuum_retrieve: hash {hash_value!r} was not issued in this "
+                f"[continuum_headroom_retrieve: hash {hash_value!r} was not issued in this "
                 "context. If the data came from a tool, re-run that tool instead.]"
             )
         try:
@@ -233,7 +233,7 @@ class HeadroomCompressor:
         except Exception as e:
             logger.warning(f"headroom: retrieve failed for {hash_value}: {e}")
             return (
-                "[continuum_retrieve: retrieval failed (content may have expired). "
+                "[continuum_headroom_retrieve: retrieval failed (content may have expired). "
                 "If the data came from a tool, re-run that tool instead.]"
             )
         logger.info("headroom: retrieved original for hash %s (%d chars)", hash_value, len(content))

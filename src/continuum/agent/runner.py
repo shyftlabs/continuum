@@ -1334,7 +1334,7 @@ class AgentRunner:
                         )
                         tool_call_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
 
-                        # Headroom CCR: intercept continuum_retrieve BEFORE the
+                        # Headroom CCR: intercept continuum_headroom_retrieve BEFORE the
                         # emit/record points below — internal decompression
                         # plumbing must not leak TOOL_CALL_* events or decision
                         # steps, nor reach ToolService. Mirrors the handoff
