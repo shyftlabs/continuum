@@ -25,6 +25,45 @@ from continuum.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Per-message content preview length for DEBUG payload logs. Full blobs (a
+# 44k-char tool result) flood the terminal, so each message's content is
+# truncated to this many chars with its true length noted — enough to see the
+# structure and the before/after effect without the wall of text.
+_DEBUG_CONTENT_PREVIEW = 220
+
+
+def _compact_messages(messages: list[dict[str, Any]]) -> str:
+    """One line per message: role, content preview (+true length), tool info.
+
+    Compressed blocks (small) print in full; big originals show a preview
+    tagged with how much was elided — so the before/after contrast is obvious
+    at a glance in the DEBUG log.
+    """
+    lines: list[str] = []
+    for i, m in enumerate(messages):
+        role = m.get("role", "?")
+        parts = [f"[{i}] {role}"]
+        tcs = m.get("tool_calls")
+        if tcs:
+            names = ", ".join(
+                (tc.get("function", {}) or {}).get("name", "?")
+                for tc in tcs
+                if isinstance(tc, dict)
+            )
+            parts.append(f"tool_calls=[{names}]")
+        if m.get("tool_call_id"):
+            parts.append(f"tcid={m['tool_call_id']}")
+        content = m.get("content")
+        if content is not None:
+            s = str(content)
+            if len(s) > _DEBUG_CONTENT_PREVIEW:
+                preview = s[:_DEBUG_CONTENT_PREVIEW].replace("\n", "⏎")
+                parts.append(f'content({len(s)} chars): "{preview}…(+{len(s) - _DEBUG_CONTENT_PREVIEW} more)"')
+            else:
+                parts.append(f'content({len(s)} chars): "{s}"')
+        lines.append("  " + " ".join(parts))
+    return "\n".join(lines)
+
 
 @dataclass
 class CompressionStats:
@@ -70,11 +109,30 @@ class HeadroomClient:
         payload: dict[str, Any] = {"messages": messages}
         if model:
             payload["model"] = model
+
+        import logging as _logging
+
+        if logger.isEnabledFor(_logging.DEBUG):
+            logger.debug(
+                "headroom REQUEST (%d messages):\n%s",
+                len(messages),
+                _compact_messages(messages),
+            )
+
         resp = await self._client.post(
             f"{self._base}/v1/compress", json=payload, headers=self._headers
         )
         resp.raise_for_status()
         body = resp.json()
+
+        if logger.isEnabledFor(_logging.DEBUG):
+            logger.debug(
+                "headroom RESPONSE (%d messages, %d→%d tokens):\n%s",
+                len(body.get("messages", [])),
+                body.get("tokens_before", 0),
+                body.get("tokens_after", 0),
+                _compact_messages(body.get("messages", [])),
+            )
         stats = CompressionStats(
             tokens_before=body.get("tokens_before", 0),
             tokens_after=body.get("tokens_after", 0),

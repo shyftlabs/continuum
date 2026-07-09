@@ -87,6 +87,16 @@ class HeadroomCompressor:
         # SECURITY (Phase 2): retrieve authorization must check this set.
         self._issued_hashes: set[str] = set()
         self._last_stats: CompressionStats | None = None
+        # Message snapshots for glassbox inspection (before/after compression).
+        self._last_messages_before: list[dict[str, Any]] | None = None
+        self._last_messages_after: list[dict[str, Any]] | None = None
+        # Cumulative counters since the last reset_run_counters(). A single run
+        # can compress multiple times (e.g. once per turn), so last_stats alone
+        # under-reports a run's total; these sum every apply() call. Observability
+        # only — never read on the request path.
+        self._cum_tokens_before = 0
+        self._cum_tokens_after = 0
+        self._cum_calls = 0
 
     @property
     def issued_hashes(self) -> set[str]:
@@ -98,6 +108,33 @@ class HeadroomCompressor:
         """Stats from the most recent successful compress call."""
         return self._last_stats
 
+    @property
+    def last_messages_before(self) -> list[dict[str, Any]] | None:
+        """Pre-compression message list from the most recent apply() call."""
+        return self._last_messages_before
+
+    @property
+    def last_messages_after(self) -> list[dict[str, Any]] | None:
+        """Post-compression message list from the most recent apply() call."""
+        return self._last_messages_after
+
+    @property
+    def run_totals(self) -> dict[str, int]:
+        """Cumulative compression totals since the last reset_run_counters().
+        Summed across every apply() call — the honest per-run figure."""
+        return {
+            "calls": self._cum_calls,
+            "tokens_before": self._cum_tokens_before,
+            "tokens_after": self._cum_tokens_after,
+            "tokens_removed": self._cum_tokens_before - self._cum_tokens_after,
+        }
+
+    def reset_run_counters(self) -> None:
+        """Zero the cumulative counters (call at the start of a run)."""
+        self._cum_tokens_before = 0
+        self._cum_tokens_after = 0
+        self._cum_calls = 0
+
     async def apply(
         self,
         messages: list[dict[str, Any]],
@@ -108,6 +145,7 @@ class HeadroomCompressor:
         On sidecar error: fail-open returns the original list unchanged;
         fail-closed re-raises for the caller to surface.
         """
+        self._last_messages_before = messages
         try:
             compressed, stats, ccr_hashes = await self._client.compress(messages, model)
         except Exception as e:
@@ -120,6 +158,9 @@ class HeadroomCompressor:
             raise
 
         self._last_stats = stats
+        self._cum_tokens_before += stats.tokens_before
+        self._cum_tokens_after += stats.tokens_after
+        self._cum_calls += 1
         if stats.tokens_saved > 0:
             logger.info(
                 "headroom: %d→%d tokens (%.0f%% saved, transforms=%s)",
@@ -141,6 +182,7 @@ class HeadroomCompressor:
         # would erase the retrieval (observed live: retrieve → recompress →
         # empty answer). Restore those tool messages' original content.
         compressed = self._restore_retrieve_results(messages, compressed)
+        self._last_messages_after = compressed
         return compressed
 
     @staticmethod
