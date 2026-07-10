@@ -205,13 +205,23 @@ class HeadroomCompressor:
             for tc_id, name in (_tc_fields(tc) for tc in (m.get("tool_calls") or []))
             if name == RETRIEVE_TOOL_NAME
         }
-        if not retrieve_ids or len(original) != len(compressed):
+        if not retrieve_ids:
             return compressed
-        for i, msg in enumerate(original):
-            if msg.get("role") == "tool" and msg.get("tool_call_id") in retrieve_ids:
-                if compressed[i].get("content") != msg.get("content"):
-                    compressed[i] = {**compressed[i], "content": msg.get("content")}
-                    logger.debug("headroom: protected retrieve result at index %d", i)
+        # Map each retrieve-result's full content by tool_call_id, then overwrite
+        # the matching compressed message wherever it sits. Keyed by the stable
+        # id — NOT by list index — so a sidecar reorder or a count change can't
+        # write the original into the wrong message (or silently skip the
+        # restore, reviving the doom loop).
+        originals_by_id = {
+            m["tool_call_id"]: m.get("content")
+            for m in original
+            if m.get("role") == "tool" and m.get("tool_call_id") in retrieve_ids
+        }
+        for cmsg in compressed:
+            tc_id = cmsg.get("tool_call_id")
+            if tc_id in originals_by_id and cmsg.get("content") != originals_by_id[tc_id]:
+                cmsg["content"] = originals_by_id[tc_id]
+                logger.debug("headroom: protected retrieve result tcid=%s", tc_id)
         return compressed
 
     @staticmethod
