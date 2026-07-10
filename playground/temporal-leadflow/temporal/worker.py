@@ -80,7 +80,7 @@ async def setup_registry(config: LeadFlowConfig | None = None) -> AgentRegistry:
     def _runner_factory():
         return AgentRunner(
             agent_registry=all_agents,
-            config=RunnerConfig(persist_state=False, default_max_turns=cfg.max_turns),
+            config=RunnerConfig(default_max_turns=cfg.max_turns),
         )
 
     registry.set_runner_factory(_runner_factory)

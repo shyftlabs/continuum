@@ -321,7 +321,9 @@ class RunnerConfig:
     default_timeout: int = 300
 
     # State persistence
-    persist_state: bool = True  # Persist run state to Redis
+    # Defaults to the PERSIST_RUN_STATE env flag (off unless explicitly enabled).
+    # Callers can still override per-runner by passing persist_state=True/False.
+    persist_state: bool = field(default_factory=lambda: settings.persist_run_state)
     state_ttl: int = 3600 * 24  # State TTL in seconds (24 hours)
 
     # Tool execution

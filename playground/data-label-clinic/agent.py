@@ -79,7 +79,7 @@ class ClinicAgent:
         self._runner = AgentRunner(
             container=self._container,
             tool_executor=self._tool_executor,
-            config=RunnerConfig(persist_state=False, default_max_turns=self.config.max_turns),
+            config=RunnerConfig(default_max_turns=self.config.max_turns),
         )
         self._runner.register_agent(self._agent)
         self._initialized = True

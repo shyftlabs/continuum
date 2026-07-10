@@ -277,6 +277,16 @@ class Settings(BaseSettings):
     decision_trace_checkpoint: bool = False
 
     # -------------------------------------------------------------------------
+    # Run-State Persistence Configuration
+    # -------------------------------------------------------------------------
+    # Write per-run state (RunState) to Redis on start/finish, intended for a
+    # future pause/resume/recovery feature. Reuses the session Redis instance.
+    # Off by default: nothing currently reads this data back, so enabling it only
+    # adds Redis writes (and a connection attempt when Redis is unavailable).
+    # Turn on via PERSIST_RUN_STATE when a consumer of run-state actually exists.
+    persist_run_state: bool = False  # PERSIST_RUN_STATE
+
+    # -------------------------------------------------------------------------
     # Lifecycle Configuration (Shutdown Behavior)
     # -------------------------------------------------------------------------
     shared_services_enabled: bool = (

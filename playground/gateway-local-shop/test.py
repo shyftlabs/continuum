@@ -94,7 +94,7 @@ async def main() -> None:
 
     runner = AgentRunner(
         container=container,
-        config=RunnerConfig(persist_state=False, default_max_turns=5),
+        config=RunnerConfig(default_max_turns=5),
     )
 
     # ------------------------------------------------------------------
