@@ -7,11 +7,15 @@ Redis on every run, for a future pause/resume feature that is not yet implemente
 every integrator had to disable it by hand. It now defaults to the PERSIST_RUN_STATE
 env flag, which is off unless explicitly enabled.
 
-Two layers are covered:
+Three layers are covered:
   1. Config: the Settings default is off; the env flag flips it; RunnerConfig's
      default tracks settings; an explicit per-runner override still wins.
   2. Behavior: with persist_state off, ContextService never calls the state
      manager's save() (no Redis write / connection attempt); with it on, it does.
+  3. Ticket regression: with the default (disabled) config, the run path never
+     reaches for the global state manager (so no Redis connection is attempted)
+     and emits no "Failed to connect to Redis for state persistence" warning —
+     the exact symptom the ticket reported.
 """
 
 from __future__ import annotations
@@ -97,3 +101,39 @@ class TestPersistStateRuntime:
         svc, manager = _svc_with_mock_manager(persist_state=True)
         await svc.create_run_state(_FakeAgent(), _FakeCtx())
         manager.save.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 3. Ticket regression — no Redis connection attempt / no warning by default
+# ---------------------------------------------------------------------------
+
+
+class TestTicketRegression:
+    @pytest.mark.asyncio
+    async def test_default_never_builds_state_manager(self, monkeypatch):
+        # The ticket's root cause: run-state persistence reached for Redis on the
+        # run path. With the default (disabled) config, the global state manager
+        # must never be constructed — no manager, no Redis connection attempt.
+        import continuum.agent.services.context_service as cs
+
+        def _tripwire():
+            raise AssertionError(
+                "get_global_state_manager() must not be called when persist_state is False"
+            )
+
+        monkeypatch.setattr(cs, "get_global_state_manager", _tripwire)
+
+        svc = ContextService(config=RunnerConfig())  # default -> persistence off
+        state = await svc.create_run_state(_FakeAgent(), _FakeCtx())
+        await svc.save_run_state(state)  # tripwire raises if either path touches it
+
+    @pytest.mark.asyncio
+    async def test_default_emits_no_redis_warning(self, caplog):
+        # The ticket's observable symptom: a "Failed to connect to Redis for state
+        # persistence" warning per run. With the default config it must not appear
+        # (regardless of whether Redis is reachable), since the path is never taken.
+        svc = ContextService(config=RunnerConfig())  # default -> persistence off
+        with caplog.at_level("WARNING"):
+            state = await svc.create_run_state(_FakeAgent(), _FakeCtx())
+            await svc.save_run_state(state)
+        assert not any("state persistence" in r.getMessage().lower() for r in caplog.records)
