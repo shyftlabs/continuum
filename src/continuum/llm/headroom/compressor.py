@@ -183,6 +183,7 @@ class HeadroomCompressor:
         # empty answer). Restore those tool messages' original content.
         compressed = self._restore_retrieve_results(messages, compressed)
         self._last_messages_after = compressed
+        self._log_role_effect(messages, compressed)
         return compressed
 
     @staticmethod
@@ -212,6 +213,54 @@ class HeadroomCompressor:
                     compressed[i] = {**compressed[i], "content": msg.get("content")}
                     logger.debug("headroom: protected retrieve result at index %d", i)
         return compressed
+
+    @staticmethod
+    def _log_role_effect(
+        before: list[dict[str, Any]], after: list[dict[str, Any]]
+    ) -> None:
+        """INFO log of Headroom's effect on the payload, bucketed by role.
+
+        The genuinely-final (post-compression, post-restore) view measured on
+        Continuum's own side — complements the sidecar's token stats, which are
+        token-based and role-blind. Length is char count of ``str(content)``;
+        the message envelope (roles/counts) is untouched by compression, so
+        counts line up. Prints a per-role breakdown only when the payload
+        actually changed, else one terse line. Observability only — wrapped so
+        it can never disturb the request path.
+        """
+        try:
+
+            def _totals(msgs: list[dict[str, Any]]) -> dict[str, list[int]]:
+                out: dict[str, list[int]] = {}
+                for m in msgs:
+                    role = m.get("role", "?")
+                    content = m.get("content")
+                    entry = out.setdefault(role, [0, 0])
+                    entry[0] += len(str(content)) if content is not None else 0
+                    entry[1] += 1
+                return out
+
+            b, a = _totals(before), _totals(after)
+            tot_b = sum(v[0] for v in b.values())
+            tot_a = sum(v[0] for v in a.values())
+            if tot_b == tot_a:
+                logger.info(
+                    "headroom: no content change (%d msgs, %d chars unchanged)",
+                    len(after),
+                    tot_a,
+                )
+                return
+            lines = ["headroom effect (content chars by role):"]
+            for role in sorted(set(b) | set(a)):
+                cb = b.get(role, [0, 0])[0]
+                ca, na = a.get(role, [0, 0])
+                pct = f"{(ca - cb) / cb * 100:+.1f}%" if cb else "—"
+                lines.append(f"  {role:<10}: {cb:>9,} → {ca:>9,}  ({pct:>7})  [{na} msg]")
+            pct_t = f"{(tot_a - tot_b) / tot_b * 100:+.1f}%" if tot_b else "—"
+            lines.append(f"  {'TOTAL':<10}: {tot_b:>9,} → {tot_a:>9,}  ({pct_t:>7})")
+            logger.info("\n".join(lines))
+        except Exception as e:  # observability must never break the call path
+            logger.debug("headroom: role-effect logging failed: %s", e)
 
     async def resolve_retrieve(self, hash_value: str, query: str | None = None) -> str:
         """Resolve a model-issued `continuum_headroom_retrieve` call. Never raises.
