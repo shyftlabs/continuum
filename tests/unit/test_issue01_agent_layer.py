@@ -199,17 +199,15 @@ class TestBaseAgentClone:
 class TestValidationUtils:
     """Test that validation error formatting uses .get() for safe access."""
 
-    def test_validate_input_returns_none_for_no_schema(self):
+    async def test_validate_input_returns_none_for_no_schema(self):
         """Agent without input_schema should pass validation."""
-        import asyncio
-
         from continuum.agent.base import BaseAgent
         from continuum.agent.types import RunContext
         from continuum.agent.utils.validation_utils import validate_input
 
         agent = BaseAgent(name="test")
         ctx = RunContext(run_id="r1")
-        result = asyncio.get_event_loop().run_until_complete(validate_input(agent, "hello", ctx))
+        result = await validate_input(agent, "hello", ctx)
         assert result is None
 
 

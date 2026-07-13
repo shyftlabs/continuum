@@ -175,7 +175,7 @@ class RunStateManager:
             # Define sync operation for thread execution
             def _sync_save() -> None:
                 # Save with TTL
-                self._redis.setex(key, self._state_ttl, state_json)
+                self._redis.set(key, state_json, ex=self._state_ttl)
 
                 # Update indexes
                 if state.session_id:

@@ -161,6 +161,34 @@ class TestConversationIsolation:
 
 
 class TestSkipWhenDisabled:
+    async def test_does_not_resolve_lazy_client_when_search_memories_false(self):
+        from continuum.agent.services.memory_service import MemoryService
+
+        resolver = MagicMock(return_value=_make_memory_client(isolation="user"))
+        svc = MemoryService(memory_client_resolver=resolver)
+        agent = _make_agent(search_memories=False)
+        ctx = create_run_context(user_id="user-1")
+
+        result = await svc.retrieve_memories(agent, "query", ctx)
+
+        assert result == []
+        resolver.assert_not_called()
+
+    async def test_resolves_lazy_client_once_when_memory_is_requested(self):
+        from continuum.agent.services.memory_service import MemoryService
+
+        memory_client = _make_memory_client(isolation="user")
+        resolver = MagicMock(return_value=memory_client)
+        svc = MemoryService(memory_client_resolver=resolver)
+        agent = _make_agent()
+        ctx = create_run_context(user_id="user-1")
+
+        await svc.retrieve_memories(agent, "first", ctx)
+        await svc.retrieve_memories(agent, "second", ctx)
+
+        resolver.assert_called_once_with()
+        assert memory_client.search.call_count == 2
+
     async def test_returns_empty_when_search_memories_false(self):
         mc = _make_memory_client(isolation="user")
         svc = _make_service(mc)
@@ -180,4 +208,70 @@ class TestSkipWhenDisabled:
         ctx = create_run_context(user_id="user-1")
 
         result = await svc.retrieve_memories(agent, "query", ctx)
+        assert result == []
+
+
+class TestMemoryLoggingPrivacy:
+    async def test_logs_exclude_query_memory_content_and_scope_identifiers(self):
+        secret_query = "Find jane@example.test account 4242 with private escalation notes"
+        secret_memory = "Jane Example owes 9100 and asked for a confidential refund"
+        secret_user_id = "customer-jane-example"
+
+        memory = MagicMock()
+        memory.memory = secret_memory
+        memory.user_id = secret_user_id
+        memory.metadata = {"_user_id": secret_user_id}
+        memory.score = 0.91
+        memory.to_dict.return_value = {"memory": secret_memory, "user_id": secret_user_id}
+
+        mc = _make_memory_client(
+            isolation="user",
+            search_result=_make_memory_result([memory]),
+        )
+        svc = _make_service(mc)
+        agent = _make_agent()
+        ctx = create_run_context(user_id=secret_user_id)
+
+        with patch("continuum.agent.services.memory_service.logger") as mock_logger:
+            result = await svc.retrieve_memories(agent, secret_query, ctx)
+
+        log_text = "\n".join(
+            str(call)
+            for method in (
+                mock_logger.debug,
+                mock_logger.info,
+                mock_logger.warning,
+                mock_logger.error,
+            )
+            for call in method.call_args_list
+        )
+        assert secret_query not in log_text
+        assert secret_query[:100] not in log_text
+        assert secret_memory not in log_text
+        assert secret_memory[:100] not in log_text
+        assert secret_user_id not in log_text
+        assert result == [{"memory": secret_memory, "user_id": secret_user_id}]
+
+    async def test_empty_search_log_excludes_query_and_scope_identifier(self):
+        secret_query = "Confidential prompt for jane@example.test account 4242"
+        secret_user_id = "customer-jane-example"
+        svc = _make_service(_make_memory_client(isolation="user"))
+        agent = _make_agent()
+        ctx = create_run_context(user_id=secret_user_id)
+
+        with patch("continuum.agent.services.memory_service.logger") as mock_logger:
+            result = await svc.retrieve_memories(agent, secret_query, ctx)
+
+        log_text = "\n".join(
+            str(call)
+            for method in (
+                mock_logger.debug,
+                mock_logger.info,
+                mock_logger.warning,
+                mock_logger.error,
+            )
+            for call in method.call_args_list
+        )
+        assert secret_query not in log_text
+        assert secret_user_id not in log_text
         assert result == []

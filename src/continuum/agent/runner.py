@@ -123,7 +123,7 @@ class AgentRunner:
         self._container = container or get_container()
 
         self._llm_client = llm_client or self._container.llm_client
-        self._memory_client = memory_client or self._container.memory_client
+        self._memory_client = memory_client
         self._session_client = session_client or self._container.session_client
         self._tool_executor = tool_executor or self._container.tool_executor
         self._tracing_manager = tracing_manager
@@ -148,6 +148,7 @@ class AgentRunner:
         self._memory_service = MemoryService(
             memory_client=self._memory_client,
             session_client=self._session_client,
+            memory_client_resolver=self._resolve_memory_client,
         )
         self._session_service = SessionService(
             session_client=self._session_client,
@@ -258,6 +259,12 @@ class AgentRunner:
 
     @property
     def memory_client(self) -> MemoryClient | None:
+        return self._resolve_memory_client()
+
+    def _resolve_memory_client(self) -> MemoryClient | None:
+        """Resolve the optional container memory client only when it is used."""
+        if self._memory_client is None:
+            self._memory_client = self._container.memory_client
         return self._memory_client
 
     @property

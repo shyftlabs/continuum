@@ -12,7 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from continuum.agent.utils.context_utils import create_run_context
 
 
-def _make_agent(system_prompt=None, session_history_turns=None, react_mode=False):
+def _make_agent(
+    system_prompt=None,
+    session_history_turns=None,
+    react_mode=False,
+    search_memories=False,
+):
     from continuum.agent.base import BaseAgent
     from continuum.agent.config import AgentConfig, AgentMemoryConfig
 
@@ -25,7 +30,7 @@ def _make_agent(system_prompt=None, session_history_turns=None, react_mode=False
             input_sanitization=False,
             injection_detection=False,
         ),
-        memory_config=AgentMemoryConfig(search_memories=False),
+        memory_config=AgentMemoryConfig(search_memories=search_memories),
     )
 
 
@@ -55,6 +60,39 @@ class TestReturnsTuple:
         messages, index = result
         assert isinstance(messages, list)
         assert isinstance(index, int)
+
+    async def test_info_logs_do_not_contain_prompt_content(self):
+        builder, _, _ = _make_builder()
+        agent = _make_agent()
+        ctx = create_run_context()
+        secret_prompt = "Customer jane@example.test owes account 4242"
+
+        with (
+            patch("continuum.observability.decorators.observe", lambda **kw: lambda f: f),
+            patch("continuum.agent.execution.message_builder.logger.info") as info_logger,
+        ):
+            await builder.prepare_messages(agent, secret_prompt, ctx)
+
+        info_log = "\n".join(str(call) for call in info_logger.call_args_list)
+        assert secret_prompt not in info_log
+        assert "Prepared prompt" in info_log
+
+    async def test_debug_logs_do_not_contain_retrieved_memory_content(self):
+        builder, memory_service, _ = _make_builder()
+        secret_memory = "Jane's confidential account balance is 4242"
+        memory_service.retrieve_memories.return_value = [{"memory": secret_memory}]
+        agent = _make_agent(search_memories=True)
+        ctx = create_run_context()
+
+        with (
+            patch("continuum.observability.decorators.observe", lambda **kw: lambda f: f),
+            patch("continuum.agent.execution.message_builder.logger.debug") as debug_logger,
+        ):
+            messages, _ = await builder.prepare_messages(agent, "question", ctx)
+
+        debug_log = "\n".join(str(call) for call in debug_logger.call_args_list)
+        assert secret_memory not in debug_log
+        assert any(secret_memory in message["content"] for message in messages)
 
     async def test_index_points_to_user_message(self):
         builder, _, _ = _make_builder()

@@ -175,7 +175,11 @@ class MessageBuilder(IMessageBuilder):
                         memory_content += f"- {m.get('memory', str(m))}\n"
 
                     logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
-                    logger.debug(f"💾 Memory context content:\n{memory_content}")
+                    logger.debug(
+                        "Memory context prepared: memories=%d content_chars=%d",
+                        len(memories),
+                        len(memory_content),
+                    )
 
                     messages.append({"role": "system", "content": memory_content})
             except Exception as e:
@@ -204,9 +208,7 @@ class MessageBuilder(IMessageBuilder):
                         context.session_id, limit=history_turns
                     )
                     if history:
-                        logger.debug(
-                            f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}"
-                        )
+                        logger.debug("Session history loaded: messages=%d", len(history))
                     messages.extend(history)
             except Exception as e:
                 logger.warning(f"Failed to load session history: {e}")
@@ -336,9 +338,7 @@ class MessageBuilder(IMessageBuilder):
         import os
 
         _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
-        _limit = None if _full else 2000
-
-        # Build display messages: insert Phase 1 inline so it appears in FINAL PROMPT log.
+        # Build display messages for explicit full-prompt diagnostics only.
         _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
         if _phase1:
             _insert_at = 0
@@ -351,12 +351,28 @@ class MessageBuilder(IMessageBuilder):
         else:
             display_messages = messages
 
-        formatted = "\n".join(
-            f"[{m.get('role', '?')}] {str(m.get('content', ''))[:_limit]}" for m in display_messages
-        )
         logger.info(
-            "===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted
+            "Prepared prompt [%s]: messages=%d tools=%d",
+            agent.name,
+            len(display_messages),
+            len(filtered_tools or []),
         )
+        if _full:
+            formatted = "\n".join(
+                f"[{m.get('role', '?')}] {m.get('content', '')}" for m in display_messages
+            )
+            logger.debug(
+                "===== FINAL PROMPT [%s] =====\n%s\n========================",
+                agent.name,
+                formatted,
+            )
+        else:
+            logger.debug(
+                "Prompt diagnostics [%s]: roles=%s content_chars=%d",
+                agent.name,
+                ",".join(str(message.get("role", "?")) for message in display_messages),
+                sum(len(str(message.get("content", ""))) for message in display_messages),
+            )
 
         if filtered_tools:
             _tool_limit = None if _full else 200
@@ -366,7 +382,17 @@ class MessageBuilder(IMessageBuilder):
                 else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
                 for t in filtered_tools
             )
+            tool_names = [
+                t.get("function", {}).get("name", "?") if isinstance(t, dict) else t.function.name
+                for t in filtered_tools
+            ]
             logger.info(
+                "Prepared tools [%s]: count=%d names=%s",
+                agent.name,
+                len(filtered_tools),
+                ",".join(tool_names),
+            )
+            logger.debug(
                 "===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted
             )
 

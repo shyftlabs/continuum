@@ -241,6 +241,7 @@ class TestMemoryConfig:
             memory_llm_temperature=0.1,
             embedder_provider="openai",
             embedder_model="text-embedding-3-small",
+            embedder_api_base=None,
             embedding_dims=1536,
             history_db_path="/tmp/test_history.db",
         )
@@ -301,6 +302,7 @@ class TestMemoryConfig:
             memory_llm_temperature=0.1,
             embedder_provider="openai",
             embedder_model="text-embedding-3-small",
+            embedder_api_base=None,
             embedding_dims=1536,
             history_db_path="/tmp/test_history.db",
         )

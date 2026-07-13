@@ -252,6 +252,11 @@ class HandoffExecutor(IHandoffExecutor):
                     f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
                 )
             logger.info(
+                "Prepared handoff prompt [%s]: messages=%d",
+                target_agent.name,
+                len(target_messages),
+            )
+            logger.debug(
                 f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
                 + "\n".join(
                     f"[{m.get('role', '?')}] {str(m.get('content', ''))[:300]}"
@@ -266,7 +271,16 @@ class HandoffExecutor(IHandoffExecutor):
                     f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:200]}"
                     for t in _tools
                 )
+                tool_names = [
+                    t.get("function", {}).get("name", "?") for t in _tools
+                ]
                 logger.info(
+                    "Prepared handoff tools [%s]: count=%d names=%s",
+                    target_agent.name,
+                    len(_tools),
+                    ",".join(tool_names),
+                )
+                logger.debug(
                     f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
                 )
 

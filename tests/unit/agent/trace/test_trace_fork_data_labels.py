@@ -51,6 +51,7 @@ class TestForkSeedsLabels:
         from continuum.agent.trace import config as trace_config
         from continuum.agent.types import AgentResponse, ResponseStatus
         from continuum.config import settings
+        from continuum.core.container import Container, ContainerConfig
 
         monkeypatch.setattr(settings, "decision_trace_store", "memory")
         monkeypatch.setattr(settings, "decision_trace_enabled", True)
@@ -70,7 +71,19 @@ class TestForkSeedsLabels:
         )
         await store.save(parent)
 
-        runner = AgentRunner()
+        runner = AgentRunner(
+            container=Container(
+                ContainerConfig(
+                    auto_initialize=False,
+                    enable_memory=False,
+                    enable_session=False,
+                    enable_langfuse=False,
+                )
+            ),
+            llm_client=object(),
+            session_client=object(),
+            tool_executor=object(),
+        )
         agent = BaseAgent(name="a", instructions="t")
 
         captured: dict = {}

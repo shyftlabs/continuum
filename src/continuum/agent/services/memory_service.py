@@ -6,6 +6,8 @@ Extracted from AgentRunner to provide clean separation of concerns.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.service_interface import IMemoryService
@@ -30,6 +32,7 @@ class MemoryService(IMemoryService):
         self,
         memory_client: Any | None = None,
         session_client: Any | None = None,
+        memory_client_resolver: Callable[[], Any | None] | None = None,
     ):
         """
         Initialize memory service.
@@ -37,13 +40,30 @@ class MemoryService(IMemoryService):
         Args:
             memory_client: Memory client instance
             session_client: Session client for metadata access
+            memory_client_resolver: Lazy resolver used when no client is injected
         """
         self._memory_client = memory_client
         self._session_client = session_client
+        self._memory_client_resolver = memory_client_resolver
+        self._memory_client_resolved = memory_client is not None or memory_client_resolver is None
+        self._memory_client_lock = Lock()
 
     @property
     def memory_client(self) -> Any | None:
         """Get memory client."""
+        return self._resolve_memory_client()
+
+    def _resolve_memory_client(self) -> Any | None:
+        """Resolve and cache the optional memory client on first use."""
+        if self._memory_client_resolved:
+            return self._memory_client
+
+        with self._memory_client_lock:
+            if not self._memory_client_resolved:
+                resolver = self._memory_client_resolver
+                self._memory_client = resolver() if resolver is not None else None
+                self._memory_client_resolved = True
+
         return self._memory_client
 
     @observe(name="retrieve_memories", capture_output=True)
@@ -64,19 +84,21 @@ class MemoryService(IMemoryService):
         Returns:
             List of memory dictionaries
         """
-        if not agent.memory_config.search_memories or not self._memory_client:
-            logger.debug(
-                f"💾 Skipping memory search: search_memories={agent.memory_config.search_memories}, "
-                f"memory_client={'available' if self._memory_client else 'not available'}"
-            )
+        if not agent.memory_config.search_memories:
+            logger.debug("Skipping memory search because it is disabled for the agent")
             return []
 
         try:
+            memory_client = self._resolve_memory_client()
+            if memory_client is None:
+                logger.debug("Skipping memory search because no memory client is available")
+                return []
+
             # Determine search scope based on agent config
             search_scope = agent.memory_config.search_scope.value
 
             # Get memory client's isolation level to determine required identifiers
-            memory_isolation = self._memory_client.config.memory_isolation
+            memory_isolation = memory_client.config.memory_isolation
 
             # Mode-aware identifier selection
             user_id_for_memory = context.user_id if memory_isolation == "user" else None
@@ -93,17 +115,21 @@ class MemoryService(IMemoryService):
                         if session_metadata and session_metadata.agent_id:
                             agent_id_for_memory = session_metadata.agent_id
                             logger.debug(
-                                f"🔍 Using agent_id from session metadata: {agent_id_for_memory} "
-                                f"(session_id={context.session_id}...)"
+                                "Using agent identity from session metadata "
+                                "(session_id_present=%s)",
+                                bool(context.session_id),
                             )
                         else:
                             logger.warning(
-                                f"⚠️ Session {context.session_id}... exists but has no agent_id in metadata. "
-                                f"Falling back to agent.name={agent.name}. This may cause memory isolation issues."
+                                "Session metadata has no agent identity; falling back to the configured "
+                                "agent name. This may cause memory isolation issues."
                             )
                             agent_id_for_memory = agent.name
                     except Exception as e:
-                        logger.debug(f"Could not get session metadata for agent_id: {e}")
+                        logger.debug(
+                            "Could not get session metadata for agent identity (error_type=%s)",
+                            type(e).__name__,
+                        )
                         agent_id_for_memory = agent.name
                 else:
                     # No session_id or session client not available - use agent.name
@@ -112,8 +138,8 @@ class MemoryService(IMemoryService):
                 # Log final agent_id being used
                 if agent_id_for_memory != agent.name:
                     logger.debug(
-                        f"🔍 Agent isolation mode: Using agent_id={agent_id_for_memory} "
-                        f"(agent.name={agent.name}, may differ when switching agents)"
+                        "Agent isolation mode is using a session-scoped identity "
+                        "(differs_from_configured_agent=true)"
                     )
 
             conversation_id_for_memory = None
@@ -127,14 +153,17 @@ class MemoryService(IMemoryService):
 
             # Log memory search parameters at DEBUG level
             logger.debug(
-                f"🔍 MEMORY SEARCH: query='{query[:100]}...', "
-                f"scope={search_scope}, isolation={memory_isolation}, "
-                f"user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
-                f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
-                f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}"
+                "Memory search: query_chars=%d scope=%s isolation=%s "
+                "user_scoped=%s agent_scoped=%s conversation_scoped=%s",
+                len(query),
+                search_scope,
+                memory_isolation,
+                user_id_for_memory is not None,
+                agent_id_for_memory is not None,
+                conversation_id_for_memory is not None,
             )
 
-            memories = await self._memory_client.search(
+            memories = await memory_client.search(
                 query=query,
                 user_id=user_id_for_memory,
                 agent_id=agent_id_for_memory,
@@ -149,11 +178,11 @@ class MemoryService(IMemoryService):
             )
 
             if not memories.results:
-                logger.warning(
-                    f"⚠️ NO MEMORIES FOUND for query='{query[:100]}...' "
-                    f"(isolation={memory_isolation}, user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
-                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
-                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'})"
+                logger.debug(
+                    "Memory search returned no results (query_chars=%d scope=%s isolation=%s)",
+                    len(query),
+                    search_scope,
+                    memory_isolation,
                 )
 
             if memories.results:
@@ -168,21 +197,20 @@ class MemoryService(IMemoryService):
 
                 # Log memory search summary at DEBUG level
                 logger.debug(
-                    f"💾 Memory search: scope={search_scope}, isolation={memory_isolation}, "
-                    f"user_id={context.user_id if context.user_id else 'none'}, "
-                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'N/A'}, "
-                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}, "
-                    f"found={len(memories.results)} memories"
+                    "Memory search completed: scope=%s isolation=%s found=%d",
+                    search_scope,
+                    memory_isolation,
+                    len(memories.results),
                 )
 
-                # Log each memory with its metadata to verify isolation (INFO level)
+                # Keep diagnostics content-free. Memory text and scope identifiers can contain customer data.
                 for idx, m in enumerate(memories.results, 1):
-                    memory_metadata = getattr(m, "metadata", {}) or {}
-                    memory_user_id = m.user_id or memory_metadata.get("_user_id") or "unknown"
                     score_str = f"{m.score:.3f}" if m.score is not None else "N/A"
-                    logger.info(
-                        f"📝 Memory #{idx}: '{m.memory[:100]}...' "
-                        f"(score={score_str}, user_id={memory_user_id if memory_user_id != 'unknown' else 'unknown'})"
+                    logger.debug(
+                        "Memory result: rank=%d score=%s content_chars=%d",
+                        idx,
+                        score_str,
+                        len(m.memory or ""),
                     )
 
                 return context.retrieved_memories
@@ -190,7 +218,10 @@ class MemoryService(IMemoryService):
             return []
 
         except Exception as e:
-            logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
+            logger.warning(
+                "Failed to retrieve memories (error_type=%s)",
+                type(e).__name__,
+            )
             return []
 
     @observe(name="store_memories", capture_output=False)

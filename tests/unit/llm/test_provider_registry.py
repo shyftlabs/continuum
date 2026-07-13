@@ -25,10 +25,14 @@ from continuum.llm.providers import (
 
 
 @pytest.fixture
-def clean_registry():
+def clean_registry(monkeypatch):
     """Snapshot and restore the module-global registry around each test."""
+    from continuum.config import settings
+
     saved = dict(registry._PROVIDERS)
     saved_default = registry._default_factory
+    monkeypatch.setattr(settings, "smart_gateway_url", None)
+    monkeypatch.setattr(settings, "smart_gateway_api_key", None)
     yield
     registry._PROVIDERS.clear()
     registry._PROVIDERS.update(saved)

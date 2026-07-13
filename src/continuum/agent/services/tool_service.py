@@ -155,7 +155,6 @@ class ToolService(IToolService):
                 f"🔧 TOOL CALL: {tool_name}",
                 extra={
                     "tool_name": tool_name,
-                    "tool_args": tool_args,
                     "tool_call_id": tool_call_id,
                 },
             )
@@ -208,8 +207,14 @@ class ToolService(IToolService):
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        result_content = str(result.get("content", ""))
+                        logger.info(
+                            "✅ TOOL RESULT: %s success latency_ms=%.2f content_chars=%d",
+                            tool_name,
+                            latency_ms,
+                            len(result_content),
+                        )
+                        logger.debug("Tool result preview [%s]: %s", tool_name, result_content[:200])
 
                         # Update span with result
                         span.set_output(truncate_data(result))
@@ -267,8 +272,14 @@ class ToolService(IToolService):
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        result_content = str(result.get("content", ""))
+                        logger.info(
+                            "✅ TOOL RESULT: %s success latency_ms=%.2f content_chars=%d",
+                            tool_name,
+                            latency_ms,
+                            len(result_content),
+                        )
+                        logger.debug("Tool result preview [%s]: %s", tool_name, result_content[:200])
 
                         # Update span with result
                         span.set_output(truncate_data(result))

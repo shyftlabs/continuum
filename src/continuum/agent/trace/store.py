@@ -110,7 +110,7 @@ class RedisTraceStore:
 
     async def save(self, trace: DecisionTrace) -> None:
         try:
-            await self._redis.setex(self._key(trace.run_id), self._ttl, json.dumps(trace.to_dict()))
+            await self._redis.set(self._key(trace.run_id), json.dumps(trace.to_dict()), ex=self._ttl)
         except Exception as e:  # never let trace persistence break a run
             logger.warning("Failed to persist decision trace %s: %s", trace.run_id, e)
 

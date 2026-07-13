@@ -7,7 +7,6 @@ SummaryCache bounded size, context compression empty guard, EvalCase context val
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 # ---------------------------------------------------------------------------
@@ -51,25 +50,25 @@ class TestCountTokensFallback:
 
 
 class TestLLMRateLimiter:
-    def test_rate_limiter_allows_initial_request(self):
+    async def test_rate_limiter_allows_initial_request(self):
         from continuum.llm.client import _LLMRateLimiter
 
         rl = _LLMRateLimiter(rpm=60)
         # Should not block
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         assert rl.tokens == 59.0  # One token consumed
 
-    def test_rate_limiter_with_low_rpm_handled(self):
+    async def test_rate_limiter_with_low_rpm_handled(self):
         """Low RPM should not cause errors — rate limiter should handle gracefully."""
         from continuum.llm.client import _LLMRateLimiter
 
         rl = _LLMRateLimiter(rpm=120)  # 2 per second
         # Consume one token
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         assert rl.tokens == 119.0
         # Second acquire should work quickly
         t0 = time.monotonic()
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         elapsed = time.monotonic() - t0
         assert elapsed < 5  # Should be near-instant with plenty of tokens
         assert abs(rl.tokens - 118.0) < 0.1
@@ -193,7 +192,7 @@ class TestStreamChunkNullSafety:
 
 
 class TestCompressSummarizeEmptyGuard:
-    def test_empty_messages_returns_empty(self):
+    async def test_empty_messages_returns_empty(self):
         from continuum.llm.context_management import (
             ContextManagementConfig,
             ProgressiveContextManager,
@@ -201,9 +200,7 @@ class TestCompressSummarizeEmptyGuard:
 
         mgr = ProgressiveContextManager()
         config = ContextManagementConfig()
-        result, compression = asyncio.get_event_loop().run_until_complete(
-            mgr._compress_summarize([], "gpt-4", config)
-        )
+        result, compression = await mgr._compress_summarize([], "gpt-4", config)
         assert result == []
         assert not compression.was_compressed
 
