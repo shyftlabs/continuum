@@ -125,9 +125,10 @@ class Executor(IExecutor):
         handoff, the executor is re-entered for the new agent, refreshing the
         ambient policy to that agent's store/name.
         """
+        from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
-        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context):
+        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context), use_run_compressor_if_enabled():
             return await self._execute_loop_impl(agent, messages, context, run_state)
 
     async def _execute_loop_impl(

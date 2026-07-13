@@ -473,9 +473,13 @@ class AgentRunner:
         # — smart-layer triage, workflow orchestration, and the executor — is
         # gated by the data-label model-routing policy, not just execute_loop.
         # execute_loop re-publishes per-agent on handoffs (nested set/reset).
+        # A fresh Headroom compressor rides the same boundary so CCR retrieve
+        # authorization (issued_hashes) is isolated to this run.
+        from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -604,6 +608,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            exit_run_compressor(_hr_token)
             reset_active_policy(_policy_token)
 
     # =========================================================================
@@ -767,9 +772,10 @@ class AgentRunner:
         # model-routing-gated and the decision-trace persist honors the run's
         # data labels — fork seeds ctx.data_labels but does not run through
         # AgentRunner.run's publish, so without this the gates would be bypassed.
+        from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
-        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx):
+        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx), use_run_compressor_if_enabled():
             response = await self._executor.execute_loop(
                 agent=target, messages=messages, context=ctx, run_state=run_state
             )
@@ -959,10 +965,14 @@ class AgentRunner:
 
         turn = 0
         # Publish the run's policy context so every llm_client.chat() in this
-        # streaming run is gated by the data-label model-routing policy.
+        # streaming run is gated by the data-label model-routing policy. A fresh
+        # Headroom compressor rides the same boundary so CCR retrieve
+        # authorization (issued_hashes) is isolated to this run.
+        from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -1658,6 +1668,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            exit_run_compressor(_hr_token)
             try:
                 reset_active_policy(_policy_token)
             except ValueError:

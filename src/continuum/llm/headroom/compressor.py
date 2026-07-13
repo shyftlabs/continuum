@@ -1,18 +1,22 @@
-"""HeadroomCompressor — pre-call compression orchestration (Phase 1).
+"""HeadroomCompressor — pre-call compression orchestration.
 
 Owns the fail-open/fail-closed policy and per-run hash bookkeeping. One
-instance per run/agent (the ``issued_hashes`` scope is the anti-forgery
-boundary for the future Phase-2 retrieve tool).
-
-Phase-1 scope is compress-only: no ``continuum_headroom_retrieve`` tool injection.
-Phase 2 (CCR retrieval) is evidence-gated — see
-``gap-analysis/headroom-native-integration-plan.md``.
+instance is published per agent run into a contextvar (see
+:func:`use_run_compressor_if_enabled`), so ``issued_hashes`` — the anti-forgery
+boundary for the ``continuum_headroom_retrieve`` tool — is isolated per run:
+one agent cannot authorize a retrieve of another agent's cached originals from
+the shared sidecar store. The expensive resource (the httpx pool inside
+``HeadroomClient``) stays process-global and is shared by every run.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from typing import Any
 
 from continuum.llm.headroom.client import CompressionStats, HeadroomClient
@@ -82,9 +86,12 @@ class HeadroomCompressor:
     def __init__(self, client: HeadroomClient, fail_open: bool = True):
         self._client = client
         self._fail_open = fail_open
-        # Hashes the sidecar issued for THIS run only. Populated from the
-        # response's `ccr_hashes` field (authoritative — never regex-scraped).
-        # SECURITY (Phase 2): retrieve authorization must check this set.
+        # Hashes the sidecar issued for THIS run only — the retrieve
+        # authorization set. The compressor is published per run in a contextvar
+        # (use_run_compressor_if_enabled), so this set is NOT shared across
+        # concurrent agents: resolve_retrieve() checks it, giving a genuine
+        # per-run anti-forgery boundary. Populated from both the response
+        # `ccr_hashes` field and a marker scan (the field alone is unreliable).
         self._issued_hashes: set[str] = set()
         self._last_stats: CompressionStats | None = None
         # Message snapshots for glassbox inspection (before/after compression).
@@ -183,7 +190,7 @@ class HeadroomCompressor:
         # empty answer). Restore those tool messages' original content.
         compressed = self._restore_retrieve_results(messages, compressed)
         self._last_messages_after = compressed
-        self._log_role_effect(messages, compressed)
+        self._log_role_effect(messages, compressed, model)
         return compressed
 
     @staticmethod
@@ -226,19 +233,56 @@ class HeadroomCompressor:
 
     @staticmethod
     def _log_role_effect(
-        before: list[dict[str, Any]], after: list[dict[str, Any]]
+        before: list[dict[str, Any]],
+        after: list[dict[str, Any]],
+        model: str | None,
     ) -> None:
-        """INFO log of Headroom's effect on the payload, bucketed by role.
+        """INFO log of Headroom's effect on the payload, bucketed by role, in
+        TOKENS (tiktoken — the same counter Continuum uses for context
+        management). This is Continuum's own estimate, so its TOTAL will not
+        match the sidecar's authoritative token stat exactly; it complements
+        that role-blind number by showing WHICH role shrank.
 
-        The genuinely-final (post-compression, post-restore) view measured on
-        Continuum's own side — complements the sidecar's token stats, which are
-        token-based and role-blind. Length is char count of ``str(content)``;
-        the message envelope (roles/counts) is untouched by compression, so
-        counts line up. Prints a per-role breakdown only when the payload
-        actually changed, else one terse line. Observability only — wrapped so
-        it can never disturb the request path.
+        Tokenizing is skipped entirely when INFO is off or when nothing changed
+        (detected cheaply by char length first), so the common no-op turn costs
+        only a couple of len() calls. Falls back to chars if tiktoken is
+        unavailable. Observability only — wrapped so it can never disturb the
+        request path.
         """
+        if not logger.isEnabledFor(logging.INFO):
+            return
         try:
+
+            def _chars(msgs: list[dict[str, Any]]) -> int:
+                return sum(
+                    len(str(m["content"])) for m in msgs if m.get("content") is not None
+                )
+
+            # Cheap change detection: if no char changed, no token changed either.
+            if _chars(before) == _chars(after):
+                logger.info(
+                    "headroom: no content change (%d msgs, %d chars unchanged)",
+                    len(after),
+                    _chars(after),
+                )
+                return
+
+            # Something compressed — measure per role in tokens.
+            enc = None
+            try:
+                import tiktoken
+
+                try:
+                    enc = tiktoken.encoding_for_model((model or "").split("/")[-1])
+                except KeyError:
+                    enc = tiktoken.get_encoding("cl100k_base")
+            except Exception:
+                enc = None  # tiktoken unavailable — degrade to chars
+
+            def _measure(text: str) -> int:
+                return len(enc.encode(text)) if enc is not None else len(text)
+
+            unit = "tokens, tiktoken est." if enc is not None else "chars (tiktoken unavailable)"
 
             def _totals(msgs: list[dict[str, Any]]) -> dict[str, list[int]]:
                 out: dict[str, list[int]] = {}
@@ -246,21 +290,14 @@ class HeadroomCompressor:
                     role = m.get("role", "?")
                     content = m.get("content")
                     entry = out.setdefault(role, [0, 0])
-                    entry[0] += len(str(content)) if content is not None else 0
+                    entry[0] += _measure(str(content)) if content is not None else 0
                     entry[1] += 1
                 return out
 
             b, a = _totals(before), _totals(after)
             tot_b = sum(v[0] for v in b.values())
             tot_a = sum(v[0] for v in a.values())
-            if tot_b == tot_a:
-                logger.info(
-                    "headroom: no content change (%d msgs, %d chars unchanged)",
-                    len(after),
-                    tot_a,
-                )
-                return
-            lines = ["headroom effect (content chars by role):"]
+            lines = [f"headroom effect ({unit} by role):"]
             for role in sorted(set(b) | set(a)):
                 cb = b.get(role, [0, 0])[0]
                 ca, na = a.get(role, [0, 0])
@@ -279,7 +316,10 @@ class HeadroomCompressor:
         can hallucinate or replay one from another context. Only serve hashes
         this compressor itself recorded as issued, else a fabricated hash could
         pull back another request's cached originals from the shared sidecar
-        store. Failures are fail-open text so the agent loop continues.
+        store. Because the compressor is published per run (contextvar-scoped),
+        ``_issued_hashes`` holds only THIS run's hashes — so this check is a
+        real per-run boundary, not a process-wide one. Failures are fail-open
+        text so the agent loop continues.
         """
         if hash_value not in self._issued_hashes:
             logger.warning(f"headroom: rejected un-issued retrieve hash {hash_value!r}")
@@ -299,35 +339,147 @@ class HeadroomCompressor:
         return content
 
 
-# Process-global compressor (Phase 1: hash bookkeeping is observability-only,
-# so a shared instance is fine; Phase 2's retrieve authorization will move to
-# a per-run instance on RunContext). Mirrors get_progressive_context_manager().
+# ---------------------------------------------------------------------------
+# Compressor scoping
+#
+# The httpx connection pool (inside HeadroomClient) is the expensive, shareable
+# resource — one per process. The per-run *state* (issued_hashes, the retrieve
+# anti-forgery boundary) must NOT be shared, so each agent run gets its own
+# HeadroomCompressor wrapping the shared client, published into a contextvar.
+#
+# contextvars are per-async-task: parallel agents spawned via create_task/gather
+# each inherit their own value and cannot see a sibling's issued hashes, so one
+# agent can no longer authorize a retrieve of another's cached originals.
+# Mirrors the ambient pattern in continuum.security.policy_context. Outside a
+# run (bare LLMClient.chat), calls fall back to a process-global compressor.
+# ---------------------------------------------------------------------------
+
+_global_client: HeadroomClient | None = None
 _global_compressor: HeadroomCompressor | None = None
 _global_lock = threading.Lock()
 
+_run_compressor: ContextVar[HeadroomCompressor | None] = ContextVar(
+    "headroom_run_compressor", default=None
+)
 
-def get_headroom_compressor() -> HeadroomCompressor:
-    """Get the global HeadroomCompressor, built from settings on first use."""
-    global _global_compressor
 
-    if _global_compressor is None:
+def get_headroom_client() -> HeadroomClient:
+    """Process-global HeadroomClient (shared httpx connection pool)."""
+    global _global_client
+    if _global_client is None:
         with _global_lock:
-            if _global_compressor is None:
+            if _global_client is None:
                 from continuum.config import settings
 
-                client = HeadroomClient(
+                _global_client = HeadroomClient(
                     api_base=settings.headroom_api_base,
                     api_key=settings.headroom_api_key,
                     timeout=settings.headroom_timeout_seconds,
                 )
-                _global_compressor = HeadroomCompressor(
-                    client=client, fail_open=settings.headroom_fail_open
-                )
+    return _global_client
+
+
+def new_run_compressor() -> HeadroomCompressor:
+    """A fresh compressor for one agent run, wrapping the shared httpx client.
+    Its ``issued_hashes`` set is private to the run — the retrieve boundary."""
+    from continuum.config import settings
+
+    return HeadroomCompressor(
+        client=get_headroom_client(), fail_open=settings.headroom_fail_open
+    )
+
+
+def get_headroom_compressor() -> HeadroomCompressor:
+    """The active compressor: the per-run instance published for this async task
+    if any, else a process-global fallback (the most-recently-finished run's
+    compressor, or a fresh one before any run).
+
+    Call sites (compress in llm/client.py, retrieve in runner/executor) don't
+    need to know which they got — a run publishes one via
+    :func:`use_run_compressor_if_enabled` / :func:`enter_run_compressor`, and
+    every call within that task then shares its issued-hash set. Post-run
+    inspectors read the fallback, which reflects the run that just finished.
+    """
+    run = _run_compressor.get()
+    if run is not None:
+        return run
+    global _global_compressor
+    if _global_compressor is not None:
+        return _global_compressor
+    # Build the fallback OUTSIDE _global_lock: new_run_compressor() acquires it
+    # via get_headroom_client(), and threading.Lock is non-reentrant, so nesting
+    # would self-deadlock. Double-check on assignment; a lost startup race just
+    # discards an unused, never-connected client.
+    candidate = new_run_compressor()
+    with _global_lock:
+        if _global_compressor is None:
+            _global_compressor = candidate
     return _global_compressor
 
 
-def reset_headroom_compressor() -> None:
-    """Reset the global compressor (tests / settings changes)."""
+def enter_run_compressor() -> Token[HeadroomCompressor | None] | None:
+    """Publish a fresh per-run compressor if none is active in this task.
+
+    Returns a token for :func:`exit_run_compressor`, or None when Headroom is
+    disabled or a compressor is already active (a nested handoff/executor —
+    which must KEEP the run's issued-hash set, so it neither rebinds nor resets).
+
+    Never raises: a binding failure (e.g. a misconfigured client) returns None
+    so the run proceeds on the global/fail-open compressor. Critically, this
+    keeps a Headroom hiccup from skipping the caller's policy-context teardown
+    (the set/reset sites bind this right before their try/finally), which would
+    otherwise leak the data-label enforcement context across runs.
+    """
+    try:
+        from continuum.config import settings
+
+        if not settings.headroom_enabled or _run_compressor.get() is not None:
+            return None
+        return _run_compressor.set(new_run_compressor())
+    except Exception as e:
+        logger.warning("headroom: per-run compressor bind failed (%s); using fallback", e)
+        return None
+
+
+def exit_run_compressor(token: Token[HeadroomCompressor | None] | None) -> None:
+    """Restore the previous compressor (no-op when :func:`enter_run_compressor`
+    returned None). Tolerates the cross-context reset that happens when a
+    streaming generator is finalized in a different context than it started in
+    (mirrors reset_active_policy's ValueError guard)."""
+    if token is None:
+        return
+    # Observability: keep the just-finished run's compressor as the global
+    # fallback so post-run inspectors (glassbox stats, issued-hash deltas) that
+    # read get_headroom_compressor() AFTER the run see the run that ran. Safe for
+    # isolation: a new run always binds a FRESH compressor via
+    # enter_run_compressor, so these hashes can never authorize a later retrieve.
     global _global_compressor
+    finished = _run_compressor.get()
+    if finished is not None:
+        _global_compressor = finished
+    try:
+        _run_compressor.reset(token)
+    except ValueError:
+        # Token created in a different context (abandoned stream, GC finalizer).
+        # The per-task context copy means there's nothing to leak; best-effort.
+        pass
+
+
+@contextmanager
+def use_run_compressor_if_enabled() -> Iterator[None]:
+    """Bind a per-run compressor for the block (nesting-safe). Use on the same
+    ``with`` line as ``use_active_policy`` at run/handoff entry points."""
+    token = enter_run_compressor()
+    try:
+        yield
+    finally:
+        exit_run_compressor(token)
+
+
+def reset_headroom_compressor() -> None:
+    """Reset process-global state (tests / settings changes). Does not touch a
+    per-run compressor published in the current task."""
+    global _global_compressor, _global_client
     with _global_lock:
         _global_compressor = None
+        _global_client = None

@@ -8,6 +8,7 @@ code paths mirroring think/handoff handling.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import httpx
@@ -17,6 +18,10 @@ from continuum.llm.headroom.compressor import (
     RETRIEVE_TOOL,
     RETRIEVE_TOOL_NAME,
     HeadroomCompressor,
+    enter_run_compressor,
+    get_headroom_compressor,
+    reset_headroom_compressor,
+    use_run_compressor_if_enabled,
 )
 
 HASH = "7e443033ad1ff3f9ca0b8c49"
@@ -175,3 +180,137 @@ class TestRetrieveResultProtection:
         compressor = HeadroomCompressor(client=client, fail_open=True)
         out = await compressor.apply(original, model="gpt-4o")
         assert out[2]["content"] == "[compressed]"  # NOT protected
+
+
+class TestPerRunIsolation:
+    """The retrieve anti-forgery boundary (``issued_hashes``) must be per-run,
+    not process-wide: one agent cannot authorize a retrieve of another agent's
+    cached originals from the shared sidecar store."""
+
+    def _mock_client(self, monkeypatch):
+        """new_run_compressor() builds a real httpx client by default — swap it
+        for a mock so these tests exercise only the scoping, not the network."""
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        monkeypatch.setattr(
+            "continuum.llm.headroom.compressor.get_headroom_client",
+            lambda: AsyncMock(),
+        )
+        reset_headroom_compressor()
+
+    def test_sequential_runs_get_distinct_compressors(self, monkeypatch):
+        self._mock_client(monkeypatch)
+        with use_run_compressor_if_enabled():
+            c1 = get_headroom_compressor()
+        with use_run_compressor_if_enabled():
+            c2 = get_headroom_compressor()
+        assert c1 is not c2
+
+    def test_nested_scope_inherits_same_compressor(self, monkeypatch):
+        """A handoff/executor re-entry must KEEP the run's compressor so
+        pre-handoff issued hashes stay retrievable — it neither rebinds nor
+        resets."""
+        self._mock_client(monkeypatch)
+        with use_run_compressor_if_enabled():
+            outer = get_headroom_compressor()
+            with use_run_compressor_if_enabled():  # nested handoff/executor
+                inner = get_headroom_compressor()
+                inner._issued_hashes.add(HASH)
+            # nested exit must not drop the run's compressor or its hashes
+            assert get_headroom_compressor() is outer
+            assert HASH in outer._issued_hashes
+        assert inner is outer
+
+    def test_outside_run_uses_stable_global_fallback(self, monkeypatch):
+        self._mock_client(monkeypatch)
+        assert get_headroom_compressor() is get_headroom_compressor()
+
+    def test_finished_run_is_readable_as_global_for_observability(self, monkeypatch):
+        """Post-run inspectors (the rig glassbox) read get_headroom_compressor()
+        AFTER the run returns; it must reflect the run that just finished, not an
+        empty global — else the run-scoped isolation would blank the glassbox."""
+        self._mock_client(monkeypatch)
+        with use_run_compressor_if_enabled():
+            run_comp = get_headroom_compressor()
+            run_comp._issued_hashes.add(HASH)
+        # Outside the scope now — the fallback must be the finished run's compressor
+        assert get_headroom_compressor() is run_comp
+        assert HASH in get_headroom_compressor().issued_hashes
+
+    def test_disabled_headroom_does_not_bind(self, monkeypatch):
+        monkeypatch.setattr(settings, "headroom_enabled", False)
+        reset_headroom_compressor()
+        assert enter_run_compressor() is None
+
+    def test_bind_failure_is_fail_safe_not_raising(self, monkeypatch):
+        """A binding failure must return None (never raise) so it can't skip the
+        caller's policy-context teardown — which would leak data-label
+        enforcement state across runs."""
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        reset_headroom_compressor()
+
+        def _boom() -> object:
+            raise RuntimeError("misconfigured client")
+
+        monkeypatch.setattr(
+            "continuum.llm.headroom.compressor.new_run_compressor", _boom
+        )
+        assert enter_run_compressor() is None  # fail-safe, no exception
+
+    async def test_concurrent_runs_have_isolated_issued_hashes(self, monkeypatch):
+        """Two parallel agents (separate async tasks) each get their own
+        compressor; neither sees the other's issued hashes."""
+        self._mock_client(monkeypatch)
+        a, b = "a" * 24, "b" * 24
+        barrier = asyncio.Barrier(2)
+        results: dict[str, tuple[bool, bool]] = {}
+
+        async def one(tag: str, mine: str, theirs: str) -> None:
+            with use_run_compressor_if_enabled():
+                comp = get_headroom_compressor()
+                comp._issued_hashes.add(mine)
+                await barrier.wait()  # both have added before anyone checks
+                results[tag] = (mine in comp._issued_hashes, theirs in comp._issued_hashes)
+
+        await asyncio.gather(one("A", a, b), one("B", b, a))
+        assert results["A"] == (True, False)  # sees own, never the peer's
+        assert results["B"] == (True, False)
+
+    def test_global_fallback_does_not_deadlock(self, monkeypatch):
+        """Regression: the fallback must build the compressor OUTSIDE _global_lock.
+        new_run_compressor() -> get_headroom_client() re-acquires the same
+        non-reentrant lock; nesting it self-deadlocks (hung 'thinking' live).
+        Runs the REAL lock path (only the httpx client is stubbed) in a worker
+        thread so a regression fails on timeout instead of hanging forever."""
+        import threading as _threading
+
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        monkeypatch.setattr(
+            "continuum.llm.headroom.compressor.HeadroomClient", lambda **kw: object()
+        )
+        reset_headroom_compressor()
+        try:
+            out: dict[str, object] = {}
+
+            def work() -> None:
+                c1 = get_headroom_compressor()  # fallback: contextvar is None here
+                out["stable"] = get_headroom_compressor() is c1
+
+            t = _threading.Thread(target=work)
+            t.start()
+            t.join(timeout=5)
+            assert not t.is_alive(), "get_headroom_compressor() deadlocked"
+            assert out.get("stable") is True
+        finally:
+            reset_headroom_compressor()
+
+    async def test_hash_from_one_run_rejected_in_another(self, monkeypatch):
+        """The end-to-end guarantee: a hash issued in run 1 is un-issued in a
+        fresh run 2, so resolve_retrieve rejects it without hitting the store."""
+        self._mock_client(monkeypatch)
+        with use_run_compressor_if_enabled():
+            get_headroom_compressor()._issued_hashes.add(HASH)
+        with use_run_compressor_if_enabled():
+            comp = get_headroom_compressor()
+            result = await comp.resolve_retrieve(HASH)
+        assert "not issued" in result
+        comp._client.retrieve.assert_not_awaited()
