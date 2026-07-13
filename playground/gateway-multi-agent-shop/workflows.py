@@ -319,6 +319,7 @@ class ParallelShop(_BaseWorkflow):
             instructions=(
                 "Search for dog products only. "
                 "Use search_products with animal='dog'. "
+                "For a full inventory/stock audit, call fetch_inventory with animal='dog' instead. "
                 "Return a clear list of results with IDs and prices."
             ),
             model=m,
@@ -333,6 +334,7 @@ class ParallelShop(_BaseWorkflow):
             instructions=(
                 "Search for cat products only. "
                 "Use search_products with animal='cat'. "
+                "For a full inventory/stock audit, call fetch_inventory with animal='cat' instead. "
                 "Return a clear list of results with IDs and prices."
             ),
             model=m,
@@ -539,7 +541,10 @@ class ScatterShop(_BaseWorkflow):
             self.config.enable_memory and memory_client is not None and memory_client.is_enabled
         )
 
-        analysts = [make_analyst_agent(m, gm) for _ in range(3)]
+        analysts = [
+            make_analyst_agent(m, gm, tools=self._tools, tool_executor=self._tool_executor)
+            for _ in range(3)
+        ]
         for i, a in enumerate(analysts, 1):
             a.name = f"analyst-agent-{i}"
 

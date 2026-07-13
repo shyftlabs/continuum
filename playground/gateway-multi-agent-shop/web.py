@@ -135,6 +135,9 @@ HTML_PAGE = (
   .chip { padding: 5px 11px; background: white; border: 1px solid #ddd;
           border-radius: 14px; font-size: 12px; cursor: pointer; color: #555; white-space: nowrap; }
   .chip:hover { border-color: #1a365d; color: #1a365d; }
+  .chip-hr { border-color: #2f855a; color: #2f855a; background: #f0fff4; }
+  .chip-hr:hover { border-color: #22543d; color: #22543d; }
+  .hr-hint { flex-basis: 100%; font-size: 11px; color: #2f855a; padding: 4px 2px 0; }
   #input-row { padding: 12px 20px; background: white; border-top: 1px solid #e0e0e0;
                display: flex; gap: 8px; }
   #input { flex: 1; padding: 9px 13px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; }
@@ -207,10 +210,10 @@ const MODE_DESCRIPTIONS = """
     + """;
 
 const MODE_SUGGESTIONS = {
-  sequential:  ["buy dog food", "get me a cat toy", "I need a dog leash"],
-  parallel:    ["what's available for dogs and cats?", "show me all pet products"],
+  sequential:  ["buy dog food", "audit the full inventory", "investigate recent order logs", "raise service.yaml pool sizes to 50 then list the original values"],
+  parallel:    ["what's available for dogs and cats?", "audit dog and cat inventory"],
   loop:        ["find me something under $10", "find a dog toy under $15"],
-  scatter:     ["compare p1 p2 and p5", "which of these is best value?"],
+  scatter:     ["compare p1 p2 and p5", "audit recent order logs for anomalies"],
   supervised:  ["write a buying guide for a new puppy", "create a pet care guide"],
   planner:     ["set up for a new puppy", "I just got a cat, what do I need?"],
   debate:      ["should I buy premium or budget dog food?", "premium vs budget cat food"],
@@ -263,11 +266,25 @@ function onModeChange() {
   startNewChat();
 }
 
+const HEADROOM_QUERIES = new Set([
+  "audit the full inventory", "investigate recent order logs",
+  "audit dog and cat inventory", "audit recent order logs for anomalies",
+  "raise service.yaml pool sizes to 50 then list the original values",
+]);
+
 function renderSuggestions(mode) {
-  const chips = (MODE_SUGGESTIONS[mode] || []).map(q =>
-    `<div class="chip" onclick='send(${JSON.stringify(q)})'>${q}</div>`
-  ).join('');
-  document.getElementById('suggestions').innerHTML = chips;
+  const list = MODE_SUGGESTIONS[mode] || [];
+  const chips = list.map(q => {
+    const hr = HEADROOM_QUERIES.has(q);
+    const cls = hr ? "chip chip-hr" : "chip";
+    const label = hr ? `🗜️ ${q}` : q;
+    return `<div class="${cls}" onclick='send(${JSON.stringify(q)})'>${label}</div>`;
+  }).join('');
+  const anyHr = list.some(q => HEADROOM_QUERIES.has(q));
+  const hint = anyHr
+    ? `<div class="hr-hint">🗜️ = returns a large payload, so Headroom visibly compresses it — watch the token savings in the server logs.</div>`
+    : '';
+  document.getElementById('suggestions').innerHTML = chips + hint;
 }
 
 function send(text) {
