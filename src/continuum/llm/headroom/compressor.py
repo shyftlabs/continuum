@@ -17,12 +17,26 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Any
+from typing import Any, Protocol
 
 from continuum.llm.headroom.client import CompressionStats, HeadroomClient
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class HeadroomBackend(Protocol):
+    """What HeadroomCompressor needs from a backend — satisfied by both
+    HeadroomClient (HTTP sidecar) and LocalHeadroomClient (in-process library).
+    Selected by ``settings.headroom_mode`` in :func:`get_headroom_client`."""
+
+    async def compress(
+        self, messages: list[dict[str, Any]], model: str | None
+    ) -> tuple[list[dict[str, Any]], CompressionStats, list[str]]: ...
+
+    async def retrieve(self, hash_value: str, query: str | None = None) -> str: ...
+
+    async def aclose(self) -> None: ...
 
 # CCR retrieval markers embedded in compressed content, e.g.
 #   "[2501 lines compressed to 7. Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]"
@@ -83,7 +97,7 @@ class HeadroomCompressor:
     (and anything persisted from it) stays pristine.
     """
 
-    def __init__(self, client: HeadroomClient, fail_open: bool = True):
+    def __init__(self, client: HeadroomBackend, fail_open: bool = True):
         self._client = client
         self._fail_open = fail_open
         # Hashes the sidecar issued for THIS run only — the retrieve
@@ -354,7 +368,7 @@ class HeadroomCompressor:
 # run (bare LLMClient.chat), calls fall back to a process-global compressor.
 # ---------------------------------------------------------------------------
 
-_global_client: HeadroomClient | None = None
+_global_client: HeadroomBackend | None = None
 _global_compressor: HeadroomCompressor | None = None
 _global_lock = threading.Lock()
 
@@ -363,19 +377,76 @@ _run_compressor: ContextVar[HeadroomCompressor | None] = ContextVar(
 )
 
 
-def get_headroom_client() -> HeadroomClient:
-    """Process-global HeadroomClient (shared httpx connection pool)."""
+class _NullBackend:
+    """No-op backend: passthrough compress, always-miss retrieve. Used when the
+    ``local`` library backend can't be built (extra not installed) and fail-open
+    is set — so compression is silently disabled instead of crashing the call.
+    Keeps the ``HeadroomBackend`` contract's 'fail-open never raises' promise."""
+
+    async def compress(
+        self, messages: list[dict[str, Any]], model: str | None
+    ) -> tuple[list[dict[str, Any]], CompressionStats, list[str]]:
+        return messages, CompressionStats(0, 0, 0, 1.0, []), []
+
+    async def retrieve(self, hash_value: str, query: str | None = None) -> str:
+        raise KeyError(f"no backend available to retrieve hash {hash_value!r}")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def get_headroom_client() -> HeadroomBackend:
+    """Process-global backend, selected by ``settings.headroom_mode``:
+    ``local`` (default) → LocalHeadroomClient (in-process ``headroom`` library);
+    ``endpoint`` → HeadroomClient (shared httpx pool to the sidecar).
+
+    In local mode, if the ``headroom`` library isn't installed the construction
+    fails: under fail-open we log and fall back to a no-op backend (compression
+    disabled, run continues); under fail-closed we re-raise so the misconfig
+    surfaces."""
     global _global_client
     if _global_client is None:
         with _global_lock:
             if _global_client is None:
                 from continuum.config import settings
 
-                _global_client = HeadroomClient(
-                    api_base=settings.headroom_api_base,
-                    api_key=settings.headroom_api_key,
-                    timeout=settings.headroom_timeout_seconds,
-                )
+                if settings.headroom_mode == "local":
+                    from continuum.llm.headroom.local_client import LocalHeadroomClient
+
+                    try:
+                        _global_client = LocalHeadroomClient(
+                            timeout=settings.headroom_timeout_seconds,
+                            kompress_prewarm=settings.headroom_kompress_local,
+                            kompress_execution_timeout_ms=(
+                                settings.headroom_kompress_execution_timeout_ms
+                            ),
+                        )
+                        logger.info(
+                            "headroom: mode=local (in-process library), "
+                            "CCR backend=%s",
+                            _global_client.ccr_backend_info(),
+                        )
+                    except Exception as e:
+                        if not settings.headroom_fail_open:
+                            raise
+                        logger.warning(
+                            "headroom: mode=local but backend unavailable (%s); "
+                            "compression DISABLED (fail-open). Install: pip install "
+                            '"shyftlabs-continuum[headroom-local]" — or set '
+                            "HEADROOM_MODE=endpoint to use a sidecar.",
+                            e,
+                        )
+                        _global_client = _NullBackend()
+                else:
+                    _global_client = HeadroomClient(
+                        api_base=settings.headroom_api_base,
+                        api_key=settings.headroom_api_key,
+                        timeout=settings.headroom_timeout_seconds,
+                    )
+                    logger.info(
+                        "headroom: mode=endpoint (sidecar), api_base=%s",
+                        settings.headroom_api_base,
+                    )
     return _global_client
 
 

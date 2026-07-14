@@ -241,16 +241,37 @@ class Settings(BaseSettings):
     context_cache_ttl_seconds: int = 3600  # Cache TTL for summaries (1 hour)
 
     # -------------------------------------------------------------------------
-    # Headroom Compression (Optional sidecar — run `headroom proxy` locally)
+    # Headroom Compression (Optional — sidecar or in-process library)
     # -------------------------------------------------------------------------
-    # Off by default: requires a running sidecar (its API is loopback-only, so
-    # it must run on the same host). Applies to async calls (chat/chat_stream)
-    # only. See gap-analysis/headroom-native-integration-plan.md.
+    # Off by default. Applies to async calls (chat/chat_stream) only. Two modes:
+    #   local (default): in-process `import headroom` — no sidecar to run;
+    #       requires the [headroom-local] extra. api_base/api_key are ignored.
+    #       Headroom env knobs (e.g. HEADROOM_CCR_BACKEND) apply to THIS process.
+    #       If the extra isn't installed: fail-open → compression silently
+    #       disabled (no crash); fail-closed → error at first use.
+    #   endpoint: HTTP to a running `headroom proxy` sidecar — the multi-worker
+    #       production mode (fault isolation, one engine for many workers). Set
+    #       HEADROOM_MODE=endpoint + HEADROOM_API_BASE to use it.
+    # See gap-analysis/headroom-native-integration-plan.md.
     headroom_enabled: bool = False
+    headroom_mode: Literal["endpoint", "local"] = "local"  # HEADROOM_MODE
     headroom_api_base: str = "http://127.0.0.1:8787"  # HEADROOM_API_BASE — must be loopback
     headroom_api_key: str | None = None  # HEADROOM_API_KEY — bearer token if the sidecar sets one
-    headroom_fail_open: bool = True  # True: sidecar error → forward uncompressed (recommended)
+    headroom_fail_open: bool = True  # True: compression error → forward uncompressed (recommended)
     headroom_timeout_seconds: float = 30.0  # Compress timeout (large payloads take seconds)
+    # In-process prose (Kompress ML `text`) compression — local mode only.
+    # Off by default because Headroom deliberately SKIPS the ML model on the hot
+    # path (loads it in a background thread, gives each call a ~25ms budget) so
+    # prose otherwise never compresses in-process. When True (needs the
+    # [headroom-local-ml] extra): (1) pre-warm the model at startup in a daemon
+    # thread so it's ready without blocking boot, and (2) raise the per-call
+    # execution budget below so a call waits for a slot instead of skipping.
+    # Trade-off: prose is the ~23% floor (logs/tables/search are the big wins
+    # and need none of this); enabling it costs a one-time warmup + a little
+    # per-call latency under contention. Ignored in endpoint mode (the sidecar
+    # owns its own Kompress config). No effect on non-prose transforms.
+    headroom_kompress_local: bool = False  # HEADROOM_KOMPRESS_LOCAL
+    headroom_kompress_execution_timeout_ms: int = 5000  # HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS
     # When Headroom is on, raise the summarizer's trigger so the (cache-hostile,
     # history-rewriting) summarizer fires only as a rare last resort behind
     # Headroom's cache-friendly per-turn compression. max() semantics — never
