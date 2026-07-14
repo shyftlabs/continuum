@@ -70,36 +70,49 @@ class LocalHeadroomClient:
             import headroom  # noqa: F401 — fail at construction, not first call
         except ImportError as e:
             raise RuntimeError(_INSTALL_HINT) from e
-        self._disable_relevance_split()
+        self._align_router_to_sidecar()
         if kompress_prewarm:
             self._enable_prose_kompress(kompress_execution_timeout_ms)
 
-    def _disable_relevance_split(self) -> None:
-        """Turn off the router's relevance_split so log/search crushing survives
-        a resident Kompress model — parity with the sidecar.
+    def _align_router_to_sidecar(self) -> None:
+        """Match the sidecar's router config so local mode compresses identically.
 
-        In the library pipeline, relevance_split (default ON) intercepts
-        LOG/SEARCH content whenever the Kompress model is ready and Kompresses
-        the "low-relevance tail". The library's relevance query is the LAST
-        user message (often "answer using the data above"), which matches
-        nothing — so the whole log is scored low-relevance and fed through the
-        ML model. Verified on headroom-ai 0.29.0: the same 31k-token log
-        crushes 99.0% via SearchCompressor but only 14.5% through this path,
-        and the split never compares itself against the crusher, so the bad
-        result wins. The sidecar does not exhibit this (verified: prose 0.78 +
-        logs 99% in one session). No public compress() knob exists, so we set
-        the router config directly; duck-typed and best-effort so a future
-        headroom that removes the field is a no-op, not a crash.
+        The library's ``compress()`` builds the ContentRouter from simpler
+        defaults than the proxy; these diverge on real payloads. There's no
+        public ``compress()`` knob for either, so we set the router config
+        directly, at construction, BEFORE any compress runs (the router caches
+        results, and the SmartCrusher/relevance path are lazy — so the config
+        must be right on the first call). Duck-typed and best-effort: a future
+        headroom that renames/removes a field is a no-op, not a crash.
+
+        Two alignments, both verified against headroom-ai 0.29.0:
+
+        - ``relevance_split = False``. Default ON, it intercepts LOG/SEARCH
+          content whenever Kompress is resident and Kompresses the
+          "low-relevance tail". Its query is the LAST user message (e.g.
+          "answer using the data above"), which matches nothing, so the whole
+          log scores low-relevance and goes through the ML model — 14.5% vs the
+          SearchCompressor's 99% — and the split never compares against the
+          crusher, so the bad result wins. The sidecar doesn't hit this.
+
+        - ``smart_crusher_max_items_after_crush = 50``. The library default is
+          15; the proxy uses 50. On a 43-row table that's drop-28-rows (49.7%,
+          lossy-recoverable) vs keep-all (19%). Pin 50 to match the sidecar's
+          more conservative keep-inline policy.
         """
         try:
             from headroom.compress import _get_pipeline
 
             for transform in getattr(_get_pipeline(), "transforms", []):
                 cfg = getattr(transform, "config", None)
-                if cfg is not None and hasattr(cfg, "relevance_split"):
+                if cfg is None:
+                    continue
+                if hasattr(cfg, "relevance_split"):
                     cfg.relevance_split = False
-        except Exception as e:  # never fatal — worst case is the 14.5% mode
-            logger.warning("headroom: could not disable relevance_split (%s)", e)
+                if hasattr(cfg, "smart_crusher_max_items_after_crush"):
+                    cfg.smart_crusher_max_items_after_crush = 50
+        except Exception as e:  # never fatal — worst case is the library defaults
+            logger.warning("headroom: could not align router to sidecar defaults (%s)", e)
 
     def _enable_prose_kompress(self, execution_timeout_ms: int) -> None:
         """Make in-process prose (Kompress ML `text`) compression actually fire.

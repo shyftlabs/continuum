@@ -82,7 +82,7 @@ def _install_stub_headroom(monkeypatch, compress_fn=None, retrieve_fn=None):
     # headroom.compress the MODULE (for `from headroom.compress import
     # _get_pipeline`); the attribute above still wins for `from headroom
     # import compress`.
-    router_config = SimpleNamespace(relevance_split=True)
+    router_config = SimpleNamespace(relevance_split=True, smart_crusher_max_items_after_crush=15)
     pipeline = SimpleNamespace(transforms=[SimpleNamespace(config=router_config)])
     compress_mod = types.ModuleType("headroom.compress")
     compress_mod._get_pipeline = lambda: pipeline
@@ -146,17 +146,21 @@ class TestCompress:
         _, stats, _ = await client.compress(MESSAGES, model="gpt-4o")
         assert stats.compression_ratio == 1.0
 
-    async def test_disables_relevance_split_at_construction(self, monkeypatch):
-        # Sidecar parity: with the library's relevance_split ON and Kompress
-        # resident, LOG/SEARCH content is fed whole to the ML model (14.5%
-        # instead of the crusher's 99%). Constructing the client must flip the
-        # router config off BEFORE any compress runs (results are cached).
+    async def test_aligns_router_to_sidecar_at_construction(self, monkeypatch):
+        # Sidecar parity, set BEFORE any compress runs (router caches results,
+        # SmartCrusher/relevance are lazy). Two alignments:
+        #  - relevance_split off: else a resident Kompress + weak query feeds
+        #    whole logs to the ML model (14.5% vs the crusher's 99%).
+        #  - max_items_after_crush 15→50: match the proxy's keep-inline policy
+        #    (else local drops more table rows than endpoint).
         router_config = _install_stub_headroom(monkeypatch)
         assert router_config.relevance_split is True
+        assert router_config.smart_crusher_max_items_after_crush == 15
         from continuum.llm.headroom.local_client import LocalHeadroomClient
 
         LocalHeadroomClient(timeout=5.0)
         assert router_config.relevance_split is False
+        assert router_config.smart_crusher_max_items_after_crush == 50
 
     async def test_protects_system_and_user_messages(self, monkeypatch):
         # SAFETY: library default compresses system messages; we must pin the
