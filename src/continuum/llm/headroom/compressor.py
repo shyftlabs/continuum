@@ -416,7 +416,15 @@ def get_headroom_client() -> HeadroomBackend:
                     try:
                         _global_client = LocalHeadroomClient(
                             timeout=settings.headroom_timeout_seconds,
-                            kompress_prewarm=settings.headroom_kompress_local,
+                            # Only pay the ~261MB Kompress model load when
+                            # Headroom is actually on. The client is also built
+                            # (disabled) by observability paths that read stats
+                            # regardless of headroom_enabled — prewarming there
+                            # would load a model that never compresses anything.
+                            kompress_prewarm=(
+                                settings.headroom_kompress_local
+                                and settings.headroom_enabled
+                            ),
                             kompress_execution_timeout_ms=(
                                 settings.headroom_kompress_execution_timeout_ms
                             ),

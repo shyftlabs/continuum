@@ -276,6 +276,49 @@ class TestFactory:
         assert isinstance(client, LocalHeadroomClient)
         assert client._timeout == settings.headroom_timeout_seconds
 
+    async def test_disabled_headroom_does_not_prewarm_kompress(self, monkeypatch):
+        # The client is built even when disabled (observability reads stats via
+        # get_headroom_compressor). Constructing it must NOT load the Kompress
+        # model — that would burn ~261MB for compression that never runs.
+        _install_stub_headroom(monkeypatch)
+        called = threading.Event()
+
+        class _StubKompress:
+            def preload(self, *, allow_download=True):
+                called.set()
+                return "onnx"
+
+        mod = types.ModuleType("headroom.transforms.kompress_compressor")
+        mod.KompressCompressor = _StubKompress
+        monkeypatch.setitem(sys.modules, "headroom.transforms.kompress_compressor", mod)
+
+        monkeypatch.setattr(settings, "headroom_mode", "local")
+        monkeypatch.setattr(settings, "headroom_kompress_local", True)  # would prewarm...
+        monkeypatch.setattr(settings, "headroom_enabled", False)  # ...but disabled
+
+        get_headroom_client()
+        assert not called.wait(0.5), "prewarm must not run when headroom is disabled"
+
+    async def test_enabled_headroom_prewarms_kompress(self, monkeypatch):
+        _install_stub_headroom(monkeypatch)
+        called = threading.Event()
+
+        class _StubKompress:
+            def preload(self, *, allow_download=True):
+                called.set()
+                return "onnx"
+
+        mod = types.ModuleType("headroom.transforms.kompress_compressor")
+        mod.KompressCompressor = _StubKompress
+        monkeypatch.setitem(sys.modules, "headroom.transforms.kompress_compressor", mod)
+
+        monkeypatch.setattr(settings, "headroom_mode", "local")
+        monkeypatch.setattr(settings, "headroom_kompress_local", True)
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+
+        get_headroom_client()
+        assert called.wait(5.0), "prewarm must run when headroom + kompress are on"
+
     async def test_endpoint_mode_builds_http_client(self, monkeypatch):
         monkeypatch.setattr(settings, "headroom_mode", "endpoint")
         client = get_headroom_client()
