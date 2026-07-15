@@ -150,7 +150,7 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | `TEMPORAL_ENABLED` | Enable durable workflow orchestration | `false` |
 | `TEMPORAL_HOST` | Temporal frontend | `localhost:7233` |
 
-> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings. See [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) for the complete, annotated reference.
+> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings, `".[headroom-local]"` for in-process Headroom compression (`".[headroom-local-ml]"` adds ML prose compression). See [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) for the complete, annotated reference.
 
 ## 🧩 Components
 
