@@ -20,6 +20,31 @@ from continuum.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _block_text(block: Any) -> str:
+    """Return the countable text of a single content block.
+
+    Handles both OpenAI-style ({"type": "text", "text": ...}) and
+    Anthropic-style tool blocks. An Anthropic ``tool_use`` block keeps its
+    payload under ``input`` and a ``tool_result`` under ``content`` (which may
+    itself be a list) — neither is a plain ``text``/``content`` string, so the
+    old logic counted them as ~0 tokens and let oversized requests slip past
+    compression (provider 400). Falling back to ``str(block)`` for any block
+    without a recognised text field counts the whole payload rather than
+    undercounting it.
+    """
+    if not isinstance(block, dict):
+        return str(block)
+    text = block.get("text")
+    if isinstance(text, str):
+        return text
+    inner = block.get("content")
+    if isinstance(inner, str):
+        return inner
+    # tool_use (payload in "input"), tool_result with a nested content list, or
+    # any unknown block shape: stringify the whole block so nothing is missed.
+    return str(block)
+
+
 class TruncationStrategy(str, Enum):
     """Strategy for truncating messages when context limit is exceeded."""
 
@@ -332,18 +357,24 @@ class ContextWindowManager:
                     total += len(enc.encode(content))
                 elif isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict):
-                            total += len(
-                                enc.encode(str(block.get("text") or block.get("content") or ""))
-                            )
+                        total += len(enc.encode(_block_text(block)))
+                # OpenAI-format tool calls live outside `content` (in tool_calls);
+                # their arguments can be large, so count them too.
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    total += len(enc.encode(str(tool_calls)))
                 total += len(enc.encode(msg.get("role", "")))
             total += 2  # priming tokens
             return total
         except Exception as e:
             logger.warning(f"Token counting failed, using estimate: {e}")
-            total_chars = sum(
-                len(str(msg.get("content", ""))) + len(str(msg.get("role", ""))) for msg in messages
-            )
+            total_chars = 0
+            for msg in messages:
+                content = msg.get("content")
+                total_chars += len(content if isinstance(content, str) else str(content or ""))
+                total_chars += len(str(msg.get("role", "")))
+                if msg.get("tool_calls"):
+                    total_chars += len(str(msg.get("tool_calls")))
             return total_chars // 4
 
     def will_exceed_limit(

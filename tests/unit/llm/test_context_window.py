@@ -92,3 +92,67 @@ class TestContextWindowManager:
         cwm = ContextWindowManager()
         monkeypatch.setattr(cwm, "_fetch_gemini_limits", lambda model: None)
         assert cwm.get_model_limits("gemini-9-ultra").max_tokens == 1000000
+
+
+class TestCountTokensToolBlocks:
+    """count_tokens must not undercount tool-call payloads.
+
+    Regression: an Anthropic tool_use block keeps its payload under `input`
+    (and tool_result under a nested `content` list), and OpenAI tool_calls
+    live outside `content`. The old counter read only `text`/`content` string
+    fields, counting these as ~0 tokens — so an oversized request slipped past
+    compression and the provider rejected it with a 400.
+    """
+
+    def _big(self, approx_tokens: int) -> str:
+        return "word " * approx_tokens
+
+    def test_anthropic_tool_use_payload_is_counted(self):
+        cwm = ContextWindowManager()
+        payload = self._big(4000)
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "t1", "name": "search", "input": {"q": payload}}],
+            }
+        ]
+        # Payload is ~4000 tokens; counting it as ~0 would be the bug.
+        assert cwm.count_tokens(msgs, "gpt-4o") > 3000
+
+    def test_anthropic_tool_result_nested_content_is_counted(self):
+        cwm = ContextWindowManager()
+        payload = self._big(4000)
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": payload}]}
+                ],
+            }
+        ]
+        assert cwm.count_tokens(msgs, "gpt-4o") > 3000
+
+    def test_openai_tool_calls_arguments_are_counted(self):
+        cwm = ContextWindowManager()
+        args = self._big(4000)
+        msgs = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": args}}
+                ],
+            }
+        ]
+        assert cwm.count_tokens(msgs, "gpt-4o") > 3000
+
+    def test_plain_text_still_counted_normally(self):
+        cwm = ContextWindowManager()
+        msgs = [{"role": "user", "content": "hello world"}]
+        n = cwm.count_tokens(msgs, "gpt-4o")
+        assert 0 < n < 50  # small, unchanged behaviour
+
+    def test_openai_text_block_list_unchanged(self):
+        cwm = ContextWindowManager()
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "hello world"}]}]
+        assert cwm.count_tokens(msgs, "gpt-4o") > 0

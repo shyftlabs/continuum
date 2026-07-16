@@ -209,6 +209,68 @@ class TestCompressSummarizeEmptyGuard:
 
 
 # ---------------------------------------------------------------------------
+# Summarize cut-guard must recognise tool I/O in both formats so a tool_use is
+# never split from its tool_result (provider 400).
+# ---------------------------------------------------------------------------
+
+
+class TestCarriesToolIO:
+    def test_plain_messages_are_safe_cut_points(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert not _carries_tool_io({"role": "user", "content": "hello"})
+        assert not _carries_tool_io({"role": "assistant", "content": "hi there"})
+
+    def test_openai_tool_call_and_tool_role_detected(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert _carries_tool_io({"role": "tool", "content": "result"})
+        assert _carries_tool_io(
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
+        )
+
+    def test_anthropic_tool_use_and_result_blocks_detected(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert _carries_tool_io(
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "input": {}}]}
+        )
+        assert _carries_tool_io(
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]}
+        )
+
+    def test_cut_walks_back_past_anthropic_tool_result_user(self):
+        """The cut must not start the recent segment on a tool_result-carrying
+        user message (its tool_use would be summarized away)."""
+        from continuum.llm.context_management import (
+            ContextManagementConfig,
+            ProgressiveContextManager,
+        )
+
+        mgr = ProgressiveContextManager()
+        config = ContextManagementConfig()
+        config.keep_recent_messages = 1  # naive cut would land on the last message
+
+        messages = [
+            {"role": "user", "content": "older turn"},
+            {"role": "assistant", "content": "plain reply"},  # clean boundary
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+        ]
+        result, _ = asyncio.get_event_loop().run_until_complete(
+            mgr._compress_summarize(messages, "gpt-4", config)
+        )
+        # The tool_use / tool_result pair must remain together (both kept, not split).
+        kept = [
+            m
+            for m in result
+            if isinstance(m.get("content"), list)
+            and any(b.get("type") in ("tool_use", "tool_result") for b in m["content"])
+        ]
+        assert len(kept) == 2  # both halves of the pair survived intact
+
+
+# ---------------------------------------------------------------------------
 # 02-#14: Token counting fallback is conservative
 # ---------------------------------------------------------------------------
 

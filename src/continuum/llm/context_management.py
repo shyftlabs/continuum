@@ -34,6 +34,27 @@ from continuum.observability.trace_context import SpanScope, truncate_data
 logger = get_logger(__name__)
 
 
+def _carries_tool_io(msg: dict[str, Any]) -> bool:
+    """True if the message is part of a tool call/result exchange.
+
+    Recognises both formats: OpenAI (``role == "tool"`` results, assistant
+    ``tool_calls``) and Anthropic (``tool_use`` / ``tool_result`` blocks inside
+    a ``content`` list). The summarize cut point must not land on such a
+    message, or a ``tool_use`` could be summarized away from its matching
+    ``tool_result`` (or vice versa) — which the provider rejects with a 400.
+    """
+    if msg.get("role") == "tool":
+        return True
+    if msg.get("tool_calls"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("tool_use", "tool_result"):
+                return True
+    return False
+
+
 class CompressionStrategy(str, Enum):
     """Strategy for compressing context when approaching limits."""
 
@@ -546,13 +567,16 @@ class ProgressiveContextManager:
                 latency_ms=0.0,
             )
 
-        # Split into older and recent, ensuring the cut never falls inside a tool call pair.
-        # Walk the cut backward until it lands before a user or plain assistant text message.
+        # Split into older and recent, ensuring the cut never falls inside a tool
+        # call pair. Walk the cut backward until it lands on a clean user/assistant
+        # text message that carries no tool I/O (OpenAI tool_calls / tool role, or
+        # Anthropic tool_use / tool_result blocks) — so a tool_use is never
+        # summarized away from its matching tool_result (provider 400).
         cut = max(0, len(conversation_messages) - config.keep_recent_messages)
         while cut > 0:
             msg = conversation_messages[cut]
             role = msg.get("role")
-            if role == "user" or (role == "assistant" and not msg.get("tool_calls")):
+            if role in ("user", "assistant") and not _carries_tool_io(msg):
                 break
             cut -= 1
 
