@@ -166,6 +166,12 @@ async for event in runner.run_stream(agent, "Tell me a story"):
         ...
 ```
 
+> Workflow agents (Sequential, Reflection, …) have no token-level stream — their
+> orchestration runs in `execute()` and returns a complete result. `run_stream()`
+> runs them to completion and emits the final result as a single
+> `CONTENT_DELTA` + `CONTENT_COMPLETE`, still wrapped in the normal
+> `RUN_START … RUN_END` events, so streaming callers keep working.
+
 ### Runner methods
 
 - `register_agent(agent)` — required for handoff targets
