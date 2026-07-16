@@ -1038,17 +1038,79 @@ class AgentRunner:
                 async for event in stream:
                     ...
         """
-        # Workflow agents have no streaming form — their orchestration lives in
-        # execute(), which returns a complete AgentResponse. Streaming one here
-        # would silently flatten it into a single bare LLM call (see run()).
-        # Fail loudly instead.
+        # Workflow agents have no native token-streaming form — their
+        # orchestration lives in execute(), which returns a complete
+        # AgentResponse rather than a token stream. Rather than fail (or silently
+        # flatten it into one bare LLM call, as the old plain path did), run the
+        # workflow to completion via run() and surface the correct result through
+        # the same streaming event contract as a single chunk. Callers keep the
+        # streaming interface and get correct output; it just arrives at once.
         if self._is_workflow_agent(agent):
-            raise AgentConfigurationError(
-                f"Workflow agent '{agent.name}' cannot be streamed: its orchestration "
-                "runs via execute(), which has no streaming form. Use runner.run() "
-                "instead, or stream the individual inner agents.",
-                agent_name=agent.name,
+            response = await self.run(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
             )
+            _run_id = response.run_id or generate_run_id()
+            _content = response.content or ""
+            yield AgentEvent(
+                type=EventType.RUN_START,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"input": input if isinstance(input, str) else "[messages]"},
+                trace_id=response.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.AGENT_START,
+                agent_name=agent.name,
+                run_id=_run_id,
+                trace_id=response.trace_id,
+            )
+            if _content:
+                # Full result as one delta (for token-accumulating UIs) plus a
+                # CONTENT_COMPLETE (for UIs that read only the final text).
+                yield AgentEvent(
+                    type=EventType.CONTENT_DELTA,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"content": _content},
+                    trace_id=response.trace_id,
+                )
+                yield AgentEvent(
+                    type=EventType.CONTENT_COMPLETE,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"content": _content},
+                    trace_id=response.trace_id,
+                )
+            if response.status == ResponseStatus.ERROR:
+                yield AgentEvent(
+                    type=EventType.RUN_ERROR,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"error": response.error or "", "error_type": "AgentError"},
+                    trace_id=response.trace_id,
+                )
+            yield AgentEvent(
+                type=EventType.AGENT_END,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"turn_count": response.turn_count},
+                trace_id=response.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.RUN_END,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"content": _content, "turn_count": response.turn_count},
+                trace_id=response.trace_id,
+            )
+            return
 
         start_time = time.time()
 

@@ -15,7 +15,8 @@ Covers:
 - circuit-breaker-open short-circuits with an error response
 - ReflectionAgent wrapping a workflow inner agent runs the inner execute()
 - plain agents still go through the conversation loop
-- run_stream() rejects workflow agents loudly instead of flattening
+- run_stream() runs workflow agents via run() and surfaces the result as
+  stream events (graceful fallback) instead of flattening
 """
 
 from __future__ import annotations
@@ -23,10 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from continuum.agent.base import BaseAgent
-from continuum.agent.exceptions import AgentConfigurationError
 from continuum.agent.types import AgentResponse, ResponseStatus
 from continuum.agent.utils.context_utils import create_run_context
 
@@ -207,17 +205,33 @@ class TestNestedWorkflowNotFlattened:
 
 
 # ---------------------------------------------------------------------------
-# run_stream() rejects workflow agents
+# run_stream() gracefully falls back to run() for workflow agents
 # ---------------------------------------------------------------------------
 
 
-class TestRunStreamRejectsWorkflowAgents:
-    async def test_run_stream_raises_for_workflow_agent(self):
+class TestRunStreamWorkflowFallback:
+    async def test_run_stream_runs_workflow_and_emits_events(self):
+        from continuum.agent.types import EventType
+
         runner, _ = _make_runner()
         wf = StubWorkflowAgent(name="wf", instructions="orchestrate")
 
-        with pytest.raises(AgentConfigurationError, match="cannot be streamed"):
-            async for _ in runner.run_stream(wf, "hi"):
-                pass
+        events = [e async for e in runner.run_stream(wf, "hi")]
 
-        assert not wf.execute_calls
+        # The workflow's execute() actually ran (not flattened, not an error).
+        assert len(wf.execute_calls) == 1
+        assert wf.execute_calls[0]["input"] == "hi"
+
+        types = [e.type for e in events]
+        # Full streaming event contract is honoured.
+        assert types[0] == EventType.RUN_START
+        assert EventType.AGENT_START in types
+        assert EventType.CONTENT_COMPLETE in types
+        assert types[-1] == EventType.RUN_END
+        assert EventType.RUN_ERROR not in types
+
+        # The correct orchestrated content is surfaced through the stream.
+        complete = next(e for e in events if e.type == EventType.CONTENT_COMPLETE)
+        assert complete.data["content"] == "ORCHESTRATED:hi"
+        end = events[-1]
+        assert end.data["content"] == "ORCHESTRATED:hi"
