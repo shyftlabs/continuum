@@ -87,6 +87,8 @@ Optional extras (declared but not installed by default):
 | `[embeddings]` | `sentence-transformers >= 2.2.0` | Local embeddings |
 | `[cohere]` | `cohere >= 5.0.0` | Cohere embeddings |
 | `[eval]` | `deepeval`, `ragas` | Evaluation framework |
+| `[headroom-local]` | `headroom-ai` | In-process Headroom compression (logs / tables / search) |
+| `[headroom-local-ml]` | `headroom-ai`, `onnxruntime`, `transformers` | Adds in-process prose compression (Kompress ML) |
 | `[dev]` | `pytest`, `ruff`, `mypy`, `respx`, `fakeredis` | Tests & linting |
 
 Install on demand:
@@ -195,6 +197,29 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `CONTEXT_KEEP_RECENT_MESSAGES` | `10` | Always keep the N most recent |
 | `CONTEXT_ENABLE_CACHING` | `true` | |
 | `CONTEXT_CACHE_TTL_SECONDS` | `3600` | 1 hour |
+
+### Headroom compression *(optional, requires `[headroom-local]` extra)*
+
+Per-turn compression that shrinks bulky tool output before it reaches
+the model. Off by default; sits in front of the summarizer above (raises
+its trigger via `HEADROOM_CONTEXT_THRESHOLD`). See `docs/index.html`
+(Run Agents → Headroom Compression) for the full walkthrough.
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEADROOM_ENABLED` | `false` | Master switch |
+| `HEADROOM_MODE` | `local` | `local` (in-process) or `endpoint` (sidecar) |
+| `HEADROOM_FAIL_OPEN` | `true` | On a compression error, forward uncompressed |
+| `HEADROOM_TIMEOUT_SECONDS` | `30.0` | Compress timeout |
+| `HEADROOM_CONTEXT_THRESHOLD` | `0.92` | Raises the summarizer trigger so it fires only behind Headroom |
+| `HEADROOM_API_BASE` | `http://127.0.0.1:8787` | Sidecar URL (endpoint mode; ignored in local) |
+| `HEADROOM_API_KEY` | unset | Bearer token, only if the sidecar sets one (endpoint) |
+| `HEADROOM_KOMPRESS_LOCAL` | `false` | In-process prose (Kompress ML); needs `[headroom-local-ml]` |
+| `HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS` | `5000` | Per-call ML budget (local, only when Kompress on) |
+
+The CCR store (local mode) is configured via headroom-ai's own env vars:
+`HEADROOM_CCR_BACKEND` (`memory` default; set `sqlite` for multi-worker)
+and `HEADROOM_CCR_SQLITE_PATH`.
 
 ### Temporal *(optional, requires `[temporal]` extra)*
 

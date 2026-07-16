@@ -146,6 +146,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | Progressive context manager       | Proactive summarization before hitting the context limit                           |
 | Compression strategies            | `summarize_old`, `truncate_oldest`, `smart` (try summarize, fall back to truncate) |
 | Async summarization               | Non-blocking context compression                                                   |
+| Headroom compression (optional)   | Per-turn, cache-friendly compression of bulky tool output; sits in front of the summarizer (`[headroom-local]` extra, local or sidecar) |
 | RAG context injection             | `rag_context` field injected after conversation history                            |
 | require_context                   | Skip the LLM and return a no-knowledge message when no RAG context is found        |
 | retrieval_top_k / rerank_enabled  | Hints for downstream RAG retrieval pipelines                                       |
@@ -228,6 +229,7 @@ Requires `pip install shyftlabs-continuum[temporal]`.
 | Workflow agents            | `src/continuum/agent/workflow/`       |
 | Smart layer (tier routing) | `src/continuum/agent/smart_layer/`    |
 | LLM clients & dispatchers  | `src/continuum/llm/`                  |
+| Headroom compression       | `src/continuum/llm/headroom/`         |
 | Tool execution             | `src/continuum/tools/`                |
 | Tool attention             | `src/continuum/tools/tool_attention/` |
 | Security & access control  | `src/continuum/security/`             |

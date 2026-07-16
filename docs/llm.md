@@ -335,6 +335,34 @@ new_messages, result = await mgr.compress_if_needed(messages, model="gpt-4o-mini
 
 To override per-agent: set `agent.config.context_management = cfg`.
 
+### Headroom compression (optional)
+
+Headroom is an optional, **per-turn** compression engine that shrinks
+bulky tool output — logs, tables, search / RAG dumps, prose — *before*
+it reaches the model, and collapses stale or redundant file reads.
+Unlike the summarizer above, it never rewrites earlier messages, so the
+provider's prompt cache stays warm. It compresses tool results (and,
+opt-in, assistant text); system and user messages are left intact. Off
+by default.
+
+It **complements** the `ProgressiveContextManager` rather than replacing
+it: Headroom runs every turn (cheap, cache-friendly), while
+`HEADROOM_CONTEXT_THRESHOLD` (default `0.92`) raises the summarizer's
+trigger so the heavier, history-rewriting summarizer fires only as a
+last resort behind Headroom.
+
+Two modes via `HEADROOM_MODE`:
+
+- **`local`** (default) — in-process (`import headroom`); install the
+  `[headroom-local]` extra (add `-ml` for prose / Kompress).
+- **`endpoint`** — HTTP to a `headroom proxy` sidecar (one engine serves
+  many workers); set `HEADROOM_MODE=endpoint` + `HEADROOM_API_BASE`.
+
+Enable with `HEADROOM_ENABLED=true`. See
+[`installation.md`](installation.md) for the full `HEADROOM_*` env-var
+reference, and `docs/index.html` (Run Agents → Headroom Compression) for
+the sidecar walkthrough and the transform reference.
+
 ---
 
 ## 7 · Tracing & callbacks
