@@ -274,7 +274,7 @@ All importable from `continuum.agent`.
 |---|---|---|
 | `default_max_turns` | `int` | `25` |
 | `default_timeout` | `int` | `300` |
-| `persist_state` | `bool` | `True` |
+| `persist_state` | `bool` | `False` (env `PERSIST_RUN_STATE`) |
 | `state_ttl` | `int` | `86400` |
 | `parallel_tool_calls` | `bool` | `True` |
 | `max_parallel_tools` | `int` | `5` |
@@ -623,10 +623,15 @@ if you want to drive handoffs manually.
 `from continuum.agent import RunStateManager,
 get_global_state_manager, initialize_global_state_manager`
 
-If `RunnerConfig.persist_state=True` (default), `RunState` is written to
-Redis with TTL `state_ttl`. This lets you pause/resume long runs (e.g.
-a workflow waiting on tool output) across processes. The default state
-manager uses the same Redis instance configured for sessions.
+If `RunnerConfig.persist_state=True`, `RunState` is written to Redis with
+TTL `state_ttl`. This is intended to support pause/resume of long runs
+(e.g. a workflow waiting on tool output) across processes. The default
+state manager uses the same Redis instance configured for sessions.
+
+Disabled by default (`persist_state=False`) — enable it globally with the
+`PERSIST_RUN_STATE` env flag, or per-runner by passing `persist_state=True`.
+Leaving it off avoids a Redis write (and a connection attempt when Redis is
+unavailable) on every run.
 
 ---
 

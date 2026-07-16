@@ -120,7 +120,7 @@ async def _startup() -> None:
         state.runner = AgentRunner(
             container=state.container,
             tool_executor=state.tool_executor,
-            config=RunnerConfig(persist_state=False, default_max_turns=default_config.max_turns),
+            config=RunnerConfig(default_max_turns=default_config.max_turns),
         )
         # Build all three topologies; register every concrete agent on the runner.
         m = default_config.model

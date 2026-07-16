@@ -101,7 +101,7 @@ class _BaseWorkflow:
         self._runner = AgentRunner(
             container=self._container,
             tool_executor=self._tool_executor,
-            config=RunnerConfig(persist_state=False, default_max_turns=self.config.max_turns),
+            config=RunnerConfig(default_max_turns=self.config.max_turns),
         )
         self._initialized = True
         logger.info(
