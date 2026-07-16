@@ -217,13 +217,21 @@ class AgentRunner:
         run without a session_id (or with log_to_session=False), then call this
         once after the pipeline completes to write only what the user sees to Redis.
 
+        Precondition: ``session_id`` must refer to a session that already exists
+        (created via ``session_client.get_or_create_session``). Like ``run()``,
+        this method writes to but never creates a session; passing an id that
+        was never created raises ``SessionNotFoundError``.
+
         Example:
+            session_id = await runner.session_client.get_or_create_session(
+                user_id="user-123"
+            )
             response_a = await runner.run(agent_a, user_query)
             response_b = await runner.run(agent_b, response_a.content)
             await runner.save_turn(session_id, user_query, response_b.content, agent=agent_b)
 
         Args:
-            session_id: Session to write to.
+            session_id: Session to write to (must already exist).
             user_message: Original user query shown in the chat window.
             assistant_message: Final response shown in the chat window.
             agent: Agent whose memory config governs fact extraction.
@@ -284,6 +292,7 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        require_session: bool | None = None,
     ) -> PrepareRunResult:
         """Prepare for agent run -- shared setup for run() and run_stream()."""
         if agent.mcp_servers and not agent.tool_executor:
@@ -331,6 +340,19 @@ class AgentRunner:
                 ),
             )
 
+        # Stateless note (DEBUG only): a run with no session_id neither loads
+        # history nor persists anything. Passing user_id/conversation_id without
+        # a session_id is a VALID stateless pattern (e.g. read long-term memory
+        # scoped by user_id without a conversation thread), so this is never a
+        # warning — it only helps someone debugging "why isn't anything saved?".
+        if context.session_id is None and (context.user_id or context.conversation_id):
+            logger.debug(
+                "Stateless run: session_id is None, so no history is loaded and "
+                "nothing is persisted. If you intended to persist this turn, create "
+                "the session first and pass the id returned by "
+                "get_or_create_session() into run()."
+            )
+
         if agent.input_schema is not None:
             validation_result = await validate_input(agent, input, context)
             if validation_result is not None:
@@ -363,11 +385,82 @@ class AgentRunner:
         await self._lifecycle.start_trace(agent, context, run_state, input_preview)
 
         # Caller is responsible for creating the session before calling runner.run().
+        # The runner loads/saves but never creates a session. When a session_id is
+        # passed, preflight it once here: if it doesn't exist, the caller forgot to
+        # call get_or_create_session — surface that loudly instead of silently
+        # losing history/memory downstream. Stateless runs (session_id=None) skip
+        # this entirely, so this never fires on an intentionally sessionless agent.
         tool_context_state = None
+        session_metadata = None
         if context.session_id and self.session_client:
+            from continuum.session.exceptions import (
+                SessionError,
+                SessionNotCreatedError,
+            )
+
+            try:
+                session_metadata = await self.session_client.get_session_metadata(
+                    context.session_id
+                )
+            except SessionError as e:
+                # A real session-store failure (e.g. Redis down) — NOT a
+                # "forgot to create" case. Skip the preflight quietly; the load
+                # path below surfaces the outage on its own.
+                logger.debug(f"Session preflight skipped (store error): {e}")
+                session_metadata = None
+            else:
+                # In degrade mode a Redis outage makes get_session_metadata return
+                # None (empty in-memory fallback) even for a session that DOES
+                # exist in Redis. That's an outage, not a "forgot to create" — do
+                # not warn/raise for it; the load path surfaces the outage itself.
+                persistence_degraded = bool(
+                    getattr(self.session_client, "persistence_degraded", False)
+                )
+                if session_metadata is None and persistence_degraded:
+                    logger.debug(
+                        f"Session preflight inconclusive: persistence degraded, cannot "
+                        f"confirm session {context.session_id!r} exists."
+                    )
+                elif session_metadata is None:
+                    # Resolve strict mode: per-call require_session wins; else the
+                    # session config's strict_sessions flag.
+                    strict = require_session
+                    if strict is None:
+                        strict = bool(getattr(self.session_client.config, "strict_sessions", False))
+                    msg = (
+                        f"session_id={context.session_id!r} was passed to run() but no such "
+                        f"session exists in the session store. The runner does not create "
+                        f"sessions — history and long-term memory for this run will NOT be "
+                        f"persisted. Create it first and pass the returned id:\n"
+                        f"    sid = await runner.session_client.get_or_create_session("
+                        f"user_id=..., conversation_id=...)\n"
+                        f"    await runner.run(agent, msg, session_id=sid, user_id=...)"
+                    )
+                    if strict:
+                        raise SessionNotCreatedError(msg, session_id=context.session_id)
+                    logger.warning(msg)
+                else:
+                    # Session exists: check the write/search user_id alignment.
+                    # Memory WRITES scope by the session's user_id; memory SEARCHES
+                    # scope by the run's context.user_id. If they differ, stored
+                    # facts won't be retrievable — a silent, confusing mismatch.
+                    if (
+                        session_metadata.user_id
+                        and context.user_id
+                        and session_metadata.user_id != context.user_id
+                    ):
+                        logger.warning(
+                            f"user_id mismatch: session {context.session_id!r} was created with "
+                            f"user_id={session_metadata.user_id!r} but run() received "
+                            f"user_id={context.user_id!r}. Long-term memory is WRITTEN under the "
+                            f"session's user_id but SEARCHED under run()'s — stored facts won't be "
+                            f"found. Pass the same user_id to run() as the session was created with."
+                        )
+
             tool_context_state = await self._session_service.load_tool_context_state(
                 session_id=context.session_id,
                 trace_id=context.trace_id,
+                session_metadata=session_metadata,
             )
 
             if not tool_context_state.is_empty():
@@ -541,8 +634,30 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        require_session: bool | None = None,
     ) -> AgentResponse:
-        """Run an agent to completion."""
+        """Run an agent to completion.
+
+        Session preconditions (when ``session_id`` is provided):
+            The runner loads history and persists messages/memory against an
+            EXISTING session — it does not create one. Create the session first
+            and pass the returned id, and pass the SAME ``user_id`` you created
+            it with so long-term memory writes and searches align::
+
+                sid = await runner.session_client.get_or_create_session(
+                    user_id="user-123", conversation_id="conv-456"
+                )
+                resp = await runner.run(agent, msg, session_id=sid, user_id="user-123")
+
+            Omit ``session_id`` for a stateless run (no history, no persistence).
+
+        Args:
+            require_session: Override for the session guardrail. When True, raise
+                SessionNotCreatedError if ``session_id`` is passed but the session
+                does not exist. When False, warn and continue. When None
+                (default), use ``SessionConfig.strict_sessions``. Ignored for
+                stateless runs (``session_id=None``).
+        """
         # Workflow agents carry their orchestration in ``execute()``. Dispatch
         # them there: running one through the plain conversation loop would
         # silently flatten the whole workflow into a single bare LLM call using
@@ -574,6 +689,7 @@ class AgentRunner:
             trace_id,
             metadata,
             tags,
+            require_session=require_session,
         )
         if not result.success:
             return result.error_response
@@ -1023,8 +1139,12 @@ class AgentRunner:
         max_turns: int | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        require_session: bool | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run an agent with streaming output.
+
+        See :meth:`run` for the session preconditions and the ``require_session``
+        guardrail (both apply identically to streaming runs).
 
         Note: this is an async generator that publishes the run's data-label
         policy context (a contextvar) for its duration and resets it in a
@@ -1055,6 +1175,7 @@ class AgentRunner:
                 max_turns=max_turns,
                 trace_id=trace_id,
                 metadata=metadata,
+                require_session=require_session,
             )
             _run_id = response.run_id or generate_run_id()
             _content = response.content or ""
@@ -1125,6 +1246,7 @@ class AgentRunner:
             trace_id,
             metadata,
             None,
+            require_session=require_session,
         )
         if not result.success:
             _run_id = generate_run_id()

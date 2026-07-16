@@ -199,12 +199,23 @@ class SessionService(ISessionService):
             )
 
         except Exception as e:
-            logger.warning(f"Failed to save messages to session: {e}")
+            from continuum.session.exceptions import SessionNotFoundError
+
+            if isinstance(e, SessionNotFoundError):
+                logger.warning(
+                    f"Messages and memory NOT persisted: session {session_id!r} does not "
+                    f"exist (it was never created via get_or_create_session). The runner "
+                    f"does not create sessions — create it first and pass the returned id "
+                    f"into run()."
+                )
+            else:
+                logger.warning(f"Failed to save messages to session: {e}")
 
     async def load_tool_context_state(
         self,
         session_id: str,
         trace_id: str | None = None,
+        session_metadata: Any | None = None,
     ) -> ToolContextState:
         """
         Load tool context state from session metadata.
@@ -215,6 +226,10 @@ class SessionService(ISessionService):
         Args:
             session_id: Session ID to load state from
             trace_id: Optional trace ID for observability
+            session_metadata: Pre-fetched session metadata to reuse. When the
+                caller already loaded it (e.g. the runner's session preflight),
+                pass it here to avoid a redundant session-store round-trip. When
+                None, the metadata is fetched here.
 
         Returns:
             ToolContextState loaded from session, or empty state if not found
@@ -225,8 +240,10 @@ class SessionService(ISessionService):
             return ToolContextState()
 
         try:
-            # Get session metadata
-            metadata = await self._session_client.get_session_metadata(session_id)
+            # Reuse pre-fetched metadata when provided; otherwise fetch it.
+            metadata = session_metadata
+            if metadata is None:
+                metadata = await self._session_client.get_session_metadata(session_id)
 
             if metadata and metadata.custom.get("tool_context"):
                 state = ToolContextState.from_dict(metadata.custom["tool_context"])

@@ -169,6 +169,21 @@ class SessionConfig(BaseModel):
         ),
     )
 
+    # Guardrail: how to react when a session_id is passed to runner.run() but
+    # no such session exists in the store (the caller forgot to create it).
+    strict_sessions: bool = Field(
+        default=False,
+        description=(
+            "When True, runner.run()/run_stream() raise SessionNotCreatedError if "
+            "a session_id is passed but the session does not exist (it was never "
+            "created via get_or_create_session). When False (default), the runner "
+            "logs a loud warning and continues without history/persistence for "
+            "that run — non-breaking, but the caller is told what went wrong. Has "
+            "no effect on stateless runs (session_id=None), which never trigger "
+            "the check. A per-call require_session= argument overrides this."
+        ),
+    )
+
     def is_configured(self) -> bool:
         """Check if session is properly configured."""
         if not self.enabled:
