@@ -16,18 +16,27 @@ mkdir -p "$CERT_DIR"
 cd "$CERT_DIR"
 
 # 1) Local test CA
+#    basicConstraints:CA + keyUsage:keyCertSign are REQUIRED — without them
+#    OpenSSL 3.x rejects the CA at verify time ("CA cert does not include key
+#    usage extension"), which makes the TLS integration test silently SKIP
+#    (the client can't verify the chain, so the fixture treats Redis as
+#    unreachable). Older OpenSSL was lenient; 3.x is not.
 openssl genrsa -out ca.key 4096
 openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 \
-  -subj "/CN=continuum-test-ca" -out ca.crt
+  -subj "/CN=continuum-test-ca" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out ca.crt
 
 # 2) Server key + CSR (localhost, with SAN so hostname verification passes)
 openssl genrsa -out redis.key 2048
 openssl req -new -key redis.key -subj "/CN=localhost" -out redis.csr
 
-# 3) Sign the server cert with the CA
+# 3) Sign the server cert with the CA (SAN + serverAuth EKU so strict TLS
+#    clients accept it under OpenSSL 3.x)
 openssl x509 -req -in redis.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out redis.crt -days 825 -sha256 \
-  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1")
+  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth")
 
 rm -f redis.csr ca.srl
 chmod 644 ./*.crt ./*.key  # redis container reads them read-only
