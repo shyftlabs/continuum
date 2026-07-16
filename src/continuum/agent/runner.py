@@ -420,6 +420,111 @@ class AgentRunner:
         )
 
     # =========================================================================
+    # Workflow dispatch
+    # =========================================================================
+
+    @staticmethod
+    def _is_model_tier_router(agent: BaseAgent) -> bool:
+        """True for RouterAgent runs handled by the smart-layer model-tier path."""
+        return (
+            isinstance(agent, RouterAgent)
+            and app_settings.smart_layer_enabled
+            and agent.router_config.routing_strategy == "model_tier"
+        )
+
+    @classmethod
+    def _is_workflow_agent(cls, agent: BaseAgent) -> bool:
+        """True when the agent carries its orchestration in ``execute()``.
+
+        Workflow agents (SequentialAgent, ReflectionAgent, PlannerAgent, ...)
+        define ``execute()`` as their entry point; plain agents don't have one.
+        Checked on the class — not the instance — so stray instance attributes
+        (e.g. MagicMock auto-created attrs in tests) don't count. The
+        model-tier RouterAgent is excluded: the smart-layer path in run()/
+        run_stream() handles its routing itself.
+        """
+        return callable(getattr(type(agent), "execute", None)) and not cls._is_model_tier_router(
+            agent
+        )
+
+    async def _run_workflow_agent(
+        self,
+        agent: BaseAgent,
+        input: str | list[dict[str, Any]] | list[ChatMessage],
+        *,
+        session_id: str | None,
+        conversation_id: str | None,
+        user_id: str | None,
+        context: RunContext | None,
+        max_turns: int | None,
+        trace_id: str | None,
+        metadata: dict[str, Any] | None,
+        tags: list[str] | None,
+    ) -> AgentResponse:
+        """Dispatch a workflow agent to its ``execute()`` entry point.
+
+        Mirrors the id validation ``_prepare_run`` performs, then hands control
+        to the agent's own orchestration. Everything else (message building,
+        session history, memory, finalization) happens inside the workflow's
+        nested ``runner.run()`` calls — running that machinery here as well
+        would duplicate it for the wrapper, which never talks to the LLM
+        directly.
+        """
+        try:
+            if context is None:
+                context = create_run_context(
+                    session_id=session_id,
+                    conversation_id=validate_conversation_id(conversation_id),
+                    user_id=validate_user_id(user_id),
+                    trace_id=trace_id,
+                    max_turns=max_turns or agent.config.max_turns,
+                    metadata=metadata or {},
+                    tags=tags or [],
+                )
+            else:
+                context.user_id = validate_user_id(context.user_id)
+                context.conversation_id = validate_conversation_id(context.conversation_id)
+        except InvalidIdentifierError as e:
+            return AgentResponse(
+                content=str(e),
+                agent_name=agent.name,
+                status=ResponseStatus.ERROR,
+                error=str(e),
+            )
+
+        try:
+            self._circuit_breaker.check()
+        except CircuitBreakerOpen as e:
+            logger.error(f"Circuit breaker open for agent '{agent.name}': {e}")
+            return AgentResponse(
+                content=f"Service temporarily unavailable: {e}",
+                agent_name=agent.name,
+                status=ResponseStatus.ERROR,
+                error=str(e),
+            )
+
+        # Workflow execute() takes the user's text; collapse message-list input.
+        if isinstance(input, str):
+            input_text = input
+        else:
+            input_text = extract_last_user_text([message_to_dict(m) for m in input])
+
+        logger.info(f"Dispatching workflow agent '{agent.name}' to its execute() entry point")
+        try:
+            response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
+            return response
+        except Exception as e:
+            if isinstance(e, AgentError):
+                raise
+            raise AgentExecutionError(
+                str(e),
+                agent_name=agent.name,
+                run_id=context.run_id,
+                trace_id=context.trace_id,
+                original_error=e,
+            ) from e
+
+    # =========================================================================
     # Run (non-streaming)
     # =========================================================================
 
@@ -438,6 +543,24 @@ class AgentRunner:
         tags: list[str] | None = None,
     ) -> AgentResponse:
         """Run an agent to completion."""
+        # Workflow agents carry their orchestration in ``execute()``. Dispatch
+        # them there: running one through the plain conversation loop would
+        # silently flatten the whole workflow into a single bare LLM call using
+        # only the wrapper's own (usually empty) tool set.
+        if self._is_workflow_agent(agent):
+            return await self._run_workflow_agent(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                context=context,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
+                tags=tags,
+            )
+
         start_time = time.time()
 
         result = await self._prepare_run(
@@ -541,7 +664,8 @@ class AgentRunner:
                 self._circuit_breaker.record_success()
                 return response
 
-            # Workflow agents must use agent.execute() directly, not runner.run().
+            # Workflow agents were dispatched to execute() at the top of run();
+            # anything reaching here is a plain conversational agent.
             response = await self._executor.execute_loop(
                 agent=agent,
                 messages=messages,
@@ -914,6 +1038,18 @@ class AgentRunner:
                 async for event in stream:
                     ...
         """
+        # Workflow agents have no streaming form — their orchestration lives in
+        # execute(), which returns a complete AgentResponse. Streaming one here
+        # would silently flatten it into a single bare LLM call (see run()).
+        # Fail loudly instead.
+        if self._is_workflow_agent(agent):
+            raise AgentConfigurationError(
+                f"Workflow agent '{agent.name}' cannot be streamed: its orchestration "
+                "runs via execute(), which has no streaming form. Use runner.run() "
+                "instead, or stream the individual inner agents.",
+                agent_name=agent.name,
+            )
+
         start_time = time.time()
 
         result = await self._prepare_run(

@@ -75,8 +75,6 @@ logger = get_logger(__name__)
 
 
 class _BaseWorkflow:
-    _use_direct_execute: bool = True
-
     def __init__(self, config: WorkflowShopConfig | None = None):
         self.config = config or default_config
         self._lifecycle = None
@@ -197,23 +195,17 @@ class _BaseWorkflow:
                     logger.warning(f"Session init failed: {e}")
 
         try:
-            if self._use_direct_execute:
-                from continuum.agent.utils.context_utils import create_run_context
-
-                ctx = create_run_context(
-                    session_id=session_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
-                response = await self._agent.execute(message, self._runner, ctx)
-            else:
-                response = await self._runner.run(
-                    agent=self._agent,
-                    input=message,
-                    session_id=session_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
+            # [SDK-fix verification] The direct-execute branch has been removed so
+            # EVERY workflow shop is forced through runner.run(). This exercises the
+            # SDK's new workflow dispatch (runner.run -> agent.execute). Before the
+            # SDK fix this path flattened the workflow into one bare LLM call.
+            response = await self._runner.run(
+                agent=self._agent,
+                input=message,
+                session_id=session_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
             return response.content or ""
         except Exception as e:
             logger.error(f"Chat error: {e}")
@@ -795,8 +787,6 @@ class RouterShop(_BaseWorkflow):
 
 
 class HandoffShop(_BaseWorkflow):
-    _use_direct_execute = False
-
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
         memory_client = self._container.memory_client if self._container else None
