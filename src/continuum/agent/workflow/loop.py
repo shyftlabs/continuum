@@ -379,7 +379,7 @@ Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
                 messages=[{"role": "user", "content": prompt}],
                 config=LLMConfig(
                     model=self.agent.model if self.agent else settings.default_llm_model,
-                    temperature=0.1,
+                    temperature=self.termination.decision_temperature,
                     max_tokens=20,
                 ),
             )

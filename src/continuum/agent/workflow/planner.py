@@ -605,7 +605,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=2000),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=2000,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)
@@ -662,7 +666,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=1500),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=1500,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)
@@ -722,7 +730,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=1500),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=1500,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)

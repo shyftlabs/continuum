@@ -397,7 +397,7 @@ Agent name:"""
                 messages=[{"role": "user", "content": prompt}],
                 config=LLMConfig(
                     model=self.router_config.routing_model or self.model,
-                    temperature=0.1,
+                    temperature=self.router_config.routing_temperature,
                     max_tokens=50,
                 ),
                 auto_session=False,

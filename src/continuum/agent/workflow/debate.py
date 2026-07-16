@@ -69,6 +69,9 @@ class DebateConfig:
     # Model for the self-summarisation calls (defaults to the debate agent's model)
     summarise_model: str | None = None
 
+    # Temperature for the self-summarisation calls (None omits it)
+    summarise_temperature: float | None = 0.1
+
     # Hard character limit applied AFTER summarisation (or instead of it when
     # summarise_arguments=False). Set to None to disable truncation entirely.
     truncate_chars: int | None = 2000
@@ -77,6 +80,7 @@ class DebateConfig:
         return {
             "summarise_arguments": self.summarise_arguments,
             "summarise_model": self.summarise_model,
+            "summarise_temperature": self.summarise_temperature,
             "truncate_chars": self.truncate_chars,
         }
 
@@ -597,7 +601,11 @@ class DebateAgent(BaseAgent):
         try:
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=1000),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.debate_config.summarise_temperature,
+                    max_tokens=1000,
+                ),
                 auto_session=False,
             )
             usage = TokenUsage()

@@ -55,7 +55,7 @@ def _classifier_llm_config(
 
     cls_config = LLMConfig(
         model=cls_model,
-        temperature=0.1,
+        temperature=router_config.tier_classifier_temperature,
         max_tokens=router_config.tier_classifier_max_tokens,
         json_mode=True,
     )

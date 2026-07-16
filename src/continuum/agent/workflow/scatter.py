@@ -83,6 +83,8 @@ class ScatterConfig:
     split_model: str | None = None  # Model for LLM task splitting
     summary_model: str | None = None  # Model for LLM result merging
     summary_prompt: str | None = None  # Custom merge prompt
+    split_temperature: float | None = 0.2  # Temperature for the LLM split call (None omits it)
+    summary_temperature: float | None = 0.3  # Temperature for the LLM merge call (None omits it)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +94,8 @@ class ScatterConfig:
             "split_model": self.split_model,
             "summary_model": self.summary_model,
             "summary_prompt": self.summary_prompt,
+            "split_temperature": self.split_temperature,
+            "summary_temperature": self.summary_temperature,
         }
 
 
@@ -456,7 +460,11 @@ class ScatterAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=1200),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.scatter_config.split_temperature,
+                    max_tokens=1200,
+                ),
                 auto_session=False,
             )
 
@@ -553,7 +561,7 @@ class ScatterAgent(BaseAgent):
                 messages=[{"role": "user", "content": prompt}],
                 config=LLMConfig(
                     model=self.scatter_config.summary_model or self.model,
-                    temperature=0.3,
+                    temperature=self.scatter_config.summary_temperature,
                 ),
                 auto_session=False,
             )

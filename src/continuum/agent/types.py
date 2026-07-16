@@ -713,6 +713,9 @@ class TerminationConfig:
     # For LLM_DECISION: Prompt for LLM to decide
     decision_prompt: str = "Is the task complete? Respond with 'COMPLETE' if done, or 'CONTINUE' if more work is needed."
 
+    # For LLM_DECISION: temperature for the completion-check call (None omits it)
+    decision_temperature: float | None = 0.1
+
     # For TOOL_CALL: Tool name that triggers termination
     tool_name: str | None = None
 
