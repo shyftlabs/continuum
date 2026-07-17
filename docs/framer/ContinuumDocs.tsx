@@ -728,7 +728,12 @@ GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional</span>
 <span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional</span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
+<span class="cm"># DEFAULT_LLM_MODEL is provider-aware when unset: the chat default is derived from</span>
+<span class="cm"># whichever API key is present, so chat + meta-ops need no OpenAI key on an</span>
+<span class="cm"># Anthropic-/Gemini-only setup. (Memory embeddings still default to OpenAI.)</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
+ANTHROPIC_DEFAULT_MODEL=claude-haiku-4-5      <span class="cm"># default when only an Anthropic key is set</span>
+GEMINI_DEFAULT_MODEL=gemini/gemini-2.5-flash  <span class="cm"># default when only a Gemini key is set</span>
 FALLBACK_LLM_MODEL=gpt-4o-mini
 DEFAULT_LLM_TEMPERATURE=0.7
 DEFAULT_LLM_MAX_TOKENS=4096

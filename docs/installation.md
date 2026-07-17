@@ -122,7 +122,9 @@ import time. **Restart your shell or re-`source` the venv after editing
 
 | Variable | Default | Description |
 |---|---|---|
-| `DEFAULT_LLM_MODEL` | `gpt-4o-mini` | Default model |
+| `DEFAULT_LLM_MODEL` | provider-aware | If unset, the chat default is derived from the configured key: OpenAI → `gpt-4o-mini`, Anthropic → `ANTHROPIC_DEFAULT_MODEL`, Gemini → `GEMINI_DEFAULT_MODEL` (fallback `gpt-4o-mini`). So chat + framework meta-operations need no OpenAI key on an Anthropic-/Gemini-only setup. (The mem0 embedder still defaults to OpenAI — see `EMBEDDER_PROVIDER`.) |
+| `ANTHROPIC_DEFAULT_MODEL` | `claude-haiku-4-5` | Default when only an Anthropic key is set |
+| `GEMINI_DEFAULT_MODEL` | `gemini/gemini-2.5-flash` | Default when only a Gemini key is set |
 | `FALLBACK_LLM_MODEL` | `gemini/gemini-1.5-flash` | Used when the primary fails (and `LLM_ENABLE_FALLBACK=true`) |
 | `DEFAULT_LLM_TEMPERATURE` | `0.7` | |
 | `DEFAULT_LLM_MAX_TOKENS` | `4096` | |

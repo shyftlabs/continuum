@@ -113,7 +113,9 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | Variable | Description | Example |
 |---|---|---|
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Provider API keys — set the one(s) you use | `sk-…` |
-| `DEFAULT_LLM_MODEL` | Default model (`provider/model`, or bare name for OpenAI) | `gemini/gemini-2.5-flash` |
+| `DEFAULT_LLM_MODEL` | Default model (`provider/model`, or bare name for OpenAI). If unset, it is provider-aware — derived from whichever API key is present, so chat and framework meta-operations (routing, reflection, summarization) need no OpenAI key on an Anthropic- or Gemini-only setup. (Memory embeddings still default to the OpenAI embedder — see `EMBEDDER_PROVIDER`.) | `gemini/gemini-2.5-flash` |
+| `ANTHROPIC_DEFAULT_MODEL` | Default model when only an Anthropic key is set (and `DEFAULT_LLM_MODEL` is unset) | `claude-haiku-4-5` |
+| `GEMINI_DEFAULT_MODEL` | Default model when only a Gemini key is set (and `DEFAULT_LLM_MODEL` is unset) | `gemini/gemini-2.5-flash` |
 | `FALLBACK_LLM_MODEL` | Model used if the default fails | `gpt-4o-mini` |
 | `LLM_ENABLE_FALLBACK` | Automatically fall back on provider errors | `true` |
 | `SMART_LAYER_ENABLED` | Enable cost-aware tier routing (Smart Inference) | `true` |
