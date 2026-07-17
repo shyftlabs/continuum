@@ -1054,7 +1054,7 @@ const BODY = `
   <a class="anchor" id="home-hero"></a>
   <div class="landing-hero">
     <div class="landing-glow" aria-hidden="true"></div>
-    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.1.0</span>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.2.0</span>
     <h1 class="landing-title grad-text">Continuum</h1>
     <p class="landing-sub">The agent platform. Build production AI agents on the open <strong>Framework</strong>, route every call through <strong>Aura</strong>, and govern the whole system with <strong>Provenance</strong>.</p>
     <div class="ph-meta">
@@ -1147,7 +1147,7 @@ response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().
 
   <a class="anchor" id="home-intro"></a>
   <div class="product-hero">
-    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.1.0</span>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.2.0</span>
     <h1 class="ph-title grad-text">Continuum Framework</h1>
     <p class="ph-sub">The open-source agent runtime for builders who ship. Production-grade reasoning, durable multi-agent workflows, two-tier memory, and full observability, out of the box.</p>
     <div class="ph-meta">
@@ -1248,7 +1248,7 @@ pip install shyftlabs-continuum</pre></div>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install shyftlabs-continuum                 <span class="cm"># latest release (v1.1.0)</span>
+pip install shyftlabs-continuum                 <span class="cm"># latest release (v1.2.0)</span>
 pip install <span class="str">"shyftlabs-continuum[temporal,eval]"</span>    <span class="cm"># optional extras</span></pre></div>
       <p style="margin:12px 0 6px;">Prefer to work from source? Clone <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">the repository</a> and install it editable:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>git clone https://github.com/shyftlabs/continuum.git
@@ -3582,7 +3582,7 @@ mypy src/</pre>
   <div class="footer-brand">
     <a href="https://continuum.shyftlabs.io" target="_blank" rel="noopener" aria-label="Continuum"><img class="footer-logo" src="assets/continuum-logo.png" alt="Continuum" /></a>
     <span class="footer-divider" aria-hidden="true"></span>
-    <span class="footer-meta">v1.1.0 · Built by</span>
+    <span class="footer-meta">v1.2.0 · Built by</span>
     <a class="footer-built" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs"><img class="footer-shyft" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" /></a>
   </div>
   <div class="footer-social">
