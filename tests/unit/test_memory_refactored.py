@@ -340,14 +340,18 @@ class TestMemoryConfig:
         assert mem0_config["vector_store"]["config"]["token"] == "my-zilliz-token"
 
     def test_to_mem0_config_gateway(self, monkeypatch):
-        """When the Smart Gateway is configured, the memory LLM routes through it.
+        """When the Smart Gateway is configured, the memory LLM routes through it
+        PINNED to an OpenAI-family model.
 
-        Fact extraction is sent to the gateway's OpenAI-compatible endpoint at
-        the auto/cheap tier (the only tier compatible with mem0's json_schema +
-        forced tool_choice calls), reusing the gateway key — independent of
-        MEMORY_LLM_MODEL.
+        Regression: the gateway path used ``auto/cheap``, whose tier routing is
+        non-deterministic and landed on an Anthropic model — which rejects
+        ``temperature`` + ``top_p`` together (mem0 sends both), 400ing
+        ``mem0.add()``. It must pin an ``openai/<model>`` id instead, since
+        OpenAI is the only provider family that accepts mem0's json_schema +
+        forced tool_choice + temperature + top_p call shape. A non-OpenAI
+        MEMORY_LLM_MODEL falls back to ``openai/gpt-4o-mini``.
         """
-        logger.info("Test memory LLM routes through Smart Gateway")
+        logger.info("Test memory LLM routes through Smart Gateway (OpenAI-pinned)")
         from continuum.config import settings
 
         monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example.test/v1")
@@ -357,7 +361,7 @@ class TestMemoryConfig:
             vector_store_provider="milvus",
             milvus_host="localhost",
             milvus_port=19530,
-            memory_llm_model="gemini/gemini-2.5-flash",  # ignored on the gateway path
+            memory_llm_model="gemini/gemini-2.5-flash",  # non-OpenAI → falls back
             memory_llm_temperature=0.1,
             embedder_model="text-embedding-3-small",
             embedding_dims=1536,
@@ -366,9 +370,31 @@ class TestMemoryConfig:
         llm = config.to_mem0_config()["llm"]
 
         assert llm["provider"] == "openai"
-        assert llm["config"]["model"] == "auto/cheap"
+        # NOT auto/cheap (could resolve to Anthropic) — a deterministic OpenAI pin.
+        assert llm["config"]["model"] == "openai/gpt-4o-mini"
+        assert not llm["config"]["model"].startswith("auto/")
         assert llm["config"]["openai_base_url"] == "https://gw.example.test/v1"
         assert llm["config"]["api_key"] == "gw-key-123"
+
+    def test_to_mem0_config_gateway_preserves_openai_family_model(self, monkeypatch):
+        """An OpenAI-family MEMORY_LLM_MODEL is pinned through the gateway as-is."""
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example.test/v1")
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "gw-key-123")
+        config = MemoryConfig(
+            enabled=True,
+            vector_store_provider="milvus",
+            milvus_host="localhost",
+            milvus_port=19530,
+            memory_llm_model="gpt-4o-mini",
+            memory_llm_temperature=0.1,
+            embedder_model="text-embedding-3-small",
+            embedding_dims=1536,
+        )
+
+        llm = config.to_mem0_config()["llm"]
+        assert llm["config"]["model"] == "openai/gpt-4o-mini"
 
 
 # =============================================================================

@@ -12,6 +12,27 @@ from pydantic import BaseModel, Field
 from continuum.config import settings
 from continuum.memory.exceptions import MemoryConfigurationError
 
+# OpenAI-family model-name prefixes. mem0's gateway fact-extraction call must
+# pin to one of these (see MemoryConfig._build_llm_config): OpenAI is the only
+# gateway provider that accepts json_schema + forced tool_choice + both
+# temperature and top_p together.
+_OPENAI_FAMILY_PREFIXES = ("gpt", "o1", "o3", "o4", "chatgpt")
+
+
+def _gateway_memory_model(model: str) -> str:
+    """Pin mem0's gateway fact-extraction model to an OpenAI-family model id.
+
+    The configured ``MEMORY_LLM_MODEL`` (any provider prefix stripped) is used
+    when it is OpenAI-family; otherwise it falls back to ``gpt-4o-mini``, since
+    a Gemini/Anthropic model cannot serve mem0's call shape through the gateway.
+    Returns a gateway-provider-qualified id (``openai/<model>``) so the gateway
+    routes deterministically instead of substituting a tier.
+    """
+    bare = model.rsplit("/", 1)[-1]
+    if bare.startswith(_OPENAI_FAMILY_PREFIXES):
+        return f"openai/{bare}"
+    return "openai/gpt-4o-mini"
+
 
 class MemoryConfig(BaseModel):
     """
@@ -245,28 +266,32 @@ class MemoryConfig(BaseModel):
         observability path as agent inference, and removes the need for a
         separate provider API key (e.g. ``GEMINI_API_KEY``).
 
-        Routing uses the gateway's native auto-routing (``auto/<tier>``) at the
-        ``cheap`` tier. This is the only tier compatible with mem0's
-        fact-extraction call shape — which combines a forced ``tool_choice``
-        with a ``json_schema`` response format: the ``mid``/``quality`` tiers
-        resolve to thinking models that reject forced tool calls (and any
-        ``temperature != 1``), and direct provider routes (e.g.
-        ``google/<model>``) reject ``json_schema``. The cheap tier also matches
-        ``MEMORY_LLM_MODEL``'s intent ("use cheap models for memory
-        operations") and stays within the configured model's provider family
-        (Gemini → ``gemini-2.0-flash``).
+        Routing pins an OpenAI-family model through the gateway rather than
+        ``auto/<tier>``. mem0's fact-extraction call combines a forced
+        ``tool_choice`` with a ``json_schema`` response format AND sends both
+        ``temperature`` and ``top_p`` (mem0 sets ``top_p`` itself). OpenAI is
+        the only gateway provider family that accepts *all* of these:
+        Anthropic rejects ``temperature`` and ``top_p`` together; Gemini and
+        "thinking" models reject ``json_schema`` / forced ``tool_choice`` (and
+        any ``temperature != 1``). ``auto/<tier>`` is non-deterministic and can
+        resolve to any of those — the ``cheap`` tier landing on an Anthropic
+        model is what made ``mem0.add()`` 400 — so we pin explicitly instead of
+        trusting tier routing. The pin stays cheap and OpenAI-family, matching
+        ``MEMORY_LLM_MODEL``'s "use cheap models for memory" intent.
 
         When no gateway is configured, fall back to direct per-provider routing
         detected from the model name.
         """
         model = self.memory_llm_model
 
-        # Smart Gateway: auto-routed cheap tier (only mem0-compatible route).
+        # Smart Gateway: pin an OpenAI-family model (the only provider family
+        # that satisfies mem0's json_schema + forced tool_choice + temperature
+        # + top_p call shape). See docstring for why auto/<tier> is unsafe here.
         if settings.smart_gateway_url and settings.smart_gateway_api_key:
             return {
                 "provider": "openai",
                 "config": {
-                    "model": "auto/cheap",
+                    "model": _gateway_memory_model(model),
                     "temperature": self.memory_llm_temperature,
                     "api_key": settings.smart_gateway_api_key,
                     "openai_base_url": settings.smart_gateway_url,
