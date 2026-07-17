@@ -390,6 +390,13 @@ class RunState:
     trace_id: str | None = None
     parent_span_id: str | None = None
 
+    # Observability: whether THIS run created (owns) the Langfuse trace and is
+    # therefore responsible for tearing down the trace context on completion. A
+    # nested run that reuses a parent trace (e.g. a workflow step) sets this
+    # False so it does not clear the shared trace mid-workflow. Runtime-only;
+    # not persisted (absent from to_dict).
+    owns_trace: bool = field(default=True, repr=False, compare=False)
+
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))

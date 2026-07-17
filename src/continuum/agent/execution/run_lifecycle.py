@@ -30,10 +30,18 @@ class RunLifecycle:
         self,
         agent: BaseAgent,
         context: RunContext,
-        run_state: RunState,
+        run_state: RunState | None,
         input_preview: str = "",
-    ) -> None:
-        """Create trace and set trace context for the run."""
+    ) -> bool:
+        """Create trace and set trace context for the run.
+
+        Returns True if this call CREATED a new trace (and therefore owns it —
+        the caller is responsible for tearing down the trace context when the
+        run ends). Returns False when it reused an existing parent trace, so a
+        nested run (e.g. a workflow step) does not clear the shared trace
+        mid-run. On failure, returns False (nothing to tear down).
+        """
+        owns_trace = False
         try:
             existing_trace_id = get_current_trace_id()
             if existing_trace_id:
@@ -70,6 +78,7 @@ class RunLifecycle:
                 if trace:
                     context.trace_id = trace.id
                     context._langfuse_trace = trace.langfuse_trace
+                    owns_trace = True
 
             set_trace_context(
                 trace_id=context.trace_id,
@@ -80,10 +89,12 @@ class RunLifecycle:
                 run_id=context.run_id,
             )
 
-            logger.debug(f"Trace context set: trace_id={context.trace_id}")
+            logger.debug(f"Trace context set: trace_id={context.trace_id} (owns={owns_trace})")
 
         except Exception as e:
             logger.warning(f"Failed to set trace context: {e}")
+
+        return owns_trace
 
     @observe(name="trace_run_end", capture_output=False)
     async def end_trace(
@@ -91,8 +102,16 @@ class RunLifecycle:
         agent: BaseAgent,
         context: RunContext,
         response: AgentResponse,
+        owns_trace: bool = True,
     ) -> None:
-        """Update trace with final output and clear trace context."""
+        """Update trace with final output and clear trace context.
+
+        Only the run that owns the trace updates its final output and clears the
+        trace context. A nested run (owns_trace=False) leaves the shared parent
+        trace intact so sibling/subsequent steps stay grouped under it.
+        """
+        if not owns_trace:
+            return
         try:
             trace = getattr(context, "_langfuse_trace", None)
             if trace:
@@ -144,8 +163,16 @@ class RunLifecycle:
         context: RunContext,
         error: Exception,
         run_state: RunState | None = None,
+        owns_trace: bool = True,
     ) -> None:
-        """Report error to trace and clear trace context."""
+        """Report error to trace and clear trace context.
+
+        The error is always attached to the current trace (as an event when a
+        trace already exists, via ``context.trace_id``) so a failing workflow
+        step surfaces on the request trace instead of spawning an orphan
+        ``error-*`` trace. Only the run that owns the trace marks the whole
+        trace ERROR and tears down the trace context.
+        """
         try:
             error_metadata: dict[str, Any] = {
                 "run_id": context.run_id,
@@ -183,25 +210,31 @@ class RunLifecycle:
                 metadata=error_metadata,
             )
 
-            trace = getattr(context, "_langfuse_trace", None)
-            if trace:
-                try:
-                    trace.update(
-                        output={"error": str(error)[:500]},
-                        level="ERROR",
-                        status_message=str(error)[:200],
-                    )
-                except Exception:
-                    pass
+            # Only the trace owner marks the whole trace ERROR and tears it
+            # down. A nested run leaves the shared parent trace intact (its
+            # failure is already recorded as the event above) so the workflow's
+            # remaining steps and the owner's teardown stay correct.
+            if owns_trace:
+                trace = getattr(context, "_langfuse_trace", None)
+                if trace:
+                    try:
+                        trace.update(
+                            output={"error": str(error)[:500]},
+                            level="ERROR",
+                            status_message=str(error)[:200],
+                        )
+                    except Exception:
+                        pass
 
-            clear_trace_context()
+                clear_trace_context()
 
         except Exception as e:
             logger.warning(f"Failed to trace run error: {e}")
-            try:
-                clear_trace_context()
-            except Exception:
-                pass
+            if owns_trace:
+                try:
+                    clear_trace_context()
+                except Exception:
+                    pass
 
     @observe(name="report_metrics", capture_output=False)
     async def report_metrics(

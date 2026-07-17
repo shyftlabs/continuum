@@ -382,7 +382,9 @@ class AgentRunner:
 
         run_state = await self._context_service.create_run_state(agent, context)
         input_preview = input if isinstance(input, str) else str(input)[:500]
-        await self._lifecycle.start_trace(agent, context, run_state, input_preview)
+        run_state.owns_trace = await self._lifecycle.start_trace(
+            agent, context, run_state, input_preview
+        )
 
         # Caller is responsible for creating the session before calling runner.run().
         # The runner loads/saves but never creates a session. When a session_id is
@@ -603,11 +605,25 @@ class AgentRunner:
         else:
             input_text = extract_last_user_text([message_to_dict(m) for m in input])
 
+        # Establish the per-request parent trace BEFORE dispatching so every
+        # nested runner.run() inside the workflow (each planner/pool/drafter
+        # step) nests under one "agent-run-<workflow>" trace instead of spawning
+        # its own sessionless top-level trace. We own the trace only if we
+        # created one — a workflow nested inside another workflow reuses the
+        # outer trace and must not tear it down.
+        owns_trace = await self._lifecycle.start_trace(agent, context, None, input_text[:500])
+
         logger.info(f"Dispatching workflow agent '{agent.name}' to its execute() entry point")
         try:
             response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
+            await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
             return response
         except Exception as e:
+            # Attach the failure to the request trace (as an event) and, if we
+            # own it, mark it ERROR + tear it down — so a failing step surfaces
+            # on the workflow trace instead of escaping untraced and later
+            # spawning an orphan "error-UNKNOWN_ERROR" trace.
+            await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
             if isinstance(e, AgentError):
                 raise
             raise AgentExecutionError(

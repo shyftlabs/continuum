@@ -101,7 +101,7 @@ class RunFinalizer:
             )
 
         await self._lifecycle.report_metrics(context, metrics)
-        await self._lifecycle.end_trace(agent, context, response)
+        await self._lifecycle.end_trace(agent, context, response, owns_trace=run_state.owns_trace)
 
     async def _finalize_decision_trace(self, context: RunContext, response: AgentResponse) -> None:
         """Build, persist, and (per detail level) attach the decision trace.
@@ -189,7 +189,9 @@ class RunFinalizer:
             agent.on_error(agent, error, {"context": context})
 
         await self._lifecycle.report_metrics(context, metrics)
-        await self._lifecycle.report_error(agent, context, error, run_state)
+        await self._lifecycle.report_error(
+            agent, context, error, run_state, owns_trace=run_state.owns_trace
+        )
 
     def attach_run_artifacts(self, agent: BaseAgent, response: AgentResponse) -> None:
         """Attach MCP artifacts to response (merge with existing e.g. model_tier routing)."""
