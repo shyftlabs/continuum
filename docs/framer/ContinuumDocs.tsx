@@ -757,6 +757,7 @@ MEMORY_LLM_MODEL=gemini/gemini-2.5-flash
 MEMORY_LLM_TEMPERATURE=0.1
 MEMORY_ISOLATION=user
 MEMORY_SEARCH_LIMIT=5
+MEMORY_MAX_QUERY_CHARS=8000  <span class="cm"># truncate long search queries before the embedder (~8191-token cap); blank disables</span>
 MEMORY_HISTORY_DB_PATH=~/.orchestrator/memory_history.db
 
 <span class="cm"># ── Session (Redis) ───────────────────────────────────────────────────────────</span>

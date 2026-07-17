@@ -126,6 +126,7 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | `VECTOR_STORE_PROVIDER` | Vector store backend | `qdrant` / `milvus` |
 | `EMBEDDER_PROVIDER` / `EMBEDDER_MODEL` | Embedding provider & model | `openai` / `text-embedding-3-small` |
 | `MEMORY_ISOLATION` | Scope of memory isolation | `user` / `agent` / `run` / `shared` |
+| `MEMORY_MAX_QUERY_CHARS` | Truncate long search queries before the embedder (avoids the ~8191-token cap; empty disables) | `8000` |
 
 #### Sessions (short-term)
 

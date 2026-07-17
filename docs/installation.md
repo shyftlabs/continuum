@@ -154,6 +154,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `MEMORY_HISTORY_DB_PATH` | `~/.orchestrator/memory_history.db` | SQLite history |
 | `MEMORY_ISOLATION` | `user` | `shared` / `user` / `agent` / `conversation` |
 | `MEMORY_SEARCH_LIMIT` | `5` | Default top-K |
+| `MEMORY_MAX_QUERY_CHARS` | `8000` | Truncate search queries to this many chars before embedding; blank disables |
 
 ### Session (Redis)
 
