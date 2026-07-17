@@ -332,6 +332,21 @@ class MemoryClient:
         """
         self._ensure_enabled()
 
+        # Bound the query before it reaches the embedder. A large synthesized
+        # prompt (e.g. a planner/drafter step input) can exceed the embedder's
+        # input cap (~8191 tokens), which either hard-fails or silently returns
+        # no results depending on the call path. Truncating a *search* query only
+        # marginally affects recall, so this is a safe guard. Since a token spans
+        # at least one character, capping characters caps tokens.
+        max_query_chars = self._config.max_query_chars
+        if max_query_chars is not None and len(query) > max_query_chars:
+            logger.warning(
+                f"Memory search query of {len(query)} chars exceeds max_query_chars="
+                f"{max_query_chars}; truncating before embedding. Raise "
+                f"MemoryConfig.max_query_chars (or set it to None) to change this."
+            )
+            query = query[:max_query_chars]
+
         # Access control check
         if policy_store is not None and subject is not None:
             from continuum.agent.exceptions import MemoryAccessDeniedError

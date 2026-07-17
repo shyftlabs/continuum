@@ -155,6 +155,17 @@ class MemoryConfig(BaseModel):
         default_factory=lambda: settings.memory_search_limit,
         description="Default number of memories to retrieve in search",
     )
+    max_query_chars: int | None = Field(
+        default_factory=lambda: settings.memory_max_query_chars,
+        description=(
+            "Maximum length (characters) of a search query before it is truncated "
+            "prior to embedding. Guards against hard embedder failures / silently "
+            "empty results when a large synthesized prompt is used as the query "
+            "(embedders cap input at ~8191 tokens). Since a token always spans at "
+            "least one character, an N-character cap guarantees at most N tokens, so "
+            "8000 is safe for any embedder/language. Set to None to disable."
+        ),
+    )
 
     # Reranker (disabled by default)
     reranker_enabled: bool = Field(
