@@ -25,10 +25,10 @@ load_dotenv(_ENV_PATH, override=True)
 # gateway key it makes embeddings.create() 401 against the wrong endpoint.
 _file_env = dotenv_values(_ENV_PATH)
 for _var in (
-    "SMART_GATEWAY_URL",
-    "SMART_GATEWAY_API_KEY",
-    "EMBEDDER_API_BASE",
-    "EMBEDDER_API_KEY",
+    # "SMART_GATEWAY_URL",
+    # "SMART_GATEWAY_API_KEY",
+    # "EMBEDDER_API_BASE",
+    # "EMBEDDER_API_KEY",
 ):
     if _var not in _file_env:
         os.environ.pop(_var, None)
@@ -44,7 +44,7 @@ class ShopConfig:
     agent_name: str = "shop-assistant"
     # Model name is sent as-is to the gateway — gateway routes to the provider.
     # Must be in the virtual key's allowed_models list (conf.json).
-    agent_model: str = "claude-opus-4-8"
+    agent_model: str = "anthropic/claude-opus-4-8" # "auto/mid"  
     agent_temperature: float = 0.7
     max_turns: int = 10
 
