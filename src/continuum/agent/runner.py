@@ -594,6 +594,7 @@ class AgentRunner:
                 agent_name=agent.name,
                 status=ResponseStatus.ERROR,
                 error=str(e),
+                run_artifacts={"retry_after_s": e.remaining_cooldown},
             )
 
         # Workflow execute() takes the user's text; collapse message-list input.
@@ -706,6 +707,7 @@ class AgentRunner:
                 agent_name=agent.name,
                 status=ResponseStatus.ERROR,
                 error=str(e),
+                run_artifacts={"retry_after_s": e.remaining_cooldown},
             )
 
         # Publish the run's policy context so EVERY llm_client.chat() in this run

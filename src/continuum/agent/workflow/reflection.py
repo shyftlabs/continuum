@@ -107,7 +107,7 @@ class ReflectionAgent(BaseAgent):
                 llm_client=llm_client,
             )
 
-            if context.session_id:
+            if context.session_id and result.status == ResponseStatus.SUCCESS:
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -167,6 +167,20 @@ class ReflectionAgent(BaseAgent):
                 context=context,
             )
             total_usage = total_usage.add(response.usage)
+
+            # A returned ERROR (e.g. circuit breaker open) is not an answer to
+            # critique — propagate it as an ERROR instead of relabeling SUCCESS.
+            if response.status == ResponseStatus.ERROR:
+                result = AgentResponse(
+                    content=response.content,
+                    agent_name=self.name,
+                    status=ResponseStatus.ERROR,
+                    error=response.error,
+                    usage=total_usage,
+                    turn_count=response.turn_count,
+                )
+                result.run_id = context.run_id
+                return result
 
             # History only needed on the first executed attempt — it doesn't change
             # between retries (writes are blocked), so skip it after.

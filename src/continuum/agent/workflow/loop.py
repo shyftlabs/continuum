@@ -132,7 +132,11 @@ class LoopAgent(BaseAgent):
                 llm_client=llm_client,
             )
 
-            if context.session_id and result.turn_count:
+            if (
+                context.session_id
+                and result.turn_count
+                and result.status == ResponseStatus.SUCCESS
+            ):
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -187,6 +191,11 @@ class LoopAgent(BaseAgent):
                     input=current_input,
                     context=context,
                 )
+                # A returned ERROR (e.g. circuit breaker open) is a failed
+                # iteration, not an answer — surface it instead of treating the
+                # error prose as this iteration's output.
+                if response.status == ResponseStatus.ERROR:
+                    raise RuntimeError(response.error or response.content or "iteration failed")
 
                 all_responses.append(response)
                 total_usage = total_usage.add(response.usage)

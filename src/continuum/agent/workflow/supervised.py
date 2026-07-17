@@ -153,7 +153,11 @@ class SupervisedSequentialAgent(BaseAgent):
                 original_input=input_text,
             )
 
-            if context.session_id and result.turn_count:
+            if (
+                context.session_id
+                and result.turn_count
+                and result.status == ResponseStatus.SUCCESS
+            ):
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -238,6 +242,13 @@ class SupervisedSequentialAgent(BaseAgent):
                                 input=attempt_input,
                                 context=context,
                             )
+                            # A returned ERROR (e.g. circuit breaker open) is a
+                            # failed attempt, not an answer to score — route it
+                            # into the failure handling below.
+                            if response.status == ResponseStatus.ERROR:
+                                raise RuntimeError(
+                                    response.error or response.content or "step failed"
+                                )
                             total_usage = total_usage.add(response.usage)
 
                             # Score the output

@@ -184,7 +184,11 @@ class PlannerAgent(BaseAgent):
                     initial_usage=plan_usage,
                 )
 
-            if context.session_id and result.turn_count:
+            if (
+                context.session_id
+                and result.turn_count
+                and result.status == ResponseStatus.SUCCESS
+            ):
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -309,6 +313,11 @@ class PlannerAgent(BaseAgent):
                         input=step_input,
                         context=context,
                     )
+                    # A returned ERROR (e.g. circuit breaker open) is a failed
+                    # step, not an answer — route it into the failure handling
+                    # below instead of chaining the error prose into the next step.
+                    if response.status == ResponseStatus.ERROR:
+                        raise RuntimeError(response.error or response.content or "step failed")
                     total_usage = total_usage.add(response.usage)
                     completed.append(
                         {

@@ -137,6 +137,9 @@ class TestRunDispatchesWorkflowAgents:
 
         assert response.status == ResponseStatus.ERROR
         assert not wf.execute_calls
+        # The remaining cooldown is exposed structurally so callers can implement
+        # cooldown-aware retry instead of parsing it out of the error prose.
+        assert response.run_artifacts["retry_after_s"] == 5.0
 
     async def test_plain_agent_still_uses_conversation_loop(self):
         runner, _ = _make_runner()
