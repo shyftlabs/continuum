@@ -45,6 +45,12 @@ ProviderFactory = Callable[[LLMConfig, "Settings"], BaseProvider]
 _PROVIDERS: dict[str, ProviderFactory] = {}
 _default_factory: ProviderFactory | None = None
 
+# Set after the built-in registrations at the bottom of this module; anything
+# registered beyond these is a deliberate custom provider. Used to warn (once)
+# when the Smart Gateway short-circuit silently shadows custom registrations.
+_BUILTIN_PREFIXES: frozenset[str] = frozenset()
+_gateway_shadow_warned = False
+
 
 def register_provider(prefix: str, factory: ProviderFactory) -> None:
     """Register a provider factory for model names starting with ``prefix``.
@@ -77,6 +83,21 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 
     if settings.smart_gateway_url:
         from continuum.llm.providers.gateway_provider import _MODE_TO_TIER, GatewayProvider
+
+        # The gateway short-circuit shadows every registration. Built-ins are
+        # expected to be shadowed (that's the feature), but a CUSTOM provider a
+        # developer registered deliberately going silently inert is a footgun —
+        # say so once, loudly.
+        global _gateway_shadow_warned
+        custom = set(_PROVIDERS) - _BUILTIN_PREFIXES
+        if custom and not _gateway_shadow_warned:
+            _gateway_shadow_warned = True
+            _log.warning(
+                "SMART_GATEWAY_URL is set: ALL models route through the Smart "
+                "Gateway, so custom provider registrations %s are bypassed. "
+                "Unset SMART_GATEWAY_URL (set it to '') to use them.",
+                sorted(custom),
+            )
 
         mode = config.gateway_router_mode or settings.smart_gateway_default_mode
         tier = _MODE_TO_TIER.get(mode, "mid")
@@ -154,6 +175,9 @@ register_provider("claude/", _make_anthropic)
 register_provider("anthropic/", _make_anthropic)
 register_provider("claude-", _make_anthropic)
 register_default_provider(_make_openai)
+
+# Everything registered above is a built-in; later registrations are custom.
+_BUILTIN_PREFIXES = frozenset(_PROVIDERS)
 
 
 __all__ = [

@@ -114,9 +114,17 @@ class OpenAIProvider(BaseProvider):
 
         return kwargs
 
+    # Overridden by subclasses that speak the OpenAI wire protocol to a
+    # different upstream (e.g. GatewayProvider → "gateway"), so errors are
+    # attributed to the system that actually served the request.
+    _provider_label: str = _PROVIDER
+
     def _handle_exception(self, e: Exception, model: str) -> None:
-        provider = _PROVIDER
-        ctx = {"model": model, "provider": provider}
+        provider = self._provider_label
+        ctx: dict[str, Any] = {"model": model, "provider": provider}
+        gateway_url = getattr(self, "_gateway_url", None)
+        if gateway_url:
+            ctx["gateway_url"] = gateway_url
         if isinstance(e, openai.AuthenticationError):
             raise LLMAuthenticationError(
                 str(e), model=model, provider=provider, original_error=e, context=ctx

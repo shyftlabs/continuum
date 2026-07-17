@@ -119,6 +119,126 @@ class TestGatewayShortCircuit:
         provider = get_provider(LLMConfig(model="gpt-4o-mini"))
         assert isinstance(provider, GatewayProvider)
 
+    def test_shadowed_custom_registration_warns_once(self, monkeypatch, caplog):
+        """A custom register_provider() going silently inert is a footgun —
+        the gateway short-circuit must warn (once) that it is bypassed."""
+        import logging
+
+        from continuum.config import settings
+
+        register_provider("myco/", _tag_factory("myco"))
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        monkeypatch.setattr(registry, "_gateway_shadow_warned", False)
+        # continuum's root logger sets propagate=False; re-enable so caplog sees it.
+        monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
+
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
+            get_provider(LLMConfig(model="myco/super-model"))
+            get_provider(LLMConfig(model="myco/super-model"))
+
+        shadow_warnings = [r for r in caplog.records if "bypassed" in r.getMessage()]
+        assert len(shadow_warnings) == 1  # warned, and only once
+        assert "myco/" in shadow_warnings[0].getMessage()
+
+    def test_no_shadow_warning_without_custom_registrations(self, monkeypatch, caplog):
+        import logging
+
+        from continuum.config import settings
+
+        # Only built-ins registered (clean_registry restores them).
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        monkeypatch.setattr(registry, "_gateway_shadow_warned", False)
+
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
+            get_provider(LLMConfig(model="gpt-4o-mini"))
+
+        assert not [r for r in caplog.records if "bypassed" in r.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# Gateway model fidelity + error attribution — a named model must reach the
+# gateway verbatim, substitutions must be loud, and gateway errors must not be
+# blamed on OpenAI.
+# ---------------------------------------------------------------------------
+
+
+class TestGatewayModelFidelity:
+    def _gw(self, mode="modest"):
+        from continuum.llm.providers.gateway_provider import GatewayProvider
+
+        return GatewayProvider(gateway_url="https://gw.example/v1", api_key="k", router_mode=mode)
+
+    def test_auto_tier_passes_through(self):
+        assert self._gw()._normalize_model("auto/quality") == "auto/quality"
+
+    def test_provider_qualified_model_passes_through_verbatim(self):
+        """Regression: qualified names were ALSO silently replaced with
+        auto/<tier> — there was no way to pin a model through the gateway."""
+        gw = self._gw()
+        assert gw._normalize_model("claude/claude-haiku-4-5") == "claude/claude-haiku-4-5"
+        assert gw._normalize_model("gemini/gemini-2.5-flash") == "gemini/gemini-2.5-flash"
+
+    def test_bare_model_is_tier_routed_with_warning(self, caplog, monkeypatch):
+        import logging
+
+        from continuum.llm.providers.gateway_provider import GatewayProvider
+
+        GatewayProvider._warned_models.discard("gpt-4o-mini")
+        gw = self._gw(mode="modest")
+        # continuum's root logger sets propagate=False; re-enable so caplog sees it.
+        monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers.gateway_provider"):
+            assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+            assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+
+        subs = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
+        assert len(subs) == 1  # loud, but once per model
+
+    def test_gateway_errors_attributed_to_gateway_not_openai(self):
+        """Regression: a gateway 401 raised provider=openai, sending users to
+        debug the wrong system."""
+        import httpx
+        import openai as openai_sdk
+
+        from continuum.llm.exceptions import LLMAuthenticationError
+
+        gw = self._gw()
+        err = openai_sdk.AuthenticationError(
+            "Incorrect API key",
+            response=httpx.Response(
+                401, request=httpx.Request("POST", "https://gw.example/v1/chat/completions")
+            ),
+            body=None,
+        )
+        with pytest.raises(LLMAuthenticationError) as exc_info:
+            gw._handle_exception(err, "claude/claude-haiku-4-5")
+        assert exc_info.value.provider == "gateway"
+        assert exc_info.value.context["gateway_url"] == "https://gw.example/v1"
+
+    def test_plain_openai_errors_still_attributed_to_openai(self):
+        import httpx
+        import openai as openai_sdk
+
+        from continuum.llm.exceptions import LLMAuthenticationError
+        from continuum.llm.providers.openai_provider import OpenAIProvider
+
+        p = OpenAIProvider(api_key="k")
+        err = openai_sdk.AuthenticationError(
+            "Incorrect API key",
+            response=httpx.Response(
+                401, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            ),
+            body=None,
+        )
+        with pytest.raises(LLMAuthenticationError) as exc_info:
+            p._handle_exception(err, "gpt-4o-mini")
+        assert exc_info.value.provider == "openai"
+        assert "gateway_url" not in exc_info.value.context
+
 
 # ---------------------------------------------------------------------------
 # Built-in factories bind to the correct provider classes (dummy keys, offline).
