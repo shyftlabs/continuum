@@ -95,6 +95,7 @@ def get_provider(config: LLMConfig) -> BaseProvider:
             gateway_url=settings.smart_gateway_url,
             api_key=settings.smart_gateway_api_key,
             router_mode=mode,
+            max_retries=config.max_retries,
         )
 
     model = config.model.lower()
@@ -126,13 +127,13 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 def _make_gemini(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.gemini_provider import GeminiProvider
 
-    return GeminiProvider(api_key=settings.gemini_api_key)
+    return GeminiProvider(api_key=settings.gemini_api_key, max_retries=config.max_retries)
 
 
 def _make_anthropic(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.anthropic_provider import AnthropicProvider
 
-    return AnthropicProvider(api_key=settings.anthropic_api_key)
+    return AnthropicProvider(api_key=settings.anthropic_api_key, max_retries=config.max_retries)
 
 
 def _make_openai(config: LLMConfig, settings: Settings) -> BaseProvider:
@@ -143,6 +144,7 @@ def _make_openai(config: LLMConfig, settings: Settings) -> BaseProvider:
         organization=settings.openai_organization,
         api_base=config.api_base,
         api_version=config.api_version,
+        max_retries=config.max_retries,
     )
 
 

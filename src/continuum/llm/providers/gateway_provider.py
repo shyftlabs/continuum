@@ -21,9 +21,15 @@ _MODE_TO_TIER: dict[str, str] = {
 class GatewayProvider(OpenAIProvider):
     """Routes all LLM calls through the Smart Gateway at SMART_GATEWAY_URL."""
 
-    def __init__(self, gateway_url: str, api_key: str | None, router_mode: str | None) -> None:
+    def __init__(
+        self,
+        gateway_url: str,
+        api_key: str | None,
+        router_mode: str | None,
+        max_retries: int | None = None,
+    ) -> None:
         self._router_mode = router_mode or "modest"
-        super().__init__(api_key=api_key, api_base=gateway_url)
+        super().__init__(api_key=api_key, api_base=gateway_url, max_retries=max_retries)
 
     def _build_kwargs(self, config, tools, tool_choice):
         kwargs = super()._build_kwargs(config, tools, tool_choice)

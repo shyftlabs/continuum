@@ -41,6 +41,7 @@ class OpenAIProvider(BaseProvider):
         api_base: str | None = None,
         api_version: str | None = None,
         extra_headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
     ):
         kwargs: dict[str, Any] = {}
         if api_key:
@@ -49,6 +50,12 @@ class OpenAIProvider(BaseProvider):
             kwargs["organization"] = organization
         if api_base:
             kwargs["base_url"] = api_base
+        # Wire the configured retry budget into the SDK client. Without this the
+        # SDK falls back to its own default (2), so llm_max_retries did nothing
+        # and a hanging call retried uncontrollably (the per-attempt timeout is
+        # not a total ceiling). None → leave the SDK default untouched.
+        if max_retries is not None:
+            kwargs["max_retries"] = max_retries
 
         default_headers: dict[str, str] = {}
         if api_version:

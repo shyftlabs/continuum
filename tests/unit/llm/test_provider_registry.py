@@ -149,6 +149,54 @@ class TestBuiltinFactoryBindings:
         assert isinstance(registry._make_openai(cfg, s), OpenAIProvider)
 
 
+class TestMaxRetriesWiring:
+    """config.max_retries must reach the underlying SDK clients.
+
+    Regression: providers built their SDK clients without max_retries, so
+    llm_max_retries was a dead knob — the SDK used its own default (2) and a
+    hung call retried uncontrollably (llm_request_timeout is per-attempt, not a
+    total ceiling). Every provider must now propagate the configured budget so
+    a caller can set it to 0 for a real single-attempt timeout.
+    """
+
+    _S = SimpleNamespace(
+        gemini_api_key="test",
+        anthropic_api_key="test",
+        openai_api_key="test",
+        openai_organization=None,
+    )
+
+    def test_openai_client_receives_max_retries(self):
+        p = registry._make_openai(LLMConfig(model="gpt-4o-mini", max_retries=0), self._S)
+        assert p._client.max_retries == 0
+        assert p._async_client.max_retries == 0
+
+    def test_anthropic_client_receives_max_retries(self):
+        p = registry._make_anthropic(LLMConfig(model="claude-opus-4-8", max_retries=1), self._S)
+        assert p._client.max_retries == 1
+        assert p._async_client.max_retries == 1
+
+    def test_gemini_client_receives_max_retries(self):
+        p = registry._make_gemini(LLMConfig(model="gemini/gemini-2.5-flash", max_retries=4), self._S)
+        assert p._client.max_retries == 4
+        assert p._async_client.max_retries == 4
+
+    def test_gateway_client_receives_max_retries(self, monkeypatch):
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        p = get_provider(LLMConfig(model="gpt-4o-mini", max_retries=0))
+        assert p._client.max_retries == 0
+        assert p._async_client.max_retries == 0
+
+    def test_zero_retries_gives_single_attempt(self):
+        # The point of the fix: retries=0 -> one attempt -> timeout is the ceiling.
+        p = registry._make_openai(LLMConfig(model="gpt-4o-mini", max_retries=0), self._S)
+        assert p._client.max_retries == 0
+
+
 # ---------------------------------------------------------------------------
 # Extension API — third parties add/override providers without editing core.
 # ---------------------------------------------------------------------------

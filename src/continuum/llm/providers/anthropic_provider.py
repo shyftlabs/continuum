@@ -47,9 +47,15 @@ class AnthropicProvider(BaseProvider):
     # is a property of the model, not of the client/key).
     _temp_unsupported: set[str] = set()
 
-    def __init__(self, api_key: str | None = None):
-        self._client = anthropic.Anthropic(api_key=api_key)
-        self._async_client = anthropic.AsyncAnthropic(api_key=api_key)
+    def __init__(self, api_key: str | None = None, max_retries: int | None = None):
+        # Wire the configured retry budget into the SDK client; without it the
+        # Anthropic SDK uses its own default (2), so llm_max_retries did nothing
+        # and a hang retried uncontrollably. None → leave the SDK default.
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if max_retries is not None:
+            client_kwargs["max_retries"] = max_retries
+        self._client = anthropic.Anthropic(**client_kwargs)
+        self._async_client = anthropic.AsyncAnthropic(**client_kwargs)
 
     def _normalize_model(self, model: str) -> str:
         return model.removeprefix("anthropic/").removeprefix("claude/")

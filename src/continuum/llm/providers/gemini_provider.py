@@ -38,11 +38,15 @@ _PROVIDER = "gemini"
 class GeminiProvider(BaseProvider):
     """Calls Google Gemini via its OpenAI-compatible endpoint."""
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, max_retries: int | None = None):
         kwargs: dict[str, Any] = {
             "base_url": _GEMINI_BASE_URL,
             "api_key": api_key or "placeholder",  # SDK requires a non-empty key
         }
+        # Honour the configured retry budget instead of the SDK default (see
+        # OpenAIProvider). None → leave the SDK default untouched.
+        if max_retries is not None:
+            kwargs["max_retries"] = max_retries
         self._client = OpenAI(**kwargs)
         self._async_client = AsyncOpenAI(**kwargs)
 
