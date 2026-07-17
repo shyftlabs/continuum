@@ -2376,6 +2376,8 @@ HEADROOM_API_BASE=http://127.0.0.1:8787</pre></div>
     <tr><td><code>anti-forgery</code></td><td>The guard on reversible retrieval (compressed content can be pulled back on demand via a retrieve tool). It answers: "can the model use a fake ticket to pull back data it was never given?" Each run issues its own hashes, and a retrieve for a hash the run never saw is rejected.</td></tr>
   </table>
 
+  <p><strong>Examples:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/headroom-compression-incident-desk" target="_blank" rel="noopener"><code>playground/headroom-compression-incident-desk</code></a> and <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a> (try <em>sequential</em> mode).</p>
+
   <a class="anchor" id="run-lifecycle"></a>
   <h2>App Lifecycle</h2>
   <p>Use <code>OrchestratorLifecycle</code> to initialise and cleanly shut down all shared services (Redis, Langfuse, vector store). Use <code>Container</code> to inject custom clients — useful in tests and multi-tenant setups.</p>
