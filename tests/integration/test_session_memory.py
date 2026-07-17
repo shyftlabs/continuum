@@ -29,11 +29,13 @@ async def session_client():
         def __init__(self, inner):
             self._inner = inner
 
-        async def create(self, *, user_id=None, agent_id=None, session_id=None):
+        async def create(self, *, user_id=None, session_id=None):
+            # get_or_create_session takes no agent_id — sessions are scoped by
+            # session_id/user_id/conversation_id. SessionMetadata.agent_id exists
+            # but is populated later (update_session_metadata), not at creation.
             sid = await self._inner.get_or_create_session(
                 session_id=session_id or f"sess-{uuid.uuid4().hex[:8]}",
                 user_id=user_id,
-                agent_id=agent_id,
             )
             created_sessions.append(sid)
             return sid
@@ -74,19 +76,28 @@ class TestSessionCRUD:
 
     async def test_create_session_returns_id(self, session_client):
         """Creating a session returns a valid session ID."""
-        sid = await session_client.create(user_id="user-crud-1", agent_id="agent-1")
+        sid = await session_client.create(user_id="user-crud-1")
         assert sid is not None
         assert len(sid) > 0
 
     async def test_session_metadata_stored(self, session_client):
-        """Session metadata should persist user_id and agent_id."""
-        sid = await session_client.create(user_id="user-meta-1", agent_id="agent-meta-1")
+        """Session metadata persists user_id at creation; agent_id starts None
+        and round-trips via update_session_metadata (its actual population path)."""
+        sid = await session_client.create(user_id="user-meta-1")
 
         meta = await session_client.get_metadata(sid)
         assert meta is not None
         assert meta.user_id == "user-meta-1"
-        assert meta.agent_id == "agent-meta-1"
+        # agent_id is not a creation-time parameter anymore.
+        assert meta.agent_id is None
         assert meta.message_count >= 0
+
+        # The field still persists when set through the metadata-update API.
+        meta.agent_id = "agent-meta-1"
+        await session_client._inner.update_session_metadata(sid, meta)
+        meta2 = await session_client.get_metadata(sid)
+        assert meta2 is not None
+        assert meta2.agent_id == "agent-meta-1"
 
     async def test_add_and_retrieve_messages(self, session_client):
         """Messages added to a session are retrievable."""
@@ -161,7 +172,8 @@ class TestConversationHistory:
         assert contents == [f"Message {i}" for i in range(5)]
 
     async def test_history_limit_returns_latest(self, session_client):
-        """History with limit should return the most recent messages."""
+        """History limit counts complete TURNS (request+response pairs), not raw
+        messages — limit=N fetches the N*2 most recent raw messages."""
         sid = await session_client.create(user_id="user-limit-1")
 
         for i in range(10):
@@ -171,12 +183,11 @@ class TestConversationHistory:
                 store_in_memory=False,
             )
 
-        # Get only last 3
+        # limit=3 turns → the 6 most recent raw messages
         history = await session_client.get_history(sid, limit=3)
-        assert len(history) == 3
-        # Should be the 3 most recent
+        assert len(history) == 6
         contents = [m.content for m in history]
-        assert contents == ["Msg-7", "Msg-8", "Msg-9"]
+        assert contents == [f"Msg-{i}" for i in range(4, 10)]
 
     async def test_many_messages_sliding_window(self, session_client):
         """Large conversation should handle sliding window correctly."""
@@ -191,11 +202,10 @@ class TestConversationHistory:
                 store_in_memory=False,
             )
 
-        # Default limit
+        # limit counts turns (pairs): limit=10 → the 20 most recent raw messages
         history = await session_client.get_history(sid, limit=10)
-        assert len(history) == 10
-        # Should be the last 10
-        assert history[0].content == "Turn-40"
+        assert len(history) == 20
+        assert history[0].content == "Turn-30"
         assert history[-1].content == "Turn-49"
 
 
@@ -233,8 +243,9 @@ class TestSessionIsolation:
     async def test_same_user_different_sessions_isolated(self, session_client):
         """Same user with multiple sessions should keep them separate."""
         uid = "user-multi-sess"
-        sid_1 = await session_client.create(user_id=uid, agent_id="agent-1")
-        sid_2 = await session_client.create(user_id=uid, agent_id="agent-2")
+        # Explicit distinct session_ids: same-user sessions are separate threads.
+        sid_1 = await session_client.create(user_id=uid)
+        sid_2 = await session_client.create(user_id=uid)
 
         await session_client.add_message(
             sid_1, ChatMessage(role="user", content="Talking to agent 1"), store_in_memory=False

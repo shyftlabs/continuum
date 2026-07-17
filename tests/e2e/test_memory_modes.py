@@ -237,7 +237,7 @@ class TestShortTermSessionMemory:
                 search_memories=False,
                 store_memories=False,
             ),
-            config=AgentConfig(log_to_session=True, session_history_limit=50),
+            config=AgentConfig(log_to_session=True, session_history_turns=25),
         )
 
         runner = AgentRunner()
@@ -248,7 +248,6 @@ class TestShortTermSessionMemory:
         sid = await session_client.get_or_create_session(
             session_id=f"e2e-stm-{uuid.uuid4().hex[:8]}",
             user_id="stm-user",
-            agent_id="session-memory-agent",
         )
 
         try:
@@ -285,8 +284,8 @@ class TestShortTermSessionMemory:
             await _cleanup_session(sid)
 
     @_skip_on_api_error
-    async def test_session_history_limit_drops_old_messages(self):
-        """With a small session_history_limit, old messages are dropped."""
+    async def test_session_history_turns_drops_old_messages(self):
+        """With a small session_history_turns, old messages are dropped."""
         _skip_if_no_api_key()
 
         from continuum.agent.base import BaseAgent
@@ -304,8 +303,8 @@ class TestShortTermSessionMemory:
                 search_memories=False,
                 store_memories=False,
             ),
-            # Very small history limit — only keeps last 4 messages
-            config=AgentConfig(log_to_session=True, session_history_limit=4),
+            # Very small history window — 2 turns = last 4 raw messages
+            config=AgentConfig(log_to_session=True, session_history_turns=2),
         )
 
         runner = AgentRunner()
@@ -315,7 +314,6 @@ class TestShortTermSessionMemory:
         sid = await session_client.get_or_create_session(
             session_id=f"e2e-limit-{uuid.uuid4().hex[:8]}",
             user_id="limit-user",
-            agent_id="limited-history-agent",
         )
 
         try:
@@ -456,7 +454,7 @@ class TestCombinedMemory:
                 store_scope=MemoryScope.USER,
                 search_limit=5,
             ),
-            config=AgentConfig(log_to_session=True, session_history_limit=20),
+            config=AgentConfig(log_to_session=True, session_history_turns=10),
         )
 
         runner = AgentRunner()
@@ -466,7 +464,6 @@ class TestCombinedMemory:
         sid = await session_client.get_or_create_session(
             session_id=f"e2e-combined-{uuid.uuid4().hex[:8]}",
             user_id=uid,
-            agent_id="combined-mem-agent",
         )
 
         try:
