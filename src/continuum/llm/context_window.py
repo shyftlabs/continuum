@@ -45,6 +45,30 @@ def _block_text(block: Any) -> str:
     return str(block)
 
 
+def _is_orphaned_tool_continuation(msg: dict[str, Any]) -> bool:
+    """True if ``msg`` — appearing first (after system) in a truncated history —
+    is a tool continuation whose partner call was truncated away.
+
+    Such an orphan makes the next provider call 400 (OpenAI: a ``tool`` result
+    with no preceding ``tool_calls``; Anthropic: a ``tool_result`` block with no
+    matching ``tool_use``). Recognises both formats. A leading ``tool_use`` is
+    NOT an orphan — its result still follows — so only dangling results (and,
+    preserving prior behaviour, a leading OpenAI assistant ``tool_calls``) are
+    stripped.
+    """
+    role = msg.get("role")
+    if role == "tool":
+        return True
+    if role == "assistant" and msg.get("tool_calls"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return True
+    return False
+
+
 class TruncationStrategy(str, Enum):
     """Strategy for truncating messages when context limit is exceeded."""
 
@@ -471,6 +495,20 @@ class ContextWindowManager:
             truncated = self._truncate_smart(messages, limits, model)
         else:
             truncated = messages
+
+        # Repair the truncation boundary: the strategies above drop oldest
+        # messages without regard to tool pairing, so the first kept turn can be
+        # a tool result whose call was truncated away. Left in place, the next
+        # provider call 400s (OpenAI: unpaired tool result; Anthropic:
+        # "unexpected tool_use_id found in tool_result blocks"). Drop such
+        # orphans at the boundary — skipping leading system messages — in both
+        # message formats.
+        truncated = list(truncated)
+        _i = 0
+        while _i < len(truncated) and truncated[_i].get("role") == "system":
+            _i += 1
+        while _i < len(truncated) and _is_orphaned_tool_continuation(truncated[_i]):
+            truncated.pop(_i)
 
         truncated_count = self.count_tokens(truncated, model)
 

@@ -156,3 +156,94 @@ class TestCountTokensToolBlocks:
         cwm = ContextWindowManager()
         msgs = [{"role": "user", "content": [{"type": "text", "text": "hello world"}]}]
         assert cwm.count_tokens(msgs, "gpt-4o") > 0
+
+
+class TestTruncationToolPairBoundary:
+    """truncate_messages() must not leave a tool result orphaned from its call.
+
+    Regression: the truncation strategies drop oldest messages without regard
+    to tool pairing, so the first kept turn could be a tool result whose call
+    was truncated away. The provider then 400s — OpenAI on an unpaired tool
+    result, Anthropic with "unexpected tool_use_id found in tool_result
+    blocks". Reproduced live at ~162K tokens. The boundary must be repaired for
+    both message formats.
+    """
+
+    @staticmethod
+    def _anthropic_orphans(messages):
+        tool_use_ids = {
+            b.get("id")
+            for m in messages
+            if isinstance(m.get("content"), list)
+            for b in m["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_use"
+        }
+        return [
+            b.get("tool_use_id")
+            for m in messages
+            if isinstance(m.get("content"), list)
+            for b in m["content"]
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+            and b.get("tool_use_id") not in tool_use_ids
+        ]
+
+    def test_anthropic_tool_result_not_orphaned_by_truncation(self):
+        cwm = ContextWindowManager()
+        # Size turns (gpt-4 window ~8192, ~6144 effective) so the recent suffix
+        # survives but the older tool_use turn is dropped — leaving the
+        # tool_result as the boundary orphan unless repaired.
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "very old filler"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tu_1", "name": "s", "input": {"q": "word " * 2000}}
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}]},
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "word " * 4500},
+        ]
+        out, res = cwm.truncate_messages(
+            msgs, "gpt-4", strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT
+        )
+        assert res.was_truncated
+        assert self._anthropic_orphans(out) == []
+
+    def test_openai_tool_result_not_orphaned_by_truncation(self):
+        cwm = ContextWindowManager()
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "very old filler"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "s", "arguments": "word " * 2000}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "result"},
+            {"role": "assistant", "content": "answer"},
+            {"role": "user", "content": "word " * 4500},
+        ]
+        out, res = cwm.truncate_messages(
+            msgs, "gpt-4", strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT
+        )
+        assert res.was_truncated
+        # No leading orphaned tool result (role=="tool") left after system.
+        non_system = [m for m in out if m.get("role") != "system"]
+        assert not (non_system and non_system[0].get("role") == "tool")
+
+    def test_no_truncation_leaves_messages_untouched(self):
+        cwm = ContextWindowManager()
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}]},
+        ]
+        out, res = cwm.truncate_messages(
+            msgs, "gpt-4", strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT
+        )
+        # Under the limit: nothing truncated, nothing stripped (no boundary cut).
+        assert not res.was_truncated
+        assert out == msgs

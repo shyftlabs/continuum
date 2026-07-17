@@ -644,21 +644,16 @@ class ProgressiveContextManager:
         limits: Any,
     ) -> tuple[list[dict[str, Any]], CompressionResult]:
         """Compress by truncating oldest messages."""
+        # truncate_messages() repairs the truncation boundary itself — dropping
+        # any tool result orphaned from its call, in both OpenAI and Anthropic
+        # formats (see ContextWindowManager.truncate_messages) — so no extra
+        # tool-pair cleanup is needed here.
         truncated, trunc_result = self._context_window_manager.truncate_messages(
             messages=messages,
             model=model,
             strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT,
             response_buffer_percent=0.25,
         )
-
-        # Fix any broken tool call pairs at the truncation boundary.
-        # Remove leading tool messages and orphan assistant tool_calls messages.
-        while truncated and truncated[0].get("role") == "tool":
-            truncated = truncated[1:]
-        while truncated and (
-            truncated[0].get("role") == "assistant" and truncated[0].get("tool_calls")
-        ):
-            truncated = truncated[1:]
 
         compressed_tokens = self._context_window_manager.count_tokens(truncated, model)
         original_tokens = self._context_window_manager.count_tokens(messages, model)
