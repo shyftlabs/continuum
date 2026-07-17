@@ -7,19 +7,20 @@ Covers, live against Smart Inference + Milvus + Redis:
   T3  Agent handoffs            — triage -> specialist transition
   T4  Memory via Smart Inference— fact extraction (auto/cheap) + recall
 
-Run:  python continuum_e2e.py
+Run:  python playground/smoke/continuum_e2e.py
 """
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Repo root = nearest ancestor with pyproject.toml, so this works at any depth.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
+load_dotenv(_ROOT / ".env", override=True)
+sys.path.insert(0, str(_ROOT / "src"))
 
 from pydantic import BaseModel  # noqa: E402
 
