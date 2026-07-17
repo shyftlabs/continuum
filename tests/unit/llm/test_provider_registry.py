@@ -35,6 +35,19 @@ def clean_registry():
     registry._default_factory = saved_default
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_ambient_gateway(monkeypatch):
+    """Isolate every test from an ambient ``SMART_GATEWAY_URL`` (e.g. loaded
+    from the developer's real ``.env``). Without this, get_provider's gateway
+    short-circuit returns a GatewayProvider for prefix-routing/extension tests
+    that expect their registered factory, so the suite's pass/fail depends on
+    whether the gateway happens to be configured. Gateway-specific tests
+    re-enable it via their own ``monkeypatch.setattr`` (which runs after this)."""
+    from continuum.config import settings
+
+    monkeypatch.setattr(settings, "smart_gateway_url", None, raising=False)
+
+
 class _Sentinel(BaseProvider):
     """A do-nothing provider tagged with which registration produced it."""
 
@@ -177,10 +190,12 @@ class TestGatewayModelFidelity:
 
     def test_provider_qualified_model_passes_through_verbatim(self):
         """Regression: qualified names were ALSO silently replaced with
-        auto/<tier> — there was no way to pin a model through the gateway."""
+        auto/<tier> — there was no way to pin a model through the gateway.
+        The prefix must be the gateway's provider id (anthropic/, openai/,
+        google/), which is what passes through unchanged."""
         gw = self._gw()
-        assert gw._normalize_model("claude/claude-haiku-4-5") == "claude/claude-haiku-4-5"
-        assert gw._normalize_model("gemini/gemini-2.5-flash") == "gemini/gemini-2.5-flash"
+        assert gw._normalize_model("anthropic/claude-opus-4-8") == "anthropic/claude-opus-4-8"
+        assert gw._normalize_model("google/gemini-2.5-flash") == "google/gemini-2.5-flash"
 
     def test_bare_model_is_tier_routed_with_warning(self, caplog, monkeypatch):
         import logging
@@ -215,7 +230,7 @@ class TestGatewayModelFidelity:
             body=None,
         )
         with pytest.raises(LLMAuthenticationError) as exc_info:
-            gw._handle_exception(err, "claude/claude-haiku-4-5")
+            gw._handle_exception(err, "anthropic/claude-opus-4-8")
         assert exc_info.value.provider == "gateway"
         assert exc_info.value.context["gateway_url"] == "https://gw.example/v1"
 

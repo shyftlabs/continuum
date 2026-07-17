@@ -6,8 +6,10 @@ Routing mode is encoded in the OpenAI `model` field using the gateway's native
 auto-routing format: `auto/<tier>` (cheap | mid | quality).
 
 Model fidelity: an explicit tier (``auto/<tier>``) and provider-qualified names
-(``claude/claude-haiku-4-5``, ``gemini/gemini-2.5-flash``) pass through to the
-gateway verbatim — naming a model means you get that model. Only bare,
+pass through to the gateway verbatim — naming a model means you get that model.
+The prefix must be the GATEWAY's provider id (``anthropic/claude-opus-4-8``,
+``openai/gpt-4o``, ``google/gemini-2.5-flash``), not Continuum's routing prefix
+(``claude/…`` is not a gateway provider id and returns a 400). Only bare,
 single-segment names (``gpt-4o-mini``) are treated as routable placeholders and
 replaced with ``auto/<tier>``, and that substitution is logged as a WARNING so
 it is never silent.
@@ -80,9 +82,9 @@ class GatewayProvider(OpenAIProvider):
             logger.warning(
                 "Smart Gateway: replacing requested model '%s' with '%s' "
                 "(router mode '%s'). To pin a specific model through the "
-                "gateway, use a provider-qualified name (e.g. "
-                "'claude/claude-haiku-4-5') or request a tier explicitly with "
-                "'auto/<tier>'.",
+                "gateway, use a gateway-provider-qualified name (e.g. "
+                "'anthropic/claude-opus-4-8', 'openai/gpt-4o') or request a "
+                "tier explicitly with 'auto/<tier>'.",
                 model,
                 routed,
                 self._router_mode,
