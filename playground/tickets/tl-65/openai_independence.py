@@ -11,7 +11,7 @@ Runs fully offline (no API key needed) — it inspects resolution + provider rou
 If ANTHROPIC_API_KEY is set, it also makes ONE real Anthropic call to prove the
 end-to-end path works with no OpenAI credential.
 
-Run:  python playground/tl65_openai_independence.py
+Run:  python playground/tickets/tl-65/openai_independence.py
 """
 
 from __future__ import annotations
@@ -22,8 +22,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Repo root = nearest ancestor with pyproject.toml, so this works at any depth.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
+load_dotenv(_ROOT / ".env", override=True)
+sys.path.insert(0, str(_ROOT / "src"))
 
 import continuum.config as config_mod  # noqa: E402
 from continuum.config import Settings  # noqa: E402

@@ -11,7 +11,7 @@ Proves the OpenAI-dependency fix end to end using real provider calls:
 
 Requires the relevant keys in the root .env. Each scenario skips if its key is absent.
 
-Run:  python playground/tl65_live_api_test.py
+Run:  python playground/tickets/tl-65/live_api.py
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# Repo root = nearest ancestor with pyproject.toml, so this works at any depth.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
+load_dotenv(_ROOT / ".env", override=True)
+sys.path.insert(0, str(_ROOT / "src"))
 
 import continuum.config as config_mod  # noqa: E402
 from continuum.config import Settings  # noqa: E402
