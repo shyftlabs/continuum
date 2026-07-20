@@ -240,9 +240,7 @@ class IncidentAgent:
 
     # --- chat_stream (runner interception path) ---------------------------- #
 
-    async def chat_stream(
-        self, message: str, user_id: str = "u1"
-    ) -> AsyncIterator[dict[str, Any]]:
+    async def chat_stream(self, message: str, user_id: str = "u1") -> AsyncIterator[dict[str, Any]]:
         """Streaming twin of chat(). Yields live token/tool events and a final
         'done' event with the same glassbox payload. Note: continuum_headroom_retrieve
         is intercepted BEFORE the runner emits TOOL_CALL_START, so retrieve
@@ -306,9 +304,7 @@ class IncidentAgent:
         prev = self._agent.config.rag_context
         self._agent.config.rag_context = rag_context
         try:
-            resp = await self._runner.run(
-                agent=self._agent, input=message, user_id=user_id
-            )
+            resp = await self._runner.run(agent=self._agent, input=message, user_id=user_id)
         finally:
             self._agent.config.rag_context = prev
 

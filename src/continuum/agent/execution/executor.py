@@ -128,7 +128,10 @@ class Executor(IExecutor):
         from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
-        with use_active_policy(getattr(agent, "policy_store", None), agent.name, context), use_run_compressor_if_enabled():
+        with (
+            use_active_policy(getattr(agent, "policy_store", None), agent.name, context),
+            use_run_compressor_if_enabled(),
+        ):
             return await self._execute_loop_impl(agent, messages, context, run_state)
 
     async def _execute_loop_impl(
@@ -510,9 +513,7 @@ class Executor(IExecutor):
                         )
 
                         regular_tool_calls = [
-                            tc
-                            for tc in regular_tool_calls
-                            if _tc_name(tc) != RETRIEVE_TOOL_NAME
+                            tc for tc in regular_tool_calls if _tc_name(tc) != RETRIEVE_TOOL_NAME
                         ]
                         compressor = get_headroom_compressor()
                         for tc in retrieve_calls:

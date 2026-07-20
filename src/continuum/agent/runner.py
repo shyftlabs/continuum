@@ -1033,7 +1033,10 @@ class AgentRunner:
         from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
-        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx), use_run_compressor_if_enabled():
+        with (
+            use_active_policy(getattr(target, "policy_store", None), target.name, ctx),
+            use_run_compressor_if_enabled(),
+        ):
             response = await self._executor.execute_loop(
                 agent=target, messages=messages, context=ctx, run_state=run_state
             )

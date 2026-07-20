@@ -152,9 +152,7 @@ class TestSupervisedErrorPropagation:
         sup = SupervisedSequentialAgent(
             name="sup",
             agents=[_make_base_agent("a")],
-            supervised_config=SupervisedConfig(
-                max_retries=0, fail_strategy=FailStrategy.FAIL_FAST
-            ),
+            supervised_config=SupervisedConfig(max_retries=0, fail_strategy=FailStrategy.FAIL_FAST),
         )
         # _get_llm patched so no real container/LLM is needed; scoring is never
         # reached because the ERROR short-circuits before it.
@@ -217,9 +215,7 @@ class TestReflectionErrorPropagation:
         runner = _make_error_runner()
 
         with _patch_span():
-            result = await ref.execute(
-                "input", runner, _make_context(), llm_client=MagicMock()
-            )
+            result = await ref.execute("input", runner, _make_context(), llm_client=MagicMock())
 
         # Not laundered into SUCCESS, and the error prose is not persisted.
         assert result.status == ResponseStatus.ERROR

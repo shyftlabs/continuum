@@ -356,6 +356,7 @@ def generate_postmortem() -> str:
 
 # --- ground truth (asserted by e2e_test.py) ----------------------------------
 
+
 def _orders_ground_truth() -> dict:
     orders = generate_failed_orders()
     largest = max(orders, key=lambda o: o["refund_amount_usd"])

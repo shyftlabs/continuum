@@ -127,7 +127,9 @@ class TestSessionPreflightRedis:
         sid = f"missing-{test_id}"
 
         with _WarnCapture() as cap:
-            resp = await runner.run(_make_agent(), "Remember I like tea", session_id=sid, user_id="u1")
+            resp = await runner.run(
+                _make_agent(), "Remember I like tea", session_id=sid, user_id="u1"
+            )
 
         assert resp.status.value == "success"  # non-breaking
         assert cap.has("get_or_create_session")  # loud, actionable warning
@@ -160,7 +162,9 @@ class TestSessionPreflightRedis:
         sid = await sc.get_or_create_session(session_id=f"good-{test_id}", user_id="u1")
 
         with _WarnCapture() as cap:
-            resp = await runner.run(_make_agent(), "Remember I like tea", session_id=sid, user_id="u1")
+            resp = await runner.run(
+                _make_agent(), "Remember I like tea", session_id=sid, user_id="u1"
+            )
 
         assert resp.status.value == "success"
         assert not cap.has("get_or_create_session")

@@ -54,9 +54,7 @@ def _make_agent(name: str = "test-agent") -> BaseAgent:
 
 def _make_metadata(user_id: str | None) -> SessionMetadata:
     now = datetime.now(UTC)
-    return SessionMetadata(
-        session_id="abc", user_id=user_id, created_at=now, last_accessed_at=now
-    )
+    return SessionMetadata(session_id="abc", user_id=user_id, created_at=now, last_accessed_at=now)
 
 
 def _make_session_client(
@@ -116,9 +114,7 @@ class TestStatelessRuns:
         strict mode on it must not raise or warn."""
         sc = _make_session_client(metadata=None, strict_sessions=True)
         with _patched_logger() as log:
-            result = await _make_runner(sc)._prepare_run(
-                _make_agent(), "hello", user_id="user-123"
-            )
+            result = await _make_runner(sc)._prepare_run(_make_agent(), "hello", user_id="user-123")
         assert result.success is True
         sc.get_session_metadata.assert_not_called()
         assert "does not create sessions" not in _warning_text(log)
@@ -134,9 +130,7 @@ class TestSessionNotCreated:
     async def test_missing_session_warns_by_default(self):
         sc = _make_session_client(metadata=None, strict_sessions=False)
         with _patched_logger() as log:
-            result = await _make_runner(sc)._prepare_run(
-                _make_agent(), "hello", session_id="abc"
-            )
+            result = await _make_runner(sc)._prepare_run(_make_agent(), "hello", session_id="abc")
         assert result.success is True  # non-breaking: run proceeds
         assert "get_or_create_session" in _warning_text(log)
 
@@ -212,9 +206,7 @@ class TestDegradedPersistence:
     async def test_degraded_missing_does_not_raise_even_strict(self):
         """Redis down in degrade mode → get_session_metadata returns None even
         for a real session. Must not warn/raise about a missing session."""
-        sc = _make_session_client(
-            metadata=None, strict_sessions=True, persistence_degraded=True
-        )
+        sc = _make_session_client(metadata=None, strict_sessions=True, persistence_degraded=True)
         with _patched_logger() as log:
             result = await _make_runner(sc)._prepare_run(
                 _make_agent(), "hello", session_id="abc", require_session=True

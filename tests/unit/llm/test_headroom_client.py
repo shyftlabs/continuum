@@ -132,9 +132,7 @@ class TestRetrieve:
         assert content == "<full 5000 rows>"
 
     async def test_falls_back_to_content_field(self):
-        client = _client_with(
-            lambda req: httpx.Response(200, json={"content": "fallback body"})
-        )
+        client = _client_with(lambda req: httpx.Response(200, json={"content": "fallback body"}))
         assert await client.retrieve("abc123def456abc123def456") == "fallback body"
 
     async def test_query_omitted_when_none(self):

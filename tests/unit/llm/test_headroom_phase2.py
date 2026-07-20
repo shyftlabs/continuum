@@ -120,9 +120,17 @@ class TestRetrieveResultProtection:
     def _messages(self):
         return [
             {"role": "user", "content": "q"},
-            {"role": "assistant", "content": None, "tool_calls": [
-                {"id": "r1", "type": "function",
-                 "function": {"name": RETRIEVE_TOOL_NAME, "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "r1",
+                        "type": "function",
+                        "function": {"name": RETRIEVE_TOOL_NAME, "arguments": "{}"},
+                    }
+                ],
+            },
             {"role": "tool", "tool_call_id": "r1", "content": self.ORIGINAL_LOG},
         ]
 
@@ -132,6 +140,7 @@ class TestRetrieveResultProtection:
         crushed[2] = {**crushed[2], "content": "[5001 lines compressed to 2]"}
         client = AsyncMock()
         from continuum.llm.headroom.client import CompressionStats
+
         client.compress.return_value = (
             crushed,
             CompressionStats(100, 1, 99, 0.01, ["router:log:0.00"]),
@@ -149,17 +158,23 @@ class TestRetrieveResultProtection:
         original = self._messages()  # [user, assistant(retrieve r1), tool r1]
         # Sidecar crushes the retrieve result AND returns the list reordered:
         # the tool message is no longer at the same index it occupied in input.
-        crushed_tool = {"role": "tool", "tool_call_id": "r1",
-                        "content": "[5001 lines compressed to 2]"}
+        crushed_tool = {
+            "role": "tool",
+            "tool_call_id": "r1",
+            "content": "[5001 lines compressed to 2]",
+        }
         reordered = [
             {**original[0]},
-            crushed_tool,          # moved earlier than its original index (was last)
+            crushed_tool,  # moved earlier than its original index (was last)
             {**original[1]},
         ]
         client = AsyncMock()
         from continuum.llm.headroom.client import CompressionStats
+
         client.compress.return_value = (
-            reordered, CompressionStats(100, 1, 99, 0.01, []), [],
+            reordered,
+            CompressionStats(100, 1, 99, 0.01, []),
+            [],
         )
         compressor = HeadroomCompressor(client=client, fail_open=True)
         out = await compressor.apply(original, model="gpt-4o")
@@ -174,8 +189,11 @@ class TestRetrieveResultProtection:
         crushed[2] = {**crushed[2], "content": "[compressed]"}
         client = AsyncMock()
         from continuum.llm.headroom.client import CompressionStats
+
         client.compress.return_value = (
-            crushed, CompressionStats(100, 1, 99, 0.01, []), [],
+            crushed,
+            CompressionStats(100, 1, 99, 0.01, []),
+            [],
         )
         compressor = HeadroomCompressor(client=client, fail_open=True)
         out = await compressor.apply(original, model="gpt-4o")
@@ -251,9 +269,7 @@ class TestPerRunIsolation:
         def _boom() -> object:
             raise RuntimeError("misconfigured client")
 
-        monkeypatch.setattr(
-            "continuum.llm.headroom.compressor.new_run_compressor", _boom
-        )
+        monkeypatch.setattr("continuum.llm.headroom.compressor.new_run_compressor", _boom)
         assert enter_run_compressor() is None  # fail-safe, no exception
 
     async def test_concurrent_runs_have_isolated_issued_hashes(self, monkeypatch):

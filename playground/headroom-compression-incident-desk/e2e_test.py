@@ -78,6 +78,7 @@ def show_box(box: dict) -> str:
 
 # --------------------------------------------------------------------------- #
 
+
 async def s1_db_lossless(agent: IncidentAgent) -> None:
     gt = GROUND_TRUTH["orders"]
     r = await agent.chat(
@@ -96,9 +97,21 @@ async def s1_db_lossless(agent: IncidentAgent) -> None:
     # bar is proportional to the payload's share of the context, not the
     # 50-60% Headroom achieves on the JSON block itself.
     ok_savings = (lc.get("pct_saved") or 0) >= 15
-    record("1 DB SmartCrusher: correct count from compressed view", ok_count, f"expect {gt['failed_count']}")
-    record("1 DB SmartCrusher: correct max-refund extraction", ok_max, f"expect {gt['largest_refund_order']} / 2499.00")
-    record("1 DB SmartCrusher: ≥15% saved on the tool-result call", ok_savings, f"got {lc.get('pct_saved')}%")
+    record(
+        "1 DB SmartCrusher: correct count from compressed view",
+        ok_count,
+        f"expect {gt['failed_count']}",
+    )
+    record(
+        "1 DB SmartCrusher: correct max-refund extraction",
+        ok_max,
+        f"expect {gt['largest_refund_order']} / 2499.00",
+    )
+    record(
+        "1 DB SmartCrusher: ≥15% saved on the tool-result call",
+        ok_savings,
+        f"got {lc.get('pct_saved')}%",
+    )
 
 
 async def s2_logs_ccr(agent: IncidentAgent) -> None:
@@ -114,9 +127,14 @@ async def s2_logs_ccr(agent: IncidentAgent) -> None:
     record("2 CCR: sidecar issued retrieve marker(s)", len(box["new_hashes"]) >= 1)
     record("2 CCR: model called continuum_headroom_retrieve", len(r["retrieve_calls"]) >= 1)
     big = any(rc["chars"] > 50_000 for rc in r["retrieve_calls"])
-    record("2 CCR: retrieve returned the full original (>50k chars)", big,
-           str([rc["chars"] for rc in r["retrieve_calls"]]))
-    record("2 CCR: needle answered (anti-doom-loop held)", token in r["response"], f"expect {token}")
+    record(
+        "2 CCR: retrieve returned the full original (>50k chars)",
+        big,
+        str([rc["chars"] for rc in r["retrieve_calls"]]),
+    )
+    record(
+        "2 CCR: needle answered (anti-doom-loop held)", token in r["response"], f"expect {token}"
+    )
 
 
 async def s3_search(agent: IncidentAgent) -> None:
@@ -129,10 +147,15 @@ async def s3_search(agent: IncidentAgent) -> None:
     print(f"    headroom: {show_box(box)}")
     print(f"    transforms: {lc.get('transforms')}")
     print(f"    answer: {r['response'][:200]}")
-    record("3 Search: right runbook from compressed results",
-           GROUND_TRUTH["runbook_id"] in r["response"])
-    record("3 Search: results actually compressed", (lc.get("pct_saved") or 0) > 0,
-           f"got {lc.get('pct_saved')}% — payload too small for the floor?")
+    record(
+        "3 Search: right runbook from compressed results",
+        GROUND_TRUTH["runbook_id"] in r["response"],
+    )
+    record(
+        "3 Search: results actually compressed",
+        (lc.get("pct_saved") or 0) > 0,
+        f"got {lc.get('pct_saved')}% — payload too small for the floor?",
+    )
 
 
 async def s4_read_excluded(agent: IncidentAgent) -> None:
@@ -146,11 +169,11 @@ async def s4_read_excluded(agent: IncidentAgent) -> None:
     print(f"    transforms: {transforms}")
     print(f"    answer: {r['response'][:200]}")
     ans = norm(r["response"])
-    record("4 read-exclusion: config values reported correctly",
-           "20" in ans and "7" in ans)
+    record("4 read-exclusion: config values reported correctly", "20" in ans and "7" in ans)
     excluded = any("exclude" in t for t in transforms)
-    record("4 read-exclusion: router marked the payload excluded", excluded,
-           f"transforms={transforms}")
+    record(
+        "4 read-exclusion: router marked the payload excluded", excluded, f"transforms={transforms}"
+    )
 
 
 async def s5_fail_open(agent: IncidentAgent) -> None:
@@ -162,8 +185,10 @@ async def s5_fail_open(agent: IncidentAgent) -> None:
         ans = norm(r["response"])
         box = r["headroom"]
         print(f"    answer: {r['response'][:160]}")
-        record("5 fail-open: run succeeded with sidecar dead",
-               str(GROUND_TRUTH["orders"]["failed_count"]) in ans)
+        record(
+            "5 fail-open: run succeeded with sidecar dead",
+            str(GROUND_TRUTH["orders"]["failed_count"]) in ans,
+        )
         record("5 fail-open: nothing compressed", box.get("last_call") is None)
     finally:
         agent.point_sidecar(None)
@@ -191,8 +216,11 @@ async def s7_streaming(agent: IncidentAgent) -> None:
     print(f"    headroom: {show_box(box)}")
     print(f"    answer: {done.get('response', '')[:200]}")
     record("7 streaming: live events emitted", "token" in events or "message" in events)
-    record("7 streaming: needle answered via runner interception",
-           token in done.get("response", ""), f"expect {token}")
+    record(
+        "7 streaming: needle answered via runner interception",
+        token in done.get("response", ""),
+        f"expect {token}",
+    )
 
 
 async def s8_multi_payload(agent: IncidentAgent) -> None:
@@ -234,7 +262,7 @@ async def s9_kompress(agent: IncidentAgent) -> None:
     first_transforms: list[str] | None = None
     for attempt in range(10):
         r = await agent.chat(question)
-        lc = (r["headroom"].get("last_call") or {})
+        lc = r["headroom"].get("last_call") or {}
         transforms = lc.get("transforms", [])
         if first_transforms is None:
             first_transforms = transforms
@@ -246,13 +274,17 @@ async def s9_kompress(agent: IncidentAgent) -> None:
             record("9 Kompress: impact figure still answered", fact_ok)
             # cold-phase evidence, when this run happened to observe it
             if attempt > 0 and not _kompress_fired(first_transforms):
-                record("9 Kompress: cold start passed through (warm-gate)", True,
-                       str(first_transforms))
+                record(
+                    "9 Kompress: cold start passed through (warm-gate)", True, str(first_transforms)
+                )
             return
         print(f"    attempt {attempt + 1}: not routed yet (transforms={transforms}); warming…")
         await asyncio.sleep(10)
-    skip("9 Kompress", f"never routed after 10 attempts (first transforms={first_transforms}) — "
-         "ML extra not installed on this sidecar, or model failed to load")
+    skip(
+        "9 Kompress",
+        f"never routed after 10 attempts (first transforms={first_transforms}) — "
+        "ML extra not installed on this sidecar, or model failed to load",
+    )
 
 
 def _rag_block(msgs: list[dict] | None) -> dict | None:
@@ -317,8 +349,9 @@ async def s11_file_read_stale(agent: IncidentAgent) -> None:
     lifecycle manager is wired and enabled, it MUST fire.
     """
     from config import SIDECAR_BASE
-    from continuum.llm.headroom.client import HeadroomClient
     from data import SERVICE_YAML
+
+    from continuum.llm.headroom.client import HeadroomClient
 
     if not sidecar_health()["up"]:
         skip("11 file-read STALE", "sidecar down — lifecycle needs the real /v1/compress")
@@ -327,15 +360,37 @@ async def s11_file_read_stale(agent: IncidentAgent) -> None:
     # read(service.yaml) → write(service.yaml): the read is now STALE.
     messages = [
         {"role": "user", "content": "Read service.yaml, then raise the DB pool size and save it."},
-        {"role": "assistant", "content": None, "tool_calls": [
-            {"id": "call_read", "type": "function",
-             "function": {"name": "read", "arguments": '{"path": "service.yaml"}'}}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_read",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"path": "service.yaml"}'},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": "call_read", "content": SERVICE_YAML},
-        {"role": "assistant", "content": None, "tool_calls": [
-            {"id": "call_write", "type": "function",
-             "function": {"name": "write",
-                          "arguments": '{"path": "service.yaml", "content": "pool_max_size: 50"}'}}]},
-        {"role": "tool", "tool_call_id": "call_write", "content": "Wrote 17 bytes to service.yaml. Change applied."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_write",
+                    "type": "function",
+                    "function": {
+                        "name": "write",
+                        "arguments": '{"path": "service.yaml", "content": "pool_max_size: 50"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_write",
+            "content": "Wrote 17 bytes to service.yaml. Change applied.",
+        },
         {"role": "user", "content": "Confirm the pool size is now 50."},
     ]
 
@@ -352,18 +407,25 @@ async def s11_file_read_stale(agent: IncidentAgent) -> None:
     print(f"    read result: {len(SERVICE_YAML)} chars → {len(new_content)} chars")
     print(f"    marker: {new_content[:140]}")
 
-    record("11 file-read STALE: read classified stale by later write",
-           any("read_lifecycle:stale" in t for t in transforms),
-           f"transforms={transforms}")
-    record("11 file-read STALE: stale read replaced by a shorter marker",
-           len(new_content) < len(SERVICE_YAML),
-           f"{len(SERVICE_YAML)} → {len(new_content)} chars")
-    record("11 file-read STALE: marker carries a CCR retrieve hash",
-           "Retrieve original: hash=" in new_content and len(hashes) >= 1,
-           f"hashes={hashes}")
+    record(
+        "11 file-read STALE: read classified stale by later write",
+        any("read_lifecycle:stale" in t for t in transforms),
+        f"transforms={transforms}",
+    )
+    record(
+        "11 file-read STALE: stale read replaced by a shorter marker",
+        len(new_content) < len(SERVICE_YAML),
+        f"{len(SERVICE_YAML)} → {len(new_content)} chars",
+    )
+    record(
+        "11 file-read STALE: marker carries a CCR retrieve hash",
+        "Retrieve original: hash=" in new_content and len(hashes) >= 1,
+        f"hashes={hashes}",
+    )
 
 
 # --------------------------------------------------------------------------- #
+
 
 def start_mcp_server() -> subprocess.Popen:
     proc = subprocess.Popen(
@@ -424,8 +486,10 @@ async def main() -> int:
     for status, name, detail in RESULTS:
         mark = {"PASS": "✅", "FAIL": "❌", "SKIP": "⏭️ "}[status]
         print(f"{mark} {name}" + (f" — {detail}" if status != "PASS" and detail else ""))
-    print(f"\n{len([r for r in RESULTS if r[0] == 'PASS'])} passed, "
-          f"{len(fails)} failed, {len([r for r in RESULTS if r[0] == 'SKIP'])} skipped")
+    print(
+        f"\n{len([r for r in RESULTS if r[0] == 'PASS'])} passed, "
+        f"{len(fails)} failed, {len([r for r in RESULTS if r[0] == 'SKIP'])} skipped"
+    )
     return 1 if fails else 0
 
 

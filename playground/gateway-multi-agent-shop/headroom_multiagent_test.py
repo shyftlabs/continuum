@@ -169,7 +169,7 @@ async def t1_parallel_isolates_compressors() -> None:
     record(
         "T1 parallel: each branch got its OWN compressor instance",
         a is not None and b is not None and a is not b,
-        f"id(A)={id(a) & 0xffff:#06x} id(B)={id(b) & 0xffff:#06x}",
+        f"id(A)={id(a) & 0xFFFF:#06x} id(B)={id(b) & 0xFFFF:#06x}",
     )
     record(
         "T1 parallel: branches have separate issued-hash sets",
@@ -204,7 +204,7 @@ async def t1_handoff_shares_compressor() -> None:
             record(
                 "T1 handoff: target inherits the SAME compressor instance",
                 source_comp is target_comp,
-                f"id={id(source_comp) & 0xffff:#06x}",
+                f"id={id(source_comp) & 0xFFFF:#06x}",
             )
         finally:
             exit_run_compressor(nested)
@@ -339,9 +339,9 @@ async def t2_real_workflows() -> None:
     """Drive the REAL ParallelAgent and REAL handoff via the rig, instrumenting
     new_run_compressor to see how many distinct per-run compressors each creates:
     parallel (direct execute) → one per branch; handoff (runner.run) → one shared."""
-    import continuum.llm.headroom.compressor as hc
-
     from workflows import create_workflow  # rig harness
+
+    import continuum.llm.headroom.compressor as hc
 
     created: list[int] = []
     real_new = hc.new_run_compressor
@@ -385,8 +385,10 @@ async def main() -> int:
     up = sidecar_up()
     print(f"{'✓ sidecar healthy' if up else '⚠️  sidecar DOWN'} at {SIDECAR_BASE}")
     if not up:
-        print("   Restart: cd extensions/headroom && HEADROOM_CCR_BACKEND=memory "
-              "HEADROOM_OFFLINE=1 HF_HUB_OFFLINE=1 uv run headroom proxy --port 8787")
+        print(
+            "   Restart: cd extensions/headroom && HEADROOM_CCR_BACKEND=memory "
+            "HEADROOM_OFFLINE=1 HF_HUB_OFFLINE=1 uv run headroom proxy --port 8787"
+        )
 
     print("\n── TIER 1 — deterministic mechanism proof ──")
     await t1_parallel_isolates_compressors()

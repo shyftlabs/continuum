@@ -287,8 +287,12 @@ class TestLLMTotalDeadline:
         from continuum.llm.client import LLMClient
 
         # timeout × (retries+1) + retries × 8s backoff cap
-        assert LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=3)) == 264.0
-        assert LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=0)) == 60.0
+        assert (
+            LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=3)) == 264.0
+        )
+        assert (
+            LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=0)) == 60.0
+        )
         # Disabled when timeout is unset/non-positive.
         assert LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=0)) is None
 

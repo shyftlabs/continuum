@@ -153,11 +153,7 @@ class SupervisedSequentialAgent(BaseAgent):
                 original_input=input_text,
             )
 
-            if (
-                context.session_id
-                and result.turn_count
-                and result.status == ResponseStatus.SUCCESS
-            ):
+            if context.session_id and result.turn_count and result.status == ResponseStatus.SUCCESS:
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,

@@ -38,6 +38,7 @@ class HeadroomBackend(Protocol):
 
     async def aclose(self) -> None: ...
 
+
 # CCR retrieval markers embedded in compressed content, e.g.
 #   "[2501 lines compressed to 7. Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]"
 # Needed because the /v1/compress `ccr_hashes` response field is UNRELIABLE —
@@ -268,9 +269,7 @@ class HeadroomCompressor:
         try:
 
             def _chars(msgs: list[dict[str, Any]]) -> int:
-                return sum(
-                    len(str(m["content"])) for m in msgs if m.get("content") is not None
-                )
+                return sum(len(str(m["content"])) for m in msgs if m.get("content") is not None)
 
             # Cheap change detection: if no char changed, no token changed either.
             if _chars(before) == _chars(after):
@@ -422,16 +421,14 @@ def get_headroom_client() -> HeadroomBackend:
                             # regardless of headroom_enabled — prewarming there
                             # would load a model that never compresses anything.
                             kompress_prewarm=(
-                                settings.headroom_kompress_local
-                                and settings.headroom_enabled
+                                settings.headroom_kompress_local and settings.headroom_enabled
                             ),
                             kompress_execution_timeout_ms=(
                                 settings.headroom_kompress_execution_timeout_ms
                             ),
                         )
                         logger.info(
-                            "headroom: mode=local (in-process library), "
-                            "CCR backend=%s",
+                            "headroom: mode=local (in-process library), CCR backend=%s",
                             _global_client.ccr_backend_info(),
                         )
                     except Exception as e:
@@ -463,9 +460,7 @@ def new_run_compressor() -> HeadroomCompressor:
     Its ``issued_hashes`` set is private to the run — the retrieve boundary."""
     from continuum.config import settings
 
-    return HeadroomCompressor(
-        client=get_headroom_client(), fail_open=settings.headroom_fail_open
-    )
+    return HeadroomCompressor(client=get_headroom_client(), fail_open=settings.headroom_fail_open)
 
 
 def get_headroom_compressor() -> HeadroomCompressor:

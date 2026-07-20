@@ -217,7 +217,9 @@ class Settings(BaseSettings):
     memory_history_db_path: str = "~/.orchestrator/memory_history.db"  # SQLite history DB
     memory_isolation: Literal["shared", "user", "agent", "conversation"] = "user"  # Isolation level
     memory_search_limit: int = 5  # Default number of memories to retrieve
-    memory_max_query_chars: int | None = 8000  # Truncate search queries to this many chars (None disables)
+    memory_max_query_chars: int | None = (
+        8000  # Truncate search queries to this many chars (None disables)
+    )
 
     # -------------------------------------------------------------------------
     # Session Configuration (Redis for short-term memory)

@@ -127,9 +127,7 @@ class TestCompress:
         assert stats.transforms_applied == ["router:smart_crusher:0.20"]
         assert ccr_hashes == []
 
-    async def test_compression_ratio_is_after_over_before_not_library_semantics(
-        self, monkeypatch
-    ):
+    async def test_compression_ratio_is_after_over_before_not_library_semantics(self, monkeypatch):
         # Library reports 0.8 (= 80% saved); Continuum's field means
         # after/before, so it must come out as 0.2 — NOT be passed through.
         client = _local_client(monkeypatch)

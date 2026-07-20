@@ -113,7 +113,9 @@ class TestCountTokensToolBlocks:
         msgs = [
             {
                 "role": "assistant",
-                "content": [{"type": "tool_use", "id": "t1", "name": "search", "input": {"q": payload}}],
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": payload}}
+                ],
             }
         ]
         # Payload is ~4000 tokens; counting it as ~0 would be the bug.
@@ -126,7 +128,11 @@ class TestCountTokensToolBlocks:
             {
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": payload}]}
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": [{"type": "text", "text": payload}],
+                    }
                 ],
             }
         ]
@@ -140,7 +146,11 @@ class TestCountTokensToolBlocks:
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    {"id": "c1", "type": "function", "function": {"name": "search", "arguments": args}}
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": args},
+                    }
                 ],
             }
         ]
@@ -183,7 +193,8 @@ class TestTruncationToolPairBoundary:
             for m in messages
             if isinstance(m.get("content"), list)
             for b in m["content"]
-            if isinstance(b, dict) and b.get("type") == "tool_result"
+            if isinstance(b, dict)
+            and b.get("type") == "tool_result"
             and b.get("tool_use_id") not in tool_use_ids
         ]
 
@@ -201,7 +212,10 @@ class TestTruncationToolPairBoundary:
                     {"type": "tool_use", "id": "tu_1", "name": "s", "input": {"q": "word " * 2000}}
                 ],
             },
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}],
+            },
             {"role": "assistant", "content": "answer"},
             {"role": "user", "content": "word " * 4500},
         ]
@@ -220,7 +234,11 @@ class TestTruncationToolPairBoundary:
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    {"id": "c1", "type": "function", "function": {"name": "s", "arguments": "word " * 2000}}
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "s", "arguments": "word " * 2000},
+                    }
                 ],
             },
             {"role": "tool", "tool_call_id": "c1", "content": "result"},
@@ -239,7 +257,10 @@ class TestTruncationToolPairBoundary:
         cwm = ContextWindowManager()
         msgs = [
             {"role": "system", "content": "sys"},
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "r"}],
+            },
         ]
         out, res = cwm.truncate_messages(
             msgs, "gpt-4", strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT

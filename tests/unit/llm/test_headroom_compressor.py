@@ -113,9 +113,12 @@ class TestHashSourceUnion:
 
     MARKED = [
         {"role": "user", "content": "Analyze this."},
-        {"role": "tool", "tool_call_id": "c1",
-         "content": "lines...\n[2501 lines compressed to 7. "
-                     "Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]"},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "lines...\n[2501 lines compressed to 7. "
+            "Retrieve more: hash=7e443033ad1ff3f9ca0b8c49]",
+        },
     ]
 
     async def test_marker_hash_recorded_when_field_empty(self):
@@ -145,8 +148,15 @@ class TestHashSourceUnion:
         """Block-style content (lists/None) must not crash the scan."""
         weird = [
             {"role": "assistant", "content": None},
-            {"role": "user", "content": [{"type": "text",
-             "text": "see [1 item compressed. Retrieve more: hash=bbbb2222bbbb2222bbbb2222]"}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "see [1 item compressed. Retrieve more: hash=bbbb2222bbbb2222bbbb2222]",
+                    }
+                ],
+            },
         ]
         client = _mock_client(result=(weird, STATS, []))
         compressor = HeadroomCompressor(client=client, fail_open=True)

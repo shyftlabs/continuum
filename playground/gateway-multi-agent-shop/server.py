@@ -171,9 +171,7 @@ _SERVICE_CONFIG = "shop-service config v3\n" + "\n".join(
     f"timeout_ms: {500 + i * 11}\n  region: us-east-{i % 4}\n  "
     f"cache_ttl_s: {30 + i % 300}\n  max_conns: {50 + i % 450}\n  "
     f"feature_flags: [flag_{i % 9}, flag_{(i + 3) % 9}]"
-    for i, svc in enumerate(
-        f"service_{n:03d}" for n in range(25)
-    )
+    for i, svc in enumerate(f"service_{n:03d}" for n in range(25))
 )
 _config_store: dict[str, str] = {"service.yaml": _SERVICE_CONFIG}
 
@@ -194,8 +192,12 @@ def write(path: str, content: str) -> str:
 
 _LOG_LEVELS = ["INFO", "INFO", "INFO", "INFO", "WARN", "ERROR"]
 _ORDER_EVENTS = [
-    "order.created", "order.paid", "order.shipped",
-    "cart.updated", "payment.authorized", "inventory.reserved",
+    "order.created",
+    "order.paid",
+    "order.shipped",
+    "cart.updated",
+    "payment.authorized",
+    "inventory.reserved",
 ]
 
 

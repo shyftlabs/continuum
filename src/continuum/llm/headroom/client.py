@@ -58,7 +58,9 @@ def _compact_messages(messages: list[dict[str, Any]]) -> str:
             s = str(content)
             if len(s) > _DEBUG_CONTENT_PREVIEW:
                 preview = s[:_DEBUG_CONTENT_PREVIEW].replace("\n", "⏎")
-                parts.append(f'content({len(s)} chars): "{preview}…(+{len(s) - _DEBUG_CONTENT_PREVIEW} more)"')
+                parts.append(
+                    f'content({len(s)} chars): "{preview}…(+{len(s) - _DEBUG_CONTENT_PREVIEW} more)"'
+                )
             else:
                 parts.append(f'content({len(s)} chars): "{s}"')
         lines.append("  " + " ".join(parts))

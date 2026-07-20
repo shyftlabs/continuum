@@ -312,7 +312,9 @@ class TestMaxRetriesWiring:
         assert p._async_client.max_retries == 1
 
     def test_gemini_client_receives_max_retries(self):
-        p = registry._make_gemini(LLMConfig(model="gemini/gemini-2.5-flash", max_retries=4), self._S)
+        p = registry._make_gemini(
+            LLMConfig(model="gemini/gemini-2.5-flash", max_retries=4), self._S
+        )
         assert p._client.max_retries == 4
         assert p._async_client.max_retries == 4
 

@@ -20,9 +20,7 @@ COMPRESSED_SENTINEL = [{"role": "user", "content": "compressed!"}]
 
 def _mock_provider() -> MagicMock:
     provider = MagicMock()
-    provider.acomplete = AsyncMock(
-        return_value=LLMResponse(content="ok", model="gpt-4o")
-    )
+    provider.acomplete = AsyncMock(return_value=LLMResponse(content="ok", model="gpt-4o"))
     return provider
 
 
@@ -90,9 +88,7 @@ class TestChatSeam:
 
     @patch("continuum.llm.client.get_provider")
     @patch("continuum.llm.client.setup_langfuse")
-    async def test_headroom_runs_before_summarizer(
-        self, _langfuse, mock_get_provider, monkeypatch
-    ):
+    async def test_headroom_runs_before_summarizer(self, _langfuse, mock_get_provider, monkeypatch):
         """Decision #2 ordering: summarizer sees POST-Headroom messages."""
         monkeypatch.setattr(settings, "headroom_enabled", True)
         monkeypatch.setattr(settings, "context_management_enabled", True)

@@ -133,9 +133,7 @@ class LocalHeadroomClient:
         """
         import os
 
-        os.environ.setdefault(
-            "HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS", str(execution_timeout_ms)
-        )
+        os.environ.setdefault("HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS", str(execution_timeout_ms))
 
         def _warm() -> None:
             try:

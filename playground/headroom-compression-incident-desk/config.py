@@ -33,7 +33,7 @@ for _var in (
     "SMART_GATEWAY_API_KEY",
     "EMBEDDER_API_BASE",
     "EMBEDDER_API_KEY",
-    "HEADROOM_ENABLED"
+    "HEADROOM_ENABLED",
 ):
     if _var not in _file_env:
         os.environ.pop(_var, None)

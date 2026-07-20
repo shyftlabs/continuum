@@ -222,9 +222,7 @@ class TestCarriesToolIO:
         from continuum.llm.context_management import _carries_tool_io
 
         assert _carries_tool_io({"role": "tool", "content": "result"})
-        assert _carries_tool_io(
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
-        )
+        assert _carries_tool_io({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]})
 
     def test_anthropic_tool_use_and_result_blocks_detected(self):
         from continuum.llm.context_management import _carries_tool_io

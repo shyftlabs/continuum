@@ -16,7 +16,6 @@ binding (fail-open, scenario 5) and fire a forged retrieve (scenario 6).
 """
 
 import json
-import sys
 
 import config as rig_config  # noqa: F401 — MUST be first (env guard + HEADROOM_ENABLED)
 import uvicorn
@@ -104,8 +103,11 @@ async def sidecar_toggle(req: SidecarToggle):
         return {"error": "agent not ready"}
     _sidecar_dead = req.dead
     base = _agent.point_sidecar("http://127.0.0.1:9" if req.dead else None)
-    return {"pointed_at": base, "dead": req.dead,
-            "note": "compressor rebuilt — previously issued CCR hashes were forgotten"}
+    return {
+        "pointed_at": base,
+        "dead": req.dead,
+        "note": "compressor rebuilt — previously issued CCR hashes were forgotten",
+    }
 
 
 @app.post("/forge")
@@ -118,8 +120,12 @@ async def forge(req: ForgeRequest):
 @app.post("/chat")
 async def chat(req: ChatRequest):
     if not _agent or not _agent._initialized:
-        return {"response": f"Agent not connected. {_init_error or 'Start server.py first.'}",
-                "tools_called": [], "retrieve_calls": [], "headroom": {}}
+        return {
+            "response": f"Agent not connected. {_init_error or 'Start server.py first.'}",
+            "tools_called": [],
+            "retrieve_calls": [],
+            "headroom": {},
+        }
     return await _agent.chat(req.message)
 
 
@@ -127,8 +133,18 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     async def gen():
         if not _agent or not _agent._initialized:
-            yield json.dumps({"type": "done", "response": "Agent not connected.",
-                              "tools_called": [], "retrieve_calls": [], "headroom": {}}) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "type": "done",
+                        "response": "Agent not connected.",
+                        "tools_called": [],
+                        "retrieve_calls": [],
+                        "headroom": {},
+                    }
+                )
+                + "\n"
+            )
             return
         async for ev in _agent.chat_stream(req.message):
             yield json.dumps(ev) + "\n"
@@ -144,8 +160,12 @@ async def chat_rag():
     passing through UNCOMPRESSED — unlike scenario 3, where the same bytes crush
     ~98% as a tool result."""
     if not _agent or not _agent._initialized:
-        return {"response": f"Agent not connected. {_init_error or 'Start server.py first.'}",
-                "tools_called": [], "retrieve_calls": [], "headroom": {}}
+        return {
+            "response": f"Agent not connected. {_init_error or 'Start server.py first.'}",
+            "tools_called": [],
+            "retrieve_calls": [],
+            "headroom": {},
+        }
     from data import format_runbook_results
 
     payload = format_runbook_results("database connection pool exhaustion")
@@ -181,29 +201,43 @@ async def messages_dump():
 
 
 SCENARIOS = [
-    ("1 · DB rows (SmartCrusher)",
-     "Query the orders database for failed orders. How many orders failed, and "
-     "which single order has the largest refund? Give its order id and the exact refund amount."),
-    ("2 · Logs + CCR needle",
-     "Fetch the checkout-api logs and tell me the exact incident reference token "
-     "recorded in the audit trail."),
-    ("3 · Runbook search (RAG)",
-     "Search the runbooks for guidance on database connection pool exhaustion. "
-     "Which runbook applies? Give its ID."),
-    ("4 · read tool (excluded)",
-     "Use the read tool to read service.yaml, then report the exact values of "
-     "database.pool_max_size and workers.refund_worker_concurrency."),
-    ("11 · read→edit (file STALE)",
-     "Use the read tool to read the file at path 'service.yaml'. The DB "
-     "connection pool is undersized for this incident — raise "
-     "database.pool_max_size to 50 and use the write tool to save the updated "
-     "config back to path 'service.yaml'. Then confirm the new pool size."),
-    ("8 · Two needles, one run",
-     "Fetch the logs for BOTH checkout-api and payments-svc. Then report the exact "
-     "incident reference token recorded in each service's audit trail."),
-    ("9 · Postmortem prose (Kompress)",
-     "Fetch the postmortem for INC-2417 and state the exact total number of checkout "
-     "attempts that failed."),
+    (
+        "1 · DB rows (SmartCrusher)",
+        "Query the orders database for failed orders. How many orders failed, and "
+        "which single order has the largest refund? Give its order id and the exact refund amount.",
+    ),
+    (
+        "2 · Logs + CCR needle",
+        "Fetch the checkout-api logs and tell me the exact incident reference token "
+        "recorded in the audit trail.",
+    ),
+    (
+        "3 · Runbook search (RAG)",
+        "Search the runbooks for guidance on database connection pool exhaustion. "
+        "Which runbook applies? Give its ID.",
+    ),
+    (
+        "4 · read tool (excluded)",
+        "Use the read tool to read service.yaml, then report the exact values of "
+        "database.pool_max_size and workers.refund_worker_concurrency.",
+    ),
+    (
+        "11 · read→edit (file STALE)",
+        "Use the read tool to read the file at path 'service.yaml'. The DB "
+        "connection pool is undersized for this incident — raise "
+        "database.pool_max_size to 50 and use the write tool to save the updated "
+        "config back to path 'service.yaml'. Then confirm the new pool size.",
+    ),
+    (
+        "8 · Two needles, one run",
+        "Fetch the logs for BOTH checkout-api and payments-svc. Then report the exact "
+        "incident reference token recorded in each service's audit trail.",
+    ),
+    (
+        "9 · Postmortem prose (Kompress)",
+        "Fetch the postmortem for INC-2417 and state the exact total number of checkout "
+        "attempts that failed.",
+    ),
 ]
 
 _SCENARIO_BTNS = "".join(
