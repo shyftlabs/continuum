@@ -1058,6 +1058,10 @@
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-branch')">Branch &amp; diff</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-store')">Storage backends</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-limits')">Limitations</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-headroom')">Headroom Compression</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-modes')">Modes: local &amp; endpoint</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-config')">Configuration</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-transforms')">Transform reference</a>
     <div class="sidebar-group-label">Deployment</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-lifecycle')">App Lifecycle</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-fastapi')">FastAPI Server</a>
@@ -1192,7 +1196,7 @@
   <a class="anchor" id="home-hero"></a>
   <div class="landing-hero">
     <div class="landing-glow" aria-hidden="true"></div>
-    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.1.0</span>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.2.0</span>
     <h1 class="landing-title grad-text">Continuum</h1>
     <p class="landing-sub">The agent platform. Build production AI agents on the open <strong>Framework</strong>, route every call through <strong>Aura</strong>, and govern the whole system with <strong>Provenance</strong>.</p>
     <div class="ph-meta">
@@ -1285,7 +1289,7 @@ response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().
 
   <a class="anchor" id="home-intro"></a>
   <div class="product-hero">
-    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.1.0</span>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.2.0</span>
     <h1 class="ph-title grad-text">Continuum Framework</h1>
     <p class="ph-sub">The open-source agent runtime for builders who ship. Production-grade reasoning, durable multi-agent workflows, two-tier memory, and full observability, out of the box.</p>
     <div class="ph-meta">
@@ -1386,7 +1390,7 @@ pip install shyftlabs-continuum</pre></div>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install shyftlabs-continuum                 <span class="cm"># latest release (v1.1.0)</span>
+pip install shyftlabs-continuum                 <span class="cm"># latest release (v1.2.0)</span>
 pip install <span class="str">"shyftlabs-continuum[temporal,eval]"</span>    <span class="cm"># optional extras</span></pre></div>
       <p style="margin:12px 0 6px;">Prefer to work from source? Clone <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">the repository</a> and install it editable:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>git clone https://github.com/shyftlabs/continuum.git
@@ -1406,7 +1410,12 @@ GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional</span>
 <span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional</span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
+<span class="cm"># DEFAULT_LLM_MODEL is provider-aware when unset: the chat default is derived from</span>
+<span class="cm"># whichever API key is present, so chat + meta-ops need no OpenAI key on an</span>
+<span class="cm"># Anthropic-/Gemini-only setup. (Memory embeddings still default to OpenAI.)</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
+ANTHROPIC_DEFAULT_MODEL=claude-haiku-4-5      <span class="cm"># default when only an Anthropic key is set</span>
+GEMINI_DEFAULT_MODEL=gemini/gemini-2.5-flash  <span class="cm"># default when only a Gemini key is set</span>
 FALLBACK_LLM_MODEL=gpt-4o-mini
 DEFAULT_LLM_TEMPERATURE=0.7
 DEFAULT_LLM_MAX_TOKENS=4096
@@ -1435,6 +1444,7 @@ MEMORY_LLM_MODEL=gemini/gemini-2.5-flash
 MEMORY_LLM_TEMPERATURE=0.1
 MEMORY_ISOLATION=user
 MEMORY_SEARCH_LIMIT=5
+MEMORY_MAX_QUERY_CHARS=8000  <span class="cm"># truncate long search queries before the embedder (~8191-token cap); blank disables</span>
 MEMORY_HISTORY_DB_PATH=~/.orchestrator/memory_history.db
 
 <span class="cm"># ── Session (Redis) ───────────────────────────────────────────────────────────</span>
@@ -2254,6 +2264,119 @@ delta = <span class="fn">diff_traces</span>(parent, child)   <span class="cm"># 
       <li><strong>LLM nondeterminism.</strong> Re-executed steps are fresh model calls, so their <em>wording</em> can differ between runs even where your edit had no effect — a diff may show cosmetic text changes. Keep outcome-determining logic in tools and use <code>temperature=0</code> so verdicts and numbers stay stable; treat narrative diffs as informational.</li>
     </ul>
   </div>
+
+  <a class="anchor" id="int-headroom"></a>
+  <h2>Headroom Compression <span class="tag tag-new">optional</span></h2>
+  <p>Headroom is an optional compression engine that shrinks bulky tool output — logs, tables, search / RAG dumps, long prose — <em>before</em> it reaches the model. It also collapses <strong>outdated or redundant file reads</strong> (ones the agent has since edited or re-read), while leaving the current copy intact. It runs per turn and is cache-friendly. Off by default; applies to async calls (<code>chat</code> / <code>chat_stream</code>).</p>
+
+  <a class="anchor" id="int-headroom-modes"></a>
+  <h3>Two modes: local &amp; endpoint</h3>
+  <p>The same compression runs either inside Continuum's own process or in a separate sidecar process you talk to over HTTP (this is what <strong>endpoint mode</strong> connects to).</p>
+  <table>
+    <tr><th>Mode</th><th><code>HEADROOM_MODE</code></th><th>How it runs</th><th>Best for</th></tr>
+    <tr><td>Local <span class="tag tag-new">default</span></td><td><code>local</code></td><td>In-process — <code>import headroom</code>. No sidecar to run; <code>api_base</code> / <code>api_key</code> are ignored.</td><td>Single process, notebooks, getting started</td></tr>
+    <tr><td>Endpoint</td><td><code>endpoint</code></td><td>HTTP to a running <code>headroom proxy</code> sidecar. One engine serves many workers, fault-isolated from the app.</td><td>Multi-worker / production</td></tr>
+  </table>
+  <h4>Configuring local mode</h4>
+  <p>Local mode needs a pip extra (endpoint mode needs none — you run the sidecar separately):</p>
+  <table>
+    <tr><th>Extra</th><th>Pulls in</th><th>For</th></tr>
+    <tr><td><code>shyftlabs-continuum[headroom-local]</code></td><td><code>headroom-ai&gt;=0.28,&lt;0.30</code></td><td>Local mode — logs / tables / search (the big wins). No ML.</td></tr>
+    <tr><td><code>shyftlabs-continuum[headroom-local-ml]</code></td><td>the above + <code>onnxruntime</code>, <code>transformers</code></td><td>Adds in-process <strong>prose</strong> (Kompress). First use downloads the model from the HF Hub.</td></tr>
+  </table>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Local (default), no machine learning model 'Kompress' is used to compress prose</span>
+pip install <span class="str">"shyftlabs-continuum[headroom-local]"</span>
+HEADROOM_ENABLED=true            <span class="cm"># HEADROOM_MODE defaults to local</span>
+
+
+<span class="cm"># Local with prose compression (adds the machine learning model 'Kompress' to compress prose)</span>
+pip install <span class="str">"shyftlabs-continuum[headroom-local-ml]"</span>
+HEADROOM_ENABLED=true
+HEADROOM_KOMPRESS_LOCAL=true
+<span class="cm"># sqlite|memory (default), controls where Headroom stashes the originals of what it compressed</span>
+HEADROOM_CCR_BACKEND=sqlite       <span class="cm"># if multi-worker (see below)</span>
+HEADROOM_CCR_SQLITE_PATH=/var/data/headroom/my_cache.db <span class="cm"># you can set your own path in sqlite</span></pre></div>
+
+
+  <h4>Running the sidecar (endpoint mode)</h4>
+  <p>The sidecar is the Headroom package with its <code>proxy</code> extra. Install it in its <strong>own</strong> environment — kept separate from your app, so the model weights (onnxruntime, transformers, …) live in the sidecar and out of your app's process — then run the <code>headroom proxy</code> server:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Install the sidecar (the proxy extra pulls FastAPI / uvicorn / onnxruntime)</span>
+pip install <span class="str">"headroom-ai[proxy]"</span>
+
+<span class="cm"># Start it — foreground</span>
+headroom proxy --port 8787
+
+<span class="cm"># ...or in the background, logging to a file</span>
+nohup headroom proxy --port 8787 &gt; headroom-sidecar.log 2&gt;&amp;1 &amp;
+
+<span class="cm"># Is it up?  (health check / listening port)</span>
+curl -s http://127.0.0.1:8787/health
+
+<span class="cm"># Stop a background sidecar — by port, or by name</span>
+lsof -ti:8787 | xargs kill
+pkill -f <span class="str">"headroom proxy"</span></pre></div>
+  <p>Once it's up, point your Continuum <strong>app</strong> at it — set these in the app's environment, not the sidecar's:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Endpoint — in your Continuum app's env</span>
+HEADROOM_ENABLED=true
+HEADROOM_MODE=endpoint            <span class="cm"># required — API_BASE alone won't switch modes</span>
+HEADROOM_API_BASE=http://127.0.0.1:8787</pre></div>
+  <div class="callout callout-warn">
+    <strong>Gotcha:</strong> <code>HEADROOM_MODE</code> defaults to <code>local</code>, not <code>endpoint</code>. Setting <code>HEADROOM_API_BASE</code> alone does <em>not</em> switch to the sidecar — you must set <code>HEADROOM_MODE=endpoint</code> explicitly, or you'll silently run in-process (and download the local model).
+  </div>
+  <p>One sidecar can serve many app workers.</p>
+
+  <a class="anchor" id="int-headroom-config"></a>
+  <h3>Configuration</h3>
+  <p>All settings are environment variables (the config field name, upper-cased). The master switch comes first — nothing else has any effect unless <code>HEADROOM_ENABLED=true</code>.</p>
+  <p><strong>Shared — apply to both modes</strong></p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_ENABLED</td><td>false</td><td>Master switch. Off = zero Headroom involvement.</td></tr>
+    <tr><td>HEADROOM_MODE</td><td>local</td><td><code>local</code> (in-process) or <code>endpoint</code> (HTTP sidecar).</td></tr>
+    <tr><td>HEADROOM_FAIL_OPEN</td><td>true</td><td>On a compression error, forward the request uncompressed (recommended). <code>false</code> = raise instead.</td></tr>
+    <tr><td>HEADROOM_TIMEOUT_SECONDS</td><td>30.0</td><td>Compress timeout. In local mode this also bounds the worker-thread / cold model-load wait.</td></tr>
+    <tr><td>HEADROOM_CONTEXT_THRESHOLD</td><td>0.92</td><td>Raises the summarizer's trigger so it only fires behind Headroom's per-turn compression. <code>max()</code> semantics — never lowers an explicitly higher <code>CONTEXT_COMPRESSION_THRESHOLD</code>.</td></tr>
+  </table>
+  <p><strong>Endpoint mode only</strong> (ignored in local mode)</p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_API_BASE</td><td>http://127.0.0.1:8787</td><td>Sidecar URL. Must be loopback.</td></tr>
+    <tr><td>HEADROOM_API_KEY</td><td>—</td><td>Bearer token, only if the sidecar sets one.</td></tr>
+  </table>
+  <p><strong>Local mode only</strong> (ignored in endpoint mode — the sidecar owns its own Kompress config)</p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_KOMPRESS_LOCAL</td><td>false</td><td>Turn on in-process <strong>prose</strong> (Kompress ML <code>text</code>) compression. Off = prose never fires in-process (Headroom skips the ML model on the hot path by design). On needs the <code>[headroom-local-ml]</code> extra + a model download on first use.</td></tr>
+    <tr><td>HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS</td><td>5000</td><td>Per-call ML budget — raised so a call waits for a model slot instead of skipping. Only takes effect when <code>HEADROOM_KOMPRESS_LOCAL=true</code>; an explicit value always wins.</td></tr>
+  </table>
+  <div class="callout callout-tip">
+    <strong>Multi-worker (local mode):</strong> the reversible-retrieve store is per-process by default. Set the library's <code>HEADROOM_CCR_BACKEND=sqlite</code> so a retrieve issued by one worker resolves in another. In endpoint mode this is the sidecar's concern, not yours.
+  </div>
+
+  <a class="anchor" id="int-headroom-transforms"></a>
+  <h3>Compression Strategies</h3>
+  <p>Users do not need to configure compression strategy by themselves, headroom will automatically choose the best strategy based on the content. If you want to know which strategy is used, you can see the transform name within <code>deominant transform</code> in the log. Every compressed turn is logged with the transforms that ran, e.g.
+  <code>headroom: 10224&rarr;3881 tokens (62% saved, transforms=[router:mixed:0.37])</code>.<br>
+  What you'll see:</p>
+  <p><strong>Compression transforms.</strong> Which one runs is decided by the <em>shape</em> of the content, not by you — Headroom routes each block to the transform that fits it:</p>
+  <table>
+    <tr><th>Transform</th><th>What it recognizes, and what it does</th></tr>
+    <tr><td><code>smart_crusher</code></td><td>Repetitive <strong>structured / tabular</strong> data — a list where every item has the same shape (order records, rows in a table). The field names and JSON punctuation (<code>{ } " :</code>) repeat on every row, but the real information is only the values. It spots the repeated shape and states the columns <em>once</em> at the top with just the values below — like turning a stack of identical JSON objects into a compact table. Same information, far less repeated scaffolding.</td></tr>
+    <tr><td><code>search</code></td><td><strong>Search results</strong> from an agent's code- or file-search tool — grep / ripgrep output, where each hit is a <code>file:line:content</code> row and there can be dozens or hundreds of them. It parses the hits, scores each for relevance to what the user asked (boosting error lines and lines matching the query), keeps the ones that matter — always the first and last per file, plus the top-scoring rest — and drops the remainder, replacing them with a short <code>[... and N more matches in &lt;file&gt;]</code> note.</td></tr>
+    <tr><td><code>log</code></td><td>Freeform <strong>build / service logs</strong> — compiler, test, lint, or application output: many near-identical lines (timestamps, <code>INFO</code> / <code>WARN</code> / <code>ERROR</code> levels) where only a handful matter. A relevance-based crusher that keeps the lines carrying signal — errors, warnings, the needle you were looking for — and collapses the repetitive noise around them. Distinct from <code>search</code>: logs are detected by their log shape, not by the <code>file:line:</code> grep format.</td></tr>
+    <tr><td><code>text</code></td><td>Natural-language <strong>prose</strong> — documentation sentences, descriptions. It has no repeated scaffolding to strip, so instead of de-duplication it's shortened by the Kompress ML model. This is the hardest content to compress (the "floor" — logs, tables and search are the larger wins). In-process only when <code>HEADROOM_KOMPRESS_LOCAL=true</code>; the sidecar runs it by default.</td></tr>
+    <tr><td><code>mixed</code></td><td><strong>Half-structured, half-prose</strong> payloads — e.g. search hits that carry repeated <code>path:line</code> scaffolding (compressible like logs / tables) plus real documentation sentences (natural language that doesn't compress as hard). The mixed compressor squeezes the repetitive scaffolding and redundant hits while <em>preserving</em> the meaningful prose, so the result lands between the pure-log and pure-prose cases. You'll also see <code>mixed</code> whenever more than one transform contributes and none clearly dominates.</td></tr>
+  </table>
+  <p><strong>Annotations — what was protected or tracked</strong></p>
+  <table>
+    <tr><th>Marker</th><th>Meaning</th></tr>
+    <tr><td><code>read_lifecycle:stale</code></td><td>The agent read a file, then later wrote or edited the <em>same</em> file — so the earlier read is now an outdated full copy sitting in the conversation. Headroom notices the file changed after it was read, throws away the bulky stale copy, and leaves a short note (<em>"this read is stale — re-read for current content"</em>) plus a retrievable ticket (a hash) to pull the original back if it's ever needed. The current, fresh read is left untouched.</td></tr>
+    <tr><td><code>excluded:tool</code></td><td>The file read was excluded from compression. If your agent's file tools use the standard names — <code>read</code>/<code>Read</code>, <code>write</code>/<code>Write</code>, <code>edit</code>/<code>Edit</code> — Headroom recognizes those automatically. This is the common convention (it's what Claude Code and most agent frameworks already name them), so in the typical case it "just works" with zero config.</td></tr>
+    <tr><td><code>protected:system</code></td><td>A <code>[system]</code> message that cannot be compressed. Compression must never be able to corrupt your instructions, so system / developer prompts are protected by default.</td></tr>
+    <tr><td><code>anti-forgery</code></td><td>The guard on reversible retrieval (compressed content can be pulled back on demand via a retrieve tool). It answers: "can the model use a fake ticket to pull back data it was never given?" Each run issues its own hashes, and a retrieve for a hash the run never saw is rejected.</td></tr>
+  </table>
+
+  <p><strong>Examples:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/headroom-compression-incident-desk" target="_blank" rel="noopener"><code>playground/headroom-compression-incident-desk</code></a> and <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a> (try <em>sequential</em> mode).</p>
 
   <a class="anchor" id="run-lifecycle"></a>
   <h2>App Lifecycle</h2>
@@ -3601,7 +3724,7 @@ mypy src/</pre>
   <div class="footer-brand">
     <a href="https://continuum.shyftlabs.io" target="_blank" rel="noopener" aria-label="Continuum"><img class="footer-logo" src="assets/continuum-logo.png" alt="Continuum" /></a>
     <span class="footer-divider" aria-hidden="true"></span>
-    <span class="footer-meta">v1.1.0 · Built by</span>
+    <span class="footer-meta">v1.2.0 · Built by</span>
     <a class="footer-built" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs"><img class="footer-shyft" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" /></a>
   </div>
   <div class="footer-social">

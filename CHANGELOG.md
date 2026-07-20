@@ -7,6 +7,33 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-17
+
+### Added
+- **Headroom Compression** (optional) — a per-turn engine that shrinks bulky tool output (logs, tables, search/RAG dumps, long prose) and collapses stale/redundant file reads *before* the payload reaches the model. Runs in two modes: **local** (in-process, default — `pip install "shyftlabs-continuum[headroom-local]"`) or **endpoint** (an out-of-process `headroom proxy` sidecar). Includes **CCR reversible retrieval** — compressed content can be pulled back on demand via the `continuum_headroom_retrieve` tool, guarded against forged tickets. Off by default (`HEADROOM_ENABLED=false`); configured via `HEADROOM_*` env vars. Per-role token effects are logged and exposed for observability. See the Run → Headroom Compression docs and the `playground/headroom-compression-incident-desk` rig.
+- **Provider-aware default model** — when `DEFAULT_LLM_MODEL` is unset, the chat/meta-operation default is derived from whichever provider key is present, so an Anthropic- or Gemini-only deployment no longer needs an OpenAI key for chat, routing, reflection, or summarization. New `ANTHROPIC_DEFAULT_MODEL` (default `claude-haiku-4-5`) and `GEMINI_DEFAULT_MODEL` (default `gemini/gemini-2.5-flash`). (The mem0 embedder still defaults to OpenAI — see `EMBEDDER_PROVIDER`.)
+- **Configurable agent temperature across all workflow types** — `temperature` is now `float | None` on agents and every workflow (planner, reflection, supervised, …); `None` omits it from the request so provider defaults apply.
+- **Loud session preflight** — when a `session_id` is passed to `runner.run()` for a session that was never created, the runner now surfaces it explicitly (`SessionNotCreatedError` / `strict_sessions`) instead of failing silently downstream.
+- **`MEMORY_MAX_QUERY_CHARS`** (default `8000`) — bounds a memory search query before it reaches the embedder, avoiding hard failures / silently-empty results at the embedder's token cap. `None`/blank disables.
+
+### Changed
+- **Run-state persistence is now off by default** — `RunnerConfig.persist_state` defaults to `False`; enable globally with `PERSIST_RUN_STATE=true` or per-runner.
+- **`LLM_REQUEST_TIMEOUT` is now enforced** as a bounded, controllable deadline on LLM calls.
+- The Headroom retrieval tool was renamed `continuum_retrieve` → **`continuum_headroom_retrieve`**.
+- Behind Headroom, the summarizer's trigger is raised via `HEADROOM_CONTEXT_THRESHOLD` (uses `max()` semantics — never lowers an explicitly higher `CONTEXT_COMPRESSION_THRESHOLD`).
+- Smart Gateway: honest error attribution, model-fidelity fixes, and a shadow-model warning that recommends gateway provider ids.
+- `httpx` is now declared as a direct dependency.
+
+### Fixed
+- **Workflow agents are now dispatched to `execute()`** in `runner.run()` — previously a workflow nested in the conversation loop was silently flattened into a single bare, tool-less LLM call. `run_stream()` also falls back to `run()` for workflow agents instead of flattening.
+- **Workflow drivers no longer launder an ERROR into SUCCESS** — a returned error (e.g. circuit-breaker-open prose) is treated as a failed step, not chained forward as an answer or persisted to memory.
+- **Per-request trace grouping for workflow agents** — a planner/pool/drafter run now nests its steps under one `agent-run-<workflow>` trace, and a failing step attaches an ERROR event to that trace instead of spawning an orphan `error-UNKNOWN_ERROR` trace.
+- Redis TLS pool configuration corrected, and session probes now report the real failure cause (#74).
+- `Container.set_memory_client` now propagates to an already-initialized `SessionClient`.
+- Context compression keeps tool-call/tool-result pairs intact and counts tool-call payloads; the anti-doom-loop restore is keyed by `tool_call_id` rather than list index.
+- The error-reporter's exit flush is bounded, fixing a process hang on shutdown.
+- The mem0 gateway LLM is pinned to OpenAI rather than an `auto`/cheap tier.
+
 ## [1.1.0] — 2026-07-02
 
 ### Added

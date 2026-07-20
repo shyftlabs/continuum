@@ -6,7 +6,7 @@ Covers, against a live Temporal server (localhost:7233):
   2. Human-in-the-loop:        agent -> approval -> agent  (query pending,
      signal submit_approval, await completion)
 
-Run:  python temporal_e2e_test.py   (Temporal infra must be up)
+Run:  python playground/smoke/temporal_e2e.py   (Temporal infra must be up)
 """
 
 import asyncio
@@ -16,11 +16,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
+# Repo root = nearest ancestor with pyproject.toml, so this works at any depth.
+_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
+load_dotenv(_ROOT / ".env", override=True)
 # Force-enable Temporal regardless of .env so the client connects.
 os.environ.setdefault("TEMPORAL_ENABLED", "true")
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, str(_ROOT / "src"))
 
 from continuum.agent import BaseAgent  # noqa: E402
 from continuum.agent.config import AgentMemoryConfig  # noqa: E402

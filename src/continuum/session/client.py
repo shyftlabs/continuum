@@ -120,6 +120,12 @@ class SessionClient:
         self._session_config = session_config or SessionConfig()
         self._provider: BaseSessionProvider | None = provider
         self._memory_client: MemoryClient | None = memory_client
+        # An explicitly supplied memory client is trusted as-is and kept for the
+        # client's lifetime. When none is supplied, the memory client is resolved
+        # LIVE from the container on each use (never cached) so that a client
+        # swapped via Container.set_memory_client() after this SessionClient was
+        # constructed takes effect — mirrors the _explicit_provider handling below.
+        self._explicit_memory_client = memory_client is not None
         self._background_tasks = background_tasks
         self._initialized = False
         self._lock = threading.Lock()
@@ -154,20 +160,32 @@ class SessionClient:
         """Get the current configuration."""
         return self._session_config
 
+    def _resolve_memory_client(self) -> MemoryClient | None:
+        """Resolve the effective memory client.
+
+        An explicitly-injected client (passed to the constructor) is honored
+        as-is. Otherwise the client is fetched LIVE from the container on every
+        call — never cached on the instance — so that Container.set_memory_client()
+        applied after this SessionClient was built takes effect immediately,
+        instead of returning a stale reference captured at init time.
+        """
+        if self._explicit_memory_client:
+            return self._memory_client
+        from continuum.core.container import get_container
+
+        return get_container().memory_client
+
     @property
     def memory_client(self) -> MemoryClient:
-        """Get the memory client from Container."""
-        if not self._memory_client:
-            from continuum.core.container import get_container
-
-            client = get_container().memory_client
-            if client is None:
-                raise RuntimeError(
-                    "MemoryClient is not available. Ensure memory is enabled "
-                    "and properly configured (MEMORY_ENABLED=true)."
-                )
-            self._memory_client = client
-        return self._memory_client
+        """Get the effective memory client, resolving from the container when one
+        was not explicitly injected."""
+        client = self._resolve_memory_client()
+        if client is None:
+            raise RuntimeError(
+                "MemoryClient is not available. Ensure memory is enabled "
+                "and properly configured (MEMORY_ENABLED=true)."
+            )
+        return client
 
     @property
     def background_tasks(self) -> BackgroundTaskRegistry | None:
@@ -394,11 +412,12 @@ class SessionClient:
             # constructing the client never opens a connection, and a disabled
             # or unreachable Redis costs no eager connection attempt.
 
-            # Initialize memory client from Container (if not provided)
-            if not self._memory_client:
-                from continuum.core.container import get_container
-
-                self._memory_client = get_container().memory_client
+            # NOTE: the memory client is intentionally NOT resolved here either.
+            # It is fetched lazily from the container on each use (see
+            # _resolve_memory_client) so that a memory client swapped on the
+            # container AFTER this SessionClient is constructed is picked up,
+            # rather than a stale reference cached at init time. An explicitly
+            # injected memory client is always honored as-is.
 
             self._initialized = True
             return True
@@ -508,7 +527,8 @@ class SessionClient:
             # In 'background' mode the (potentially slow) mem0 fact-extraction is
             # scheduled as a fire-and-forget task so it does not add latency to the
             # response; the short-term Redis write above is always synchronous.
-            if store_in_memory and self._memory_client and self._memory_client.is_enabled:
+            memory_client = self._resolve_memory_client()
+            if store_in_memory and memory_client and memory_client.is_enabled:
                 registry = self.background_tasks
                 # Resolve the EFFECTIVE write mode at call time. Inside a Temporal
                 # activity we always force 'sync' so the mem0 write completes within
@@ -800,7 +820,8 @@ class SessionClient:
         """
         self._ensure_enabled()
 
-        if not self._memory_client or not self._memory_client.is_enabled:
+        memory_client = self._resolve_memory_client()
+        if not memory_client or not memory_client.is_enabled:
             logger.warning("Memory client not enabled, returning empty list")
             return []
 

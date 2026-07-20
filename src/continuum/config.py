@@ -11,11 +11,44 @@ from functools import lru_cache
 from typing import Literal
 
 from dotenv import load_dotenv
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file into os.environ BEFORE creating Settings
 # This ensures all libraries can read env vars via os.getenv()
 load_dotenv()
+
+
+def _resolve_default_model(
+    explicit: str | None,
+    *,
+    has_openai: bool,
+    has_anthropic: bool,
+    has_gemini: bool,
+    anthropic_model: str,
+    gemini_model: str,
+) -> str:
+    """Pick the default chat model from whatever provider is actually configured.
+
+    An explicit ``DEFAULT_LLM_MODEL`` always wins. Otherwise the default is
+    auto-detected from the configured API key, so an Anthropic-only or
+    Gemini-only deployment does not silently require an OpenAI key (TL-65).
+
+    Falls back to ``gpt-4o-mini`` (the historical default) when nothing is
+    configured — this keeps imports/tests without any key working; a real call
+    with no matching provider key still surfaces that provider's own auth error.
+    The per-provider model ids are themselves settings, so they stay overridable
+    and there is no hardcoded model *list* to maintain.
+    """
+    if explicit:
+        return explicit
+    if has_openai:
+        return "gpt-4o-mini"
+    if has_anthropic:
+        return anthropic_model
+    if has_gemini:
+        return gemini_model
+    return "gpt-4o-mini"
 
 
 class Settings(BaseSettings):
@@ -68,6 +101,11 @@ class Settings(BaseSettings):
     # Default LLM Configuration
     # -------------------------------------------------------------------------
     default_llm_model: str = "gpt-4o-mini"
+    # Per-provider default chat model, used by the provider-aware resolver when no
+    # explicit DEFAULT_LLM_MODEL is set and only this provider's key is configured.
+    # Overridable via ANTHROPIC_DEFAULT_MODEL / GEMINI_DEFAULT_MODEL.
+    anthropic_default_model: str = "claude-haiku-4-5"
+    gemini_default_model: str = "gemini/gemini-2.5-flash"
     fallback_llm_model: str = "gemini/gemini-1.5-flash"
     default_llm_temperature: float = 0.7
     default_llm_max_tokens: int = 4096
@@ -179,6 +217,9 @@ class Settings(BaseSettings):
     memory_history_db_path: str = "~/.orchestrator/memory_history.db"  # SQLite history DB
     memory_isolation: Literal["shared", "user", "agent", "conversation"] = "user"  # Isolation level
     memory_search_limit: int = 5  # Default number of memories to retrieve
+    memory_max_query_chars: int | None = (
+        8000  # Truncate search queries to this many chars (None disables)
+    )
 
     # -------------------------------------------------------------------------
     # Session Configuration (Redis for short-term memory)
@@ -241,6 +282,44 @@ class Settings(BaseSettings):
     context_cache_ttl_seconds: int = 3600  # Cache TTL for summaries (1 hour)
 
     # -------------------------------------------------------------------------
+    # Headroom Compression (Optional — sidecar or in-process library)
+    # -------------------------------------------------------------------------
+    # Off by default. Applies to async calls (chat/chat_stream) only. Two modes:
+    #   local (default): in-process `import headroom` — no sidecar to run;
+    #       requires the [headroom-local] extra. api_base/api_key are ignored.
+    #       Headroom env knobs (e.g. HEADROOM_CCR_BACKEND) apply to THIS process.
+    #       If the extra isn't installed: fail-open → compression silently
+    #       disabled (no crash); fail-closed → error at first use.
+    #   endpoint: HTTP to a running `headroom proxy` sidecar — the multi-worker
+    #       production mode (fault isolation, one engine for many workers). Set
+    #       HEADROOM_MODE=endpoint + HEADROOM_API_BASE to use it.
+    # See gap-analysis/headroom-native-integration-plan.md.
+    headroom_enabled: bool = False
+    headroom_mode: Literal["endpoint", "local"] = "local"  # HEADROOM_MODE
+    headroom_api_base: str = "http://127.0.0.1:8787"  # HEADROOM_API_BASE — must be loopback
+    headroom_api_key: str | None = None  # HEADROOM_API_KEY — bearer token if the sidecar sets one
+    headroom_fail_open: bool = True  # True: compression error → forward uncompressed (recommended)
+    headroom_timeout_seconds: float = 30.0  # Compress timeout (large payloads take seconds)
+    # In-process prose (Kompress ML `text`) compression — local mode only.
+    # Off by default because Headroom deliberately SKIPS the ML model on the hot
+    # path (loads it in a background thread, gives each call a ~25ms budget) so
+    # prose otherwise never compresses in-process. When True (needs the
+    # [headroom-local-ml] extra): (1) pre-warm the model at startup in a daemon
+    # thread so it's ready without blocking boot, and (2) raise the per-call
+    # execution budget below so a call waits for a slot instead of skipping.
+    # Trade-off: prose is the ~23% floor (logs/tables/search are the big wins
+    # and need none of this); enabling it costs a one-time warmup + a little
+    # per-call latency under contention. Ignored in endpoint mode (the sidecar
+    # owns its own Kompress config). No effect on non-prose transforms.
+    headroom_kompress_local: bool = False  # HEADROOM_KOMPRESS_LOCAL
+    headroom_kompress_execution_timeout_ms: int = 5000  # HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS
+    # When Headroom is on, raise the summarizer's trigger so the (cache-hostile,
+    # history-rewriting) summarizer fires only as a rare last resort behind
+    # Headroom's cache-friendly per-turn compression. max() semantics — never
+    # lowers an explicitly higher context_compression_threshold.
+    headroom_context_threshold: float = 0.92
+
+    # -------------------------------------------------------------------------
     # Temporal Configuration (Optional - requires `pip install shyftlabs-continuum[temporal]`)
     # -------------------------------------------------------------------------
     temporal_enabled: bool = False
@@ -277,6 +356,16 @@ class Settings(BaseSettings):
     decision_trace_checkpoint: bool = False
 
     # -------------------------------------------------------------------------
+    # Run-State Persistence Configuration
+    # -------------------------------------------------------------------------
+    # Write per-run state (RunState) to Redis on start/finish, intended for a
+    # future pause/resume/recovery feature. Reuses the session Redis instance.
+    # Off by default: nothing currently reads this data back, so enabling it only
+    # adds Redis writes (and a connection attempt when Redis is unavailable).
+    # Turn on via PERSIST_RUN_STATE when a consumer of run-state actually exists.
+    persist_run_state: bool = False  # PERSIST_RUN_STATE
+
+    # -------------------------------------------------------------------------
     # Lifecycle Configuration (Shutdown Behavior)
     # -------------------------------------------------------------------------
     shared_services_enabled: bool = (
@@ -284,6 +373,36 @@ class Settings(BaseSettings):
     )
     # When True: Only flush Langfuse traces, don't shutdown client. Don't close Redis connections.
     # When False: Fully shutdown Langfuse and close Redis connections on shutdown.
+
+    @model_validator(mode="after")
+    def _apply_provider_aware_defaults(self) -> "Settings":
+        """Make the OpenAI-model defaults provider-aware (TL-65).
+
+        ``default_llm_model``, ``memory_llm_model`` and
+        ``context_summarization_model`` all historically defaulted to an OpenAI
+        model, so an Anthropic- or Gemini-only deployment still needed an OpenAI
+        key for routing, reflection, the tier classifier, memory fact-extraction
+        and summarization. Resolve the chat default from whatever provider key is
+        configured; memory and summarization inherit it unless set explicitly.
+
+        Explicit values are preserved. Router routing and reflection critique need
+        no change here — they already read ``default_llm_model``. The Smart Gateway
+        path is unaffected (it rewrites the model to ``auto/<tier>`` downstream).
+        """
+        fields_set = self.model_fields_set
+        self.default_llm_model = _resolve_default_model(
+            self.default_llm_model if "default_llm_model" in fields_set else None,
+            has_openai=bool(self.openai_api_key),
+            has_anthropic=bool(self.anthropic_api_key),
+            has_gemini=bool(self.gemini_api_key),
+            anthropic_model=self.anthropic_default_model,
+            gemini_model=self.gemini_default_model,
+        )
+        if "memory_llm_model" not in fields_set:
+            self.memory_llm_model = self.default_llm_model
+        if "context_summarization_model" not in fields_set:
+            self.context_summarization_model = self.default_llm_model
+        return self
 
     def __repr__(self) -> str:
         """Mask all secret/key/password fields in repr output."""

@@ -107,7 +107,7 @@ class ReflectionAgent(BaseAgent):
                 llm_client=llm_client,
             )
 
-            if context.session_id:
+            if context.session_id and result.status == ResponseStatus.SUCCESS:
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -167,6 +167,20 @@ class ReflectionAgent(BaseAgent):
                 context=context,
             )
             total_usage = total_usage.add(response.usage)
+
+            # A returned ERROR (e.g. circuit breaker open) is not an answer to
+            # critique — propagate it as an ERROR instead of relabeling SUCCESS.
+            if response.status == ResponseStatus.ERROR:
+                result = AgentResponse(
+                    content=response.content,
+                    agent_name=self.name,
+                    status=ResponseStatus.ERROR,
+                    error=response.error,
+                    usage=total_usage,
+                    turn_count=response.turn_count,
+                )
+                result.run_id = context.run_id
+                return result
 
             # History only needed on the first executed attempt — it doesn't change
             # between retries (writes are blocked), so skip it after.
@@ -276,6 +290,17 @@ class ReflectionAgent(BaseAgent):
             self.agent.model if self.agent else settings.default_llm_model
         )
 
+        # Temperature: an explicit reflection_temperature wins; otherwise inherit
+        # the inner agent's configured temperature (which may itself be None, in
+        # which case the parameter is omitted for providers that reject it).
+        temperature: float | None
+        if self.reflection_config.reflection_temperature is not None:
+            temperature = self.reflection_config.reflection_temperature
+        elif self.agent is not None:
+            temperature = self.agent.temperature
+        else:
+            temperature = settings.default_llm_temperature
+
         messages = [
             {"role": "user", "content": response_content},
             {"role": "user", "content": self.reflection_config.critique_prompt},
@@ -291,7 +316,7 @@ class ReflectionAgent(BaseAgent):
         try:
             llm_response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=256),
+                config=LLMConfig(model=model, temperature=temperature, max_tokens=256),
                 auto_session=False,
             )
 
@@ -336,6 +361,7 @@ async def generate_critique_prompt(
     user_query: str,
     llm_client: Any,
     model: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """
     Generate a critique prompt tailored to the user's query.
@@ -348,6 +374,8 @@ async def generate_critique_prompt(
         user_query: The user's original query
         llm_client: LLM client to use for generation
         model: Model to use (defaults to the configured default)
+        temperature: Temperature for the generation call. None inherits the
+            default LLM temperature; pass a float to override.
 
     Returns:
         A critique prompt string ready for use in ReflectionConfig
@@ -368,6 +396,9 @@ async def generate_critique_prompt(
     from continuum.llm.config import LLMConfig
 
     _model = model or settings.default_llm_model
+    config = LLMConfig(model=_model, max_tokens=300)
+    if temperature is not None:
+        config = config.with_overrides(temperature=temperature)
 
     messages = [
         {
@@ -388,7 +419,7 @@ async def generate_critique_prompt(
     try:
         response = await llm_client.chat(
             messages=messages,
-            config=LLMConfig(model=_model, temperature=0.1, max_tokens=300),
+            config=config,
             auto_session=False,
         )
         return (response.content or "").strip()
@@ -404,6 +435,7 @@ def create_reflection_agent(
     critique_prompt: str | None = None,
     max_reflections: int = 2,
     reflection_model: str | None = None,
+    reflection_temperature: float | None = None,
     memory_agent: BaseAgent | None = None,
 ) -> ReflectionAgent:
     """
@@ -415,6 +447,8 @@ def create_reflection_agent(
         critique_prompt: Custom critique prompt (overrides default)
         max_reflections: Maximum number of reflection retries
         reflection_model: Model to use for critique calls (defaults to inner agent's model)
+        reflection_temperature: Temperature for critique calls. None inherits the
+            inner agent's temperature; pass a float to override.
 
     Returns:
         Configured ReflectionAgent
@@ -422,6 +456,7 @@ def create_reflection_agent(
     config = ReflectionConfig(
         max_reflections=max_reflections,
         reflection_model=reflection_model,
+        reflection_temperature=reflection_temperature,
     )
     if critique_prompt is not None:
         config.critique_prompt = critique_prompt

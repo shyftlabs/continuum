@@ -18,6 +18,7 @@ from continuum.llm.callbacks import (
 )
 from continuum.llm.config import LLMConfig
 from continuum.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
+from continuum.llm.exceptions import LLMTimeoutError
 from continuum.llm.providers import get_provider
 from continuum.llm.types import (
     ChatMessage,
@@ -191,6 +192,26 @@ class LLMClient:
             return "google"
         return "unknown"
 
+    # SDK exponential backoff between retries is capped at ~8s per retry; budget
+    # for it so the deadline doesn't cancel a legitimate final retry early.
+    _RETRY_BACKOFF_CAP_S = 8
+
+    @classmethod
+    def _total_llm_deadline(cls, config: LLMConfig) -> float | None:
+        """Hard wall-clock ceiling for one completion, covering every SDK retry.
+
+        The provider ``timeout`` is per-attempt; with retries the real worst
+        case is ``timeout × (max_retries + 1)`` plus inter-retry backoff. This
+        derives that bound from the two knobs the caller already sets so a
+        hang can't run unbounded. Returns None (no deadline) when ``timeout``
+        is unset/non-positive.
+        """
+        timeout = config.timeout
+        if not timeout or timeout <= 0:
+            return None
+        retries = max(0, config.max_retries or 0)
+        return float(timeout) * (retries + 1) + retries * cls._RETRY_BACKOFF_CAP_S
+
     # =========================================================================
     # Synchronous Methods
     # =========================================================================
@@ -309,6 +330,21 @@ class LLMClient:
         else:
             messages_dict = self._convert_messages(messages)
 
+        # Headroom sidecar compression — runs BEFORE the summarizer so its
+        # threshold check sees post-Headroom token counts (cache-friendly
+        # payload compression every turn; LLM summarization only as a rare
+        # last resort). Fail-open/fail-closed policy lives inside apply():
+        # fail-open never raises; fail-closed raises deliberately, so no
+        # try/except here beyond what apply() itself decides.
+        from continuum.config import settings as _settings
+
+        if _settings.headroom_enabled:
+            from continuum.llm.headroom.compressor import get_headroom_compressor
+
+            messages_dict = await get_headroom_compressor().apply(
+                messages_dict, effective_config.model
+            )
+
         # Context compression
         try:
             from continuum.llm.context_management import get_progressive_context_manager
@@ -346,26 +382,42 @@ class LLMClient:
         provider = get_provider(effective_config)
         logger.debug(f"Async completion: model={effective_config.model}")
 
+        # Hard wall-clock ceiling for the whole completion (all SDK retries +
+        # backoff). The provider's per-request timeout is per-attempt only, so
+        # without this a hung or endlessly-retried call runs unbounded — the
+        # symptom behind "llm_request_timeout not enforced". Applied around the
+        # actual provider call (not the dispatcher queue wait).
+        deadline = self._total_llm_deadline(effective_config)
+
+        async def _acomplete() -> LLMResponse:
+            coro = provider.acomplete(messages_dict, effective_config, tools_dict, tool_choice)
+            if deadline is None:
+                return await coro
+            try:
+                return await asyncio.wait_for(coro, timeout=deadline)
+            except TimeoutError as e:  # asyncio.TimeoutError is an alias on 3.11+
+                raise LLMTimeoutError(
+                    f"LLM call exceeded total deadline of {deadline:.0f}s "
+                    f"(per-attempt timeout={effective_config.timeout}s, "
+                    f"max_retries={effective_config.max_retries}); aborted to avoid "
+                    "an unbounded hang.",
+                    timeout=deadline,
+                ) from e
+
         if self._dispatcher is not None:
             if isinstance(self._dispatcher, TwoLevelDispatcher):
                 llm_response = await self._dispatcher.dispatch(
-                    lambda: provider.acomplete(
-                        messages_dict, effective_config, tools_dict, tool_choice
-                    ),
+                    _acomplete,
                     stage_priority=stage_priority,
                     request_priority=priority,
                 )
             else:
                 llm_response = await self._dispatcher.dispatch(
-                    lambda: provider.acomplete(
-                        messages_dict, effective_config, tools_dict, tool_choice
-                    ),
+                    _acomplete,
                     priority=priority,
                 )
         else:
-            llm_response = await provider.acomplete(
-                messages_dict, effective_config, tools_dict, tool_choice
-            )
+            llm_response = await _acomplete()
         self._validate_json_response(llm_response.content, effective_config)
 
         # Save messages to session
@@ -458,6 +510,16 @@ class LLMClient:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
         effective_config = config or self.default_config
         messages_dict = self._convert_messages(messages)
+
+        # Headroom sidecar compression — before the summarizer, same as chat().
+        from continuum.config import settings as _settings
+
+        if _settings.headroom_enabled:
+            from continuum.llm.headroom.compressor import get_headroom_compressor
+
+            messages_dict = await get_headroom_compressor().apply(
+                messages_dict, effective_config.model
+            )
 
         # Context compression before streaming
         try:

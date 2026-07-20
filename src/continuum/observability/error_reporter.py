@@ -445,10 +445,26 @@ def flush_errors() -> None:
 
 
 # Register flush on exit
+_CLEANUP_FLUSH_TIMEOUT_SECONDS = 5.0
+
+
 def _cleanup() -> None:
-    """Cleanup function called on exit."""
+    """Bounded flush on interpreter exit.
+
+    The provider flush chain can block indefinitely (Langfuse's ``flush()``
+    ends in an unbounded ``queue.join()``; if the upload queue can't drain —
+    no network, no reachable server — it never returns and the process hangs
+    at exit). Run the flush in a daemon thread with a bounded join: a
+    shutdown flush is best-effort and must never wedge the process.
+    """
     try:
-        flush_errors()
+        flusher = threading.Thread(
+            target=flush_errors, name="error-reporter-exit-flush", daemon=True
+        )
+        flusher.start()
+        flusher.join(timeout=_CLEANUP_FLUSH_TIMEOUT_SECONDS)
+        # If still alive, the daemon thread dies with the interpreter — exit
+        # proceeds instead of hanging on telemetry.
     except Exception:
         pass
 

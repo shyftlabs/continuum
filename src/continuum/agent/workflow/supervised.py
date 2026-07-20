@@ -59,6 +59,8 @@ class SupervisedConfig:
     quality_threshold: float = 0.7  # Retry if supervisor score < this
     max_retries: int = 2  # Max retries per step before giving up
     supervisor_model: str | None = None  # Model for quality scoring (default: agent model)
+    # Temperature for the supervisor scoring call (None omits it)
+    supervisor_temperature: float | None = 0.1
     pass_full_history: bool = False  # Pass full history vs just last output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     pipeline_context_max_chars: int | None = 300  # None = no truncation
@@ -68,6 +70,7 @@ class SupervisedConfig:
             "quality_threshold": self.quality_threshold,
             "max_retries": self.max_retries,
             "supervisor_model": self.supervisor_model,
+            "supervisor_temperature": self.supervisor_temperature,
             "pass_full_history": self.pass_full_history,
             "fail_strategy": self.fail_strategy.value,
             "pipeline_context_max_chars": self.pipeline_context_max_chars,
@@ -150,7 +153,7 @@ class SupervisedSequentialAgent(BaseAgent):
                 original_input=input_text,
             )
 
-            if context.session_id and result.turn_count:
+            if context.session_id and result.turn_count and result.status == ResponseStatus.SUCCESS:
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -235,6 +238,13 @@ class SupervisedSequentialAgent(BaseAgent):
                                 input=attempt_input,
                                 context=context,
                             )
+                            # A returned ERROR (e.g. circuit breaker open) is a
+                            # failed attempt, not an answer to score — route it
+                            # into the failure handling below.
+                            if response.status == ResponseStatus.ERROR:
+                                raise RuntimeError(
+                                    response.error or response.content or "step failed"
+                                )
                             total_usage = total_usage.add(response.usage)
 
                             # Score the output
@@ -468,7 +478,11 @@ class SupervisedSequentialAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=200),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.supervised_config.supervisor_temperature,
+                    max_tokens=200,
+                ),
                 auto_session=False,
             )
 

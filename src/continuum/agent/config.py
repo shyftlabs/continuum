@@ -163,6 +163,10 @@ class ReflectionConfig:
     )
     max_reflections: int = 2
     reflection_model: str | None = None  # defaults to the inner agent's model
+    # Temperature for the critique LLM call. None = inherit the inner agent's
+    # temperature (which may itself be None to omit the parameter); a float
+    # overrides it for the critique call only.
+    reflection_temperature: float | None = None
 
 
 # =============================================================================
@@ -178,7 +182,8 @@ class AgentConfig:
 
     # Model settings
     model: str = field(default_factory=lambda: settings.default_llm_model)
-    temperature: float = 0.7
+    # None omits temperature from LLM calls (for providers/models that reject it).
+    temperature: float | None = 0.7
     max_tokens: int | None = None
 
     # Execution settings
@@ -321,7 +326,9 @@ class RunnerConfig:
     default_timeout: int = 300
 
     # State persistence
-    persist_state: bool = True  # Persist run state to Redis
+    # Defaults to the PERSIST_RUN_STATE env flag (off unless explicitly enabled).
+    # Callers can still override per-runner by passing persist_state=True/False.
+    persist_state: bool = field(default_factory=lambda: settings.persist_run_state)
     state_ttl: int = 3600 * 24  # State TTL in seconds (24 hours)
 
     # Tool execution
@@ -388,6 +395,8 @@ class ParallelConfig:
     timeout: int = 300  # Overall timeout
     summary_model: str | None = None  # Model for LLM summarization
     summary_prompt: str | None = None  # Custom prompt for summarization
+    # Temperature for the LLM summarization/merge call. None omits it.
+    summary_temperature: float | None = 0.3
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -396,6 +405,7 @@ class ParallelConfig:
             "timeout": self.timeout,
             "summary_model": self.summary_model,
             "summary_prompt": self.summary_prompt,
+            "summary_temperature": self.summary_temperature,
         }
 
 
@@ -421,6 +431,8 @@ class PlanningConfig:
     enable_replanning: bool = False
     replan_on_failure: bool = True
     planning_model: str | None = None
+    # Temperature for plan-generation / replanning LLM calls. None omits it.
+    planning_temperature: float | None = 0.2
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     strict_agent_pool: bool = False
 
@@ -430,6 +442,7 @@ class PlanningConfig:
             "enable_replanning": self.enable_replanning,
             "replan_on_failure": self.replan_on_failure,
             "planning_model": self.planning_model,
+            "planning_temperature": self.planning_temperature,
             "fail_strategy": self.fail_strategy.value,
             "strict_agent_pool": self.strict_agent_pool,
         }
@@ -445,6 +458,7 @@ class RouterConfig:
     routing_strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "llm"
     routing_model: str | None = None  # Model for LLM routing (default: agent's model)
     routing_prompt: str | None = None  # Custom prompt for routing decision
+    routing_temperature: float | None = 0.1  # Temperature for the LLM routing call (None omits it)
 
     # --- Smart layer (model_tier) -------------------------------------------------
     tier_classifier: TierClassifierMode = "gpt_4o_mini"
@@ -452,6 +466,9 @@ class RouterConfig:
         None  # gpt_4o_mini default id; qwen/qwen_local require explicit id
     )
     tier_classifier_max_tokens: int = 128
+    tier_classifier_temperature: float | None = (
+        0.1  # Temperature for the tier-classifier call (None omits it)
+    )
     # Keyword / length heuristics before the classifier LLM (disable to always call the classifier).
     tier_classifier_heuristic_shortcut: bool = True
     tier_router_api_base: str | None = (
@@ -481,9 +498,11 @@ class RouterConfig:
             "routing_strategy": self.routing_strategy,
             "routing_model": self.routing_model,
             "routing_prompt": self.routing_prompt,
+            "routing_temperature": self.routing_temperature,
             "tier_classifier": self.tier_classifier,
             "tier_classifier_llm_model": self.tier_classifier_llm_model,
             "tier_classifier_max_tokens": self.tier_classifier_max_tokens,
+            "tier_classifier_temperature": self.tier_classifier_temperature,
             "tier_classifier_heuristic_shortcut": self.tier_classifier_heuristic_shortcut,
             "tier_router_api_base": self.tier_router_api_base,
             "tier_router_api_key": self.tier_router_api_key,

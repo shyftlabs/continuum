@@ -272,3 +272,74 @@ class TestLLMClientChatAsync:
         )
         assert result.content == "Hello async!"
         mock_provider.acomplete.assert_called_once()
+
+
+class TestLLMTotalDeadline:
+    """A hung/endlessly-retried LLM call must be hard-bounded.
+
+    Regression: llm_request_timeout is a per-attempt timeout, so with SDK
+    retries the real worst case is several × timeout (observed ~295s at
+    llm_request_timeout=60). client.chat() now wraps the completion in an
+    overall deadline derived from timeout × (max_retries + 1) + backoff.
+    """
+
+    def test_deadline_derivation(self):
+        from continuum.llm.client import LLMClient
+
+        # timeout × (retries+1) + retries × 8s backoff cap
+        assert (
+            LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=3)) == 264.0
+        )
+        assert (
+            LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=60, max_retries=0)) == 60.0
+        )
+        # Disabled when timeout is unset/non-positive.
+        assert LLMClient._total_llm_deadline(LLMConfig(model="m", timeout=0)) is None
+
+    @patch("continuum.llm.client.get_provider")
+    @patch("continuum.llm.client.setup_langfuse")
+    @pytest.mark.asyncio
+    async def test_hanging_call_raises_timeout_not_hangs(self, mock_setup, mock_get_provider):
+        import asyncio
+
+        from continuum.llm.client import LLMClient
+        from continuum.llm.exceptions import LLMTimeoutError
+
+        async def _hang(*args, **kwargs):
+            await asyncio.sleep(3600)  # would hang forever without the deadline
+
+        mock_provider = MagicMock()
+        mock_provider.acomplete = AsyncMock(side_effect=_hang)
+        mock_get_provider.return_value = mock_provider
+
+        client = LLMClient(enable_langfuse=False)
+        # timeout=1, retries=0 -> 1s hard ceiling; must raise quickly, not hang.
+        with pytest.raises(LLMTimeoutError):
+            await asyncio.wait_for(
+                client.chat(
+                    [ChatMessage(role="user", content="hi")],
+                    config=LLMConfig(model="gpt-4o-mini", timeout=1, max_retries=0),
+                    auto_session=False,
+                ),
+                timeout=30,  # test-level safety net; the deadline should fire at ~1s
+            )
+
+    @patch("continuum.llm.client.get_provider")
+    @patch("continuum.llm.client.setup_langfuse")
+    @pytest.mark.asyncio
+    async def test_fast_call_unaffected(self, mock_setup, mock_get_provider):
+        from continuum.llm.client import LLMClient
+
+        mock_provider = MagicMock()
+        mock_provider.acomplete = AsyncMock(
+            return_value=_make_llm_response(content="ok", model="gpt-4")
+        )
+        mock_get_provider.return_value = mock_provider
+
+        client = LLMClient(enable_langfuse=False)
+        result = await client.chat(
+            [ChatMessage(role="user", content="hi")],
+            config=LLMConfig(model="gpt-4o-mini", timeout=60, max_retries=3),
+            auto_session=False,
+        )
+        assert result.content == "ok"

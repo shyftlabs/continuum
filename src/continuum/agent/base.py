@@ -99,7 +99,8 @@ class BaseAgent:
 
     # Model configuration
     model: str = field(default_factory=lambda: settings.default_llm_model)
-    temperature: float = 0.7
+    # None omits temperature from LLM calls (for providers/models that reject it).
+    temperature: float | None = 0.7
     max_tokens: int | None = None
     gateway_mode: str | None = (
         None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE
@@ -340,6 +341,22 @@ class BaseAgent:
         # Without regular tools, react_mode has no effect (same as normal mode)
         if self.config and self.config.react_mode and has_regular_tools:
             tools.insert(0, _THINK_TOOL)
+
+        # Headroom CCR: register continuum_headroom_retrieve at STARTUP (not per-turn) so
+        # the tool list — and tool_attention's cached summary prefix — stays
+        # byte-stable across turns. The call is intercepted in the executor
+        # loops, never dispatched to ToolService.
+        # Only for agents that HAVE regular tools: compression markers appear
+        # exclusively on tool outputs, so a tool-less agent can never see one —
+        # and giving it a tool would change its provider call shape (e.g.
+        # structured-output constrained mode) for no benefit.
+        if has_regular_tools:
+            from continuum.config import settings
+
+            if settings.headroom_enabled:
+                from continuum.llm.headroom.compressor import RETRIEVE_TOOL
+
+                tools.append(RETRIEVE_TOOL)
 
         return tools
 

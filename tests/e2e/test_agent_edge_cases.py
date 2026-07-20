@@ -276,7 +276,7 @@ class TestSessionPersistence:
             name="memory-agent",
             instructions="You are a helpful assistant. Remember what the user tells you. Be concise.",
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True, session_history_limit=50),
+            config=AgentConfig(log_to_session=True, session_history_turns=25),
         )
 
         runner = AgentRunner()
@@ -288,7 +288,6 @@ class TestSessionPersistence:
         session_id = await session_client.get_or_create_session(
             session_id=raw_session_id,
             user_id="test-user-1",
-            agent_id="memory-agent",
         )
 
         # Turn 1: Tell the agent something
@@ -335,7 +334,7 @@ class TestSessionPersistence:
                 "If the user asks about something you don't know, say 'I don't have that information'."
             ),
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
-            config=AgentConfig(log_to_session=True, session_history_limit=50),
+            config=AgentConfig(log_to_session=True, session_history_turns=25),
         )
 
         runner = AgentRunner()

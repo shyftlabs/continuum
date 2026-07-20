@@ -10,7 +10,8 @@ Features:
 - Provider abstraction for easy extensibility (Redis, DynamoDB, PostgreSQL, etc.)
 - Integration with mem0 for long-term memory
 - Standardized ID alignment (session_id maps to run_id in mem0)
-- Auto-create sessions on first use
+- Explicit session creation via get_or_create_session() — the caller owns
+  session lifecycle; runner.run() loads/saves but never creates a session
 - Configurable TTL and message limits
 - Full observability with Langfuse (automatic via @observe decorator)
 - Complete conversation history (user, assistant, tool calls, tool results)
@@ -28,6 +29,7 @@ from continuum.session.exceptions import (
     SessionConnectionError,
     SessionError,
     SessionMessageLimitError,
+    SessionNotCreatedError,
     SessionNotEnabledError,
     SessionNotFoundError,
 )
@@ -69,5 +71,6 @@ __all__ = [
     "SessionNotEnabledError",
     "SessionConnectionError",
     "SessionNotFoundError",
+    "SessionNotCreatedError",
     "SessionMessageLimitError",
 ]

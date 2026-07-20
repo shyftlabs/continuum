@@ -7,7 +7,6 @@ SummaryCache bounded size, context compression empty guard, EvalCase context val
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 # ---------------------------------------------------------------------------
@@ -51,25 +50,25 @@ class TestCountTokensFallback:
 
 
 class TestLLMRateLimiter:
-    def test_rate_limiter_allows_initial_request(self):
+    async def test_rate_limiter_allows_initial_request(self):
         from continuum.llm.client import _LLMRateLimiter
 
         rl = _LLMRateLimiter(rpm=60)
         # Should not block
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         assert rl.tokens == 59.0  # One token consumed
 
-    def test_rate_limiter_with_low_rpm_handled(self):
+    async def test_rate_limiter_with_low_rpm_handled(self):
         """Low RPM should not cause errors — rate limiter should handle gracefully."""
         from continuum.llm.client import _LLMRateLimiter
 
         rl = _LLMRateLimiter(rpm=120)  # 2 per second
         # Consume one token
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         assert rl.tokens == 119.0
         # Second acquire should work quickly
         t0 = time.monotonic()
-        asyncio.get_event_loop().run_until_complete(rl.acquire())
+        await rl.acquire()
         elapsed = time.monotonic() - t0
         assert elapsed < 5  # Should be near-instant with plenty of tokens
         assert abs(rl.tokens - 118.0) < 0.1
@@ -193,7 +192,7 @@ class TestStreamChunkNullSafety:
 
 
 class TestCompressSummarizeEmptyGuard:
-    def test_empty_messages_returns_empty(self):
+    async def test_empty_messages_returns_empty(self):
         from continuum.llm.context_management import (
             ContextManagementConfig,
             ProgressiveContextManager,
@@ -201,11 +200,67 @@ class TestCompressSummarizeEmptyGuard:
 
         mgr = ProgressiveContextManager()
         config = ContextManagementConfig()
-        result, compression = asyncio.get_event_loop().run_until_complete(
-            mgr._compress_summarize([], "gpt-4", config)
-        )
+        result, compression = await mgr._compress_summarize([], "gpt-4", config)
         assert result == []
         assert not compression.was_compressed
+
+
+# ---------------------------------------------------------------------------
+# Summarize cut-guard must recognise tool I/O in both formats so a tool_use is
+# never split from its tool_result (provider 400).
+# ---------------------------------------------------------------------------
+
+
+class TestCarriesToolIO:
+    def test_plain_messages_are_safe_cut_points(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert not _carries_tool_io({"role": "user", "content": "hello"})
+        assert not _carries_tool_io({"role": "assistant", "content": "hi there"})
+
+    def test_openai_tool_call_and_tool_role_detected(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert _carries_tool_io({"role": "tool", "content": "result"})
+        assert _carries_tool_io({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]})
+
+    def test_anthropic_tool_use_and_result_blocks_detected(self):
+        from continuum.llm.context_management import _carries_tool_io
+
+        assert _carries_tool_io(
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "input": {}}]}
+        )
+        assert _carries_tool_io(
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]}
+        )
+
+    async def test_cut_walks_back_past_anthropic_tool_result_user(self):
+        """The cut must not start the recent segment on a tool_result-carrying
+        user message (its tool_use would be summarized away)."""
+        from continuum.llm.context_management import (
+            ContextManagementConfig,
+            ProgressiveContextManager,
+        )
+
+        mgr = ProgressiveContextManager()
+        config = ContextManagementConfig()
+        config.keep_recent_messages = 1  # naive cut would land on the last message
+
+        messages = [
+            {"role": "user", "content": "older turn"},
+            {"role": "assistant", "content": "plain reply"},  # clean boundary
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1"}]},
+        ]
+        result, _ = await mgr._compress_summarize(messages, "gpt-4", config)
+        # The tool_use / tool_result pair must remain together (both kept, not split).
+        kept = [
+            m
+            for m in result
+            if isinstance(m.get("content"), list)
+            and any(b.get("type") in ("tool_use", "tool_result") for b in m["content"])
+        ]
+        assert len(kept) == 2  # both halves of the pair survived intact
 
 
 # ---------------------------------------------------------------------------

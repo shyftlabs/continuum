@@ -20,6 +20,55 @@ from continuum.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _block_text(block: Any) -> str:
+    """Return the countable text of a single content block.
+
+    Handles both OpenAI-style ({"type": "text", "text": ...}) and
+    Anthropic-style tool blocks. An Anthropic ``tool_use`` block keeps its
+    payload under ``input`` and a ``tool_result`` under ``content`` (which may
+    itself be a list) — neither is a plain ``text``/``content`` string, so the
+    old logic counted them as ~0 tokens and let oversized requests slip past
+    compression (provider 400). Falling back to ``str(block)`` for any block
+    without a recognised text field counts the whole payload rather than
+    undercounting it.
+    """
+    if not isinstance(block, dict):
+        return str(block)
+    text = block.get("text")
+    if isinstance(text, str):
+        return text
+    inner = block.get("content")
+    if isinstance(inner, str):
+        return inner
+    # tool_use (payload in "input"), tool_result with a nested content list, or
+    # any unknown block shape: stringify the whole block so nothing is missed.
+    return str(block)
+
+
+def _is_orphaned_tool_continuation(msg: dict[str, Any]) -> bool:
+    """True if ``msg`` — appearing first (after system) in a truncated history —
+    is a tool continuation whose partner call was truncated away.
+
+    Such an orphan makes the next provider call 400 (OpenAI: a ``tool`` result
+    with no preceding ``tool_calls``; Anthropic: a ``tool_result`` block with no
+    matching ``tool_use``). Recognises both formats. A leading ``tool_use`` is
+    NOT an orphan — its result still follows — so only dangling results (and,
+    preserving prior behaviour, a leading OpenAI assistant ``tool_calls``) are
+    stripped.
+    """
+    role = msg.get("role")
+    if role == "tool":
+        return True
+    if role == "assistant" and msg.get("tool_calls"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return True
+    return False
+
+
 class TruncationStrategy(str, Enum):
     """Strategy for truncating messages when context limit is exceeded."""
 
@@ -332,18 +381,24 @@ class ContextWindowManager:
                     total += len(enc.encode(content))
                 elif isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict):
-                            total += len(
-                                enc.encode(str(block.get("text") or block.get("content") or ""))
-                            )
+                        total += len(enc.encode(_block_text(block)))
+                # OpenAI-format tool calls live outside `content` (in tool_calls);
+                # their arguments can be large, so count them too.
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    total += len(enc.encode(str(tool_calls)))
                 total += len(enc.encode(msg.get("role", "")))
             total += 2  # priming tokens
             return total
         except Exception as e:
             logger.warning(f"Token counting failed, using estimate: {e}")
-            total_chars = sum(
-                len(str(msg.get("content", ""))) + len(str(msg.get("role", ""))) for msg in messages
-            )
+            total_chars = 0
+            for msg in messages:
+                content = msg.get("content")
+                total_chars += len(content if isinstance(content, str) else str(content or ""))
+                total_chars += len(str(msg.get("role", "")))
+                if msg.get("tool_calls"):
+                    total_chars += len(str(msg.get("tool_calls")))
             return total_chars // 4
 
     def will_exceed_limit(
@@ -440,6 +495,20 @@ class ContextWindowManager:
             truncated = self._truncate_smart(messages, limits, model)
         else:
             truncated = messages
+
+        # Repair the truncation boundary: the strategies above drop oldest
+        # messages without regard to tool pairing, so the first kept turn can be
+        # a tool result whose call was truncated away. Left in place, the next
+        # provider call 400s (OpenAI: unpaired tool result; Anthropic:
+        # "unexpected tool_use_id found in tool_result blocks"). Drop such
+        # orphans at the boundary — skipping leading system messages — in both
+        # message formats.
+        truncated = list(truncated)
+        _i = 0
+        while _i < len(truncated) and truncated[_i].get("role") == "system":
+            _i += 1
+        while _i < len(truncated) and _is_orphaned_tool_continuation(truncated[_i]):
+            truncated.pop(_i)
 
         truncated_count = self.count_tokens(truncated, model)
 

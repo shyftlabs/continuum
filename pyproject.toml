@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shyftlabs-continuum"
-version = "1.1.0"
+version = "1.2.0"
 description = "Agentic Framework for Enterprise-Wide Execution with multi-LLM provider support, observability, and error tracking"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -37,6 +37,7 @@ dependencies = [
     "openai>=1.50.0",
     "anthropic>=0.40.0",
     "google-genai>=1.0.0",
+    "httpx>=0.27.0",  # Explicit dependency — llm/headroom sidecar client (was transitive via SDKs)
     "tiktoken>=0.7.0",
     "langfuse>=2.57.0,<3.0.0",
     "pydantic>=2.10.0",
@@ -75,6 +76,27 @@ temporal = [
 eval = [
     "deepeval>=1.0.0",
     "ragas>=0.2.0",
+]
+# In-process Headroom compression (headroom_mode=local — no sidecar).
+# Upper bound is deliberate: Continuum captures CCR hashes by scanning
+# `hash=<24 hex>` markers (llm/headroom/compressor.py), a format contract
+# with the library — bump only after re-verifying markers + CompressResult.
+# NOTE: headroom-ai pulls litellm transitively (lazy, unused on the
+# compression path) — keep this an extra, never a core dependency.
+headroom-local = [
+    "headroom-ai>=0.28,<0.30",
+]
+# Optional prose (Kompress) compression for local mode. The base
+# [headroom-local] extra covers every transform EXCEPT the ML `text`
+# transform — logs (~99%), tables, search, code, diffs, and CCR all run
+# on base alone. Kompress needs the ONNX runtime + a tokenizer; this adds
+# only those two (the ONNX path — no torch), NOT headroom-ai[proxy] (which
+# bundles an unused HTTP server) nor [ml] (torch, ~GBs). First use downloads
+# the ~265 MB chopratejas/kompress-v2-base model to the HF cache.
+headroom-local-ml = [
+    "headroom-ai>=0.28,<0.30",
+    "onnxruntime>=1.16.0",
+    "transformers>=4.30.0,<6.0",
 ]
 
 [project.scripts]
@@ -138,6 +160,12 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 packages = ["src/continuum"]
+
+[[tool.mypy.overrides]]
+# Optional dependency of the [headroom-local] extra (llm/headroom/local_client.py);
+# not installed in the default dev environment.
+module = "headroom.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

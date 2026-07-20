@@ -86,6 +86,9 @@ class IntelligenceConfig:
     # LLM model for scoring, extraction (defaults to container default)
     intelligence_model: str | None = None
 
+    # Temperature for scoring/extraction/profile LLM calls (None omits it)
+    intelligence_temperature: float | None = 0.1
+
     # Pruning: memories where importance + decay < threshold are deleted
     prune_threshold: float = 0.15
 
@@ -431,7 +434,11 @@ class IntelligentMemoryClient(MemoryClient):
         try:
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=16),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self._intel.intelligence_temperature,
+                    max_tokens=16,
+                ),
                 auto_session=False,
             )
             label = (response.content or "").strip().lower()
@@ -472,7 +479,11 @@ class IntelligentMemoryClient(MemoryClient):
         try:
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=1000),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self._intel.intelligence_temperature,
+                    max_tokens=1000,
+                ),
                 auto_session=False,
             )
             data = self._extract_json(response.content or '{"entities": []}')
@@ -550,7 +561,11 @@ class IntelligentMemoryClient(MemoryClient):
             )  # pause to avoid rate-limiting after rapid scoring + entity calls
             response = await llm.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=300),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self._intel.intelligence_temperature,
+                    max_tokens=300,
+                ),
                 auto_session=False,
             )
             raw = response.content or ""

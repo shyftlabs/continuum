@@ -217,13 +217,21 @@ class AgentRunner:
         run without a session_id (or with log_to_session=False), then call this
         once after the pipeline completes to write only what the user sees to Redis.
 
+        Precondition: ``session_id`` must refer to a session that already exists
+        (created via ``session_client.get_or_create_session``). Like ``run()``,
+        this method writes to but never creates a session; passing an id that
+        was never created raises ``SessionNotFoundError``.
+
         Example:
+            session_id = await runner.session_client.get_or_create_session(
+                user_id="user-123"
+            )
             response_a = await runner.run(agent_a, user_query)
             response_b = await runner.run(agent_b, response_a.content)
             await runner.save_turn(session_id, user_query, response_b.content, agent=agent_b)
 
         Args:
-            session_id: Session to write to.
+            session_id: Session to write to (must already exist).
             user_message: Original user query shown in the chat window.
             assistant_message: Final response shown in the chat window.
             agent: Agent whose memory config governs fact extraction.
@@ -284,6 +292,7 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        require_session: bool | None = None,
     ) -> PrepareRunResult:
         """Prepare for agent run -- shared setup for run() and run_stream()."""
         if agent.mcp_servers and not agent.tool_executor:
@@ -331,6 +340,19 @@ class AgentRunner:
                 ),
             )
 
+        # Stateless note (DEBUG only): a run with no session_id neither loads
+        # history nor persists anything. Passing user_id/conversation_id without
+        # a session_id is a VALID stateless pattern (e.g. read long-term memory
+        # scoped by user_id without a conversation thread), so this is never a
+        # warning — it only helps someone debugging "why isn't anything saved?".
+        if context.session_id is None and (context.user_id or context.conversation_id):
+            logger.debug(
+                "Stateless run: session_id is None, so no history is loaded and "
+                "nothing is persisted. If you intended to persist this turn, create "
+                "the session first and pass the id returned by "
+                "get_or_create_session() into run()."
+            )
+
         if agent.input_schema is not None:
             validation_result = await validate_input(agent, input, context)
             if validation_result is not None:
@@ -360,14 +382,87 @@ class AgentRunner:
 
         run_state = await self._context_service.create_run_state(agent, context)
         input_preview = input if isinstance(input, str) else str(input)[:500]
-        await self._lifecycle.start_trace(agent, context, run_state, input_preview)
+        run_state.owns_trace = await self._lifecycle.start_trace(
+            agent, context, run_state, input_preview
+        )
 
         # Caller is responsible for creating the session before calling runner.run().
+        # The runner loads/saves but never creates a session. When a session_id is
+        # passed, preflight it once here: if it doesn't exist, the caller forgot to
+        # call get_or_create_session — surface that loudly instead of silently
+        # losing history/memory downstream. Stateless runs (session_id=None) skip
+        # this entirely, so this never fires on an intentionally sessionless agent.
         tool_context_state = None
+        session_metadata = None
         if context.session_id and self.session_client:
+            from continuum.session.exceptions import (
+                SessionError,
+                SessionNotCreatedError,
+            )
+
+            try:
+                session_metadata = await self.session_client.get_session_metadata(
+                    context.session_id
+                )
+            except SessionError as e:
+                # A real session-store failure (e.g. Redis down) — NOT a
+                # "forgot to create" case. Skip the preflight quietly; the load
+                # path below surfaces the outage on its own.
+                logger.debug(f"Session preflight skipped (store error): {e}")
+                session_metadata = None
+            else:
+                # In degrade mode a Redis outage makes get_session_metadata return
+                # None (empty in-memory fallback) even for a session that DOES
+                # exist in Redis. That's an outage, not a "forgot to create" — do
+                # not warn/raise for it; the load path surfaces the outage itself.
+                persistence_degraded = bool(
+                    getattr(self.session_client, "persistence_degraded", False)
+                )
+                if session_metadata is None and persistence_degraded:
+                    logger.debug(
+                        f"Session preflight inconclusive: persistence degraded, cannot "
+                        f"confirm session {context.session_id!r} exists."
+                    )
+                elif session_metadata is None:
+                    # Resolve strict mode: per-call require_session wins; else the
+                    # session config's strict_sessions flag.
+                    strict = require_session
+                    if strict is None:
+                        strict = bool(getattr(self.session_client.config, "strict_sessions", False))
+                    msg = (
+                        f"session_id={context.session_id!r} was passed to run() but no such "
+                        f"session exists in the session store. The runner does not create "
+                        f"sessions — history and long-term memory for this run will NOT be "
+                        f"persisted. Create it first and pass the returned id:\n"
+                        f"    sid = await runner.session_client.get_or_create_session("
+                        f"user_id=..., conversation_id=...)\n"
+                        f"    await runner.run(agent, msg, session_id=sid, user_id=...)"
+                    )
+                    if strict:
+                        raise SessionNotCreatedError(msg, session_id=context.session_id)
+                    logger.warning(msg)
+                else:
+                    # Session exists: check the write/search user_id alignment.
+                    # Memory WRITES scope by the session's user_id; memory SEARCHES
+                    # scope by the run's context.user_id. If they differ, stored
+                    # facts won't be retrievable — a silent, confusing mismatch.
+                    if (
+                        session_metadata.user_id
+                        and context.user_id
+                        and session_metadata.user_id != context.user_id
+                    ):
+                        logger.warning(
+                            f"user_id mismatch: session {context.session_id!r} was created with "
+                            f"user_id={session_metadata.user_id!r} but run() received "
+                            f"user_id={context.user_id!r}. Long-term memory is WRITTEN under the "
+                            f"session's user_id but SEARCHED under run()'s — stored facts won't be "
+                            f"found. Pass the same user_id to run() as the session was created with."
+                        )
+
             tool_context_state = await self._session_service.load_tool_context_state(
                 session_id=context.session_id,
                 trace_id=context.trace_id,
+                session_metadata=session_metadata,
             )
 
             if not tool_context_state.is_empty():
@@ -420,6 +515,126 @@ class AgentRunner:
         )
 
     # =========================================================================
+    # Workflow dispatch
+    # =========================================================================
+
+    @staticmethod
+    def _is_model_tier_router(agent: BaseAgent) -> bool:
+        """True for RouterAgent runs handled by the smart-layer model-tier path."""
+        return (
+            isinstance(agent, RouterAgent)
+            and app_settings.smart_layer_enabled
+            and agent.router_config.routing_strategy == "model_tier"
+        )
+
+    @classmethod
+    def _is_workflow_agent(cls, agent: BaseAgent) -> bool:
+        """True when the agent carries its orchestration in ``execute()``.
+
+        Workflow agents (SequentialAgent, ReflectionAgent, PlannerAgent, ...)
+        define ``execute()`` as their entry point; plain agents don't have one.
+        Checked on the class — not the instance — so stray instance attributes
+        (e.g. MagicMock auto-created attrs in tests) don't count. The
+        model-tier RouterAgent is excluded: the smart-layer path in run()/
+        run_stream() handles its routing itself.
+        """
+        return callable(getattr(type(agent), "execute", None)) and not cls._is_model_tier_router(
+            agent
+        )
+
+    async def _run_workflow_agent(
+        self,
+        agent: BaseAgent,
+        input: str | list[dict[str, Any]] | list[ChatMessage],
+        *,
+        session_id: str | None,
+        conversation_id: str | None,
+        user_id: str | None,
+        context: RunContext | None,
+        max_turns: int | None,
+        trace_id: str | None,
+        metadata: dict[str, Any] | None,
+        tags: list[str] | None,
+    ) -> AgentResponse:
+        """Dispatch a workflow agent to its ``execute()`` entry point.
+
+        Mirrors the id validation ``_prepare_run`` performs, then hands control
+        to the agent's own orchestration. Everything else (message building,
+        session history, memory, finalization) happens inside the workflow's
+        nested ``runner.run()`` calls — running that machinery here as well
+        would duplicate it for the wrapper, which never talks to the LLM
+        directly.
+        """
+        try:
+            if context is None:
+                context = create_run_context(
+                    session_id=session_id,
+                    conversation_id=validate_conversation_id(conversation_id),
+                    user_id=validate_user_id(user_id),
+                    trace_id=trace_id,
+                    max_turns=max_turns or agent.config.max_turns,
+                    metadata=metadata or {},
+                    tags=tags or [],
+                )
+            else:
+                context.user_id = validate_user_id(context.user_id)
+                context.conversation_id = validate_conversation_id(context.conversation_id)
+        except InvalidIdentifierError as e:
+            return AgentResponse(
+                content=str(e),
+                agent_name=agent.name,
+                status=ResponseStatus.ERROR,
+                error=str(e),
+            )
+
+        try:
+            self._circuit_breaker.check()
+        except CircuitBreakerOpen as e:
+            logger.error(f"Circuit breaker open for agent '{agent.name}': {e}")
+            return AgentResponse(
+                content=f"Service temporarily unavailable: {e}",
+                agent_name=agent.name,
+                status=ResponseStatus.ERROR,
+                error=str(e),
+                run_artifacts={"retry_after_s": e.remaining_cooldown},
+            )
+
+        # Workflow execute() takes the user's text; collapse message-list input.
+        if isinstance(input, str):
+            input_text = input
+        else:
+            input_text = extract_last_user_text([message_to_dict(m) for m in input])
+
+        # Establish the per-request parent trace BEFORE dispatching so every
+        # nested runner.run() inside the workflow (each planner/pool/drafter
+        # step) nests under one "agent-run-<workflow>" trace instead of spawning
+        # its own sessionless top-level trace. We own the trace only if we
+        # created one — a workflow nested inside another workflow reuses the
+        # outer trace and must not tear it down.
+        owns_trace = await self._lifecycle.start_trace(agent, context, None, input_text[:500])
+
+        logger.info(f"Dispatching workflow agent '{agent.name}' to its execute() entry point")
+        try:
+            response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
+            await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
+            return response
+        except Exception as e:
+            # Attach the failure to the request trace (as an event) and, if we
+            # own it, mark it ERROR + tear it down — so a failing step surfaces
+            # on the workflow trace instead of escaping untraced and later
+            # spawning an orphan "error-UNKNOWN_ERROR" trace.
+            await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
+            if isinstance(e, AgentError):
+                raise
+            raise AgentExecutionError(
+                str(e),
+                agent_name=agent.name,
+                run_id=context.run_id,
+                trace_id=context.trace_id,
+                original_error=e,
+            ) from e
+
+    # =========================================================================
     # Run (non-streaming)
     # =========================================================================
 
@@ -436,8 +651,48 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        require_session: bool | None = None,
     ) -> AgentResponse:
-        """Run an agent to completion."""
+        """Run an agent to completion.
+
+        Session preconditions (when ``session_id`` is provided):
+            The runner loads history and persists messages/memory against an
+            EXISTING session — it does not create one. Create the session first
+            and pass the returned id, and pass the SAME ``user_id`` you created
+            it with so long-term memory writes and searches align::
+
+                sid = await runner.session_client.get_or_create_session(
+                    user_id="user-123", conversation_id="conv-456"
+                )
+                resp = await runner.run(agent, msg, session_id=sid, user_id="user-123")
+
+            Omit ``session_id`` for a stateless run (no history, no persistence).
+
+        Args:
+            require_session: Override for the session guardrail. When True, raise
+                SessionNotCreatedError if ``session_id`` is passed but the session
+                does not exist. When False, warn and continue. When None
+                (default), use ``SessionConfig.strict_sessions``. Ignored for
+                stateless runs (``session_id=None``).
+        """
+        # Workflow agents carry their orchestration in ``execute()``. Dispatch
+        # them there: running one through the plain conversation loop would
+        # silently flatten the whole workflow into a single bare LLM call using
+        # only the wrapper's own (usually empty) tool set.
+        if self._is_workflow_agent(agent):
+            return await self._run_workflow_agent(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                context=context,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
+                tags=tags,
+            )
+
         start_time = time.time()
 
         result = await self._prepare_run(
@@ -451,6 +706,7 @@ class AgentRunner:
             trace_id,
             metadata,
             tags,
+            require_session=require_session,
         )
         if not result.success:
             return result.error_response
@@ -467,15 +723,20 @@ class AgentRunner:
                 agent_name=agent.name,
                 status=ResponseStatus.ERROR,
                 error=str(e),
+                run_artifacts={"retry_after_s": e.remaining_cooldown},
             )
 
         # Publish the run's policy context so EVERY llm_client.chat() in this run
         # — smart-layer triage, workflow orchestration, and the executor — is
         # gated by the data-label model-routing policy, not just execute_loop.
         # execute_loop re-publishes per-agent on handoffs (nested set/reset).
+        # A fresh Headroom compressor rides the same boundary so CCR retrieve
+        # authorization (issued_hashes) is isolated to this run.
+        from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -537,7 +798,8 @@ class AgentRunner:
                 self._circuit_breaker.record_success()
                 return response
 
-            # Workflow agents must use agent.execute() directly, not runner.run().
+            # Workflow agents were dispatched to execute() at the top of run();
+            # anything reaching here is a plain conversational agent.
             response = await self._executor.execute_loop(
                 agent=agent,
                 messages=messages,
@@ -604,6 +866,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            exit_run_compressor(_hr_token)
             reset_active_policy(_policy_token)
 
     # =========================================================================
@@ -767,9 +1030,13 @@ class AgentRunner:
         # model-routing-gated and the decision-trace persist honors the run's
         # data labels — fork seeds ctx.data_labels but does not run through
         # AgentRunner.run's publish, so without this the gates would be bypassed.
+        from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
-        with use_active_policy(getattr(target, "policy_store", None), target.name, ctx):
+        with (
+            use_active_policy(getattr(target, "policy_store", None), target.name, ctx),
+            use_run_compressor_if_enabled(),
+        ):
             response = await self._executor.execute_loop(
                 agent=target, messages=messages, context=ctx, run_state=run_state
             )
@@ -893,8 +1160,12 @@ class AgentRunner:
         max_turns: int | None = None,
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        require_session: bool | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run an agent with streaming output.
+
+        See :meth:`run` for the session preconditions and the ``require_session``
+        guardrail (both apply identically to streaming runs).
 
         Note: this is an async generator that publishes the run's data-label
         policy context (a contextvar) for its duration and resets it in a
@@ -908,6 +1179,81 @@ class AgentRunner:
                 async for event in stream:
                     ...
         """
+        # Workflow agents have no native token-streaming form — their
+        # orchestration lives in execute(), which returns a complete
+        # AgentResponse rather than a token stream. Rather than fail (or silently
+        # flatten it into one bare LLM call, as the old plain path did), run the
+        # workflow to completion via run() and surface the correct result through
+        # the same streaming event contract as a single chunk. Callers keep the
+        # streaming interface and get correct output; it just arrives at once.
+        if self._is_workflow_agent(agent):
+            response = await self.run(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
+                require_session=require_session,
+            )
+            _run_id = response.run_id or generate_run_id()
+            _content = response.content or ""
+            yield AgentEvent(
+                type=EventType.RUN_START,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"input": input if isinstance(input, str) else "[messages]"},
+                trace_id=response.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.AGENT_START,
+                agent_name=agent.name,
+                run_id=_run_id,
+                trace_id=response.trace_id,
+            )
+            if _content:
+                # Full result as one delta (for token-accumulating UIs) plus a
+                # CONTENT_COMPLETE (for UIs that read only the final text).
+                yield AgentEvent(
+                    type=EventType.CONTENT_DELTA,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"content": _content},
+                    trace_id=response.trace_id,
+                )
+                yield AgentEvent(
+                    type=EventType.CONTENT_COMPLETE,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"content": _content},
+                    trace_id=response.trace_id,
+                )
+            if response.status == ResponseStatus.ERROR:
+                yield AgentEvent(
+                    type=EventType.RUN_ERROR,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"error": response.error or "", "error_type": "AgentError"},
+                    trace_id=response.trace_id,
+                )
+            yield AgentEvent(
+                type=EventType.AGENT_END,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"turn_count": response.turn_count},
+                trace_id=response.trace_id,
+            )
+            yield AgentEvent(
+                type=EventType.RUN_END,
+                agent_name=agent.name,
+                run_id=_run_id,
+                data={"content": _content, "turn_count": response.turn_count},
+                trace_id=response.trace_id,
+            )
+            return
+
         start_time = time.time()
 
         result = await self._prepare_run(
@@ -921,6 +1267,7 @@ class AgentRunner:
             trace_id,
             metadata,
             None,
+            require_session=require_session,
         )
         if not result.success:
             _run_id = generate_run_id()
@@ -959,10 +1306,14 @@ class AgentRunner:
 
         turn = 0
         # Publish the run's policy context so every llm_client.chat() in this
-        # streaming run is gated by the data-label model-routing policy.
+        # streaming run is gated by the data-label model-routing policy. A fresh
+        # Headroom compressor rides the same boundary so CCR retrieve
+        # authorization (issued_hashes) is isolated to this run.
+        from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
 
@@ -1334,6 +1685,50 @@ class AgentRunner:
                         )
                         tool_call_id = tc.id if hasattr(tc, "id") else tc.get("id", "")
 
+                        # Headroom CCR: intercept continuum_headroom_retrieve BEFORE the
+                        # emit/record points below — internal decompression
+                        # plumbing must not leak TOOL_CALL_* events or decision
+                        # steps, nor reach ToolService. Mirrors the handoff
+                        # special-case pattern. (Same interception as executor.py.)
+                        from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+                        if tool_name == RETRIEVE_TOOL_NAME:
+                            import json as _json
+
+                            from continuum.llm.headroom.compressor import (
+                                get_headroom_compressor,
+                            )
+
+                            raw_args = (
+                                tc.function.arguments
+                                if hasattr(tc, "function")
+                                else tc.get("function", {}).get("arguments", "{}")
+                            )
+                            try:
+                                _args = (
+                                    _json.loads(raw_args)
+                                    if isinstance(raw_args, str)
+                                    else (raw_args or {})
+                                )
+                            except Exception:
+                                _args = {}
+                            _content = await get_headroom_compressor().resolve_retrieve(
+                                str(_args.get("hash", "")), _args.get("query")
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call_id,
+                                    "content": _content,
+                                }
+                            )
+                            # Purely-retrieve turn = plumbing, not agent work:
+                            # exempt from the max_turns budget (guarded — only
+                            # when the retrieve is the turn's sole tool call).
+                            if len(tool_calls) == 1:
+                                turn -= 1
+                            continue
+
                         is_handoff, target = agent.is_handoff_tool_call(tool_name)
                         if is_handoff and target:
                             yield AgentEvent(
@@ -1614,6 +2009,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            exit_run_compressor(_hr_token)
             try:
                 reset_active_policy(_policy_token)
             except ValueError:

@@ -415,7 +415,7 @@ Please synthesize these responses into a single coherent answer that captures th
                     messages=[{"role": "user", "content": prompt}],
                     config=LLMConfig(
                         model=self.parallel_config.summary_model or self.model,
-                        temperature=0.3,
+                        temperature=self.parallel_config.summary_temperature,
                     ),
                 )
                 return response.content

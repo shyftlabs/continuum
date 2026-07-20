@@ -75,8 +75,6 @@ logger = get_logger(__name__)
 
 
 class _BaseWorkflow:
-    _use_direct_execute: bool = True
-
     def __init__(self, config: WorkflowShopConfig | None = None):
         self.config = config or default_config
         self._lifecycle = None
@@ -103,7 +101,7 @@ class _BaseWorkflow:
         self._runner = AgentRunner(
             container=self._container,
             tool_executor=self._tool_executor,
-            config=RunnerConfig(persist_state=False, default_max_turns=self.config.max_turns),
+            config=RunnerConfig(default_max_turns=self.config.max_turns),
         )
         self._initialized = True
         logger.info(
@@ -197,23 +195,17 @@ class _BaseWorkflow:
                     logger.warning(f"Session init failed: {e}")
 
         try:
-            if self._use_direct_execute:
-                from continuum.agent.utils.context_utils import create_run_context
-
-                ctx = create_run_context(
-                    session_id=session_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
-                response = await self._agent.execute(message, self._runner, ctx)
-            else:
-                response = await self._runner.run(
-                    agent=self._agent,
-                    input=message,
-                    session_id=session_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
+            # [SDK-fix verification] The direct-execute branch has been removed so
+            # EVERY workflow shop is forced through runner.run(). This exercises the
+            # SDK's new workflow dispatch (runner.run -> agent.execute). Before the
+            # SDK fix this path flattened the workflow into one bare LLM call.
+            response = await self._runner.run(
+                agent=self._agent,
+                input=message,
+                session_id=session_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
             return response.content or ""
         except Exception as e:
             logger.error(f"Chat error: {e}")
@@ -319,6 +311,7 @@ class ParallelShop(_BaseWorkflow):
             instructions=(
                 "Search for dog products only. "
                 "Use search_products with animal='dog'. "
+                "For a full inventory/stock audit, call fetch_inventory with animal='dog' instead. "
                 "Return a clear list of results with IDs and prices."
             ),
             model=m,
@@ -333,6 +326,7 @@ class ParallelShop(_BaseWorkflow):
             instructions=(
                 "Search for cat products only. "
                 "Use search_products with animal='cat'. "
+                "For a full inventory/stock audit, call fetch_inventory with animal='cat' instead. "
                 "Return a clear list of results with IDs and prices."
             ),
             model=m,
@@ -539,7 +533,10 @@ class ScatterShop(_BaseWorkflow):
             self.config.enable_memory and memory_client is not None and memory_client.is_enabled
         )
 
-        analysts = [make_analyst_agent(m, gm) for _ in range(3)]
+        analysts = [
+            make_analyst_agent(m, gm, tools=self._tools, tool_executor=self._tool_executor)
+            for _ in range(3)
+        ]
         for i, a in enumerate(analysts, 1):
             a.name = f"analyst-agent-{i}"
 
@@ -790,8 +787,6 @@ class RouterShop(_BaseWorkflow):
 
 
 class HandoffShop(_BaseWorkflow):
-    _use_direct_execute = False
-
     def _build_workflow(self) -> None:
         m, gm = self.config.model, self.config.gateway_mode
         memory_client = self._container.memory_client if self._container else None

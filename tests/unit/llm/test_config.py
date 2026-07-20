@@ -26,6 +26,12 @@ class TestLLMConfig:
         assert kw["temperature"] == 0.5
         assert kw["max_tokens"] == 100
 
+    def test_config_temperature_none_omitted(self):
+        logger.info("LLMConfig: temperature=None omits the parameter")
+        c = LLMConfig(model="gpt-4", temperature=None)
+        kw = c.to_kwargs()
+        assert "temperature" not in kw
+
     def test_config_with_fallbacks(self):
         logger.info("LLMConfig: config with fallbacks")
         c = LLMConfig(fallback_models=["gpt-3.5-turbo"], enable_fallback=True)

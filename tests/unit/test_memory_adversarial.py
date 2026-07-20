@@ -410,6 +410,44 @@ class TestAdversarialInputs:
         result = await client.add(huge, user_id="u-1")
         assert result is not None
 
+
+class TestSearchQueryTruncation:
+    """Search queries are bounded before the embedder (embedder input cap ~8191
+    tokens). A char cap guarantees a token cap since a token spans >= 1 char."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_query_is_truncated_before_provider(self):
+        provider = _mock_provider()
+        config = MemoryConfig(enabled=True, memory_isolation="user", max_query_chars=8000)
+        client = MemoryClient(config=config, provider=provider)
+
+        await client.search("Q" * 1_000_000, user_id="u-1")
+
+        sent_query = provider.search.call_args.args[0]
+        assert len(sent_query) == 8000
+
+    @pytest.mark.asyncio
+    async def test_query_within_cap_passes_through_unchanged(self):
+        provider = _mock_provider()
+        config = MemoryConfig(enabled=True, memory_isolation="user", max_query_chars=8000)
+        client = MemoryClient(config=config, provider=provider)
+
+        query = "what does the user prefer?"
+        await client.search(query, user_id="u-1")
+
+        assert provider.search.call_args.args[0] == query
+
+    @pytest.mark.asyncio
+    async def test_none_cap_disables_truncation(self):
+        provider = _mock_provider()
+        config = MemoryConfig(enabled=True, memory_isolation="user", max_query_chars=None)
+        client = MemoryClient(config=config, provider=provider)
+
+        huge = "Q" * 50_000
+        await client.search(huge, user_id="u-1")
+
+        assert provider.search.call_args.args[0] == huge
+
     @pytest.mark.asyncio
     async def test_unicode_message_does_not_crash(self):
         client = _make_client()

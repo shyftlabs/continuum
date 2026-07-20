@@ -38,13 +38,19 @@ async def memory_client():
         def __init__(self, inner):
             self._inner = inner
 
-        async def add(self, messages, *, user_id=None, agent_id=None, run_id=None, **kw):
+        async def add(self, messages, *, user_id=None, agent_id=None, conversation_id=None, **kw):
+            # MemoryClient.add scopes by user_id/agent_id/conversation_id; the old
+            # run_id scoping param was renamed to conversation_id upstream.
             if user_id:
                 created_user_ids.append(user_id)
             if agent_id:
                 created_agent_ids.append(agent_id)
             return await self._inner.add(
-                messages, user_id=user_id, agent_id=agent_id, run_id=run_id, **kw
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+                conversation_id=conversation_id,
+                **kw,
             )
 
         async def search(self, query, **kw):

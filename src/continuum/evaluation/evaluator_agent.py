@@ -91,6 +91,8 @@ class EvaluatorAgent(BaseAgent):
     criteria: list[str] = field(default_factory=lambda: ["correctness", "helpfulness"])
     pass_threshold: float = 0.7
     judge_model: str | None = None
+    # Temperature for the judge LLM call; 0.0 keeps scoring deterministic. None omits it.
+    judge_temperature: float | None = 0.0
     rubrics: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -235,7 +237,7 @@ class EvaluatorAgent(BaseAgent):
         try:
             llm_response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.0, max_tokens=300),
+                config=LLMConfig(model=model, temperature=self.judge_temperature, max_tokens=300),
                 auto_session=False,
             )
 
@@ -305,6 +307,7 @@ class EvaluatorAgent(BaseAgent):
                 "criteria": self.criteria,
                 "pass_threshold": self.pass_threshold,
                 "judge_model": self.judge_model,
+                "judge_temperature": self.judge_temperature,
                 "rubrics": self.rubrics,
                 "workflow_type": "evaluator",
             }
@@ -369,6 +372,7 @@ def create_evaluator_agent(
     *,
     pass_threshold: float = 0.7,
     judge_model: str | None = None,
+    judge_temperature: float | None = 0.0,
     rubrics: dict[str, str] | None = None,
 ) -> EvaluatorAgent:
     """
@@ -379,6 +383,7 @@ def create_evaluator_agent(
         criteria:       List of criterion labels (e.g. ["correctness", "safety"]).
         pass_threshold: Score threshold for a criterion to be "passed" (default 0.7).
         judge_model:    LLM model for judging (defaults to settings.default_llm_model).
+        judge_temperature: Temperature for judging (default 0.0 for determinism; None omits it).
         rubrics:        Per-criterion rubric overrides.
 
     Returns:
@@ -399,5 +404,6 @@ def create_evaluator_agent(
         criteria=criteria,
         pass_threshold=pass_threshold,
         judge_model=judge_model,
+        judge_temperature=judge_temperature,
         rubrics=rubrics or {},
     )

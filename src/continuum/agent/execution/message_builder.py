@@ -209,7 +209,16 @@ class MessageBuilder(IMessageBuilder):
                         )
                     messages.extend(history)
             except Exception as e:
-                logger.warning(f"Failed to load session history: {e}")
+                from continuum.session.exceptions import SessionNotFoundError
+
+                if isinstance(e, SessionNotFoundError):
+                    logger.warning(
+                        f"No history loaded: session {context.session_id!r} does not exist "
+                        f"(it was never created via get_or_create_session). Run continues "
+                        f"without prior context."
+                    )
+                else:
+                    logger.warning(f"Failed to load session history: {e}")
 
         # Inject RAG context last (closest to current question for maximum recency effect)
         rag_context = agent.config.rag_context if agent.config else None

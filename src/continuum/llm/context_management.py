@@ -34,6 +34,27 @@ from continuum.observability.trace_context import SpanScope, truncate_data
 logger = get_logger(__name__)
 
 
+def _carries_tool_io(msg: dict[str, Any]) -> bool:
+    """True if the message is part of a tool call/result exchange.
+
+    Recognises both formats: OpenAI (``role == "tool"`` results, assistant
+    ``tool_calls``) and Anthropic (``tool_use`` / ``tool_result`` blocks inside
+    a ``content`` list). The summarize cut point must not land on such a
+    message, or a ``tool_use`` could be summarized away from its matching
+    ``tool_result`` (or vice versa) — which the provider rejects with a 400.
+    """
+    if msg.get("role") == "tool":
+        return True
+    if msg.get("tool_calls"):
+        return True
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("tool_use", "tool_result"):
+                return True
+    return False
+
+
 class CompressionStrategy(str, Enum):
     """Strategy for compressing context when approaching limits."""
 
@@ -300,9 +321,16 @@ class ProgressiveContextManager:
         # Get model limits
         limits = self._context_window_manager.get_model_limits(model)
         current_tokens = self._context_window_manager.count_tokens(messages, model)
-        threshold_tokens = int(
-            limits.effective_input_limit * effective_config.compression_threshold
-        )
+        # With Headroom on, this manager is a rare last-resort safety net behind
+        # Headroom's cache-friendly per-turn compression: raise the trigger so
+        # the (cache-hostile, history-rewriting) summarization only fires near
+        # the true limit. max() — never lowers a user's higher threshold. The
+        # seam runs Headroom BEFORE this check, so `current_tokens` is already
+        # the post-Headroom count.
+        threshold_ratio = effective_config.compression_threshold
+        if settings.headroom_enabled:
+            threshold_ratio = max(threshold_ratio, settings.headroom_context_threshold)
+        threshold_tokens = int(limits.effective_input_limit * threshold_ratio)
 
         # Check if compression needed
         if current_tokens <= threshold_tokens:
@@ -539,13 +567,16 @@ class ProgressiveContextManager:
                 latency_ms=0.0,
             )
 
-        # Split into older and recent, ensuring the cut never falls inside a tool call pair.
-        # Walk the cut backward until it lands before a user or plain assistant text message.
+        # Split into older and recent, ensuring the cut never falls inside a tool
+        # call pair. Walk the cut backward until it lands on a clean user/assistant
+        # text message that carries no tool I/O (OpenAI tool_calls / tool role, or
+        # Anthropic tool_use / tool_result blocks) — so a tool_use is never
+        # summarized away from its matching tool_result (provider 400).
         cut = max(0, len(conversation_messages) - config.keep_recent_messages)
         while cut > 0:
             msg = conversation_messages[cut]
             role = msg.get("role")
-            if role == "user" or (role == "assistant" and not msg.get("tool_calls")):
+            if role in ("user", "assistant") and not _carries_tool_io(msg):
                 break
             cut -= 1
 
@@ -613,21 +644,16 @@ class ProgressiveContextManager:
         limits: Any,
     ) -> tuple[list[dict[str, Any]], CompressionResult]:
         """Compress by truncating oldest messages."""
+        # truncate_messages() repairs the truncation boundary itself — dropping
+        # any tool result orphaned from its call, in both OpenAI and Anthropic
+        # formats (see ContextWindowManager.truncate_messages) — so no extra
+        # tool-pair cleanup is needed here.
         truncated, trunc_result = self._context_window_manager.truncate_messages(
             messages=messages,
             model=model,
             strategy=TruncationStrategy.KEEP_SYSTEM_AND_RECENT,
             response_buffer_percent=0.25,
         )
-
-        # Fix any broken tool call pairs at the truncation boundary.
-        # Remove leading tool messages and orphan assistant tool_calls messages.
-        while truncated and truncated[0].get("role") == "tool":
-            truncated = truncated[1:]
-        while truncated and (
-            truncated[0].get("role") == "assistant" and truncated[0].get("tool_calls")
-        ):
-            truncated = truncated[1:]
 
         compressed_tokens = self._context_window_manager.count_tokens(truncated, model)
         original_tokens = self._context_window_manager.count_tokens(messages, model)

@@ -35,6 +35,19 @@ def clean_registry():
     registry._default_factory = saved_default
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_ambient_gateway(monkeypatch):
+    """Isolate every test from an ambient ``SMART_GATEWAY_URL`` (e.g. loaded
+    from the developer's real ``.env``). Without this, get_provider's gateway
+    short-circuit returns a GatewayProvider for prefix-routing/extension tests
+    that expect their registered factory, so the suite's pass/fail depends on
+    whether the gateway happens to be configured. Gateway-specific tests
+    re-enable it via their own ``monkeypatch.setattr`` (which runs after this)."""
+    from continuum.config import settings
+
+    monkeypatch.setattr(settings, "smart_gateway_url", None, raising=False)
+
+
 class _Sentinel(BaseProvider):
     """A do-nothing provider tagged with which registration produced it."""
 
@@ -119,6 +132,148 @@ class TestGatewayShortCircuit:
         provider = get_provider(LLMConfig(model="gpt-4o-mini"))
         assert isinstance(provider, GatewayProvider)
 
+    def test_shadowed_custom_registration_warns_once(self, monkeypatch, caplog):
+        """A custom register_provider() going silently inert is a footgun —
+        the gateway short-circuit must warn (once) that it is bypassed."""
+        import logging
+
+        from continuum.config import settings
+
+        register_provider("myco/", _tag_factory("myco"))
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        monkeypatch.setattr(registry, "_gateway_shadow_warned", False)
+        # continuum's root logger sets propagate=False; re-enable so caplog sees it.
+        monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
+
+        # Warn-once is proven by the SECOND call emitting nothing — not by
+        # counting the first as exactly one record. With propagation forced on,
+        # a single emission can be captured more than once depending on handlers
+        # other tests leave behind, so a raw `== 1` count is order-dependent.
+        # "Nothing" cannot be double-captured, so this stays deterministic.
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
+            get_provider(LLMConfig(model="myco/super-model"))
+        first = [r for r in caplog.records if "bypassed" in r.getMessage()]
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
+            get_provider(LLMConfig(model="myco/super-model"))
+        second = [r for r in caplog.records if "bypassed" in r.getMessage()]
+
+        assert first, "first call must warn that the custom registration is bypassed"
+        assert "myco/" in first[0].getMessage()
+        assert not second, "second call must not warn again (warn-once)"
+        assert registry._gateway_shadow_warned is True
+
+    def test_no_shadow_warning_without_custom_registrations(self, monkeypatch, caplog):
+        import logging
+
+        from continuum.config import settings
+
+        # Only built-ins registered (clean_registry restores them).
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        monkeypatch.setattr(registry, "_gateway_shadow_warned", False)
+
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
+            get_provider(LLMConfig(model="gpt-4o-mini"))
+
+        assert not [r for r in caplog.records if "bypassed" in r.getMessage()]
+
+
+# ---------------------------------------------------------------------------
+# Gateway model fidelity + error attribution — a named model must reach the
+# gateway verbatim, substitutions must be loud, and gateway errors must not be
+# blamed on OpenAI.
+# ---------------------------------------------------------------------------
+
+
+class TestGatewayModelFidelity:
+    def _gw(self, mode="modest"):
+        from continuum.llm.providers.gateway_provider import GatewayProvider
+
+        return GatewayProvider(gateway_url="https://gw.example/v1", api_key="k", router_mode=mode)
+
+    def test_auto_tier_passes_through(self):
+        assert self._gw()._normalize_model("auto/quality") == "auto/quality"
+
+    def test_provider_qualified_model_passes_through_verbatim(self):
+        """Regression: qualified names were ALSO silently replaced with
+        auto/<tier> — there was no way to pin a model through the gateway.
+        The prefix must be the gateway's provider id (anthropic/, openai/,
+        google/), which is what passes through unchanged."""
+        gw = self._gw()
+        assert gw._normalize_model("anthropic/claude-opus-4-8") == "anthropic/claude-opus-4-8"
+        assert gw._normalize_model("google/gemini-2.5-flash") == "google/gemini-2.5-flash"
+
+    def test_bare_model_is_tier_routed_with_warning(self, caplog, monkeypatch):
+        import logging
+
+        from continuum.llm.providers.gateway_provider import GatewayProvider
+
+        GatewayProvider._warned_models.discard("gpt-4o-mini")
+        gw = self._gw(mode="modest")
+        # continuum's root logger sets propagate=False; re-enable so caplog sees it.
+        monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
+
+        # Warn-once per model: the SECOND normalize emits nothing. Asserting the
+        # first is "exactly one record" is order-dependent under forced
+        # propagation (a single emission can be captured more than once); an
+        # empty second capture cannot be, so this stays deterministic.
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers.gateway_provider"):
+            assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+        first = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers.gateway_provider"):
+            assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+        second = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
+
+        assert first, "first normalize of a bare model must warn"
+        assert not second, "second normalize of the same model must not warn again"
+        assert "gpt-4o-mini" in GatewayProvider._warned_models
+
+    def test_gateway_errors_attributed_to_gateway_not_openai(self):
+        """Regression: a gateway 401 raised provider=openai, sending users to
+        debug the wrong system."""
+        import httpx
+        import openai as openai_sdk
+
+        from continuum.llm.exceptions import LLMAuthenticationError
+
+        gw = self._gw()
+        err = openai_sdk.AuthenticationError(
+            "Incorrect API key",
+            response=httpx.Response(
+                401, request=httpx.Request("POST", "https://gw.example/v1/chat/completions")
+            ),
+            body=None,
+        )
+        with pytest.raises(LLMAuthenticationError) as exc_info:
+            gw._handle_exception(err, "anthropic/claude-opus-4-8")
+        assert exc_info.value.provider == "gateway"
+        assert exc_info.value.context["gateway_url"] == "https://gw.example/v1"
+
+    def test_plain_openai_errors_still_attributed_to_openai(self):
+        import httpx
+        import openai as openai_sdk
+
+        from continuum.llm.exceptions import LLMAuthenticationError
+        from continuum.llm.providers.openai_provider import OpenAIProvider
+
+        p = OpenAIProvider(api_key="k")
+        err = openai_sdk.AuthenticationError(
+            "Incorrect API key",
+            response=httpx.Response(
+                401, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+            ),
+            body=None,
+        )
+        with pytest.raises(LLMAuthenticationError) as exc_info:
+            p._handle_exception(err, "gpt-4o-mini")
+        assert exc_info.value.provider == "openai"
+        assert "gateway_url" not in exc_info.value.context
+
 
 # ---------------------------------------------------------------------------
 # Built-in factories bind to the correct provider classes (dummy keys, offline).
@@ -149,6 +304,56 @@ class TestBuiltinFactoryBindings:
         assert isinstance(registry._make_openai(cfg, s), OpenAIProvider)
 
 
+class TestMaxRetriesWiring:
+    """config.max_retries must reach the underlying SDK clients.
+
+    Regression: providers built their SDK clients without max_retries, so
+    llm_max_retries was a dead knob — the SDK used its own default (2) and a
+    hung call retried uncontrollably (llm_request_timeout is per-attempt, not a
+    total ceiling). Every provider must now propagate the configured budget so
+    a caller can set it to 0 for a real single-attempt timeout.
+    """
+
+    _S = SimpleNamespace(
+        gemini_api_key="test",
+        anthropic_api_key="test",
+        openai_api_key="test",
+        openai_organization=None,
+    )
+
+    def test_openai_client_receives_max_retries(self):
+        p = registry._make_openai(LLMConfig(model="gpt-4o-mini", max_retries=0), self._S)
+        assert p._client.max_retries == 0
+        assert p._async_client.max_retries == 0
+
+    def test_anthropic_client_receives_max_retries(self):
+        p = registry._make_anthropic(LLMConfig(model="claude-opus-4-8", max_retries=1), self._S)
+        assert p._client.max_retries == 1
+        assert p._async_client.max_retries == 1
+
+    def test_gemini_client_receives_max_retries(self):
+        p = registry._make_gemini(
+            LLMConfig(model="gemini/gemini-2.5-flash", max_retries=4), self._S
+        )
+        assert p._client.max_retries == 4
+        assert p._async_client.max_retries == 4
+
+    def test_gateway_client_receives_max_retries(self, monkeypatch):
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "smart_gateway_url", "https://gw.example/v1", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "smart_gateway_default_mode", "modest", raising=False)
+        p = get_provider(LLMConfig(model="gpt-4o-mini", max_retries=0))
+        assert p._client.max_retries == 0
+        assert p._async_client.max_retries == 0
+
+    def test_zero_retries_gives_single_attempt(self):
+        # The point of the fix: retries=0 -> one attempt -> timeout is the ceiling.
+        p = registry._make_openai(LLMConfig(model="gpt-4o-mini", max_retries=0), self._S)
+        assert p._client.max_retries == 0
+
+
 # ---------------------------------------------------------------------------
 # Extension API — third parties add/override providers without editing core.
 # ---------------------------------------------------------------------------
@@ -166,3 +371,31 @@ class TestExtensionAPI:
         register_provider("gemini/", _tag_factory("my-gemini"))
         provider = get_provider(LLMConfig(model="gemini/gemini-2.5-flash"))
         assert provider.tag == "my-gemini"
+
+
+# ---------------------------------------------------------------------------
+# temperature=None must be omitted so providers/models that reject it never
+# receive the parameter (mirrors Anthropic's existing guard).
+# ---------------------------------------------------------------------------
+
+
+class TestTemperatureOmission:
+    @pytest.mark.parametrize(
+        "provider_path,model",
+        [
+            ("continuum.llm.providers.openai_provider.OpenAIProvider", "gpt-4o-mini"),
+            ("continuum.llm.providers.gemini_provider.GeminiProvider", "gemini/gemini-2.5-flash"),
+        ],
+    )
+    def test_temperature_omitted_when_none(self, provider_path, model):
+        import importlib
+
+        mod_name, cls_name = provider_path.rsplit(".", 1)
+        cls = getattr(importlib.import_module(mod_name), cls_name)
+        provider = cls(api_key="test-key")
+
+        omitted = provider._build_kwargs(LLMConfig(model=model, temperature=None), None, None)
+        assert "temperature" not in omitted
+
+        present = provider._build_kwargs(LLMConfig(model=model, temperature=0.4), None, None)
+        assert present["temperature"] == 0.4

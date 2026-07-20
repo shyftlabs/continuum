@@ -31,6 +31,7 @@ const CSS = `
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--text); background: var(--bg); font-size: 15px; line-height: 1.6;
+      overflow-x: clip; /* safety guard, never let nav crowding cause horizontal page scroll (clip = no sticky side-effects) */
       background-image:
         radial-gradient(circle at 1px 1px, rgba(10,10,10,.04) 1px, transparent 0);
       background-size: 22px 22px;
@@ -51,10 +52,15 @@ const CSS = `
       line-height: 1;
     }
     .nav-logo img.mark {
-      width: 30px; height: 30px;
+      width: 28px; height: 28px;
       border-radius: 7px;
       object-fit: cover;
       box-shadow: 0 1px 3px rgba(0,0,0,.12);
+      display: none; /* desktop shows wordmark; mobile swaps to this square mark */
+    }
+    .nav-logo img.wordmark-img {
+      height: 22px; width: auto;
+      object-fit: contain;
       display: block;
     }
     .nav-logo .text { display: flex; flex-direction: column; gap: 3px; line-height: 1; }
@@ -68,7 +74,9 @@ const CSS = `
       color: var(--text-secondary);
     }
     .nav-logo .byline em { font-style: normal; font-weight: 600; color: var(--text); }
-    .nav-tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+    .nav-tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; min-width: 0;
+      -webkit-mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+              mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%); }
     .nav-tabs::-webkit-scrollbar { display: none; }
     .nav-tab {
       padding: 6px 13px; border-radius: 7px; cursor: pointer; font-size: 13.5px; font-weight: 500;
@@ -211,7 +219,7 @@ const CSS = `
     }
     .copy-btn:hover { background: white; color: var(--code-bg); border-color: white; }
 
-    /* syntax colours (monochrome — desaturated industrial) */
+    /* syntax colours (monochrome, desaturated industrial) */
     .kw { color: #d4d4d4; font-weight: 500; }
     .fn { color: #ffffff; }
     .str { color: #c4c4c4; }
@@ -320,14 +328,19 @@ const CSS = `
       background: var(--bg);
     }
     footer a { color: var(--text-secondary); }
-
-    /* Empty brand slot — takes no space, no clickable area */
-    .nav-logo-empty {
-      display: inline-block;
-      width: 0; height: 0;
-      margin: 0; padding: 0;
-      pointer-events: none;
-    }
+    footer { flex-wrap: wrap; gap: 18px; text-transform: none; letter-spacing: 0; }
+    .footer-brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .footer-logo { height: 22px; width: auto; display: block; }
+    .footer-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+    .footer-meta { font-family: var(--display-font); font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute); white-space: nowrap; }
+    .footer-built { display: inline-flex; align-items: center; }
+    .footer-shyft { height: 17px; width: auto; display: block; opacity: .82; transition: opacity .15s ease; }
+    .footer-built:hover .footer-shyft { opacity: 1; }
+    .footer-social { display: flex; align-items: center; gap: 6px; }
+    .footer-social a { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text-secondary); border: 1px solid transparent; transition: all .15s ease; }
+    .footer-social a:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
+    .footer-social a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .footer-social svg { width: 18px; height: 18px; }
 
     /* ── HAMBURGER (mobile only) ── */
     #hamburger {
@@ -367,13 +380,14 @@ const CSS = `
       .cn-tablet pre { padding: 16px 18px; font-size: 12.5px; }
       .cn-tablet table { font-size: 13px; }
 
-    /* Mobile (≤ 768px) — sidebar becomes a drawer */
+    /* Mobile (≤ 768px), sidebar becomes a drawer */
     
       .cn-mobile #topnav { padding: 0 8px; gap: 4px; }
       .cn-mobile #hamburger { display: inline-flex; flex: 0 0 36px; width: 36px; height: 36px; margin-right: 2px; }
       .cn-mobile .nav-logo { flex: 0 0 auto; min-width: 0; margin-right: 4px; gap: 6px; }
       .cn-mobile .nav-logo .text { display: none; }
-      .cn-mobile .nav-logo img.mark { width: 28px; height: 28px; }
+      .cn-mobile .nav-logo img.mark { display: block; width: 28px; height: 28px; }
+      .cn-mobile .nav-logo img.wordmark-img { display: none; }
       .cn-mobile .nav-tabs { flex: 1 1 0; min-width: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%); }
       .cn-mobile .nav-tab { flex: 0 0 auto; scroll-snap-align: start; padding: 5px 10px; font-size: 12.5px; border-radius: 6px; }
       .cn-mobile .nav-badge { display: none; }
@@ -428,6 +442,7 @@ const CSS = `
       .cn-small #hamburger { flex: 0 0 34px; width: 34px; height: 34px; margin-right: 0; }
       .cn-small .nav-logo { margin-right: 4px; gap: 5px; }
       .cn-small .nav-logo img.mark { width: 26px; height: 26px; }
+      .cn-small .nav-logo img.wordmark-img { height: 16px; }
       .cn-small .nav-tab { padding: 5px 8px; font-size: 12px; }
       .cn-small .card { padding: 14px; }
       .cn-small .card p { font-size: 13px; }
@@ -448,9 +463,354 @@ const CSS = `
     @supports (-webkit-touch-callout: none) {
       table::-webkit-scrollbar { display: none; }
     }
+
+    /* ════════════════════ SUITE · PREMIUM LAYER (v1.0.0) ════════════════════ */
+
+    /* Aurora, the single accent gradient, reserved for the product suite.
+       Muted, dark, low-saturation cool tones, tuned to the monochrome theme (no neon). */
+    :root {
+      --aurora: linear-gradient(100deg,#30323a 0%,#3b4a60 27%,#355b5e 50%,#444a63 75%,#30323a 100%);
+    }
+    @keyframes aurora-flow { to { background-position: 220% center; } }
+
+    .grad-text {
+      background: var(--aurora); background-size: 220% auto;
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+      animation: aurora-flow 7s linear infinite;
+    }
+    /* Solid fallback where background-clip:text is unsupported, never invisible */
+    @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+      .grad-text { color: var(--text); -webkit-text-fill-color: currentColor; background: none; }
+    }
+
+    /* Skip-to-content (revealed on keyboard focus) */
+    .skip-link {
+      position: fixed; top: 8px; left: 8px; z-index: 200;
+      background: var(--text); color: #fff; padding: 8px 14px; border-radius: 6px;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .04em;
+      text-transform: uppercase; text-decoration: none;
+      transform: translateY(-160%); transition: transform .18s ease;
+    }
+    .skip-link:focus { transform: translateY(0); outline: 2px solid var(--text); outline-offset: 2px; }
+
+    /* Command-style badge (lowercase, monospace) for the install command */
+    .badge-cmd { text-transform: none; font-family: 'JetBrains Mono', monospace; letter-spacing: 0; font-weight: 600; }
+
+    /* Reading-progress bar, pinned to the very top edge */
+    #read-progress {
+      position: fixed; top: 0; left: 0; height: 2px; width: 0;
+      background: var(--aurora); background-size: 220% auto;
+      z-index: 102;
+      transition: width .08s linear; pointer-events: none;
+    }
+
+    /* ── PRODUCT SWITCHER ── */
+    .product-nav {
+      display: flex; align-items: center; gap: 2px; flex-shrink: 0;
+      padding: 3px; margin-right: 4px;
+      border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+    }
+    .product-tab {
+      position: relative; display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 11px; border: none; background: none; cursor: pointer; border-radius: 6px;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700;
+      letter-spacing: .03em; text-transform: uppercase; white-space: nowrap;
+      transition: background .15s ease;
+    }
+    .product-tab:hover { background: var(--surface); }
+    .product-tab.active { background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong); }
+    .product-tab.active .grad-text { animation-duration: 5s; filter: saturate(1.15) contrast(1.05); }
+    .product-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .product-tab .soon {
+      font-family: var(--display-font); font-size: 8px; font-weight: 700; letter-spacing: .08em;
+      color: var(--text-mute); -webkit-text-fill-color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 1px 4px;
+    }
+    .product-tab.active .soon { color: var(--text-secondary); -webkit-text-fill-color: var(--text-secondary); border-color: var(--border-strong); }
+
+    .nav-div { width: 1px; height: 22px; background: var(--border); margin: 0 10px; flex-shrink: 0; }
+
+    /* ── NAV RIGHT ACTIONS ── */
+    .nav-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; padding-left: 8px; flex-shrink: 0; }
+    .nav-icon-link {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 6px 11px; border-radius: 7px; text-decoration: none;
+      color: var(--text-secondary); font-size: 13px; font-weight: 500;
+      border: 1px solid transparent; transition: all .15s ease; white-space: nowrap;
+    }
+    .nav-icon-link:hover { color: var(--text); background: var(--surface); border-color: var(--border); }
+    .nav-icon-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+    .nav-icon-link svg { width: 19px; height: 19px; flex-shrink: 0; }
+    .nav-brand-link { padding: 5px 10px; }
+    .nav-shyft-logo { height: 26px; width: auto; display: block; opacity: 1; transition: opacity .15s ease; }
+    .nav-brand-link:hover .nav-shyft-logo { opacity: 1; }
+    .nav-div-actions { margin: 0 8px; }
+
+    /* ── HOME · PRODUCT SUITE ── */
+    .suite-lead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+    .suite { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 18px 0 8px; }
+    .suite-card {
+      position: relative; overflow: hidden; text-align: left; cursor: pointer;
+      border: 1px solid var(--border); border-radius: 2px; padding: 24px 20px 18px; background: var(--bg);
+      transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+    .suite-card::before {
+      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: var(--aurora); background-size: 220% auto; animation: aurora-flow 7s linear infinite; opacity: .92;
+    }
+    .suite-card:hover { border-color: var(--text); transform: translateY(-3px); box-shadow: 0 14px 32px -18px rgba(10,10,10,.32); }
+    .suite-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+    .suite-card .kicker {
+      font-family: var(--display-font); font-size: 9.5px; font-weight: 700; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--text-mute); margin-bottom: 12px;
+    }
+    .suite-card h3 {
+      font-family: var(--display-font); font-size: 20px; font-weight: 700; letter-spacing: 0;
+      text-transform: uppercase; margin: 0 0 8px;
+    }
+    .suite-card p { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.55; }
+    .suite-meta { display: flex; align-items: center; justify-content: space-between; }
+    .suite-status {
+      font-family: var(--display-font); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 2px; border: 1px solid var(--border); color: var(--text-secondary);
+    }
+    .suite-status.live { color: #fff; background: var(--text); border-color: var(--text); }
+    .suite-go { font-family: var(--display-font); font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--text); opacity: .55; transition: opacity .15s ease; }
+    .suite-card:hover .suite-go { opacity: 1; }
+    .suite-meta { flex-wrap: wrap; gap: 8px; }
+    .suite-status, .suite-go { white-space: nowrap; }
+
+    /* ── COMING SOON (Provenance) ── */
+    .cs { text-align: center; max-width: 660px; margin: 20px auto; }
+    .cs-badge {
+      display: inline-block; font-family: var(--display-font); font-size: 10px; font-weight: 700;
+      letter-spacing: .16em; text-transform: uppercase; color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 4px 12px; margin-bottom: 24px;
+    }
+    .cs h1 { font-size: 66px; margin-bottom: 18px; line-height: 1; }
+    .cs-sub { font-size: 18px; color: var(--text-secondary); line-height: 1.5; margin: 0 auto 30px; max-width: 540px; text-transform: none; letter-spacing: 0; }
+    .cs-pills { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 0 auto 34px; max-width: 560px; }
+    .cs-pill {
+      font-family: var(--display-font); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+      border: 1px solid var(--border); border-radius: 2px; padding: 7px 13px; color: var(--text-secondary); background: var(--bg);
+    }
+    .cs-cta {
+      display: inline-flex; align-items: center; gap: 9px; background: var(--text); color: #fff; text-decoration: none;
+      font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      padding: 13px 24px; border-radius: 2px; transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .cs-cta:hover { transform: translateY(-2px); box-shadow: 0 16px 32px -16px rgba(10,10,10,.55); }
+
+    /* Premium: gentle section fade-in on tab switch */
+    .page-section.active { animation: section-in .34s ease both; }
+    @keyframes section-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    /* Responsive, new nav + suite */
+    
+      .cn-tablet .suite { grid-template-columns: 1fr; }
+    
+      .cn-mobile .product-nav { margin-right: 4px; padding: 2px; gap: 1px; }
+      .cn-mobile .product-tab { padding: 4px 7px; font-size: 10.5px; letter-spacing: .02em; }
+      .cn-mobile .product-tab .soon { font-size: 0; padding: 0; border: none; width: 5px; height: 5px; border-radius: 50%; background: var(--text-mute); -webkit-text-fill-color: transparent; }
+      .cn-mobile .nav-div { display: none; }
+      .cn-mobile .nav-actions { padding-left: 4px; }
+      .cn-mobile .nav-icon-link { padding: 6px 8px; }
+      .cn-mobile .nav-icon-link .label { display: none; }
+      .cn-mobile #nav-shyftlabs, .cn-mobile .nav-div-actions { display: none; }
+      .cn-mobile .cs h1 { font-size: 40px; }
+      .cn-mobile .cs-sub { font-size: 15px; }
+      .cn-mobile .cs-badge { margin-bottom: 18px; }
+    
+      .cn-small .product-tab { padding: 4px 6px; font-size: 10px; }
+      .cn-small #nav-shyftlabs { display: none; }
+
+    /* ════════════════ PER-PRODUCT BRANDING · HEROES · FX ════════════════ */
+
+    /* Three muted gradient variations, one cohesive family, distinct per product */
+    :root {
+      --grad-framework: linear-gradient(105deg,#2b2f3a 0%,#33455f 30%,#3a5566 55%,#3d4a63 80%,#2b2f3a 100%);
+      --grad-aura:      linear-gradient(105deg,#2c3a3a 0%,#335b5e 32%,#2f6360 56%,#3a5a57 80%,#2c3a3a 100%);
+      --grad-prov:      linear-gradient(105deg,#332f3e 0%,#444a63 30%,#473f63 55%,#3b3f5e 80%,#332f3e 100%);
+    }
+    /* .grad-text pulls its gradient from --g (set per product context) */
+    .grad-text { background-image: var(--g, var(--aurora)); background-size: 220% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .product-tab[data-section="framework"], #sec-framework, #sb-framework-areas { --g: var(--grad-framework); }
+    #sec-home { --g: var(--grad-framework); }
+    .product-tab[data-section="smart"], #sec-smart { --g: var(--grad-aura); }
+    .product-tab[data-section="provenance"], #sec-provenance { --g: var(--grad-prov); }
+    .suite-card.s-framework { --g: var(--grad-framework); }
+    .suite-card.s-aura { --g: var(--grad-aura); }
+    .suite-card.s-prov { --g: var(--grad-prov); }
+
+    /* ── PRODUCT HERO (shared premium header per product) ── */
+    .product-hero { padding: 4px 0 18px; }
+    .ph-kicker {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-family: var(--display-font); font-size: 10px; font-weight: 700;
+      letter-spacing: .16em; text-transform: uppercase; color: var(--text-mute);
+      border: 1px solid var(--border-strong); border-radius: 2px; padding: 4px 11px; margin-bottom: 22px;
+    }
+    .ph-kicker .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--g, var(--aurora)); background-size: 220% auto; }
+    .ph-title {
+      font-family: var(--display-font); font-weight: 700; line-height: .98;
+      font-size: clamp(34px, 5.6vw, 58px); letter-spacing: -.02em; text-transform: uppercase; margin: 0 0 18px;
+    }
+    .ph-sub {
+      font-family: 'Inter', sans-serif; font-size: 18px; color: var(--text-secondary);
+      line-height: 1.5; max-width: 600px; margin: 0 0 22px; text-transform: none; letter-spacing: 0;
+    }
+    .ph-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+    /* ── PROPRIETARY banner (Aura / Provenance) ── */
+    .proprietary {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+      border: 1px solid var(--border-strong); border-radius: 3px; background: var(--surface);
+      padding: 15px 18px 15px 22px; margin: 4px 0 30px; position: relative; overflow: hidden;
+    }
+    .proprietary::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+      background: var(--g, var(--aurora)); background-size: 220% auto;
+    }
+    .proprietary .pr-text { font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; }
+    .proprietary .pr-text strong { color: var(--text); }
+    .pr-tag {
+      font-family: var(--display-font); font-size: 9px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--text); border: 1px solid var(--border-strong);
+      border-radius: 2px; padding: 2px 7px; margin-right: 8px; vertical-align: 1px;
+    }
+    .pr-cta {
+      flex-shrink: 0; display: inline-flex; align-items: center; gap: 8px;
+      background: var(--text); color: #fff; text-decoration: none;
+      font-family: var(--display-font); font-size: 11px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase; padding: 10px 18px; border-radius: 2px;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .pr-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 24px -12px rgba(10,10,10,.5); }
+
+    /* ── ANIMATED CONSTELLATION BACKGROUND ── */
+    #bg-canvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; opacity: .6; }
+
+    /* ── SCROLL REVEAL (classes applied by JS, so content is visible without JS) ── */
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s cubic-bezier(.2,.7,.3,1), transform .6s cubic-bezier(.2,.7,.3,1); }
+    .reveal.in { opacity: 1; transform: none; }
+
+    /* ── FRAMEWORK AREA NAV (sub-sections in the sidebar) ── */
+    #sb-framework-areas { border-bottom: 1px solid var(--border); margin-bottom: 6px; padding-bottom: 8px; }
+    .area-link { font-weight: 500; }
+    .area-link.active { font-weight: 700; }
+
+    /* ── REFINED PRODUCT SWITCHER (segmented control) ── */
+    .product-nav { padding: 0; gap: 4px; border: none; background: none; border-radius: 0; flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; margin-right: 10px; }
+    .product-nav::-webkit-scrollbar { display: none; }
+    .product-tab { padding: 9px 15px; font-size: 13.5px; border-radius: 8px; flex-shrink: 0; letter-spacing: .02em; }
+    .product-tab:hover { background: var(--surface); }
+    .product-tab.active { background: none; box-shadow: none; }
+    .product-tab.active::after {
+      content: ""; position: absolute; left: 15px; right: 15px; bottom: 2px; height: 2.5px; border-radius: 3px;
+      background: var(--g, var(--aurora)); background-size: 220% auto;
+    }
+    .product-tab .soon { margin-left: 1px; }
+
+    /* Focus rings on primary CTAs + sidebar links; pointer for onclick links; label contrast */
+    .pr-cta:focus-visible, .cs-cta:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px rgba(10,10,10,.35); }
+    .sidebar-link:focus-visible, .area-link:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+    .suite-card:focus-visible { transform: translateY(-3px); box-shadow: 0 14px 32px -18px rgba(10,10,10,.32); }
+    .suite-card:focus-visible .suite-go { opacity: 1; }
+    a[onclick] { cursor: pointer; }
+    .ph-kicker, .suite-card .kicker, .cs-badge { color: var(--text-secondary); }
+    .product-tab .soon { color: var(--text-secondary); -webkit-text-fill-color: var(--text-secondary); }
+
+    /* Compact product switcher on small screens (declared AFTER the refined block so it wins) */
+    
+      .cn-bp860 .product-tab { padding: 5px 10px; font-size: 11.5px; }
+    
+      .cn-mobile .product-nav { padding: 2px; gap: 1px; }
+      .cn-mobile .product-tab { padding: 7px 10px; font-size: 12px; letter-spacing: .01em; }
+      .cn-mobile .product-tab.active::after { left: 10px; right: 10px; }
+
+    
+      .cn-mobile .ph-sub { font-size: 15px; }
+      .cn-mobile .proprietary { padding: 14px 16px; }
+      .cn-mobile .pr-cta { padding: 9px 14px; }
+
+    /* ── HOME · SUITE LANDING ── */
+    .landing-hero { position: relative; padding: 24px 0 34px; }
+    .landing-glow {
+      position: absolute; top: -50px; left: -8%; width: 62%; height: 300px; z-index: -1;
+      background: var(--aurora); background-size: 220% auto; filter: blur(80px); opacity: .11; border-radius: 50%;
+      animation: aurora-flow 9s linear infinite, glow-pulse 6s ease-in-out infinite; pointer-events: none;
+    }
+    @keyframes glow-pulse { 0%, 100% { opacity: .09; } 50% { opacity: .19; } }
+    .landing-title {
+      font-family: var(--display-font); font-weight: 700; text-transform: uppercase;
+      font-size: clamp(34px, 5.6vw, 62px); line-height: 1; letter-spacing: -.02em; margin: 4px 0 16px;
+    }
+    .landing-sub {
+      font-family: 'Inter', sans-serif; font-size: 18px; color: var(--text-secondary);
+      line-height: 1.5; max-width: 600px; margin: 0 0 24px; text-transform: none; letter-spacing: 0;
+    }
+    .landing-sub strong { color: var(--text); }
+    .pr-cta-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); }
+    /* Landing hero CTA row: pip badge matches the button height */
+    .landing-hero .ph-meta { gap: 10px; }
+    .landing-hero .ph-meta .badge-cmd { padding: 11px 16px; font-size: 13px; border-radius: 2px; line-height: 1; }
+    .landing-hero .ph-meta .pr-cta { padding: 11px 18px; }
+    .pr-cta-ghost:hover { background: var(--surface); }
+    .suite-lg { gap: 16px; }
+    .suite-lg .suite-card { padding: 28px 22px 20px; }
+    .suite-lg .suite-card h3 { font-size: 24px; }
+    .suite-lg .suite-card::before { height: 4px; }
+    .suite-lg .suite-card:hover { transform: translateY(-5px); box-shadow: 0 22px 46px -22px rgba(10,10,10,.42); }
+    
+      .cn-mobile .landing-glow { width: 92%; height: 200px; filter: blur(48px); }
+
+    /* Landing detail: stats, flow, CTA */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 36px 0; padding: 22px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .stat-num { font-family: var(--display-font); font-size: 36px; font-weight: 700; letter-spacing: -.02em; line-height: 1; }
+    .stat-label { font-family: var(--display-font); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-mute); margin-top: 6px; }
+    .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 8px; margin: 18px 0 10px; }
+    .flow-step { border: 1px solid var(--border); border-radius: 2px; padding: 20px 18px; background: var(--bg); transition: border-color .15s ease, transform .15s ease; }
+    .flow-step:hover { border-color: var(--text); transform: translateY(-2px); }
+    .flow-num { font-family: var(--display-font); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-mute); }
+    .flow-step h3 { font-family: var(--display-font); font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0; margin: 10px 0 8px; }
+    .flow-step p { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
+    .flow-arrow { display: flex; align-items: center; justify-content: center; font-family: var(--display-font); font-size: 20px; color: var(--border-strong); }
+    .cta-band { margin: 42px 0 8px; border-radius: 3px; background: var(--text); color: #fff; padding: 38px 32px; text-align: center; }
+    .cta-band h2 { color: #fff; border: none; margin: 0 0 8px; padding: 0; font-size: 28px; text-transform: uppercase; }
+    .cta-band > p { color: rgba(255,255,255,.7); margin: 0 auto 22px; max-width: 460px; }
+    .cta-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; align-items: center; }
+    .cta-btn { display: inline-flex; align-items: center; gap: 8px; background: #fff; color: var(--text); text-decoration: none; font-family: var(--display-font); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 12px 20px; border-radius: 2px; transition: transform .15s ease; }
+    .cta-btn:hover { transform: translateY(-2px); }
+    .cta-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    .cta-btn-ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.3); }
+    
+      .cn-mobile .stats { grid-template-columns: 1fr 1fr; gap: 14px; }
+      .cn-mobile .flow { grid-template-columns: 1fr; }
+      .cn-mobile .flow-arrow { transform: rotate(90deg); padding: 2px 0; }
+      .cn-mobile .cta-band { padding: 28px 20px; }
+
+    /* Respect reduced-motion */
+    @media (prefers-reduced-motion: reduce) {
+      .grad-text, #read-progress, .suite-card::before, .landing-glow { animation: none; }
+      .grad-text { background-position: 35% center; }
+      .landing-glow { opacity: .1; }
+      .page-section.active { animation: none; }
+      .suite-card:hover, .suite-lg .suite-card:hover, .cs-cta:hover { transform: none; }
+      .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+      #bg-canvas { display: none; }
+    }
 `
 
 const BODY = `
+<a class="skip-link" href="#main">Skip to content</a>
+
+<!-- Reading-progress bar (aurora) -->
+<div id="read-progress" aria-hidden="true"></div>
+
+<!-- Minimal animated constellation background -->
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
+
 <!-- ═══════════════════════ TOP NAV ═══════════════════════ -->
 <nav id="topnav">
   <button id="hamburger" onclick="toggleSidebar()" aria-label="Toggle navigation">
@@ -460,18 +820,24 @@ const BODY = `
       <line x1="3" y1="18" x2="21" y2="18"></line>
     </svg>
   </button>
-  <!-- Brand intentionally empty — fill via Framer props (wordmark / byline / logo) or restore the markup here for a custom build. -->
-  <span class="nav-logo nav-logo-empty" aria-hidden="true"></span>
-  <div class="nav-tabs">
-    <button class="nav-tab active" onclick="showSection('home')">Home</button>
-    <button class="nav-tab" onclick="showSection('build')">Build Agents</button>
-    <button class="nav-tab" onclick="showSection('run')">Run Agents</button>
-    <button class="nav-tab" onclick="showSection('smart')">Smart Inference</button>
-    <button class="nav-tab" onclick="showSection('components')">Components</button>
-    <button class="nav-tab" onclick="showSection('integrations')">Integrations</button>
-    <button class="nav-tab" onclick="showSection('research')">Research</button>
-    <button class="nav-tab" onclick="showSection('examples')">Examples</button>
-    <button class="nav-tab" onclick="showSection('community')">Community</button>
+  <a class="nav-logo" onclick="showSection('home')" aria-label="Continuum home, suite overview">
+    <img class="mark" src="__LOGO__" alt="" aria-hidden="true" />
+    <img class="wordmark-img" src="assets/continuum-logo.png" alt="Continuum" />
+  </a>
+  <div class="product-nav" aria-label="Continuum product suite">
+    <button class="product-tab" data-section="framework" onclick="showSection('framework')" title="Continuum Framework, the open agent runtime"><span class="grad-text">Continuum Framework</span></button>
+    <button class="product-tab" data-section="smart" onclick="showSection('smart')" title="Aura, the Smart Inference layer"><span class="grad-text">Aura</span></button>
+    <button class="product-tab" data-section="provenance" onclick="showSection('provenance')" title="Provenance, the governance &amp; safety layer (coming soon)"><span class="grad-text">Provenance</span><span class="soon">Soon</span></button>
+  </div>
+  <div class="nav-actions">
+    <a class="nav-icon-link" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" aria-label="Continuum on GitHub">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1-.02-1.96-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.07.78 2.16 0 1.56-.01 2.82-.01 3.2 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
+      <span class="label">GitHub</span>
+    </a>
+    <span class="nav-div nav-div-actions" aria-hidden="true"></span>
+    <a class="nav-icon-link nav-brand-link" id="nav-shyftlabs" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs, the company behind Continuum">
+      <img class="nav-shyft-logo" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" />
+    </a>
   </div>
 </nav>
 
@@ -481,18 +847,45 @@ const BODY = `
 <!-- ── SIDEBAR ── -->
 <aside id="sidebar">
 
+  <!-- FRAMEWORK area nav, the framework's sub-sections, shown for any framework area -->
+  <div class="sidebar-group area-nav" id="sb-framework-areas" style="display:none">
+    <div class="sidebar-group-label">Continuum Framework</div>
+    <a class="sidebar-link area-link" data-area="framework" onclick="showSection('framework')">Overview</a>
+    <a class="sidebar-link area-link" data-area="build" onclick="showSection('build')">Build Agents</a>
+    <a class="sidebar-link area-link" data-area="run" onclick="showSection('run')">Run Agents</a>
+    <a class="sidebar-link area-link" data-area="components" onclick="showSection('components')">Components</a>
+    <a class="sidebar-link area-link" data-area="integrations" onclick="showSection('integrations')">Integrations</a>
+    <a class="sidebar-link area-link" data-area="research" onclick="showSection('research')">Research</a>
+    <a class="sidebar-link area-link" data-area="examples" onclick="showSection('examples')">Examples</a>
+    <a class="sidebar-link area-link" data-area="community" onclick="showSection('community')">Community</a>
+  </div>
+
   <!-- HOME sidebar -->
+  <!-- HOME (suite landing) sidebar -->
   <div class="sidebar-group" id="sb-home">
-    <div class="sidebar-group-label">Overview</div>
-    <a class="sidebar-link active" onclick="scrollToAnchor('home-intro')">Introduction</a>
+    <div class="sidebar-group-label">Continuum Suite</div>
+    <a class="sidebar-link active" onclick="scrollToAnchor('home-hero')">Overview</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-suite')">The Three Layers</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-how')">How it works</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-start')">Quickstart</a>
+    <div class="sidebar-group-label">Products</div>
+    <a class="sidebar-link" onclick="showSection('framework')">Continuum Framework</a>
+    <a class="sidebar-link" onclick="showSection('smart')">Aura</a>
+    <a class="sidebar-link" onclick="showSection('provenance')">Provenance</a>
+  </div>
+
+  <!-- CONTINUUM FRAMEWORK sidebar -->
+  <div class="sidebar-group" id="sb-framework" style="display:none">
+    <div class="sidebar-group-label">On this page</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-intro')">Introduction</a>
     <a class="sidebar-link" onclick="scrollToAnchor('home-features')">Key Features</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-quickstart')">Quickstart</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-arch')">Architecture</a>
-    <a class="sidebar-link" onclick="scrollToAnchor('home-docs')">Full Documentation</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('home-quickstart')">Get started</a>
   </div>
 
   <!-- BUILD sidebar -->
   <div class="sidebar-group" id="sb-build" style="display:none">
+    <div class="sidebar-group-label">Get Started</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('build-setup')">Installation &amp; setup</a>
     <div class="sidebar-group-label">Agent Design</div>
     <a class="sidebar-link" onclick="scrollToAnchor('build-baseagent')">Base Agent</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('build-stateless')">Stateless vs Stateful</a>
@@ -523,6 +916,10 @@ const BODY = `
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-branch')">Branch &amp; diff</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-store')">Storage backends</a>
     <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('run-trace-limits')">Limitations</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('int-headroom')">Headroom Compression</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-modes')">Modes: local &amp; endpoint</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-config')">Configuration</a>
+    <a class="sidebar-link sidebar-link-sub" onclick="scrollToAnchor('int-headroom-transforms')">Transform reference</a>
     <div class="sidebar-group-label">Deployment</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-lifecycle')">App Lifecycle</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-fastapi')">FastAPI Server</a>
@@ -549,6 +946,8 @@ const BODY = `
     <a class="sidebar-link" onclick="scrollToAnchor('comp-temporal')">Temporal Integration</a>
     <a class="sidebar-link" onclick="scrollToAnchor('comp-hitl')">Human-in-the-Loop</a>
     <a class="sidebar-link" onclick="scrollToAnchor('comp-loop-workflow')">Loop Workflow</a>
+    <div class="sidebar-group-label">Connectors</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('comp-connectors')">Connectors</a>
   </div>
 
   <!-- INTEGRATIONS sidebar -->
@@ -569,7 +968,7 @@ const BODY = `
   <!-- SMART INFERENCE sidebar -->
   <div class="sidebar-group" id="sb-smart" style="display:none">
     <div class="sidebar-group-label">Overview</div>
-    <a class="sidebar-link" onclick="scrollToAnchor('smart-intro')">What is Smart Inference</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('smart-intro')">What is Aura</a>
     <a class="sidebar-link" onclick="scrollToAnchor('smart-how')">How it works</a>
     <a class="sidebar-link" onclick="scrollToAnchor('smart-modes')">Routing Modes</a>
     <div class="sidebar-group-label">Setup</div>
@@ -631,6 +1030,14 @@ const BODY = `
     <a class="sidebar-link" onclick="scrollToAnchor('com-contributing')">Contributing</a>
   </div>
 
+  <!-- PROVENANCE sidebar -->
+  <div class="sidebar-group" id="sb-provenance" style="display:none">
+    <div class="sidebar-group-label">Provenance</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-intro')">Overview</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-capabilities')">What's coming</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('prov-early')">Early access</a>
+  </div>
+
 
 </aside>
 
@@ -641,18 +1048,114 @@ const BODY = `
 <main id="main">
 
 <!-- ═══════════════════ HOME ═══════════════════ -->
+<!-- ═══════════════════ HOME · SUITE LANDING ═══════════════════ -->
 <section class="page-section active" id="sec-home">
 
+  <a class="anchor" id="home-hero"></a>
+  <div class="landing-hero">
+    <div class="landing-glow" aria-hidden="true"></div>
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · v1.2.0</span>
+    <h1 class="landing-title grad-text">Continuum</h1>
+    <p class="landing-sub">The agent platform. Build production AI agents on the open <strong>Framework</strong>, route every call through <strong>Aura</strong>, and govern the whole system with <strong>Provenance</strong>.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue badge-cmd">pip install shyftlabs-continuum</span>
+      <a class="pr-cta" onclick="showSection('framework')">Explore the Framework &#8594;</a>
+      <a class="pr-cta pr-cta-ghost" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-suite"></a>
+  <h2>One platform · <span class="grad-text">three layers</span></h2>
+  <p class="section-intro" style="margin-bottom:18px;">Continuum is a product suite, not a single library. The open <strong>Framework</strong> builds and runs your agents, <strong>Aura</strong> routes every call to the right model, and <strong>Provenance</strong> keeps the whole system governed, safe, and auditable.</p>
+  <div class="suite suite-lg">
+    <div class="suite-card s-framework" role="button" tabindex="0" onclick="showSection('framework')" aria-label="Explore the Continuum Framework">
+      <div class="kicker">01 · Framework</div>
+      <h3 class="grad-text">Continuum</h3>
+      <p>The open-source agent runtime. BaseAgent, 9 composable workflow patterns, durable Temporal jobs, two-tier memory, MCP-native tools, and time-travel decision traces.</p>
+      <div class="suite-meta"><span class="suite-status live">Open source</span><span class="suite-go">Explore →</span></div>
+    </div>
+    <div class="suite-card s-aura" role="button" tabindex="0" onclick="showSection('smart')" aria-label="Explore Aura, the Smart Inference layer">
+      <div class="kicker">02 · Inference</div>
+      <h3 class="grad-text">Aura</h3>
+      <p>The Smart Inference layer. One OpenAI-compatible endpoint to 250+ models across 45+ providers; a classifier picks the cheapest model that clears the quality bar, per prompt.</p>
+      <div class="suite-meta"><span class="suite-status">Proprietary</span><span class="suite-go">Explore →</span></div>
+    </div>
+    <div class="suite-card s-prov" role="button" tabindex="0" onclick="showSection('provenance')" aria-label="Preview Provenance, the governance layer">
+      <div class="kicker">03 · Governance</div>
+      <h3 class="grad-text">Provenance</h3>
+      <p>Prompt management, guardrails, PII redaction, and policy. The governance &amp; security layer that makes every agent decision observable, safe, and compliant.</p>
+      <div class="suite-meta"><span class="suite-status">Coming soon</span><span class="suite-go">Preview →</span></div>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-stats"></a>
+  <div class="stats">
+    <div class="stat"><div class="stat-num grad-text">250+</div><div class="stat-label">Models routed</div></div>
+    <div class="stat"><div class="stat-num grad-text">45+</div><div class="stat-label">LLM providers</div></div>
+    <div class="stat"><div class="stat-num grad-text">9</div><div class="stat-label">Workflow patterns</div></div>
+    <div class="stat"><div class="stat-num grad-text">100%</div><div class="stat-label">Auto-traced</div></div>
+  </div>
+
+  <a class="anchor" id="home-how"></a>
+  <h2>From notebook to production</h2>
+  <p class="section-intro" style="margin-bottom:18px;">Three layers, one workflow. Build your agents, let Aura route every model call, and let Provenance keep the whole system governed and audit-ready.</p>
+  <div class="flow">
+    <div class="flow-step s-framework">
+      <div class="flow-num">01 · Framework</div>
+      <h3 class="grad-text">Build</h3>
+      <p>Define agents with <code>BaseAgent</code>, compose nine workflow patterns, attach MCP tools and two-tier memory.</p>
+    </div>
+    <div class="flow-arrow" aria-hidden="true">&#8594;</div>
+    <div class="flow-step s-aura">
+      <div class="flow-num">02 · Aura</div>
+      <h3 class="grad-text">Route</h3>
+      <p>One OpenAI-compatible endpoint. A classifier picks the cheapest model that clears the quality bar, per prompt.</p>
+    </div>
+    <div class="flow-arrow" aria-hidden="true">&#8594;</div>
+    <div class="flow-step s-prov">
+      <div class="flow-num">03 · Provenance</div>
+      <h3 class="grad-text">Govern</h3>
+      <p>Prompt versioning, guardrails, PII redaction, and policy, so every decision is observable and audit-ready.</p>
+    </div>
+  </div>
+
+  <a class="anchor" id="home-start"></a>
+  <h2>Up and running in minutes</h2>
+  <p>Install the open-source framework and ship your first agent in a few lines. Aura and Provenance plug in when you need them.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># pip install shyftlabs-continuum</span>
+<span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>
+<span class="kw">from</span> continuum.agent.runner <span class="kw">import</span> <span class="cls">AgentRunner</span>
+
+agent = <span class="cls">BaseAgent</span>(name=<span class="str">"assistant"</span>, instructions=<span class="str">"You are helpful."</span>, model=<span class="str">"gpt-4o-mini"</span>)
+response = <span class="kw">await</span> <span class="cls">AgentRunner</span>().run(agent, <span class="str">"Hello!"</span>)
+<span class="fn">print</span>(response.content)</pre></div>
+
+  <a class="anchor" id="home-cta"></a>
+  <div class="cta-band">
+    <h2>Build on Continuum</h2>
+    <p>Open-source framework today. Proprietary inference and governance when you scale.</p>
+    <div class="cta-actions">
+      <span class="badge badge-cmd" style="background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.28); color:#fff;">pip install shyftlabs-continuum</span>
+      <a class="cta-btn" onclick="showSection('framework')">Explore the Framework &#8594;</a>
+      <a class="cta-btn cta-btn-ghost" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+
+</section>
+
+<section class="page-section" id="sec-framework">
+
   <a class="anchor" id="home-intro"></a>
-  <div class="hero">
-    <h1>The agent runtime<br>for builders who ship.</h1>
-    <p class="tagline">Production-grade reasoning, durable workflows, cost-aware routing, and full observability — out of the box. Continuum is the bridge from notebook to enterprise.</p>
-    <div class="hero-badges">
-      <span class="badge badge-blue">Python 3.13</span>
-      <span class="badge badge-green">250+ models via Smart Inference</span>
-      <span class="badge badge-purple">MCP-native tools</span>
-      <span class="badge badge-blue">Temporal · Durable workflows</span>
-      <span class="badge badge-green">Langfuse · Auto-traced</span>
+  <div class="product-hero">
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Open Source · v1.2.0</span>
+    <h1 class="ph-title grad-text">Continuum Framework</h1>
+    <p class="ph-sub">The open-source agent runtime for builders who ship. Production-grade reasoning, durable multi-agent workflows, two-tier memory, and full observability, out of the box.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue badge-cmd">pip install shyftlabs-continuum</span>
+      <span class="badge badge-green">Python 3.13</span>
+      <span class="badge badge-purple">250+ models via Aura</span>
+      <span class="badge badge-blue">Temporal · durable workflows</span>
+      <span class="badge badge-green">Langfuse · auto-traced</span>
       <span class="badge badge-purple">9 multi-agent patterns</span>
     </div>
   </div>
@@ -662,7 +1165,7 @@ const BODY = `
   <div class="cards">
     <div class="card filled">
       <div class="card-icon" style="color:#fff">◆</div>
-      <h3>Smart Inference routing</h3>
+      <h3>Aura · Smart Inference routing</h3>
       <p>One OpenAI-compatible endpoint, 250+ models. A classifier scores every prompt; the router picks the cheapest model that clears the quality bar. Per-agent <code style="background:rgba(255,255,255,.1);color:#fff;border-color:rgba(255,255,255,.2)">strict / modest / quality</code> tiers.</p>
     </div>
     <div class="card">
@@ -673,12 +1176,12 @@ const BODY = `
     <div class="card">
       <div class="card-icon">▤</div>
       <h3>9 composable workflow patterns</h3>
-      <p>Sequential · Parallel · Loop · Reflection · Router · Planner · Debate · Scatter · SupervisedSequential. Mix and nest freely — every step is independently traceable.</p>
+      <p>Sequential · Parallel · Loop · Reflection · Router · Planner · Debate · Scatter · SupervisedSequential. Mix and nest freely, every step is independently traceable.</p>
     </div>
     <div class="card filled">
       <div class="card-icon" style="color:#fff">◇</div>
       <h3>MCP-native tooling</h3>
-      <p>Stdio, SSE, or StreamableHTTP — connect any MCP server with zero adapters. Top-<em>k</em> Tool Attention promotes only the relevant tools each turn, cutting prompt tokens 30–60%.</p>
+      <p>Stdio, SSE, or StreamableHTTP, connect any MCP server with zero adapters. Top-<em>k</em> Tool Attention promotes only the relevant tools each turn, cutting prompt tokens 30–60%.</p>
     </div>
     <div class="card">
       <div class="card-icon">◐</div>
@@ -692,29 +1195,66 @@ const BODY = `
     </div>
     <div class="card">
       <div class="card-icon">◈</div>
-      <h3>Safety hooks built in</h3>
-      <p>Pluggable input/output PII redaction and content scanners (bring your own — none run until configured). Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
+      <h3>Safe by default</h3>
+      <p>Input/output PII redaction. Configurable scrubbers on memory writes. Cycle detection on agent handoffs. Graceful shutdown with in-flight trace flush. Bearer-scoped budgets at the gateway.</p>
     </div>
     <div class="card">
       <div class="card-icon">▢</div>
       <h3>Production primitives</h3>
       <p>Dependency-injection container, health checks for every dependency, lifecycle hooks, FastAPI helpers, fakeredis for tests. Async-native, protocol-based, code-first.</p>
     </div>
+    <div class="card filled">
+      <div class="card-icon" style="color:#fff">⬡</div>
+      <h3>Pluggable connectors</h3>
+      <p>One uniform layer for every external service, Redis, vector store (Milvus/Qdrant), Temporal, Langfuse. Connect via API keys, local Docker, or a custom host; the connection <em>mode</em> is inferred automatically, and one call health-probes them all. Add a new service in a single file.</p>
+    </div>
   </div>
 
   <a class="anchor" id="home-quickstart"></a>
-  <h2>Quickstart</h2>
+  <h2>Get started</h2>
+  <p class="section-intro" style="margin-bottom:14px;">Install the open-source framework from PyPI and have your first agent running in a few lines. Full setup, the environment reference, and the end-to-end walkthrough live under <a onclick="showSection('build')">Build Agents</a>.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13</span>
+pip install shyftlabs-continuum</pre></div>
+  <div class="ph-meta" style="margin-top:16px;">
+    <a class="pr-cta" onclick="showSection('build')">Build your first agent &#8594;</a>
+    <a class="pr-cta" href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" style="background:var(--bg); color:var(--text); border:1px solid var(--border-strong);">View on GitHub</a>
+  </div>
+
+</section>
+
+
+<!-- ═══════════════════ BUILD AGENTS ═══════════════════ -->
+<section class="page-section" id="sec-build">
+
+  <a class="anchor" id="build-install"></a>
+  <h1>Build Agents</h1>
+  <p class="section-intro">From a minimal single agent to complex multi-agent workflows, everything starts with <code>BaseAgent</code>.</p>
+
+  <div style="display:flex; gap:12px; margin: 16px 0 0;">
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank" rel="noopener"><code>playground/gateway-local-shop</code></a>, one agent with MCP tools over HTTP.
+    </div>
+    <div class="callout callout-tip" style="flex:1; margin:0">
+      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a>.
+    </div>
+  </div>
+
+  <a class="anchor" id="build-setup"></a>
+  <h2>Installation &amp; setup</h2>
   <ol class="steps">
     <li>
       <strong>Install</strong><br>
-      git clone continuum(<a href="https://github.com/shyftlabs/continuum" target="_blank">https://github.com/shyftlabs/continuum</a>) into your local computer, enter the project, then:
+      The fastest path, install the released package straight from PyPI:
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Python 3.13 required</span>
-python3.13 -m venv .venv    
+python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-
-optional:
-pip install -e '.[temporal]' </div>
+pip install shyftlabs-continuum                 <span class="cm"># latest release (v1.2.0)</span>
+pip install <span class="str">"shyftlabs-continuum[temporal,eval]"</span>    <span class="cm"># optional extras</span></pre></div>
+      <p style="margin:12px 0 6px;">Prefer to work from source? Clone <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener">the repository</a> and install it editable:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>git clone https://github.com/shyftlabs/continuum.git
+cd continuum
+python3.13 -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e <span class="str">".[dev]"</span>                          <span class="cm"># add [temporal] / [eval] as needed</span></pre></div>
     </li>
     <li>
       <strong>Setup environment and spin up infrastructure</strong>
@@ -728,7 +1268,12 @@ GEMINI_API_KEY=your-gemini-api-key        <span class="cm"># optional</span>
 <span class="cm"># ANTHROPIC_API_KEY=your-anthropic-api-key  # optional</span>
 
 <span class="cm"># ── Default LLM ──────────────────────────────────────────────────────────────</span>
+<span class="cm"># DEFAULT_LLM_MODEL is provider-aware when unset: the chat default is derived from</span>
+<span class="cm"># whichever API key is present, so chat + meta-ops need no OpenAI key on an</span>
+<span class="cm"># Anthropic-/Gemini-only setup. (Memory embeddings still default to OpenAI.)</span>
 DEFAULT_LLM_MODEL=gemini/gemini-2.5-flash
+ANTHROPIC_DEFAULT_MODEL=claude-haiku-4-5      <span class="cm"># default when only an Anthropic key is set</span>
+GEMINI_DEFAULT_MODEL=gemini/gemini-2.5-flash  <span class="cm"># default when only a Gemini key is set</span>
 FALLBACK_LLM_MODEL=gpt-4o-mini
 DEFAULT_LLM_TEMPERATURE=0.7
 DEFAULT_LLM_MAX_TOKENS=4096
@@ -757,6 +1302,7 @@ MEMORY_LLM_MODEL=gemini/gemini-2.5-flash
 MEMORY_LLM_TEMPERATURE=0.1
 MEMORY_ISOLATION=user
 MEMORY_SEARCH_LIMIT=5
+MEMORY_MAX_QUERY_CHARS=8000  <span class="cm"># truncate long search queries before the embedder (~8191-token cap); blank disables</span>
 MEMORY_HISTORY_DB_PATH=~/.orchestrator/memory_history.db
 
 <span class="cm"># ── Session (Redis) ───────────────────────────────────────────────────────────</span>
@@ -806,7 +1352,7 @@ ANONYMIZED_TELEMETRY=false
 TOKENIZERS_PARALLELISM=false</pre></div>
 
       <p style="margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563;">Finally, spin up the infrastructure:</p>
-      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>continuum up               <span class="cm"># Redis + Qdrant (minimal); \`continuum up full\` adds Langfuse · Temporal · Milvus</span></pre></div>
+      <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>docker compose up -d       <span class="cm"># Redis (:6380) + Milvus (:19530)</span></pre></div>
     </li>
     <li>
       <strong>Create and run your first agent</strong>
@@ -828,58 +1374,6 @@ agent = <span class="cls">BaseAgent</span>(
 asyncio.<span class="fn">run</span>(main())</pre></div>
     </li>
   </ol>
-
-  <a class="anchor" id="home-arch"></a>
-  <h2>Architecture</h2>
-  <p>Continuum is structured as layered modules, each independently usable:</p>
-  <table>
-    <tr><th>Module</th><th>Import path</th><th>Purpose</th></tr>
-    <tr><td><code>agent</code></td><td><code>continuum.agent</code></td><td>BaseAgent, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><code>llm</code></td><td><code>continuum.llm</code></td><td>LLMClient, provider routing, structured output, context compression</td></tr>
-    <tr><td><code>memory</code></td><td><code>continuum.memory</code></td><td>mem0 + Qdrant/Milvus long-term memory</td></tr>
-    <tr><td><code>session</code></td><td><code>continuum.session</code></td><td>Redis-backed conversation history</td></tr>
-    <tr><td><code>tools</code></td><td><code>continuum.tools</code></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><code>observability</code></td><td><code>continuum.observability</code></td><td>Langfuse tracing, metrics, error reporting</td></tr>
-    <tr><td><code>temporal</code></td><td><code>continuum.temporal</code></td><td>Durable workflows, approval gates</td></tr>
-    <tr><td><code>core</code></td><td><code>continuum.core</code></td><td>DI Container, lifecycle, health checks</td></tr>
-  </table>
-
-  <a class="anchor" id="home-docs"></a>
-  <h2>Full Documentation</h2>
-  <p>Each module has a detailed markdown reference in the repository:</p>
-  <table>
-    <tr><th>Doc</th><th>Covers</th></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/agent.md" target="_blank"><code>agent.md</code></a></td><td>BaseAgent fields, AgentRunner, 9 workflow patterns, handoffs</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/llm.md" target="_blank"><code>llm.md</code></a></td><td>LLMClient, LLMConfig, provider routing, structured output, context compression</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/memory.md" target="_blank"><code>memory.md</code></a> &amp; <a href="https://github.com/shyftlabs/continuum/blob/main/docs/update-docs/memory-issue-analysis.md" target="_blank"><code>memory-issue-analysis.md</code></a></td><td>memory settings, memory mechanism and issues</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/session.md" target="_blank"><code>session.md</code></a></td><td>SessionClient, Redis conversation history</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/tools.md" target="_blank"><code>tools.md</code></a></td><td>MCP servers, ToolExecutor, run artifacts</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/observability.md" target="_blank"><code>observability.md</code></a></td><td>Langfuse tracing, @observe decorator, metrics</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/temporal/" target="_blank"><code>temporal/</code></a></td><td>Durable workflows, approval gates, human-in-the-loop</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/core.md" target="_blank"><code>core.md</code></a></td><td>Container, OrchestratorLifecycle, health checks, protocols</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/installation.md" target="_blank"><code>installation.md</code></a></td><td>Full env var reference, troubleshooting</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/features.md" target="_blank"><code>features.md</code></a></td><td>Complete feature inventory organized by layer</td></tr>
-    <tr><td><a href="https://github.com/shyftlabs/continuum/blob/main/docs/GUIDE.md" target="_blank"><code>GUIDE.md</code></a></td><td>Developer guide — config defaults, session/memory behaviour, practical patterns</td></tr>
-  </table>
-
-</section>
-
-
-<!-- ═══════════════════ BUILD AGENTS ═══════════════════ -->
-<section class="page-section" id="sec-build">
-
-  <a class="anchor" id="build-install"></a>
-  <h1>Build Agents</h1>
-  <p class="section-intro">From a minimal single agent to complex multi-agent workflows — everything starts with <code>BaseAgent</code>.</p>
-
-  <div style="display:flex; gap:12px; margin: 16px 0 0;">
-    <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Single-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-local-shop" target="_blank"><code>playground/gateway-local-shop</code></a> — one agent with MCP tools over HTTP.
-    </div>
-    <div class="callout callout-tip" style="flex:1; margin:0">
-      <strong>Multi-agent example:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank"><code>playground/gateway-multi-agent-shop</code></a>.
-    </div>
-  </div>
 
   <a class="anchor" id="build-baseagent"></a>
   <h2>Base Agent</h2>
@@ -1522,7 +2016,7 @@ DECISION_TRACE_STORE=redis         <span class="cm"># redis | memory | null</spa
 DECISION_TRACE_CHECKPOINT=true     <span class="cm"># per-step snapshots → enables fork/rewind</span>
 DECISION_TRACE_TTL_DAYS=14         <span class="cm"># auto-expiry of persisted traces</span></pre></div>
   <p>…or flip the same switches programmatically before the first run — which is what the <code>decision-trace-timetravel</code> playground does:</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> orchestrator.config <span class="kw">import</span> settings
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.config <span class="kw">import</span> settings
 settings.decision_trace_enabled = <span class="cls">True</span>
 settings.decision_trace_checkpoint = <span class="cls">True</span>   <span class="cm"># only if you want fork/rewind</span>
 settings.decision_trace_store = <span class="str">"redis"</span></pre></div>
@@ -1549,8 +2043,8 @@ settings.decision_trace_store = <span class="str">"redis"</span></pre></div>
 trace = response.decision_trace        <span class="cm"># dict: steps, metrics, final_response…</span>
 
 <span class="cm"># …or reload any past run by id from the configured store</span>
-<span class="kw">from</span> orchestrator.agent.trace.config <span class="kw">import</span> get_trace_store
-<span class="kw">from</span> orchestrator.agent.trace.types <span class="kw">import</span> <span class="cls">TraceDetail</span>
+<span class="kw">from</span> continuum.agent.trace.config <span class="kw">import</span> get_trace_store
+<span class="kw">from</span> continuum.agent.trace.types <span class="kw">import</span> <span class="cls">TraceDetail</span>
 
 stored = <span class="kw">await</span> get_trace_store().<span class="fn">get</span>(response.run_id)
 data = stored.<span class="fn">to_dict</span>(<span class="cls">TraceDetail</span>.FULL)   <span class="cm"># steps with message checkpoints</span></pre></div>
@@ -1588,8 +2082,8 @@ forked = <span class="kw">await</span> runner.fork(
   <h3>Branch &amp; diff</h3>
   <p>Because upstream replays from cache, forking the same step at several values is cheap — run them concurrently and compare. <code>diff_traces()</code> reports what changed between two runs.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> asyncio
-<span class="kw">from</span> orchestrator.agent.trace <span class="kw">import</span> diff_traces
-<span class="kw">from</span> orchestrator.agent.trace.config <span class="kw">import</span> get_trace_store
+<span class="kw">from</span> continuum.agent.trace <span class="kw">import</span> diff_traces
+<span class="kw">from</span> continuum.agent.trace.config <span class="kw">import</span> get_trace_store
 
 <span class="cm"># Branch the same step at three values, concurrently</span>
 forks = <span class="kw">await</span> asyncio.gather(*[
@@ -1628,6 +2122,119 @@ delta = <span class="fn">diff_traces</span>(parent, child)   <span class="cm"># 
       <li><strong>LLM nondeterminism.</strong> Re-executed steps are fresh model calls, so their <em>wording</em> can differ between runs even where your edit had no effect — a diff may show cosmetic text changes. Keep outcome-determining logic in tools and use <code>temperature=0</code> so verdicts and numbers stay stable; treat narrative diffs as informational.</li>
     </ul>
   </div>
+
+  <a class="anchor" id="int-headroom"></a>
+  <h2>Headroom Compression <span class="tag tag-new">optional</span></h2>
+  <p>Headroom is an optional compression engine that shrinks bulky tool output — logs, tables, search / RAG dumps, long prose — <em>before</em> it reaches the model. It also collapses <strong>outdated or redundant file reads</strong> (ones the agent has since edited or re-read), while leaving the current copy intact. It runs per turn and is cache-friendly. Off by default; applies to async calls (<code>chat</code> / <code>chat_stream</code>).</p>
+
+  <a class="anchor" id="int-headroom-modes"></a>
+  <h3>Two modes: local &amp; endpoint</h3>
+  <p>The same compression runs either inside Continuum's own process or in a separate sidecar process you talk to over HTTP (this is what <strong>endpoint mode</strong> connects to).</p>
+  <table>
+    <tr><th>Mode</th><th><code>HEADROOM_MODE</code></th><th>How it runs</th><th>Best for</th></tr>
+    <tr><td>Local <span class="tag tag-new">default</span></td><td><code>local</code></td><td>In-process — <code>import headroom</code>. No sidecar to run; <code>api_base</code> / <code>api_key</code> are ignored.</td><td>Single process, notebooks, getting started</td></tr>
+    <tr><td>Endpoint</td><td><code>endpoint</code></td><td>HTTP to a running <code>headroom proxy</code> sidecar. One engine serves many workers, fault-isolated from the app.</td><td>Multi-worker / production</td></tr>
+  </table>
+  <h4>Configuring local mode</h4>
+  <p>Local mode needs a pip extra (endpoint mode needs none — you run the sidecar separately):</p>
+  <table>
+    <tr><th>Extra</th><th>Pulls in</th><th>For</th></tr>
+    <tr><td><code>shyftlabs-continuum[headroom-local]</code></td><td><code>headroom-ai&gt;=0.28,&lt;0.30</code></td><td>Local mode — logs / tables / search (the big wins). No ML.</td></tr>
+    <tr><td><code>shyftlabs-continuum[headroom-local-ml]</code></td><td>the above + <code>onnxruntime</code>, <code>transformers</code></td><td>Adds in-process <strong>prose</strong> (Kompress). First use downloads the model from the HF Hub.</td></tr>
+  </table>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Local (default), no machine learning model 'Kompress' is used to compress prose</span>
+pip install <span class="str">"shyftlabs-continuum[headroom-local]"</span>
+HEADROOM_ENABLED=true            <span class="cm"># HEADROOM_MODE defaults to local</span>
+
+
+<span class="cm"># Local with prose compression (adds the machine learning model 'Kompress' to compress prose)</span>
+pip install <span class="str">"shyftlabs-continuum[headroom-local-ml]"</span>
+HEADROOM_ENABLED=true
+HEADROOM_KOMPRESS_LOCAL=true
+<span class="cm"># sqlite|memory (default), controls where Headroom stashes the originals of what it compressed</span>
+HEADROOM_CCR_BACKEND=sqlite       <span class="cm"># if multi-worker (see below)</span>
+HEADROOM_CCR_SQLITE_PATH=/var/data/headroom/my_cache.db <span class="cm"># you can set your own path in sqlite</span></pre></div>
+
+
+  <h4>Running the sidecar (endpoint mode)</h4>
+  <p>The sidecar is the Headroom package with its <code>proxy</code> extra. Install it in its <strong>own</strong> environment — kept separate from your app, so the model weights (onnxruntime, transformers, …) live in the sidecar and out of your app's process — then run the <code>headroom proxy</code> server:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Install the sidecar (the proxy extra pulls FastAPI / uvicorn / onnxruntime)</span>
+pip install <span class="str">"headroom-ai[proxy]"</span>
+
+<span class="cm"># Start it — foreground</span>
+headroom proxy --port 8787
+
+<span class="cm"># ...or in the background, logging to a file</span>
+nohup headroom proxy --port 8787 &gt; headroom-sidecar.log 2&gt;&amp;1 &amp;
+
+<span class="cm"># Is it up?  (health check / listening port)</span>
+curl -s http://127.0.0.1:8787/health
+
+<span class="cm"># Stop a background sidecar — by port, or by name</span>
+lsof -ti:8787 | xargs kill
+pkill -f <span class="str">"headroom proxy"</span></pre></div>
+  <p>Once it's up, point your Continuum <strong>app</strong> at it — set these in the app's environment, not the sidecar's:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Endpoint — in your Continuum app's env</span>
+HEADROOM_ENABLED=true
+HEADROOM_MODE=endpoint            <span class="cm"># required — API_BASE alone won't switch modes</span>
+HEADROOM_API_BASE=http://127.0.0.1:8787</pre></div>
+  <div class="callout callout-warn">
+    <strong>Gotcha:</strong> <code>HEADROOM_MODE</code> defaults to <code>local</code>, not <code>endpoint</code>. Setting <code>HEADROOM_API_BASE</code> alone does <em>not</em> switch to the sidecar — you must set <code>HEADROOM_MODE=endpoint</code> explicitly, or you'll silently run in-process (and download the local model).
+  </div>
+  <p>One sidecar can serve many app workers.</p>
+
+  <a class="anchor" id="int-headroom-config"></a>
+  <h3>Configuration</h3>
+  <p>All settings are environment variables (the config field name, upper-cased). The master switch comes first — nothing else has any effect unless <code>HEADROOM_ENABLED=true</code>.</p>
+  <p><strong>Shared — apply to both modes</strong></p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_ENABLED</td><td>false</td><td>Master switch. Off = zero Headroom involvement.</td></tr>
+    <tr><td>HEADROOM_MODE</td><td>local</td><td><code>local</code> (in-process) or <code>endpoint</code> (HTTP sidecar).</td></tr>
+    <tr><td>HEADROOM_FAIL_OPEN</td><td>true</td><td>On a compression error, forward the request uncompressed (recommended). <code>false</code> = raise instead.</td></tr>
+    <tr><td>HEADROOM_TIMEOUT_SECONDS</td><td>30.0</td><td>Compress timeout. In local mode this also bounds the worker-thread / cold model-load wait.</td></tr>
+    <tr><td>HEADROOM_CONTEXT_THRESHOLD</td><td>0.92</td><td>Raises the summarizer's trigger so it only fires behind Headroom's per-turn compression. <code>max()</code> semantics — never lowers an explicitly higher <code>CONTEXT_COMPRESSION_THRESHOLD</code>.</td></tr>
+  </table>
+  <p><strong>Endpoint mode only</strong> (ignored in local mode)</p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_API_BASE</td><td>http://127.0.0.1:8787</td><td>Sidecar URL. Must be loopback.</td></tr>
+    <tr><td>HEADROOM_API_KEY</td><td>—</td><td>Bearer token, only if the sidecar sets one.</td></tr>
+  </table>
+  <p><strong>Local mode only</strong> (ignored in endpoint mode — the sidecar owns its own Kompress config)</p>
+  <table class="param-table">
+    <tr><th>Env var</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>HEADROOM_KOMPRESS_LOCAL</td><td>false</td><td>Turn on in-process <strong>prose</strong> (Kompress ML <code>text</code>) compression. Off = prose never fires in-process (Headroom skips the ML model on the hot path by design). On needs the <code>[headroom-local-ml]</code> extra + a model download on first use.</td></tr>
+    <tr><td>HEADROOM_KOMPRESS_EXECUTION_TIMEOUT_MS</td><td>5000</td><td>Per-call ML budget — raised so a call waits for a model slot instead of skipping. Only takes effect when <code>HEADROOM_KOMPRESS_LOCAL=true</code>; an explicit value always wins.</td></tr>
+  </table>
+  <div class="callout callout-tip">
+    <strong>Multi-worker (local mode):</strong> the reversible-retrieve store is per-process by default. Set the library's <code>HEADROOM_CCR_BACKEND=sqlite</code> so a retrieve issued by one worker resolves in another. In endpoint mode this is the sidecar's concern, not yours.
+  </div>
+
+  <a class="anchor" id="int-headroom-transforms"></a>
+  <h3>Compression Strategies</h3>
+  <p>Users do not need to configure compression strategy by themselves, headroom will automatically choose the best strategy based on the content. If you want to know which strategy is used, you can see the transform name within <code>deominant transform</code> in the log. Every compressed turn is logged with the transforms that ran, e.g.
+  <code>headroom: 10224&rarr;3881 tokens (62% saved, transforms=[router:mixed:0.37])</code>.<br>
+  What you'll see:</p>
+  <p><strong>Compression transforms.</strong> Which one runs is decided by the <em>shape</em> of the content, not by you — Headroom routes each block to the transform that fits it:</p>
+  <table>
+    <tr><th>Transform</th><th>What it recognizes, and what it does</th></tr>
+    <tr><td><code>smart_crusher</code></td><td>Repetitive <strong>structured / tabular</strong> data — a list where every item has the same shape (order records, rows in a table). The field names and JSON punctuation (<code>{ } " :</code>) repeat on every row, but the real information is only the values. It spots the repeated shape and states the columns <em>once</em> at the top with just the values below — like turning a stack of identical JSON objects into a compact table. Same information, far less repeated scaffolding.</td></tr>
+    <tr><td><code>search</code></td><td><strong>Search results</strong> from an agent's code- or file-search tool — grep / ripgrep output, where each hit is a <code>file:line:content</code> row and there can be dozens or hundreds of them. It parses the hits, scores each for relevance to what the user asked (boosting error lines and lines matching the query), keeps the ones that matter — always the first and last per file, plus the top-scoring rest — and drops the remainder, replacing them with a short <code>[... and N more matches in &lt;file&gt;]</code> note.</td></tr>
+    <tr><td><code>log</code></td><td>Freeform <strong>build / service logs</strong> — compiler, test, lint, or application output: many near-identical lines (timestamps, <code>INFO</code> / <code>WARN</code> / <code>ERROR</code> levels) where only a handful matter. A relevance-based crusher that keeps the lines carrying signal — errors, warnings, the needle you were looking for — and collapses the repetitive noise around them. Distinct from <code>search</code>: logs are detected by their log shape, not by the <code>file:line:</code> grep format.</td></tr>
+    <tr><td><code>text</code></td><td>Natural-language <strong>prose</strong> — documentation sentences, descriptions. It has no repeated scaffolding to strip, so instead of de-duplication it's shortened by the Kompress ML model. This is the hardest content to compress (the "floor" — logs, tables and search are the larger wins). In-process only when <code>HEADROOM_KOMPRESS_LOCAL=true</code>; the sidecar runs it by default.</td></tr>
+    <tr><td><code>mixed</code></td><td><strong>Half-structured, half-prose</strong> payloads — e.g. search hits that carry repeated <code>path:line</code> scaffolding (compressible like logs / tables) plus real documentation sentences (natural language that doesn't compress as hard). The mixed compressor squeezes the repetitive scaffolding and redundant hits while <em>preserving</em> the meaningful prose, so the result lands between the pure-log and pure-prose cases. You'll also see <code>mixed</code> whenever more than one transform contributes and none clearly dominates.</td></tr>
+  </table>
+  <p><strong>Annotations — what was protected or tracked</strong></p>
+  <table>
+    <tr><th>Marker</th><th>Meaning</th></tr>
+    <tr><td><code>read_lifecycle:stale</code></td><td>The agent read a file, then later wrote or edited the <em>same</em> file — so the earlier read is now an outdated full copy sitting in the conversation. Headroom notices the file changed after it was read, throws away the bulky stale copy, and leaves a short note (<em>"this read is stale — re-read for current content"</em>) plus a retrievable ticket (a hash) to pull the original back if it's ever needed. The current, fresh read is left untouched.</td></tr>
+    <tr><td><code>excluded:tool</code></td><td>The file read was excluded from compression. If your agent's file tools use the standard names — <code>read</code>/<code>Read</code>, <code>write</code>/<code>Write</code>, <code>edit</code>/<code>Edit</code> — Headroom recognizes those automatically. This is the common convention (it's what Claude Code and most agent frameworks already name them), so in the typical case it "just works" with zero config.</td></tr>
+    <tr><td><code>protected:system</code></td><td>A <code>[system]</code> message that cannot be compressed. Compression must never be able to corrupt your instructions, so system / developer prompts are protected by default.</td></tr>
+    <tr><td><code>anti-forgery</code></td><td>The guard on reversible retrieval (compressed content can be pulled back on demand via a retrieve tool). It answers: "can the model use a fake ticket to pull back data it was never given?" Each run issues its own hashes, and a retrieve for a hash the run never saw is rejected.</td></tr>
+  </table>
+
+  <p><strong>Examples:</strong> <a href="https://github.com/shyftlabs/continuum/tree/main/playground/headroom-compression-incident-desk" target="_blank" rel="noopener"><code>playground/headroom-compression-incident-desk</code></a> and <a href="https://github.com/shyftlabs/continuum/tree/main/playground/gateway-multi-agent-shop" target="_blank" rel="noopener"><code>playground/gateway-multi-agent-shop</code></a> (try <em>sequential</em> mode).</p>
 
   <a class="anchor" id="run-lifecycle"></a>
   <h2>App Lifecycle</h2>
@@ -2012,6 +2619,7 @@ results = <span class="kw">await</span> memory.search(<span class="str">"user pr
   <a class="anchor" id="comp-session"></a>
   <h2>Sessions (Redis)</h2>
   <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically — you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
+  <p>Persistence initializes <strong>lazily</strong> — no connection is attempted (and no warnings logged) until the first session op, so a disabled or unconfigured Redis costs nothing. If Redis is unreachable, the client degrades to a non-durable in-memory store and keeps serving with a single warning instead of an error per request. Which you want is a choice: <code>degrade</code> (the default) keeps the app running through the outage, while <code>fail</code> raises instead — surfacing the error loudly so you can catch and debug it. Set <code>SESSION_FALLBACK_MODE</code> to opt in; it defaults to <code>degrade</code>. Either way the fallback flips a <code>session_persistence</code> health check to <code>degraded</code> and a <code>session_persistence_degraded</code> gauge to <code>1.0</code> for alerting.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> <span class="cls">SessionClient</span>
 
 session = <span class="cls">SessionClient</span>()
@@ -2095,6 +2703,93 @@ mgr = <span class="cls">HumanInLoopManager</span>(client=temporal_client)
 <span class="kw">await</span> mgr.<span class="fn">approve</span>(workflow_id, request_id, decided_by=<span class="str">"alice@company.com"</span>)    <span class="cm"># honored</span>
 <span class="kw">await</span> mgr.<span class="fn">reject</span>(workflow_id, request_id, decided_by=<span class="str">"mallory@evil.com"</span>)     <span class="cm"># ignored — not an approver; stays pending</span>
 <span class="kw">await</span> mgr.<span class="fn">escalate</span>(workflow_id, request_id, escalate_to=<span class="str">"carol@company.com"</span>)  <span class="cm"># always allowed (re-targets)</span></pre></div>
+
+  <a class="anchor" id="comp-connectors"></a>
+  <h2>Connectors</h2>
+  <p>One uniform layer for every external service — Redis, the vector store (Milvus/Qdrant), Temporal, and Langfuse. Each connector exposes the same interface (<code>is_enabled</code> / <code>is_configured</code> / <code>mode</code> / <code>connect</code> / <code>aping</code> / <code>describe</code>) and registers in a shared registry, so services are configured and probed consistently. Most app code never touches connectors directly — the session, memory, temporal, and observability layers consume them internally; you reach for this module to <strong>inspect</strong>, <strong>probe</strong>, or <strong>add</strong> a service.</p>
+
+  <h3>Connection modes</h3>
+  <p>Every connector reports a <code>mode</code> <strong>inferred from configuration</strong> — no manual flag. This is what makes "connect via API keys, local Docker, or a custom host" just work.</p>
+  <table>
+    <tr><th>Mode</th><th>When</th><th>Inferred from</th></tr>
+    <tr><td><code>local_docker</code></td><td>Default host/ports (e.g. <code>continuum up</code>)</td><td>Host is <code>localhost</code> / the compose service name</td></tr>
+    <tr><td><code>cloud</code></td><td>Managed / API-key endpoint</td><td>An API key / token is set, or TLS is on</td></tr>
+    <tr><td><code>custom</code></td><td>Explicit non-default host, no cloud credential</td><td>Host set but matches neither above</td></tr>
+    <tr><td><code>disabled</code></td><td>Turned off</td><td>The service's <code>enabled</code> flag is <code>False</code></td></tr>
+  </table>
+
+  <h3>Inspect &amp; probe</h3>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.connectors <span class="kw">import</span> get_connector, health_check_all, list_connectors
+
+list_connectors()              <span class="cm"># ['langfuse', 'redis', 'temporal', 'vector_store']</span>
+
+redis = get_connector(<span class="str">"redis"</span>)
+redis.describe()               <span class="cm"># {'name': 'redis', 'mode': 'local_docker', 'host': ..., 'password': '****'}</span>
+<span class="kw">await</span> redis.aping()             <span class="cm"># True / False — never raises</span>
+
+<span class="cm"># Probe every enabled service at once (disabled ones cost zero connection attempts):</span>
+report = <span class="kw">await</span> health_check_all()</pre></div>
+  <p>Secrets come back masked in <code>describe()</code>, so the output is safe to log.</p>
+
+  <h3>Add a new service</h3>
+  <p>The cost is always <strong>config first, then one connector file, then one registration line</strong> — it does not grow as more connectors are added.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># 1 — Settings fields (src/continuum/config.py → class Settings) so they're env-configurable</span>
+s3_enabled: bool = <span class="kw">False</span>
+s3_endpoint: str = <span class="str">"http://localhost:9000"</span>   <span class="cm"># local docker (minio)</span>
+s3_access_key: str | <span class="kw">None</span> = <span class="kw">None</span>           <span class="cm"># api key → cloud</span>
+
+<span class="cm"># 2 — The connector (src/continuum/connectors/s3.py)</span>
+<span class="kw">from</span> continuum.config <span class="kw">import</span> settings
+<span class="kw">from</span> continuum.connectors.base <span class="kw">import</span> <span class="cls">BaseConnector</span>, <span class="cls">ConnectionMode</span>
+<span class="kw">from</span> continuum.utils.secrets <span class="kw">import</span> mask_value
+
+<span class="kw">class</span> <span class="cls">S3Connector</span>(<span class="cls">BaseConnector</span>[<span class="cls">Any</span>]):
+    name = <span class="str">"s3"</span>
+
+    <span class="op">@</span>property
+    <span class="kw">def</span> <span class="fn">is_enabled</span>(self) -> bool: <span class="kw">return</span> settings.s3_enabled
+    <span class="kw">def</span> <span class="fn">is_configured</span>(self) -> bool: <span class="kw">return</span> bool(settings.s3_endpoint)
+
+    <span class="op">@</span>property
+    <span class="kw">def</span> <span class="fn">mode</span>(self) -> <span class="cls">ConnectionMode</span>:
+        <span class="kw">if not</span> settings.s3_enabled: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.DISABLED
+        <span class="kw">if</span> settings.s3_access_key: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.CLOUD      <span class="cm"># api key → cloud</span>
+        <span class="kw">if</span> <span class="str">"localhost"</span> <span class="kw">in</span> settings.s3_endpoint: <span class="kw">return</span> <span class="cls">ConnectionMode</span>.LOCAL_DOCKER
+        <span class="kw">return</span> <span class="cls">ConnectionMode</span>.CUSTOM
+
+    <span class="kw">async def</span> <span class="fn">connect</span>(self) -> <span class="cls">Any</span>:
+        <span class="kw">import</span> boto3
+        <span class="kw">return</span> boto3.client(
+            <span class="str">"s3"</span>,
+            endpoint_url=settings.s3_endpoint,
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
+        )
+
+    <span class="kw">async def</span> <span class="fn">aping</span>(self) -> bool:
+        <span class="kw">try</span>:
+            (<span class="kw">await</span> self.connect()).list_buckets(); <span class="kw">return</span> <span class="kw">True</span>
+        <span class="kw">except</span> Exception: <span class="kw">return</span> <span class="kw">False</span>
+
+    <span class="kw">def</span> <span class="fn">describe</span>(self) -> dict:
+        d = super().describe()
+        d.update(endpoint=settings.s3_endpoint,
+                 access_key=mask_value(settings.s3_access_key) <span class="kw">if</span> settings.s3_access_key <span class="kw">else</span> <span class="kw">None</span>)
+        <span class="kw">return</span> d
+
+<span class="cm"># 3 — Register it (registry.py → register_default_connectors(), one line)</span>
+<span class="kw">from</span> continuum.connectors.s3 <span class="kw">import</span> <span class="cls">S3Connector</span>
+register_connector(<span class="str">"s3"</span>, <span class="cls">S3Connector</span>(), replace=replace)
+
+<span class="cm"># 4 — Use it</span>
+<span class="kw">from</span> continuum.core.container <span class="kw">import</span> get_container
+s3 = get_container().connectors[<span class="str">"s3"</span>]   <span class="cm"># or get_connector("s3")</span>
+client = <span class="kw">await</span> s3.connect()              <span class="cm"># live client (you own it)</span></pre></div>
+  <p>It's now automatically in <code>health_check_all()</code>, gets uniform mode/describe/secret-masking, and is configurable via env. Override <code>aping</code> / <code>describe</code> when a cheaper probe or richer masked diagnostics exist.</p>
+
+  <div class="callout callout-info">
+    <strong>Which flavor?</strong> If <em>you own the client</em> (S3, Postgres, Redis, Temporal), <code>connect()</code> returns the live client and consumers call it. If <em>a library owns the client</em> (like mem0), expose a <code>to_&lt;lib&gt;_block()</code> config method the library consumes and use <code>connect()</code> only for a health-probe client — the <code>vector_store</code> pattern. <strong>LLM providers are intentionally not connectors</strong>: they're a per-request router (model-prefix routing, fallback chains), not a persistent connection.
+  </div>
 
 
 </section>
@@ -2241,19 +2936,25 @@ MILVUS_PORT=19530</pre></div>
 
 
 
-<!-- ═══════════════════ COMMUNITY ═══════════════════ -->
-<!-- ═══════════════════ SMART INFERENCE ═══════════════════ -->
+<!-- ═══════════════════ AURA · SMART INFERENCE ═══════════════════ -->
 <section class="page-section" id="sec-smart">
 
   <a class="anchor" id="smart-intro"></a>
-  <h1>Smart Inference</h1>
-  <p class="section-intro">A cost-aware, classifier-driven routing layer that picks the optimal model per prompt. Continuum agents call one OpenAI-compatible endpoint; Smart Inference dispatches across 250+ models on 45+ providers with per-1M-token pricing, budget ledger, and dynamic output caps baked into the request path.</p>
+  <div class="product-hero">
+    <span class="ph-kicker"><span class="dot"></span>Continuum Suite · Proprietary</span>
+    <h1 class="ph-title grad-text">Aura</h1>
+    <p class="ph-sub">The Smart Inference layer. A cost-aware, classifier-driven router that picks the optimal model per prompt, so your agents hit one OpenAI-compatible endpoint while Aura dispatches across 250+ models on 45+ providers, with per-1M-token pricing, a budget ledger, and dynamic output caps in the request path.</p>
+    <div class="ph-meta">
+      <span class="badge badge-blue">OpenAI-compatible</span>
+      <span class="badge badge-green">Sub-millisecond overhead</span>
+      <span class="badge badge-purple">Classifier · Router · Budget</span>
+      <span class="badge badge-blue">250+ models</span>
+    </div>
+  </div>
 
-  <div class="hero-badges" style="margin-bottom: 24px;">
-    <span class="badge badge-blue">OpenAI-compatible</span>
-    <span class="badge badge-green">Sub-millisecond overhead</span>
-    <span class="badge badge-purple">Classifier · Router · Budget</span>
-    <span class="badge badge-blue">250+ models</span>
+  <div class="proprietary">
+    <div class="pr-text"><span class="pr-tag">Proprietary</span><strong>Aura is a proprietary Continuum product.</strong> The reference below shows how agents wire into the gateway. For an endpoint, a virtual key, and access, reach out to the Shyftlabs team.</div>
+    <a class="pr-cta" href="https://shyftlabs.io/" target="_blank" rel="noopener">Reach out to Shyftlabs →</a>
   </div>
 
   <div class="callout callout-tip">
@@ -2263,7 +2964,7 @@ MILVUS_PORT=19530</pre></div>
   <a class="anchor" id="smart-how"></a>
   <h2>How it works</h2>
   <p>Every <code>POST /v1/chat/completions</code> request flows through a fixed middleware pipeline. Each stage is independently observable and skipped cleanly when its feature flag is off.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Request lifecycle (Continuum agent → Smart Inference gateway → provider)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Request lifecycle (Continuum agent → Aura gateway → provider)</span>
 
 inbound request
   ─► requireValidKey            <span class="cm"># bearer → virtualKey lookup, fail-closed 401</span>
@@ -2287,20 +2988,20 @@ client ◄┘</pre></div>
   <table>
     <tr><th>Mode</th><th>Tier</th><th>Optimises for</th><th>Typical pick</th></tr>
     <tr><td><code>strict</code></td><td>cheap</td><td>lowest cost</td><td>smallest model that clears the capability gate (gpt-4o-mini / gemini-flash / haiku class)</td></tr>
-    <tr><td><code>modest</code></td><td>mid</td><td>quality / cost balance</td><td>mid-tier with the best q/cost — claude-sonnet, gpt-4o</td></tr>
+    <tr><td><code>modest</code></td><td>mid</td><td>quality / cost balance</td><td>mid-tier with the best q/cost, claude-sonnet, gpt-4o</td></tr>
     <tr><td><code>quality</code></td><td>quality</td><td>highest quality</td><td>top-tier candidates available in the registry</td></tr>
   </table>
   <div class="callout callout-info">
-    <strong>Capped by the registry.</strong> The router can only pick from <code>src/services/router/registry.json</code>. Models not in the registry are unreachable via <code>auto</code> — pin them explicitly with <code>&lt;provider&gt;/&lt;model_id&gt;</code> if needed.
+    <strong>Capped by the registry.</strong> The router can only pick from <code>src/services/router/registry.json</code>. Models not in the registry are unreachable via <code>auto</code>; pin them explicitly with <code>&lt;provider&gt;/&lt;model_id&gt;</code> if needed.
   </div>
 
   <a class="anchor" id="smart-setup"></a>
   <h2>Wire Continuum to the Gateway</h2>
-  <p>Continuum routes all LLM calls through Smart Inference when <code>SMART_GATEWAY_URL</code> is set. There is nothing else to import or subclass — <code>GatewayProvider</code> automatically replaces the per-provider clients.</p>
+  <p>Continuum routes all LLM calls through Aura when <code>SMART_GATEWAY_URL</code> is set. There is nothing else to import or subclass; <code>GatewayProvider</code> automatically replaces the per-provider clients.</p>
 
   <a class="anchor" id="smart-env"></a>
   <h3>Environment variables</h3>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side — .env</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Continuum side, .env</span>
 SMART_GATEWAY_URL=https://continuum.shyftops.io/v1     <span class="cm"># gateway base URL</span>
 SMART_GATEWAY_API_KEY=your-smart-gateway-api-key       <span class="cm"># bearer (matches a virtual key)</span>
 SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modest | quality</span></pre></div>
@@ -2308,7 +3009,7 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
   <a class="anchor" id="smart-virtualkey"></a>
   <h3>Virtual key (bearer)</h3>
   <p>The gateway authenticates the client by bearer and looks up the upstream provider key, budget, and allowed-models from <code>conf.integrations[]</code>.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm">// Smart Inference side — conf.json (excerpt)</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm">// Smart Inference side, conf.json (excerpt)</span>
 {
   <span class="str">"integrations"</span>: [
     {
@@ -2329,7 +3030,7 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
 }</pre></div>
 
   <div class="callout callout-warn">
-    <strong>Process env vs <code>.env</code> file.</strong> <code>npm run start:node</code> does <em>not</em> dotenv-load the gateway. Either <code>set -a; source .env; set +a</code> before starting, or pin secrets in <code>docker-compose.yaml</code>'s <code>environment:</code> block. A virtual key whose <code>api_key_env</code> resolves to <code>undefined</code> is silently dropped from the index — every request to it returns <code>401</code>.
+    <strong>Process env vs <code>.env</code> file.</strong> <code>npm run start:node</code> does <em>not</em> dotenv-load the gateway. Either <code>set -a; source .env; set +a</code> before starting, or pin secrets in <code>docker-compose.yaml</code>'s <code>environment:</code> block. A virtual key whose <code>api_key_env</code> resolves to <code>undefined</code> is silently dropped from the index, and every request to it returns <code>401</code>.
   </div>
 
   <a class="anchor" id="smart-model"></a>
@@ -2337,11 +3038,11 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
   <p>The <code>model</code> field in the request body is parsed by <code>modelResolver.ts</code>. Five grammars are supported:</p>
   <table class="param-table">
     <tr><th>Form</th><th>Meaning</th></tr>
-    <tr><td>auto</td><td>—</td><td>gateway-wide auto-routing, default tier</td></tr>
-    <tr><td>auto/&lt;tier&gt;</td><td>—</td><td>gateway-wide, specific tier (cheap/mid/quality)</td></tr>
-    <tr><td>&lt;provider&gt;/auto</td><td>—</td><td>provider-scoped auto-routing, default tier</td></tr>
-    <tr><td>&lt;provider&gt;/auto/&lt;tier&gt;</td><td>—</td><td>provider-scoped, specific tier</td></tr>
-    <tr><td>&lt;provider&gt;/&lt;model_id&gt;</td><td>—</td><td>explicit pin — bypasses model selection</td></tr>
+    <tr><td>auto</td><td>gateway-wide auto-routing, default tier</td></tr>
+    <tr><td>auto/&lt;tier&gt;</td><td>gateway-wide, specific tier (cheap/mid/quality)</td></tr>
+    <tr><td>&lt;provider&gt;/auto</td><td>provider-scoped auto-routing, default tier</td></tr>
+    <tr><td>&lt;provider&gt;/auto/&lt;tier&gt;</td><td>provider-scoped, specific tier</td></tr>
+    <tr><td>&lt;provider&gt;/&lt;model_id&gt;</td><td>explicit pin, bypasses model selection</td></tr>
   </table>
 
   <a class="anchor" id="smart-code"></a>
@@ -2349,7 +3050,7 @@ SMART_GATEWAY_DEFAULT_MODE=modest              <span class="cm"># strict | modes
   <p>From the agent's perspective, nothing changes. Set <code>agent_model</code> to a routing intent and optionally pick a mode.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>
 
-<span class="cm"># Auto-routing — gateway picks the model per turn.</span>
+<span class="cm"># Auto-routing, gateway picks the model per turn.</span>
 agent = <span class="cls">BaseAgent</span>(
     name=<span class="str">"shop-assistant"</span>,
     instructions=<span class="str">"You are a friendly pet shop assistant."</span>,
@@ -2389,27 +3090,27 @@ specialist = <span class="cls">BaseAgent</span>(name=<span class="str">"speciali
   <p>The gateway echoes its routing decision on every response. Useful for tracing and dashboards.</p>
   <table class="param-table">
     <tr><th>Header</th><th>Type</th><th>Example</th></tr>
-    <tr><td>x-portkey-router-mode</td><td>string</td><td><code>modest</code></td></tr>
-    <tr><td>x-portkey-router-complexity</td><td>string</td><td><code>medium</code></td></tr>
-    <tr><td>x-portkey-router-domain</td><td>string</td><td><code>general</code></td></tr>
-    <tr><td>x-portkey-router-picker</td><td>string</td><td><code>category</code> · <code>pareto</code></td></tr>
-    <tr><td>x-portkey-router-pool-size-before</td><td>number</td><td><code>20</code></td></tr>
-    <tr><td>x-portkey-router-pool-size-after</td><td>number</td><td><code>14</code></td></tr>
-    <tr><td>x-portkey-router-attempts</td><td>list</td><td><code>claude-sonnet-4-6@anthropic:200</code></td></tr>
-    <tr><td>x-portkey-router-handover</td><td>string</td><td><code>none</code> · <code>injected</code></td></tr>
-    <tr><td>x-portkey-budget-state</td><td>string</td><td><code>ok</code> · <code>warn</code></td></tr>
-    <tr><td>x-portkey-cache-status</td><td>string</td><td><code>HIT</code> · <code>MISS</code> · <code>DISABLED</code></td></tr>
-    <tr><td>x-portkey-trace-id</td><td>uuid</td><td>—</td></tr>
+    <tr><td>x-aura-router-mode</td><td>string</td><td><code>modest</code></td></tr>
+    <tr><td>x-aura-router-complexity</td><td>string</td><td><code>medium</code></td></tr>
+    <tr><td>x-aura-router-domain</td><td>string</td><td><code>general</code></td></tr>
+    <tr><td>x-aura-router-picker</td><td>string</td><td><code>category</code> · <code>pareto</code></td></tr>
+    <tr><td>x-aura-router-pool-size-before</td><td>number</td><td><code>20</code></td></tr>
+    <tr><td>x-aura-router-pool-size-after</td><td>number</td><td><code>14</code></td></tr>
+    <tr><td>x-aura-router-attempts</td><td>list</td><td><code>claude-sonnet-4-6@anthropic:200</code></td></tr>
+    <tr><td>x-aura-router-handover</td><td>string</td><td><code>none</code> · <code>injected</code></td></tr>
+    <tr><td>x-aura-budget-state</td><td>string</td><td><code>ok</code> · <code>warn</code></td></tr>
+    <tr><td>x-aura-cache-status</td><td>string</td><td><code>HIT</code> · <code>MISS</code> · <code>DISABLED</code></td></tr>
+    <tr><td>x-aura-trace-id</td><td>uuid</td><td><code>3a7f1b9e&#8230;</code></td></tr>
   </table>
 
   <a class="anchor" id="smart-tips"></a>
   <h2>Tips &amp; gotchas</h2>
   <ul>
-    <li><strong>Handover</strong> — when the router picks a different model between turns in the same <code>session_id</code>, the gateway injects a one-line system note so the new model keeps prior context. Always pass <code>metadata.session_id</code> for multi-turn agents.</li>
-    <li><strong>Cooldown</strong> — 429/503 from a candidate temporarily removes it from the pool (default 15s, honoring upstream <code>Retry-After</code> up to 5 min).</li>
-    <li><strong>Semantic cache</strong> — cosine ≥ 0.95 hits on near-duplicate prompts. Streams and tool calls bypass cache by design. Enable via <code>conf.cache.semantic.enabled = true</code>.</li>
-    <li><strong>Streaming tool calls</strong> — current versions of Smart Inference forward provider chunks 1:1. If you stream <em>and</em> use tools, aggregate tool_call argument fragments client-side until <code>finish_reason="tool_calls"</code>.</li>
-    <li><strong>Budgets</strong> — gated by <code>budgets.enabled</code>. When on, requests are pre-checked against the bearer's <code>budget_usd</code> and the integration's session/project caps.</li>
+    <li><strong>Handover</strong>, when the router picks a different model between turns in the same <code>session_id</code>, the gateway injects a one-line system note so the new model keeps prior context. Always pass <code>metadata.session_id</code> for multi-turn agents.</li>
+    <li><strong>Cooldown</strong>, 429/503 from a candidate temporarily removes it from the pool (default 15s, honoring upstream <code>Retry-After</code> up to 5 min).</li>
+    <li><strong>Semantic cache</strong>, cosine ≥ 0.95 hits on near-duplicate prompts. Streams and tool calls bypass cache by design. Enable via <code>conf.cache.semantic.enabled = true</code>.</li>
+    <li><strong>Streaming tool calls</strong>, current versions of Aura forward provider chunks 1:1. If you stream <em>and</em> use tools, aggregate tool_call argument fragments client-side until <code>finish_reason="tool_calls"</code>.</li>
+    <li><strong>Budgets</strong>, gated by <code>budgets.enabled</code>. When on, requests are pre-checked against the bearer's <code>budget_usd</code> and the integration's session/project caps.</li>
   </ul>
 
 </section>
@@ -2848,19 +3549,54 @@ mypy src/</pre>
 
 </section>
 
+<!-- ═══════════════════ PROVENANCE · COMING SOON ═══════════════════ -->
+<section class="page-section" id="sec-provenance">
+
+  <a class="anchor" id="prov-intro"></a>
+  <div class="cs">
+    <span class="cs-badge">Coming soon · Continuum Suite · Proprietary</span>
+    <h1 class="grad-text">Provenance</h1>
+    <p class="cs-sub">The trust layer for agents in production. Prompt versioning, guardrails, PII redaction, and policy, so every decision your agents make is governed, observable, and audit-ready.</p>
+
+    <a class="anchor" id="prov-capabilities"></a>
+    <div class="cs-pills">
+      <span class="cs-pill">Prompt Management</span>
+      <span class="cs-pill">Guardrails</span>
+      <span class="cs-pill">PII Redaction</span>
+      <span class="cs-pill">Policy &amp; Governance</span>
+      <span class="cs-pill">Audit Trails</span>
+      <span class="cs-pill">Access Control</span>
+    </div>
+
+    <a class="anchor" id="prov-early"></a>
+    <a class="cs-cta" href="https://shyftlabs.io/" target="_blank" rel="noopener">Request early access →</a>
+    <p style="margin-top:22px; font-size:13px; color:var(--text-mute);">Need governance sooner? <a href="https://shyftlabs.io/" target="_blank" rel="noopener">Talk to the team at Shyftlabs</a>. Provenance is rolling out to design partners first.</p>
+  </div>
+
+</section>
+
 </main>
 </div>
 
 <footer>
-  <span>Continuum v0.2.0 · Shyftlabs</span>
-  <span>Python 3.13+ · <a href="https://github.com/shyftlabs/continuum">GitHub</a></span>
+  <div class="footer-brand">
+    <a href="https://continuum.shyftlabs.io" target="_blank" rel="noopener" aria-label="Continuum"><img class="footer-logo" src="assets/continuum-logo.png" alt="Continuum" /></a>
+    <span class="footer-divider" aria-hidden="true"></span>
+    <span class="footer-meta">v1.2.0 · Built by</span>
+    <a class="footer-built" href="https://shyftlabs.io/" target="_blank" rel="noopener" aria-label="Shyftlabs"><img class="footer-shyft" src="assets/shyftlabs-logo.svg" alt="Shyftlabs" /></a>
+  </div>
+  <div class="footer-social">
+    <a href="https://github.com/shyftlabs/continuum" target="_blank" rel="noopener" aria-label="Continuum on GitHub"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1-.02-1.96-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.07.78 2.16 0 1.56-.01 2.82-.01 3.2 0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg></a>
+    <a href="https://www.linkedin.com/company/shyftlabsio/" target="_blank" rel="noopener" aria-label="Shyftlabs on LinkedIn"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.8 0 0 .78 0 1.74v20.52C0 23.22.8 24 1.77 24h20.45c.97 0 1.78-.78 1.78-1.74V1.74C24 .78 23.2 0 22.22 0z"/></svg></a>
+    <a href="https://x.com/ShyftLabs_io" target="_blank" rel="noopener" aria-label="Shyftlabs on X"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+  </div>
 </footer>
 
 <!-- ═══════════════════ JS ═══════════════════ -->
 `
 
 const JS = `
-const sections = ['home', 'build', 'run', 'smart', 'components', 'integrations', 'research', 'examples', 'community'];
+const sections = ['home', 'framework', 'build', 'run', 'smart', 'components', 'integrations', 'research', 'examples', 'community', 'provenance'];
 
   // ───── Mobile drawer ─────
   function isMobile() { return window.innerWidth <= 768; }
@@ -2902,31 +3638,47 @@ const sections = ['home', 'build', 'run', 'smart', 'components', 'integrations',
     }
   });
 
+  // Continuum Framework owns all of these areas; Aura and Provenance are standalone products.
+  const FRAMEWORK_AREAS = ['framework', 'build', 'run', 'components', 'integrations', 'research', 'examples', 'community'];
+
   function showSection(name) {
-    // Hide all sections
+    // Hide every section + its sidebar, and the framework area-nav
     sections.forEach(s => {
       const sec = document.getElementById('sec-' + s);
       if (sec) sec.classList.remove('active');
       const sb = document.getElementById('sb-' + s);
       if (sb) sb.style.display = 'none';
     });
+    const areaNav = document.getElementById('sb-framework-areas');
+    if (areaNav) areaNav.style.display = 'none';
 
-    // Show target
+    // Show the target section + its sub-section sidebar
     const sec = document.getElementById('sec-' + name);
     if (sec) sec.classList.add('active');
     const sb = document.getElementById('sb-' + name);
     if (sb) sb.style.display = 'block';
 
-    // Update nav tabs
-    document.querySelectorAll('.nav-tab').forEach((t, i) => {
-      t.classList.toggle('active', sections[i] === name);
+    // Framework areas share one persistent area-nav (the framework's sub-sections)
+    if (areaNav && FRAMEWORK_AREAS.includes(name)) {
+      areaNav.style.display = 'block';
+      areaNav.querySelectorAll('.area-link').forEach(l =>
+        l.classList.toggle('active', l.dataset.area === name));
+    }
+
+    // Product switcher follows the PRODUCT: Framework=all areas, Aura=smart, Provenance=provenance
+    const currentProduct = name === 'smart' ? 'smart' : name === 'provenance' ? 'provenance' : (FRAMEWORK_AREAS.includes(name) ? 'framework' : null);
+    document.querySelectorAll('.product-tab').forEach((t) => {
+      const on = t.dataset.section === currentProduct;
+      t.classList.toggle('active', on);
+      if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
     });
 
-    // Scroll to top
+    // Reset scroll + re-arm scroll-reveal for the newly shown content
     document.getElementById('main').scrollTop = 0;
     window.scrollTo(0, 0);
+    if (window.armReveal) window.armReveal();
 
-    // Update sidebar active link
+    // Activate the first sub-section link
     const links = document.querySelectorAll('#sb-' + name + ' .sidebar-link');
     if (links.length > 0) {
       links.forEach(l => l.classList.remove('active'));
@@ -2936,18 +3688,22 @@ const sections = ['home', 'build', 'run', 'smart', 'components', 'integrations',
     closeSidebarIfMobile();
   }
 
+  // Parse the exact anchor id out of a sidebar link's onclick (avoids substring prefix bugs)
+  function linkAnchor(l) {
+    const m = (l.getAttribute('onclick') || '').match(/scrollToAnchor\\('([^']+)'\\)/);
+    return m ? m[1] : null;
+  }
+
   function scrollToAnchor(anchorId) {
     const el = document.getElementById(anchorId);
     if (el) {
       const y = el.getBoundingClientRect().top + window.scrollY - 70;
       window.scrollTo({ top: y, behavior: 'smooth' });
     }
-    // Update sidebar active
+    // Update sidebar active (exact match; leave area-nav links, which use showSection, untouched)
     document.querySelectorAll('.sidebar-link').forEach(l => {
-      l.classList.remove('active');
-      if (l.getAttribute('onclick') && l.getAttribute('onclick').includes(anchorId)) {
-        l.classList.add('active');
-      }
+      const a = linkAnchor(l);
+      if (a !== null) l.classList.toggle('active', a === anchorId);
     });
 
     closeSidebarIfMobile();
@@ -2958,29 +3714,119 @@ const sections = ['home', 'build', 'run', 'smart', 'components', 'integrations',
     const wrapper = btn.closest('.code-wrapper') || btn.parentElement;
     const pre = wrapper.querySelector('pre') || btn.parentElement;
     const text = pre.innerText.trim();
+    if (!navigator.clipboard) return;
     navigator.clipboard.writeText(text).then(() => {
       btn.textContent = 'copied!';
       setTimeout(() => btn.textContent = 'copy', 1500);
-    });
+    }).catch(() => {});
   }
 
-  // Scrollspy — update sidebar as user scrolls
+  // Scrollspy, update sidebar as user scrolls
   window.addEventListener('scroll', () => {
-    const anchors = document.querySelectorAll('.anchor');
+    // Reading-progress bar
+    const bar = document.getElementById('read-progress');
+    if (bar) {
+      const doc = document.documentElement;
+      const max = (doc.scrollHeight - window.innerHeight) || 1;
+      bar.style.width = Math.max(0, Math.min(100, (window.scrollY / max) * 100)) + '%';
+    }
+    const anchors = document.querySelectorAll('.page-section.active .anchor');
     let current = null;
     anchors.forEach(a => {
       if (window.scrollY >= a.offsetTop - 90) current = a.id;
     });
     if (current) {
       document.querySelectorAll('.sidebar-link').forEach(l => {
-        const oc = l.getAttribute('onclick') || '';
-        l.classList.toggle('active', oc.includes(current));
+        const a = linkAnchor(l);
+        if (a !== null) l.classList.toggle('active', a === current);
       });
     }
   });
 
-  // Show home sidebar on load
-  document.getElementById('sb-home').style.display = 'block';
+  // Suite cards (role=button), Enter/Space activate, like a real button
+  document.querySelectorAll('.suite-card').forEach(card => {
+    card.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+    });
+  });
+
+  // href-less onclick anchors (sidebar TOC + inline cross-links), make them keyboard-operable
+  document.querySelectorAll('a[onclick]:not([href])').forEach(a => {
+    if (!a.hasAttribute('tabindex')) a.setAttribute('tabindex', '0');
+    if (!a.hasAttribute('role')) a.setAttribute('role', 'link');
+    a.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); a.click(); }
+    });
+  });
+
+  // ───── Minimal constellation background (vanilla canvas, monochrome) ─────
+  (function constellation() {
+    const canvas = document.getElementById('bg-canvas');
+    if (!canvas) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const ctx = canvas.getContext('2d');
+    let w, h, dpr, pts = [], raf, t;
+    function size() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = canvas.width = Math.floor(innerWidth * dpr);
+      h = canvas.height = Math.floor(innerHeight * dpr);
+      canvas.style.width = innerWidth + 'px';
+      canvas.style.height = innerHeight + 'px';
+      const count = Math.max(18, Math.min(60, Math.round(innerWidth * innerHeight / 28000)));
+      pts = Array.from({ length: count }, () => ({
+        x: Math.random() * w, y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.16 * dpr,
+        vy: (Math.random() - 0.5) * 0.16 * dpr,
+        r: (Math.random() * 1.1 + 0.6) * dpr,
+      }));
+    }
+    function frame() {
+      ctx.clearRect(0, 0, w, h);
+      const link = 132 * dpr;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0 || p.x > w) p.vx *= -1;
+        if (p.y < 0 || p.y > h) p.vy *= -1;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(24,28,38,0.28)'; ctx.fill();
+        for (let j = i + 1; j < pts.length; j++) {
+          const q = pts[j], dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
+          if (d < link) {
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+            ctx.strokeStyle = 'rgba(48,56,74,' + (0.11 * (1 - d / link)).toFixed(3) + ')';
+            ctx.lineWidth = dpr * 0.6; ctx.stroke();
+          }
+        }
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    size(); frame();
+    window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(size, 200); });
+  })();
+
+  // ───── Scroll reveal (IntersectionObserver; classes added by JS so no-JS stays visible) ─────
+  (function () {
+    if ((window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) || !('IntersectionObserver' in window)) {
+      window.armReveal = function () {}; return;
+    }
+    const SEL = 'h2, .cards, .suite, .code-wrapper, .callout, table, .steps, .workflow-grid, .cs-pills, .proprietary, .ph-meta, .stats, .flow, .cta-band';
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { rootMargin: '0px 0px -7% 0px', threshold: 0.05 });
+    window.armReveal = function () {
+      const active = document.querySelector('.page-section.active');
+      if (!active) return;
+      active.querySelectorAll(SEL).forEach(el => {
+        el.classList.add('reveal');
+        if (el.getBoundingClientRect().top < innerHeight * 0.92) el.classList.add('in'); // in view: show now
+        else io.observe(el); // below the fold: fade up on scroll
+      });
+    };
+  })();
+
+  // Initialise on the Continuum Framework / Overview view
+  showSection('home');
 `
 
 interface Props {

@@ -41,6 +41,7 @@ class OpenAIProvider(BaseProvider):
         api_base: str | None = None,
         api_version: str | None = None,
         extra_headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
     ):
         kwargs: dict[str, Any] = {}
         if api_key:
@@ -49,6 +50,12 @@ class OpenAIProvider(BaseProvider):
             kwargs["organization"] = organization
         if api_base:
             kwargs["base_url"] = api_base
+        # Wire the configured retry budget into the SDK client. Without this the
+        # SDK falls back to its own default (2), so llm_max_retries did nothing
+        # and a hanging call retried uncontrollably (the per-attempt timeout is
+        # not a total ceiling). None → leave the SDK default untouched.
+        if max_retries is not None:
+            kwargs["max_retries"] = max_retries
 
         default_headers: dict[str, str] = {}
         if api_version:
@@ -72,8 +79,9 @@ class OpenAIProvider(BaseProvider):
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._normalize_model(config.model),
-            "temperature": config.temperature,
         }
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
         if config.max_tokens is not None:
             kwargs["max_tokens"] = config.max_tokens
         if config.top_p is not None:
@@ -106,9 +114,17 @@ class OpenAIProvider(BaseProvider):
 
         return kwargs
 
+    # Overridden by subclasses that speak the OpenAI wire protocol to a
+    # different upstream (e.g. GatewayProvider → "gateway"), so errors are
+    # attributed to the system that actually served the request.
+    _provider_label: str = _PROVIDER
+
     def _handle_exception(self, e: Exception, model: str) -> None:
-        provider = _PROVIDER
-        ctx = {"model": model, "provider": provider}
+        provider = self._provider_label
+        ctx: dict[str, Any] = {"model": model, "provider": provider}
+        gateway_url = getattr(self, "_gateway_url", None)
+        if gateway_url:
+            ctx["gateway_url"] = gateway_url
         if isinstance(e, openai.AuthenticationError):
             raise LLMAuthenticationError(
                 str(e), model=model, provider=provider, original_error=e, context=ctx

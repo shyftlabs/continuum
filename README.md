@@ -113,7 +113,9 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | Variable | Description | Example |
 |---|---|---|
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | Provider API keys — set the one(s) you use | `sk-…` |
-| `DEFAULT_LLM_MODEL` | Default model (`provider/model`, or bare name for OpenAI) | `gemini/gemini-2.5-flash` |
+| `DEFAULT_LLM_MODEL` | Default model (`provider/model`, or bare name for OpenAI). If unset, it is provider-aware — derived from whichever API key is present, so chat and framework meta-operations (routing, reflection, summarization) need no OpenAI key on an Anthropic- or Gemini-only setup. (Memory embeddings still default to the OpenAI embedder — see `EMBEDDER_PROVIDER`.) | `gemini/gemini-2.5-flash` |
+| `ANTHROPIC_DEFAULT_MODEL` | Default model when only an Anthropic key is set (and `DEFAULT_LLM_MODEL` is unset) | `claude-haiku-4-5` |
+| `GEMINI_DEFAULT_MODEL` | Default model when only a Gemini key is set (and `DEFAULT_LLM_MODEL` is unset) | `gemini/gemini-2.5-flash` |
 | `FALLBACK_LLM_MODEL` | Model used if the default fails | `gpt-4o-mini` |
 | `LLM_ENABLE_FALLBACK` | Automatically fall back on provider errors | `true` |
 | `SMART_LAYER_ENABLED` | Enable cost-aware tier routing (Smart Inference) | `true` |
@@ -126,6 +128,7 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | `VECTOR_STORE_PROVIDER` | Vector store backend | `qdrant` / `milvus` |
 | `EMBEDDER_PROVIDER` / `EMBEDDER_MODEL` | Embedding provider & model | `openai` / `text-embedding-3-small` |
 | `MEMORY_ISOLATION` | Scope of memory isolation | `user` / `agent` / `run` / `shared` |
+| `MEMORY_MAX_QUERY_CHARS` | Truncate long search queries before the embedder (avoids the ~8191-token cap; empty disables) | `8000` |
 
 #### Sessions (short-term)
 
@@ -150,7 +153,7 @@ Continuum is configured through environment variables (copy [`.env.template`](ht
 | `TEMPORAL_ENABLED` | Enable durable workflow orchestration | `false` |
 | `TEMPORAL_HOST` | Temporal frontend | `localhost:7233` |
 
-> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings. See [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) for the complete, annotated reference.
+> Optional extras: `pip install -e ".[temporal]"` for Temporal, `".[eval]"` for evaluation, `".[embeddings]"` for local embeddings, `".[headroom-local]"` for in-process Headroom compression (`".[headroom-local-ml]"` adds ML prose compression). See [`.env.template`](https://github.com/shyftlabs/continuum/blob/main/.env.template) for the complete, annotated reference.
 
 ## 🧩 Components
 

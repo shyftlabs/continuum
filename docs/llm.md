@@ -43,6 +43,28 @@ class BaseProvider(ABC):
     async def astream(messages, config, tools=None, tool_choice=None) -> AsyncIterator[StreamChunk]
 ```
 
+### Smart Gateway (`SMART_GATEWAY_URL`)
+
+When `SMART_GATEWAY_URL` is set, **every** model routes through the Smart
+Gateway (the prefix table above is bypassed, and custom `register_provider()`
+entries are shadowed — a one-time warning is logged when that happens). The
+gateway is OpenAI-compatible, so the model string must use **the gateway's
+own provider ids**, not Continuum's routing prefixes:
+
+- Use `anthropic/…`, `openai/…`, `google/…` — e.g. `anthropic/claude-opus-4-8`.
+  Continuum's `claude/…` prefix is **not** a gateway provider id and returns
+  `400 model provider is not supported`.
+- Provider-qualified names (`anthropic/claude-opus-4-8`) and explicit tiers
+  (`auto/<tier>`) pass through **verbatim** — you get exactly that model/tier.
+- A **bare** single-segment name (`gpt-4o-mini`) is treated as a routable
+  placeholder and replaced with `auto/<tier>` (tier from the router mode); the
+  substitution is logged as a `WARNING` so it is never silent.
+
+To disable the gateway (direct provider calls), set `SMART_GATEWAY_URL=`
+(empty) in your environment — an empty value is falsy, so routing falls back
+to the prefix table. Deleting the var from a shell after it was exported is
+not enough if it's still exported elsewhere; prefer the empty value.
+
 ### Provider quirks (handled for you)
 
 - **Gemini** does not support tools and JSON mode simultaneously — the
@@ -142,8 +164,8 @@ A Pydantic model with full provider-agnostic settings.
 | `presence_penalty` | `float \| None` | `None` | OpenAI-only |
 | `stop` | `list[str] \| str \| None` | `None` | Stop sequences |
 | `seed` | `int \| None` | `None` | Determinism |
-| `timeout` | `int` | `settings.llm_request_timeout` | Seconds |
-| `max_retries` | `int` | `settings.llm_max_retries` | |
+| `timeout` | `int` | `settings.llm_request_timeout` | Per-attempt seconds (not total). The whole call is hard-bounded at ~`timeout × (max_retries + 1)` + backoff via an overall deadline. |
+| `max_retries` | `int` | `settings.llm_max_retries` | SDK-level retries per call (wired into the provider client). Set `0` to make `timeout` a true single-attempt ceiling. |
 | `enable_fallback` | `bool` | `settings.llm_enable_fallback` | |
 | `response_format` | `dict \| type[BaseModel] \| None` | `None` | Structured output |
 | `json_mode` | `bool` | `False` | Simple `json_object` mode |
@@ -334,6 +356,34 @@ new_messages, result = await mgr.compress_if_needed(messages, model="gpt-4o-mini
 `compression_ratio`, `latency_ms`, `cache_hit`, etc.
 
 To override per-agent: set `agent.config.context_management = cfg`.
+
+### Headroom compression (optional)
+
+Headroom is an optional, **per-turn** compression engine that shrinks
+bulky tool output — logs, tables, search / RAG dumps, prose — *before*
+it reaches the model, and collapses stale or redundant file reads.
+Unlike the summarizer above, it never rewrites earlier messages, so the
+provider's prompt cache stays warm. It compresses tool results (and,
+opt-in, assistant text); system and user messages are left intact. Off
+by default.
+
+It **complements** the `ProgressiveContextManager` rather than replacing
+it: Headroom runs every turn (cheap, cache-friendly), while
+`HEADROOM_CONTEXT_THRESHOLD` (default `0.92`) raises the summarizer's
+trigger so the heavier, history-rewriting summarizer fires only as a
+last resort behind Headroom.
+
+Two modes via `HEADROOM_MODE`:
+
+- **`local`** (default) — in-process (`import headroom`); install the
+  `[headroom-local]` extra (add `-ml` for prose / Kompress).
+- **`endpoint`** — HTTP to a `headroom proxy` sidecar (one engine serves
+  many workers); set `HEADROOM_MODE=endpoint` + `HEADROOM_API_BASE`.
+
+Enable with `HEADROOM_ENABLED=true`. See
+[`installation.md`](installation.md) for the full `HEADROOM_*` env-var
+reference, and `docs/index.html` (Run Agents → Headroom Compression) for
+the sidecar walkthrough and the transform reference.
 
 ---
 

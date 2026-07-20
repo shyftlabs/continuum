@@ -184,7 +184,7 @@ class PlannerAgent(BaseAgent):
                     initial_usage=plan_usage,
                 )
 
-            if context.session_id and result.turn_count:
+            if context.session_id and result.turn_count and result.status == ResponseStatus.SUCCESS:
                 await runner.save_turn(
                     session_id=context.session_id,
                     user_message=input_text,
@@ -309,6 +309,11 @@ class PlannerAgent(BaseAgent):
                         input=step_input,
                         context=context,
                     )
+                    # A returned ERROR (e.g. circuit breaker open) is a failed
+                    # step, not an answer — route it into the failure handling
+                    # below instead of chaining the error prose into the next step.
+                    if response.status == ResponseStatus.ERROR:
+                        raise RuntimeError(response.error or response.content or "step failed")
                     total_usage = total_usage.add(response.usage)
                     completed.append(
                         {
@@ -605,7 +610,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=[{"role": "user", "content": prompt}],
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=2000),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=2000,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)
@@ -662,7 +671,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.1, max_tokens=1500),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=1500,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)
@@ -722,7 +735,11 @@ class PlannerAgent(BaseAgent):
         try:
             response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=0.2, max_tokens=1500),
+                config=LLMConfig(
+                    model=model,
+                    temperature=self.planning_config.planning_temperature,
+                    max_tokens=1500,
+                ),
                 auto_session=False,
             )
             usage = self._extract_usage(response)
