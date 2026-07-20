@@ -147,13 +147,23 @@ class TestGatewayShortCircuit:
         # continuum's root logger sets propagate=False; re-enable so caplog sees it.
         monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
 
+        # Warn-once is proven by the SECOND call emitting nothing — not by
+        # counting the first as exactly one record. With propagation forced on,
+        # a single emission can be captured more than once depending on handlers
+        # other tests leave behind, so a raw `== 1` count is order-dependent.
+        # "Nothing" cannot be double-captured, so this stays deterministic.
         with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
             get_provider(LLMConfig(model="myco/super-model"))
+        first = [r for r in caplog.records if "bypassed" in r.getMessage()]
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers"):
             get_provider(LLMConfig(model="myco/super-model"))
+        second = [r for r in caplog.records if "bypassed" in r.getMessage()]
 
-        shadow_warnings = [r for r in caplog.records if "bypassed" in r.getMessage()]
-        assert len(shadow_warnings) == 1  # warned, and only once
-        assert "myco/" in shadow_warnings[0].getMessage()
+        assert first, "first call must warn that the custom registration is bypassed"
+        assert "myco/" in first[0].getMessage()
+        assert not second, "second call must not warn again (warn-once)"
+        assert registry._gateway_shadow_warned is True
 
     def test_no_shadow_warning_without_custom_registrations(self, monkeypatch, caplog):
         import logging
@@ -206,12 +216,22 @@ class TestGatewayModelFidelity:
         gw = self._gw(mode="modest")
         # continuum's root logger sets propagate=False; re-enable so caplog sees it.
         monkeypatch.setattr(logging.getLogger("continuum"), "propagate", True)
+
+        # Warn-once per model: the SECOND normalize emits nothing. Asserting the
+        # first is "exactly one record" is order-dependent under forced
+        # propagation (a single emission can be captured more than once); an
+        # empty second capture cannot be, so this stays deterministic.
         with caplog.at_level(logging.WARNING, logger="continuum.llm.providers.gateway_provider"):
             assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+        first = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="continuum.llm.providers.gateway_provider"):
             assert gw._normalize_model("gpt-4o-mini") == "auto/mid"
+        second = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
 
-        subs = [r for r in caplog.records if "replacing requested model" in r.getMessage()]
-        assert len(subs) == 1  # loud, but once per model
+        assert first, "first normalize of a bare model must warn"
+        assert not second, "second normalize of the same model must not warn again"
+        assert "gpt-4o-mini" in GatewayProvider._warned_models
 
     def test_gateway_errors_attributed_to_gateway_not_openai(self):
         """Regression: a gateway 401 raised provider=openai, sending users to
