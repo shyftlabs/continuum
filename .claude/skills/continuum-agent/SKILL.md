@@ -53,9 +53,9 @@ print(resp.structured_output)           # populated if output_schema set
 | `examples` | `[]` | few-shot |
 | `instruction_modifiers` | `[]` | dynamic prompt rewriters |
 | `on_start` / `on_end` / `on_error` / `on_tool_call` / `on_handoff` | `None` | sync callables |
-| `config` | `AgentConfig()` | max_turns=25, react_mode, reasoning_mode, scanners, … |
+| `config` | `AgentConfig()` | max_turns=25, react_mode, reasoning_mode, scanners, `strict_security`, … |
 | `gateway_mode` | `None` | Smart Gateway routing: `"strict"` / `"modest"` / `"quality"` |
-| `policy_store` | `None` | Security policy store for request validation |
+| `policy_store` | `None` | Access-control store. `None` = fail-open (no authorization). Use `PolicyStore.default_deny([...])` to fail closed; set `AgentConfig(strict_security=True)` to raise when side-effectful tools have no policy |
 
 ## Structured output
 

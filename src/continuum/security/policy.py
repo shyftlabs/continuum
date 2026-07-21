@@ -4,7 +4,9 @@ Inspired by Orla's serving/access/evaluator.go:
   - Subjects are agent names or data labels (glob patterns).
   - Resources are tool names, memory scopes, or data labels (glob patterns).
   - Deny always overrides allow (explicit deny wins).
-  - If no policy matches, access is open (default allow).
+  - If no policy matches, the result is PolicyStore.default_effect
+    ("allow" by default — historical open default; set "deny", or use
+    PolicyStore.default_deny(), to fail closed).
 """
 
 from __future__ import annotations

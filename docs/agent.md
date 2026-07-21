@@ -52,6 +52,7 @@ default — only `name` is required.
 | `tools` | `list[ToolDefinition] \| list[dict]` | `[]` | Pre-shaped tool definitions for the LLM |
 | `tool_executor` | `ToolExecutor \| None` | `None` | Override the runner's executor for this agent |
 | `mcp_servers` | `list[MCPServer]` | `[]` | MCP servers — tools are auto-discovered |
+| `policy_store` | `PolicyStore \| None` | `None` | Access-control policies for tool/memory calls. `None` = no authorization (fail-open); wire `PolicyStore.default_deny([...])` to fail closed. See [Security](#security-posture) |
 | `handoffs` | `list[Handoff]` | `[]` | Allowed agent-to-agent transitions |
 | `memory_config` | `AgentMemoryConfig` | `AgentMemoryConfig()` | Memory search/store behavior |
 | `config` | `AgentConfig` | `AgentConfig()` | Run-level config (max_turns, ReAct, scanners, …) |
@@ -243,6 +244,7 @@ All importable from `continuum.agent`.
 | `context_management` | `ContextManagementConfig \| None` | `None` | Per-agent compression override |
 | `input_sanitization` | `bool` | `True` | Strip control chars from input |
 | `injection_detection` | `bool` | `False` | Log suspected prompt-injection patterns |
+| `strict_security` | `bool` | `False` | If `True`, agent construction raises `AgentConfigurationError` when it has side-effectful tools but no `policy_store`/`access_policies`. If `False`, the same case logs a warning. See [Security](#security-posture) |
 | `output_type` | `Literal["text","json","structured"]` | `"text"` | |
 | `reasoning_mode` | `bool` | `False` | Silent think-first pass before main loop |
 | `react_mode` | `bool` | `False` | Inject the `think` tool with ReAct scaffold |
@@ -284,6 +286,48 @@ All importable from `continuum.agent`.
 | `circuit_breaker_threshold` | `int` | `5` |
 | `circuit_breaker_cooldown` | `int` | `60` |
 | `trace_enabled` | `bool` | `True` |
+
+---
+
+## Security posture
+
+Authorization in Continuum is **opt-in and fail-open by default**: `BaseAgent.policy_store`
+is `None`, so an agent whose `policy_store` and `config.access_policies` are both unset
+runs **every tool call unauthorized**. The access-control engine itself is solid
+(deny-overrides, glob subjects/resources) — it just isn't wired unless you wire it.
+
+Two mechanisms make this safe:
+
+**1. Construction-time visibility.** If an agent has side-effectful tools (names matching
+`delete`, `send`, `pay`, `transfer`, `shell`, `exec`, `write_file`, … ) but no authorization
+configured, construction logs a warning. Set `AgentConfig(strict_security=True)` to turn that
+warning into an `AgentConfigurationError` — recommended for production.
+
+**2. Fail-closed policies.** `PolicyStore` evaluates unmatched resources against
+`default_effect` (`"allow"` by default, preserving historical behavior). Use the
+`default_deny()` constructor so anything not explicitly allowed is blocked:
+
+```python
+from continuum.agent import BaseAgent, AgentConfig
+from continuum.security.policy import AccessPolicy, PolicyStore
+
+store = PolicyStore.default_deny([
+    AccessPolicy(name="reads", subjects=["support"],
+                 resources=["tool:get_*"], effect="allow"),
+])
+
+agent = BaseAgent(
+    name="support",
+    instructions="...",
+    tools=[get_order, refund_order],   # refund_order is NOT allowed → blocked
+    policy_store=store,
+    config=AgentConfig(strict_security=True),
+)
+```
+
+Resource prefixes: `tool:<name>`, `memory:<scope>`, `data:<label>`. Deny always overrides
+allow. `RunContext.data_labels` (e.g. `"pii"`) are passed as extra subjects, so a policy can
+gate access based on data tainting the run.
 
 ---
 
