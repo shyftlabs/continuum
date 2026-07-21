@@ -388,7 +388,7 @@ class BaseAgent:
         When react_mode is enabled, prepends a 'think' tool so the LLM
         can express reasoning steps via function calling before acting.
         """
-        tools = []
+        tools: list[Any] = []
 
         # Add regular tools
         for tool in self.tools:
@@ -483,7 +483,7 @@ class BaseAgent:
             New agent instance
         """
         # Deep copy mutable nested structures to prevent shared-state mutations
-        current = {
+        current: dict[str, Any] = {
             "name": self.name,
             "instructions": self.instructions,
             "description": self.description,
