@@ -163,12 +163,14 @@ class SummaryCache:
 
     def _generate_key(self, messages: list[dict[str, Any]]) -> str:
         """Generate cache key from messages."""
-        # Create hash of message content (excluding timestamps/metadata)
+        # Create hash of message content (excluding timestamps/metadata).
+        # Non-security cache key for summary dedup only — no trust boundary.
+        # Uses sha256 (not md5) so static analysis never flags a weak-hash finding here.
         content = []
         for msg in messages:
             content.append(f"{msg.get('role')}:{(msg.get('content') or '')[:100]}")
         content_str = "|".join(content)
-        return hashlib.md5(content_str.encode()).hexdigest()
+        return hashlib.sha256(content_str.encode()).hexdigest()
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
