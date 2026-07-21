@@ -164,3 +164,51 @@ class TestPolicyStoreMutability:
         lst = store.list_policies()
         lst.clear()
         assert len(store.list_policies()) == 1
+
+
+class TestPolicyStoreDefaultEffect:
+    """Step 3 — opt-in default-deny posture when a store IS configured."""
+
+    def test_default_is_allow_backward_compatible(self):
+        # Unset default_effect must preserve the historical open-default behavior.
+        store = PolicyStore()
+        assert store.default_effect == "allow"
+        assert store.check("agent", "tool:anything").allowed is True
+
+    def test_default_deny_blocks_unmatched(self):
+        store = PolicyStore(default_effect="deny")
+        decision = store.check("agent", "tool:delete_account")
+        assert decision.allowed is False
+        assert decision.policy_name is None
+        assert "default" in decision.reason.lower()
+
+    def test_default_deny_allows_explicitly_allowed(self):
+        store = PolicyStore(default_effect="deny")
+        store.add_policy(_allow("p1", ["billing_agent"], ["tool:get_invoice"]))
+        assert store.check("billing_agent", "tool:get_invoice").allowed is True
+        # Anything not explicitly allowed is blocked.
+        assert store.check("billing_agent", "tool:delete_account").allowed is False
+
+    def test_default_deny_still_honours_explicit_deny(self):
+        # deny-overrides semantics remain intact under default-deny.
+        store = PolicyStore(default_effect="deny")
+        store.add_policy(_allow("all", ["*"], ["tool:*"]))
+        store.add_policy(_deny("no_shell", ["*"], ["tool:shell_exec"]))
+        assert store.check("agent", "tool:shell_exec").allowed is False
+        assert store.check("agent", "tool:get_weather").allowed is True
+
+
+class TestPolicyStoreDefaultDenyFactory:
+    """Step 2 — ergonomic secure-defaults constructor for the quick-start path."""
+
+    def test_default_deny_factory_denies_by_default(self):
+        store = PolicyStore.default_deny()
+        assert store.default_effect == "deny"
+        assert store.check("agent", "tool:anything").allowed is False
+
+    def test_default_deny_factory_seeds_allow_policies(self):
+        store = PolicyStore.default_deny(
+            [_allow("read_only", ["*"], ["tool:get_*"])]
+        )
+        assert store.check("agent", "tool:get_invoice").allowed is True
+        assert store.check("agent", "tool:delete_invoice").allowed is False

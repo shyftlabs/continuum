@@ -210,6 +210,12 @@ class AgentConfig:
     input_sanitization: bool = True
     injection_detection: bool = False
 
+    # When True, agent construction FAILS (raises AgentConfigurationError) if the
+    # agent has side-effectful tools but no authorization configured (no
+    # policy_store and no access_policies). When False (default), the same
+    # condition only emits a warning — see BaseAgent._check_security_posture.
+    strict_security: bool = False
+
     # Output settings
     output_type: Literal["text", "json", "structured"] = "text"
 
@@ -289,6 +295,7 @@ class AgentConfig:
             ),
             "input_sanitization": self.input_sanitization,
             "injection_detection": self.injection_detection,
+            "strict_security": self.strict_security,
             "output_type": self.output_type,
             "reasoning_mode": self.reasoning_mode,
             "react_mode": self.react_mode,

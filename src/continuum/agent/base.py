@@ -7,6 +7,7 @@ Defines the fundamental agent abstraction that all agents inherit from.
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,19 @@ if TYPE_CHECKING:
     from continuum.tools import MCPServer, ToolExecutor
 
 _logger = get_logger(__name__)
+
+# Heuristic for "side-effectful" tool names — used to warn when an agent can take
+# consequential actions but has no authorization configured. Conservative by design:
+# a false positive only produces an extra warning, never a blocked call.
+_SENSITIVE_TOOL_PATTERN = re.compile(
+    r"delete|remove|drop|destroy|purge|truncate|"
+    r"send|email|notify|post|publish|"
+    r"pay|payment|charge|refund|transfer|wire|withdraw|invoice|"
+    r"shell|exec|run_command|subprocess|"
+    r"write_file|upload|deploy|"
+    r"revoke|grant|disable|reset",
+    re.IGNORECASE,
+)
 
 
 class _SafeFormatMap(dict):
@@ -193,6 +207,7 @@ class BaseAgent:
     def __post_init__(self) -> None:
         """Validate agent configuration after initialization."""
         self._validate()
+        self._check_security_posture()
 
     def _validate(self) -> None:
         """Validate agent configuration."""
@@ -208,6 +223,60 @@ class BaseAgent:
         for handoff in self.handoffs:
             if handoff.target_agent == self.name:
                 raise AgentConfigurationError(f"Agent '{self.name}' cannot hand off to itself")
+
+    def _tool_names(self) -> list[str]:
+        """Best-effort extraction of tool names across the supported tool shapes.
+
+        Tools may be ToolDefinition (``.function.name``), OpenAI-style dicts
+        (``{"function": {"name": ...}}`` or flat ``{"name": ...}``), or objects
+        exposing ``.name``. MCP tools are resolved at runtime and are not
+        inspected here.
+        """
+        names: list[str] = []
+        for tool in self.tools:
+            name = None
+            fn = getattr(tool, "function", None)
+            if fn is not None and getattr(fn, "name", None):
+                name = fn.name
+            elif isinstance(tool, dict):
+                fn_dict = tool.get("function")
+                if isinstance(fn_dict, dict):
+                    name = fn_dict.get("name")
+                name = name or tool.get("name")
+            else:
+                name = getattr(tool, "name", None)
+            if name:
+                names.append(str(name))
+        return names
+
+    def _has_authorization(self) -> bool:
+        """True if any authorization is wired (a policy store or access policies)."""
+        return self.policy_store is not None or bool(self.config.access_policies)
+
+    def _check_security_posture(self) -> None:
+        """Warn (or, under strict_security, raise) when this agent can take
+        side-effectful actions but has no authorization configured.
+
+        This makes the framework's fail-open default *visible*: silent no-auth
+        is the real hazard (see security finding F1). Configuring a PolicyStore
+        or access_policies — or having only benign tools — suppresses it.
+        """
+        if self._has_authorization():
+            return
+        sensitive = [n for n in self._tool_names() if _SENSITIVE_TOOL_PATTERN.search(n)]
+        if not sensitive:
+            return
+        message = (
+            f"Agent '{self.name}' has side-effectful tools {sensitive} but no "
+            f"authorization is configured (policy_store is None and "
+            f"config.access_policies is empty) — these tool calls will run "
+            f"UNAUTHORIZED. Wire a policy store (e.g. "
+            f"PolicyStore.default_deny([...])) or set access_policies. Set "
+            f"config.strict_security=True to make this a hard error."
+        )
+        if self.config.strict_security:
+            raise AgentConfigurationError(message)
+        _logger.warning(message)
 
     @property
     def system_prompt(self) -> str:
