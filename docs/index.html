@@ -2459,14 +2459,14 @@ agent = <span class="cls">BaseAgent</span>(
   <p><strong>Independent of <a onclick="scrollToAnchor('run-safety')" style="cursor:pointer;text-decoration:underline">Input / Output Scanning</a>.</strong> Scanners <em>sanitize text</em>; data labels <em>gate behavior</em>. Neither feeds the other — a scanner never taints a run.</p>
 
   <h3>Defaults — opt-in &amp; inert</h3>
-  <p>With nothing configured the feature does nothing (zero behavior change, fully backward-compatible): no policy store on the agent, no producers, every run unlabeled. Policy evaluation is <strong>open-default-allow</strong> with <strong>deny-overrides</strong>.</p>
+  <p>With nothing configured the feature does nothing (zero behavior change, fully backward-compatible): no policy store on the agent, no producers, every run unlabeled. Policy evaluation is <strong>open-default-allow</strong> with <strong>deny-overrides</strong> — this is the <em>historical default</em>, not the only option. To fail closed, construct the store with <code>PolicyStore.default_deny([…])</code> (unmatched resources are then denied) and set <code>AgentConfig(strict_security=True)</code> so an agent with side-effectful tools refuses to start without a policy store.</p>
   <table>
     <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
     <tr><td><code>BaseAgent(policy_store=…)</code></td><td><code>None</code></td><td>no gates run at all</td></tr>
     <tr><td><code>AgentConfig.tool_data_labels</code></td><td><code>{}</code></td><td>no tool taints the run</td></tr>
     <tr><td><code>AgentMemoryConfig.scope_data_labels</code></td><td><code>{}</code></td><td>no memory-read taint</td></tr>
     <tr><td>run-level <code>data_labels</code></td><td><code>None</code></td><td>run starts clean</td></tr>
-    <tr><td>policy evaluation</td><td>open-default-allow</td><td>unmatched resource → allowed</td></tr>
+    <tr><td>policy evaluation</td><td>open-default-allow</td><td>unmatched resource → allowed (opt into fail-closed via <code>PolicyStore.default_deny()</code>)</td></tr>
   </table>
 
   <h3>Enable it in three steps</h3>
