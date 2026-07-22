@@ -120,7 +120,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret} # CHANGEME
     ports:
-      - ${MINIO_API_PORT:-9090}:9000
+      - 127.0.0.1:${MINIO_API_PORT:-9090}:9000
       - 127.0.0.1:${MINIO_CONSOLE_PORT:-9091}:9001
     volumes:
       - langfuse_minio_data:/data
@@ -161,7 +161,7 @@ services:
       --maxmemory 512mb
       ${SESSION_REDIS_PASSWORD:+--requirepass ${SESSION_REDIS_PASSWORD}}
     ports:
-      - "${SESSION_REDIS_PORT:-6380}:6379"
+      - "127.0.0.1:${SESSION_REDIS_PORT:-6380}:6379"
     volumes:
       - redis_sdk_data:/data
     healthcheck:
@@ -298,8 +298,8 @@ services:
     image: qdrant/qdrant:latest
     container_name: orchestrator-qdrant
     ports:
-      - "${QDRANT_PORT:-6333}:6333"  # REST API
-      - "${QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"  # REST API
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
@@ -348,7 +348,7 @@ services:
     container_name: orchestrator-milvus
     command: ["milvus", "run", "standalone"]
     ports:
-      - "${MILVUS_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
     volumes:
       - milvus_data:/var/lib/milvus
     environment:
