@@ -137,11 +137,25 @@ def harden_untrusted_tool_content(
     ``"function"``) message's content cleaned and wrapped in an untrusted envelope.
 
     Copy-not-mutate: tool message dicts are shallow-copied before editing; every
-    other message is passed through by reference untouched. Idempotent: content
-    already wrapped in the envelope is left as-is.
+    other message is passed through by reference untouched.
+
+    The system instruction is added when ``add_system_instruction`` is set. Callers
+    gate that flag on *tool availability* (did this LLM call carry a tool list?),
+    NOT on whether a tool result happens to be present:
+
+      * tool-availability is stable across a tool-using agent's turns (the tool
+        list is passed every turn, including turn 1 before any tool is called),
+        so the leading system prefix stays byte-identical turn-over-turn and the
+        provider's prompt cache is not invalidated;
+      * tool-less calls (summarizer, plain completion) carry no tool list, so the
+        instruction — which is only meaningful when tools exist — is skipped,
+        keeping those calls clean.
+
+    Gating instead on "a tool result is present" would flip the prefix on/off
+    across turns and bust the cache; gating on nothing (always) would leak the
+    instruction into tool-less utility calls.
     """
     out: list[dict[str, Any]] = []
-    wrapped_any = False
 
     for msg in messages:
         if not isinstance(msg, dict) or msg.get("role") not in ("tool", "function"):
@@ -167,9 +181,8 @@ def harden_untrusted_tool_content(
         new_msg = {**msg}  # copy: do not touch the shared/history dict
         new_msg["content"] = _harden_content(content)
         out.append(new_msg)
-        wrapped_any = True
 
-    if wrapped_any and add_system_instruction:
+    if add_system_instruction:
         out = _ensure_system_instruction(out)
 
     return out

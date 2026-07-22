@@ -173,10 +173,15 @@ def test_system_instruction_not_duplicated():
     assert twice[0]["content"].count(SYSTEM_INSTRUCTION) == 1
 
 
-def test_no_system_instruction_when_nothing_wrapped():
+def test_system_instruction_is_flag_driven_not_gated_on_tool_messages():
+    # The instruction is controlled by add_system_instruction (callers set it to
+    # bool(tools)), NOT by whether a tool result is present. So with the flag on,
+    # it's added even to a list with no tool messages -- which is what keeps the
+    # system prefix stable across a tool-using agent's turns (tools every turn).
     msgs = [{"role": "user", "content": "hi"}]
-    out = harden_untrusted_tool_content(msgs)
-    assert all(m.get("role") != "system" for m in out)
+    out = harden_untrusted_tool_content(msgs, add_system_instruction=True)
+    assert out[0]["role"] == "system"
+    assert out[0]["content"] == SYSTEM_INSTRUCTION
 
 
 def test_system_instruction_can_be_disabled():
@@ -184,6 +189,25 @@ def test_system_instruction_can_be_disabled():
         [{"role": "tool", "content": "data"}], add_system_instruction=False
     )
     assert all(m.get("role") != "system" for m in out)
+
+
+def test_system_prefix_stable_across_turns_for_cache():
+    # For a tool-using agent, callers pass add_system_instruction=True on every
+    # turn (tools are available every turn). The leading system message must then
+    # be byte-identical whether or not a tool result is present yet, so the
+    # provider's cached system prefix isn't invalidated when the first tool
+    # result appears mid-conversation.
+    turn1 = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "hi"},
+    ]
+    turn2 = turn1 + [
+        {"role": "assistant", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "some tool output"},
+    ]
+    out1 = harden_untrusted_tool_content(turn1, add_system_instruction=True)
+    out2 = harden_untrusted_tool_content(turn2, add_system_instruction=True)
+    assert out1[0]["content"] == out2[0]["content"]  # identical system prefix
 
 
 # --- content shapes -----------------------------------------------------------
@@ -199,8 +223,10 @@ def test_non_string_content_is_stringified_and_wrapped():
 
 
 def test_none_content_left_alone():
+    # add_system_instruction=False isolates the None-handling from the
+    # (now unconditional) system-instruction prepend.
     msgs = [{"role": "tool", "content": None}]
-    out = harden_untrusted_tool_content(msgs)
+    out = harden_untrusted_tool_content(msgs, add_system_instruction=False)
     assert out[0] is msgs[0]
 
 
