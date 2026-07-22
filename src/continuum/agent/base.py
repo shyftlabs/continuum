@@ -250,8 +250,8 @@ class BaseAgent:
         return names
 
     def _has_authorization(self) -> bool:
-        """True if any authorization is wired (a policy store or access policies)."""
-        return self.policy_store is not None or bool(self.config.access_policies)
+        """True if authorization is wired (a policy store is configured)."""
+        return self.policy_store is not None
 
     def _check_security_posture(self) -> None:
         """Warn (or, under strict_security, raise) when this agent can take
@@ -259,7 +259,7 @@ class BaseAgent:
 
         This makes the framework's fail-open default *visible*: silent no-auth
         is the real hazard (see security finding F1). Configuring a PolicyStore
-        or access_policies — or having only benign tools — suppresses it.
+        — or having only benign tools — suppresses it.
         """
         if self._has_authorization():
             return
@@ -268,10 +268,9 @@ class BaseAgent:
             return
         message = (
             f"Agent '{self.name}' has side-effectful tools {sensitive} but no "
-            f"authorization is configured (policy_store is None and "
-            f"config.access_policies is empty) — these tool calls will run "
+            f"policy_store is configured — these tool calls will run "
             f"UNAUTHORIZED. Wire a policy store (e.g. "
-            f"PolicyStore.default_deny([...])) or set access_policies. Set "
+            f"PolicyStore.default_deny([...])). Set "
             f"config.strict_security=True to make this a hard error."
         )
         if self.config.strict_security:

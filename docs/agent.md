@@ -244,7 +244,7 @@ All importable from `continuum.agent`.
 | `context_management` | `ContextManagementConfig \| None` | `None` | Per-agent compression override |
 | `input_sanitization` | `bool` | `True` | Strip control chars from input |
 | `injection_detection` | `bool` | `False` | Log suspected prompt-injection patterns |
-| `strict_security` | `bool` | `False` | If `True`, agent construction raises `AgentConfigurationError` when it has side-effectful tools but no `policy_store`/`access_policies`. If `False`, the same case logs a warning. See [Security](#security-posture) |
+| `strict_security` | `bool` | `False` | If `True`, agent construction raises `AgentConfigurationError` when it has side-effectful tools but no `policy_store`. If `False`, the same case logs a warning. See [Security](#security-posture) |
 | `output_type` | `Literal["text","json","structured"]` | `"text"` | |
 | `reasoning_mode` | `bool` | `False` | Silent think-first pass before main loop |
 | `react_mode` | `bool` | `False` | Inject the `think` tool with ReAct scaffold |
@@ -292,7 +292,7 @@ All importable from `continuum.agent`.
 ## Security posture
 
 Authorization in Continuum is **opt-in and fail-open by default**: `BaseAgent.policy_store`
-is `None`, so an agent whose `policy_store` and `config.access_policies` are both unset
+is `None`, so an agent whose `policy_store` is unset
 runs **every tool call unauthorized**. The access-control engine itself is solid
 (deny-overrides, glob subjects/resources) — it just isn't wired unless you wire it.
 

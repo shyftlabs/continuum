@@ -1,9 +1,9 @@
 """
 Step 1 — agent security-posture check.
 
-When an agent has side-effectful ("sensitive") tools but no authorization is
-configured (no policy_store and no config.access_policies), construction should
-surface it: a loud warning by default, or a hard error under strict_security.
+When an agent has side-effectful ("sensitive") tools but no policy_store is
+configured, construction should surface it: a loud warning by default, or a
+hard error under strict_security.
 Benign-only agents, and agents that DO wire authorization, stay silent.
 
 The warning goes through continuum's logger, whose ``propagate`` is False, so we
@@ -18,7 +18,7 @@ import continuum.agent.base as base_mod
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import AgentConfig
 from continuum.agent.exceptions import AgentConfigurationError
-from continuum.security.policy import AccessPolicy, PolicyStore
+from continuum.security.policy import PolicyStore
 
 
 @pytest.fixture
@@ -63,22 +63,6 @@ class TestSecurityPostureWarning:
             instructions="help",
             tools=[_tool("delete_account")],
             policy_store=PolicyStore.default_deny(),
-        )
-        assert warnings == []
-
-    def test_access_policies_suppress_warning(self, warnings):
-        cfg = AgentConfig(
-            access_policies=[
-                AccessPolicy(
-                    name="p", subjects=["*"], resources=["tool:*"], effect="allow"
-                )
-            ]
-        )
-        BaseAgent(
-            name="support",
-            instructions="help",
-            tools=[_tool("delete_account")],
-            config=cfg,
         )
         assert warnings == []
 

@@ -211,9 +211,9 @@ class AgentConfig:
     injection_detection: bool = False
 
     # When True, agent construction FAILS (raises AgentConfigurationError) if the
-    # agent has side-effectful tools but no authorization configured (no
-    # policy_store and no access_policies). When False (default), the same
-    # condition only emits a warning — see BaseAgent._check_security_posture.
+    # agent has side-effectful tools but no policy_store configured. When False
+    # (default), the same condition only emits a warning — see
+    # BaseAgent._check_security_posture.
     strict_security: bool = False
 
     # Output settings
@@ -265,15 +265,6 @@ class AgentConfig:
     # when multiple agents are competing for the same inference backend.
     # For external APIs, RunContext.priority (request-level) is used instead.
     stage_priority: int = 5
-
-    # Access control policies applied before each tool call and memory access.
-    # Evaluated with deny-overrides semantics (Orla-style): an explicit deny always
-    # wins over any allow. If no policy matches, access is open (default allow).
-    # Use the resource prefixes "tool:", "memory:", "data:" to target different layers.
-    # Example:
-    #   AccessPolicy(name="no-delete", subjects=["billing_agent"],
-    #                resources=["tool:delete_*"], effect="deny")
-    access_policies: list[Any] = field(default_factory=list)  # list[AccessPolicy]
 
     # Tracing
     trace_all_turns: bool = True  # Trace every turn
