@@ -96,7 +96,7 @@ services:
 
   clickhouse:
     profiles: ["standard", "full"]
-    image: docker.io/clickhouse/clickhouse-server
+    image: docker.io/clickhouse/clickhouse-server:26.6.2.81
     restart: always
     user: "101:101"
     environment:
@@ -256,7 +256,7 @@ services:
 
   temporal:
     profiles: ["full"]
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.29.3
     container_name: orchestrator-temporal
     depends_on:
       postgres-temporal:
@@ -287,7 +287,7 @@ services:
 
   temporal-ui:
     profiles: ["full"]
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.52.1
     container_name: orchestrator-temporal-ui
     depends_on:
       - temporal
@@ -302,7 +302,7 @@ services:
   # Qdrant Vector Database for Long-term Memory (VECTOR_STORE_PROVIDER=qdrant)
   qdrant:
     profiles: ["minimal", "standard", "full"]
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.3
     container_name: orchestrator-qdrant
     ports:
       - "127.0.0.1:${QDRANT_PORT:-6333}:6333"  # REST API
@@ -351,7 +351,7 @@ services:
   # Milvus Vector Database for Long-term Memory (VECTOR_STORE_PROVIDER=milvus)
   milvus:
     profiles: ["full"]
-    image: milvusdb/milvus:latest
+    image: milvusdb/milvus:v2.6.20
     container_name: orchestrator-milvus
     command: ["milvus", "run", "standalone"]
     ports:
