@@ -88,7 +88,8 @@ If you are running Continuum in production, please also:
 - Subscribe to repository Security Advisories (Watch → Custom → Security alerts).
 - Run the agent process with the minimum privileges it needs — never as root, never with broader cloud-IAM scopes than the deployed agents require.
 - Treat LLM outputs as untrusted input when feeding them into tools, shells, or database queries.
-- Keep `mem0`, `Milvus`, `Qdrant`, `Redis`, `Temporal`, and `Langfuse` reachable only from the application network — never expose them to the public internet without an authenticated proxy.
+- Keep `mem0`, `Milvus`, `Qdrant`, `Redis`, `Temporal`, and `Langfuse` reachable only from the application network — never expose them to the public internet without an authenticated proxy. The bundled `docker-compose.yml` binds these to `127.0.0.1` by default; if you change a binding to expose a service, enable that service's own authentication first (Redis `requirepass`, Qdrant/Milvus API keys, MinIO root credentials).
+- Replace every `# CHANGEME` default in `.env` / `docker-compose.yml` (Redis, MinIO, ClickHouse, Postgres, Langfuse keys) with strong, unique secrets before any non-local deployment — the shipped values are placeholders, not safe credentials.
 
 ## Questions
 
@@ -96,4 +97,4 @@ Non-vulnerability security questions (e.g. "how do I configure X safely") belong
 
 ---
 
-*Last updated: 2026-05.*
+*Last updated: 2026-07.*

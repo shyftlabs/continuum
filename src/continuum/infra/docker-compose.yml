@@ -1,8 +1,15 @@
 # Make sure to update the credential placeholders with your own secrets.
 # We mark them with # CHANGEME in the file below.
-# In addition, we recommend to restrict inbound traffic on the host to langfuse-web (port 3000) and minio (port 9090) only.
-# All other components are bound to localhost (127.0.0.1) to only accept connections from the local machine.
-# External connections from other machines will not be able to reach these services directly.
+#
+# Network exposure: only langfuse-web (port 3000, an authenticated UI) accepts
+# external connections by default. All data stores — redis-sdk, qdrant, milvus,
+# minio, clickhouse — are bound to localhost (127.0.0.1) and are NOT reachable
+# from other machines.
+#
+# Before exposing ANY of these beyond localhost, first replace every # CHANGEME
+# secret with a strong unique value AND enable that service's own authentication
+# (Redis requirepass, Qdrant/Milvus API keys, MinIO root credentials). Shipped
+# defaults are placeholders, not safe values. See SECURITY.md.
 services:
   langfuse-worker:
     profiles: ["standard", "full"]
