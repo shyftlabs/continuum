@@ -364,6 +364,17 @@ class LLMClient:
         except Exception as e:
             logger.warning(f"Context management failed, continuing without compression: {e}")
 
+        # Untrusted tool-content hardening (F2): strip invisible/control chars and
+        # wrap tool outputs in an untrusted-data envelope. Last transform before
+        # the provider call, so it fences whatever the pipeline produced (incl.
+        # Headroom-compressed markers / restored retrieve results). Operates on a
+        # copy — the stored session history (saved from the original `messages`
+        # below) is never touched.
+        if _settings.untrusted_tool_content_hardening:
+            from continuum.llm.untrusted_content import harden_untrusted_tool_content
+
+            messages_dict = harden_untrusted_tool_content(messages_dict)
+
         tools_dict = self._convert_tools(tools)
         effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
         self._log_json_mode_status(effective_config)
@@ -538,6 +549,13 @@ class LLMClient:
                     )
         except Exception as e:
             logger.warning(f"Context management failed, continuing without compression: {e}")
+
+        # Untrusted tool-content hardening (F2) — same as chat(): last transform
+        # before streaming to the provider.
+        if _settings.untrusted_tool_content_hardening:
+            from continuum.llm.untrusted_content import harden_untrusted_tool_content
+
+            messages_dict = harden_untrusted_tool_content(messages_dict)
 
         tools_dict = self._convert_tools(tools)
         effective_config = self._apply_json_mode_compat(effective_config, tools_dict)

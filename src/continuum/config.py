@@ -320,6 +320,19 @@ class Settings(BaseSettings):
     headroom_context_threshold: float = 0.92
 
     # -------------------------------------------------------------------------
+    # Untrusted tool-content hardening (security finding F2 — indirect prompt
+    # injection). When True (default), the content of every ``role == "tool"``
+    # message is, right before the provider call: (1) stripped of invisible /
+    # control characters (Unicode-tag smuggling, zero-width, bidi overrides,
+    # C0/C1 controls), and (2) wrapped in a ``<tool_result untrusted="true">``
+    # envelope, with a one-line system instruction that content inside such tags
+    # is data, never instructions. Defence-in-depth only — the hard boundary is
+    # authorization on side-effecting tools, not this. Headroom-independent.
+    # Set False for byte-identical legacy behavior.
+    # -------------------------------------------------------------------------
+    untrusted_tool_content_hardening: bool = True  # UNTRUSTED_TOOL_CONTENT_HARDENING
+
+    # -------------------------------------------------------------------------
     # Temporal Configuration (Optional - requires `pip install shyftlabs-continuum[temporal]`)
     # -------------------------------------------------------------------------
     temporal_enabled: bool = False
