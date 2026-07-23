@@ -52,7 +52,8 @@ class TestMidSessionDegrade:
         logspy, errspy = _spies(monkeypatch)
 
         sc = SessionClient(
-            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            session_config=SessionConfig(enabled=True, redis_host="localhost",
+                redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade"),
             auto_initialize=False,
         )
 
@@ -79,7 +80,8 @@ class TestMidSessionDegrade:
         _spies(monkeypatch)
 
         sc = SessionClient(
-            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            session_config=SessionConfig(enabled=True, redis_host="localhost",
+                redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade"),
             auto_initialize=False,
         )
 
@@ -103,7 +105,8 @@ class TestLogicalErrorsDoNotDegrade:
         _spies(monkeypatch)
 
         sc = SessionClient(
-            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            session_config=SessionConfig(enabled=True, redis_host="localhost",
+                redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade"),
             auto_initialize=False,
         )
 
@@ -137,7 +140,8 @@ class TestMemoryWriteSkipsOnSessionStoreDown:
         # Injected provider → never degrades; the SessionConnectionError surfaces
         # into _store_in_memory exactly as it does in fail-mode with Redis down.
         sc = SessionClient(
-            session_config=SessionConfig(enabled=True, fallback_mode="degrade"),
+            session_config=SessionConfig(enabled=True, redis_host="localhost",
+                redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade"),
             provider=provider,
             auto_initialize=False,
         )

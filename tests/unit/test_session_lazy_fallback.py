@@ -133,7 +133,8 @@ class TestLazyInit:
             aping,
             raising=False,
         )
-        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380)
+        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380,
+                            redis_password="ut-strong-redis-pw-0123456789")
         SessionClient(session_config=cfg, auto_initialize=True)
         # Merely constructing the client must not probe Redis.
         aping.assert_not_called()
@@ -154,7 +155,8 @@ class TestLazyInit:
             op,
             raising=True,
         )
-        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380)
+        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380,
+                            redis_password="ut-strong-redis-pw-0123456789")
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
         sid = await client.get_or_create_session(user_id="alice")
@@ -202,7 +204,8 @@ class TestUnreachableFallback:
             raising=False,
         )
         cfg = SessionConfig(
-            enabled=True, redis_host="localhost", redis_port=6380, fallback_mode="degrade"
+            enabled=True, redis_host="localhost", redis_port=6380,
+            redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade"
         )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
@@ -236,7 +239,8 @@ class TestHappyPathUnchanged:
         injected.get_or_create_session = AsyncMock(return_value="sess-x")
         injected.is_initialized = True
 
-        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380)
+        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380,
+                            redis_password="ut-strong-redis-pw-0123456789")
         client = SessionClient(session_config=cfg, provider=injected, auto_initialize=False)
 
         sid = await client.get_or_create_session(user_id="alice")
