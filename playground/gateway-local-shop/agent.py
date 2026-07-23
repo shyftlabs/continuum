@@ -29,6 +29,7 @@ from continuum import (
 from continuum.agent.types import EventType
 from continuum.core.container import Container, get_container
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
+from continuum.exceptions import InsecureConfigurationError
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
 from continuum.utils.sanitization import (
@@ -249,6 +250,11 @@ class LocalShopAgent:
                     await self._runner._session_service.save_tool_context_state(
                         session_id, existing
                     )
+                except InsecureConfigurationError as e:
+                    # Fail closed: a weak/blank data-store secret is an operator
+                    # config error — refuse the request instead of running stateless.
+                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    return f"Error: {e}"
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 
@@ -300,6 +306,11 @@ class LocalShopAgent:
                     await self._runner._session_service.save_tool_context_state(
                         session_id, existing
                     )
+                except InsecureConfigurationError as e:
+                    # Fail closed: surface the config error to the client and stop.
+                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                    return
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 
