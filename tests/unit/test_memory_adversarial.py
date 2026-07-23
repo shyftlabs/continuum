@@ -576,6 +576,7 @@ class TestConfigBoundaries:
             vector_store_provider="milvus",
             milvus_host="my-milvus",
             milvus_port=19530,
+            milvus_token="test-token",  # remote host → token required (F8/D4 guard)
             milvus_collection="col",
             memory_llm_model="gpt-4o-mini",
             embedder_model="text-embedding-3-small",

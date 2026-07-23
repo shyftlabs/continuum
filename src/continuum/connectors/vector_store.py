@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from continuum.connectors.base import BaseConnector, ConnectionMode
 from continuum.logging import get_logger
+from continuum.security.secrets_guard import enforce_credential
 from continuum.utils.secrets import mask_value
 
 if TYPE_CHECKING:
@@ -68,12 +69,36 @@ class VectorStoreConnector(BaseConnector[Any]):
             return ConnectionMode.LOCAL_DOCKER
         return ConnectionMode.CUSTOM
 
+    def _enforce_credential(self) -> None:
+        """Fail-closed on a missing/weak credential for a REMOTE store (F8/D4).
+
+        A loopback/local vector store (``LOCAL_DOCKER``) legitimately runs
+        without a token — the same posture as Redis's own protected mode — so it
+        is exempt. Only a remote ``CUSTOM`` host or a ``CLOUD`` endpoint must
+        authenticate. Override with ``CONTINUUM_ALLOW_INSECURE=1`` (local/testing).
+        """
+        if self.mode not in (ConnectionMode.CUSTOM, ConnectionMode.CLOUD):
+            return
+        if self.provider == "milvus":
+            enforce_credential(
+                service="Milvus vector store",
+                credential=self._config.milvus_token,
+                env_var="MILVUS_TOKEN",
+            )
+        else:
+            enforce_credential(
+                service="Qdrant vector store",
+                credential=self._config.qdrant_api_key,
+                env_var="QDRANT_API_KEY",
+            )
+
     def to_mem0_block(self) -> dict[str, Any]:
         """Build the mem0 ``vector_store`` config block from connection settings.
 
         This is the single source of truth for the vector-store connection that
         ``MemoryConfig.to_mem0_config`` consumes.
         """
+        self._enforce_credential()
         if self.provider == "milvus":
             milvus_config: dict[str, Any] = {
                 "collection_name": self._config.milvus_collection,
