@@ -10,6 +10,18 @@
 # secret with a strong unique value AND enable that service's own authentication
 # (Redis requirepass, Qdrant/Milvus API keys, MinIO root credentials). Shipped
 # defaults are placeholders, not safe values. See SECURITY.md.
+#
+# Customizing this stack: this file ships inside the installed package, so edits
+# made here are lost on the next `pip`/`uv` upgrade. To change image versions,
+# resource limits, or add services, layer your own override file rather than
+# editing this one. `continuum up` invokes compose with an explicit `-f`, which
+# disables Compose's automatic docker-compose.override.yml merging — so run
+# compose directly and name both files yourself:
+#
+#   docker compose -f "$(continuum config-path)" -f ./my.override.yml \
+#     -p continuum --profile full up -d
+#
+# Ports and a few versions (e.g. POSTGRES_VERSION) are already overridable via .env.
 services:
   langfuse-worker:
     profiles: ["standard", "full"]
