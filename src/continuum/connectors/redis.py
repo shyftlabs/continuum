@@ -16,6 +16,7 @@ import redis.asyncio as redis
 
 from continuum.connectors.base import BaseConnector, ConnectionMode
 from continuum.logging import get_logger
+from continuum.security.secrets_guard import enforce_credential
 from continuum.session.config import SessionConfig
 from continuum.utils.secrets import mask_value
 
@@ -74,6 +75,14 @@ class RedisConnector(BaseConnector["Redis"]):
             raise RuntimeError(
                 "Redis is not configured. Set SESSION_REDIS_HOST / SESSION_REDIS_PORT."
             )
+
+        # Fail-closed on a missing/weak session secret (F8/D2). Refuses to build
+        # the client unless CONTINUUM_ALLOW_INSECURE=1 is set (local/testing).
+        enforce_credential(
+            service="Session Redis",
+            credential=self._config.redis_password,
+            env_var="SESSION_REDIS_PASSWORD",
+        )
 
         conn_kwargs: dict[str, Any] = {
             "host": self._config.redis_host,
