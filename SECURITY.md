@@ -77,6 +77,7 @@ Out of scope (please do **not** report):
 
 - **CI gate** — every pull request must pass `ruff` (lint) and the unit test suite before it can merge to `dev`/`main`.
 - **Dependency vulnerabilities** — Dependabot vulnerability **alerts** are enabled; vulnerable dependencies are surfaced in the repository **Security** tab. Automated dependency-bump PRs are intentionally disabled to keep PR noise low — maintainers triage alerts and bump versions as needed.
+- **Bundled image pinning** — every service in the bundled `docker-compose.yml` is pinned to an explicit version tag (e.g. `qdrant/qdrant:v1.18.3`, `milvusdb/milvus:v2.6.20`), never `:latest`. This closes the tag-substitution supply-chain risk: a hijacked upstream `:latest` cannot silently reach a `docker compose pull`. We deliberately stop at version tags rather than immutable digests (`@sha256:…`) for this dev-convenience stack — a bare digest never updates and, without a bot bumping it, silently rots on unpatched CVEs; version tags stay human-readable and hand-updatable while still defeating tag substitution. Production deployments should not use the bundled stack as-is (see hardening notes below).
 - **Secret scanning** — GitHub secret scanning and push protection apply on the public repository, and the project history is scanned for committed credentials.
 - **Code scanning** — static analysis (e.g. CodeQL) may be enabled as the project matures and infrastructure allows.
 
