@@ -12,10 +12,14 @@ contributors** (working in this repository).
 - **Python 3.13** — the framework requires it. Use `pyenv`, `uv`, or
   a system 3.13.
 - **Docker + Docker Compose** — for Redis, Milvus (default vector store), and (optionally) Langfuse.
-- **An LLM provider key** — at minimum `OPENAI_API_KEY`. mem0's default
-  embedder is OpenAI's `text-embedding-3-small`, which means an
-  `OPENAI_API_KEY` is required at startup *even if* you only call
-  Anthropic or Gemini for chat.
+- **An LLM provider key** — by default `OPENAI_API_KEY`, because mem0's
+  default embedder (`text-embedding-3-small`) *and* fact-extraction LLM are
+  OpenAI, so it is required at startup *even if* you only call Anthropic or
+  Gemini for chat. Avoidable — set `EMBEDDER_PROVIDER` to a non-OpenAI
+  provider (e.g. `ollama`, keyless) for embeddings, and route the
+  fact-extraction LLM through the Smart Gateway (a bare non-OpenAI
+  `MEMORY_LLM_MODEL` may fail — mem0's fact-extraction is reliably served only
+  by OpenAI-family), or set `MEMORY_ENABLED=false`.
 
 ---
 
@@ -110,7 +114,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | OpenAI; **required at startup** for the mem0 embedder |
+| `OPENAI_API_KEY` | OpenAI; **required by default** for mem0's embedder + fact-extraction LLM (avoidable via `EMBEDDER_PROVIDER` + Smart Gateway, or `MEMORY_ENABLED=false`) |
 | `OPENAI_ORGANIZATION` | Optional OpenAI organization id |
 | `ANTHROPIC_API_KEY` | Anthropic |
 | `GEMINI_API_KEY` | Google Gemini |
@@ -279,7 +283,7 @@ Missing credentials` means infra is fine but `OPENAI_API_KEY` isn't set
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `ModuleNotFoundError: continuum` | venv not active | `source .venv/bin/activate` |
-| `Failed to initialize mem0: Missing credentials` | mem0 needs OpenAI for embeddings | set `OPENAI_API_KEY` or `MEMORY_ENABLED=false` |
+| `Failed to initialize mem0: Missing credentials` | mem0's default embedder/LLM are OpenAI | set `OPENAI_API_KEY`, or use `EMBEDDER_PROVIDER` + Smart Gateway, or `MEMORY_ENABLED=false` |
 | `redis.exceptions.ConnectionError` | Redis not running / wrong port | `continuum status`; check `SESSION_REDIS_PORT=6380` |
 | Vector store collection not found | Stale volume after schema change | `continuum down -v && continuum up` |
 | `aiohttp` deprecation warnings | Older aiohttp | `pip install "aiohttp>=3.13.2" --upgrade` |

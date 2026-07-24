@@ -62,9 +62,12 @@ If you've never used Continuum before, read in this order:
 - **Three IDs that travel together** — `trace_id` (Langfuse),
   `session_id` (Redis), and `run_id` (mem0). The framework keeps
   them synchronized via `contextvars`.
-- **`OPENAI_API_KEY` is required at startup** — mem0's default embedder
-  is OpenAI. Set the key, change the embedder provider, or disable
-  memory entirely.
+- **`OPENAI_API_KEY` is required by default** — mem0's default embedder
+  and fact-extraction LLM are OpenAI. Set the key; or switch
+  `EMBEDDER_PROVIDER` to non-OpenAI for embeddings and route memory's LLM
+  through the Smart Gateway (mem0's fact-extraction is reliably served only
+  by OpenAI-family, so a bare non-OpenAI `MEMORY_LLM_MODEL` may fail); or
+  disable memory entirely.
 
 ---
 
