@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -195,6 +196,77 @@ def apply_managed_env(env_path: Path, profile: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# MinIO secret bootstrap
+# ---------------------------------------------------------------------------
+
+# Placeholder/weak MinIO passwords the auto-generator should replace.
+_WEAK_MINIO_SECRETS = frozenset({"", "miniosecret"})
+
+
+def _is_weak_minio_secret(value: str | None) -> bool:
+    """True if *value* is missing, blank, or a known-weak MinIO placeholder."""
+    if value is None:
+        return True
+    lowered = value.strip().lower()
+    return lowered in _WEAK_MINIO_SECRETS or "changeme" in lowered
+
+
+def ensure_minio_secret(env_path: Path) -> list[str]:
+    """Ensure a strong ``MINIO_ROOT_PASSWORD`` exists before compose interpolates it.
+
+    The bundled Langfuse stack makes ``MINIO_ROOT_PASSWORD`` a hard requirement,
+    single-sourced across MinIO and Langfuse (D3). To keep the quick-start
+    frictionless while never shipping a weak default, generate a strong value
+    when the operator hasn't set one — persisted OUTSIDE the managed block so it
+    survives, is user-editable, and is never clobbered by ``continuum up``.
+
+    An explicit strong value (shell export or ``.env``) always wins and is left
+    untouched. Returns human-readable messages to print (empty when nothing to do).
+    """
+    # A strong value exported in the shell wins and can't be improved via .env.
+    shell = os.environ.get("MINIO_ROOT_PASSWORD")
+    if shell is not None and not _is_weak_minio_secret(shell):
+        return []
+    if shell is not None:  # set but weak — compose uses the shell value over .env
+        return [
+            "warning: MINIO_ROOT_PASSWORD is set to a weak value in your shell "
+            "environment; unset it and re-run — Docker Compose uses the shell "
+            "value over .env, so it cannot be secured here."
+        ]
+
+    text = env_path.read_text() if env_path.exists() else ""
+    outside = _MANAGED_BLOCK_RE.sub("", text)
+    existing = _user_value(outside, "MINIO_ROOT_PASSWORD")
+    if existing is not None and not _is_weak_minio_secret(existing):
+        return []  # user already set a strong one — respect it.
+
+    generated = secrets.token_hex(32)
+    if existing is not None:
+        # Replace the weak line in place (preserves position outside the block).
+        new_text = re.sub(
+            r"^\s*MINIO_ROOT_PASSWORD=.*$",
+            f"MINIO_ROOT_PASSWORD={generated}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        sep = "" if (text == "" or text.endswith("\n")) else "\n"
+        new_text = (
+            f"{text}{sep}"
+            "# Auto-generated strong MinIO root password (used by MinIO and\n"
+            "# Langfuse's S3 client — single source of truth). Edit to rotate,\n"
+            "# then recreate the MinIO container (continuum down && continuum up).\n"
+            f"MINIO_ROOT_PASSWORD={generated}\n"
+        )
+    env_path.write_text(new_text)
+    return [
+        "Generated a strong MINIO_ROOT_PASSWORD and saved it to .env "
+        "(no secure MinIO secret was set)."
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
 
@@ -235,6 +307,9 @@ def _cmd_up(args: argparse.Namespace) -> int:
         return 1
 
     env_path = Path.cwd() / ".env"
+    for msg in ensure_minio_secret(env_path):
+        stream = sys.stderr if msg.startswith("warning:") else sys.stdout
+        print(msg, file=stream)
     warnings = apply_managed_env(env_path, args.profile)
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)

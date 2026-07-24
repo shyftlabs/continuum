@@ -38,6 +38,14 @@ def _docker_ok() -> bool:
 requires_docker = pytest.mark.skipif(not _docker_ok(), reason="Docker not available")
 
 
+@pytest.fixture(autouse=True)
+def _minio_secret_for_compose(monkeypatch):
+    # The bundled compose now REQUIRES MINIO_ROOT_PASSWORD (D3). These structural
+    # tests don't care about its value, so provide a dummy so interpolation
+    # succeeds. Tests that assert the requirement itself override this explicitly.
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "test-minio-secret-for-config")
+
+
 # Expected service sets per profile — the contract minimal ⊂ standard ⊂ full.
 EXPECTED = {
     "minimal": {"qdrant", "redis-sdk"},
@@ -124,6 +132,27 @@ def test_published_ports_are_overridable_via_env() -> None:
     assert "6399" in published  # qdrant REST remapped
     assert "6390" in published  # session redis remapped
     assert "6333" not in published  # default no longer used
+
+
+@requires_docker
+def test_minio_password_required_and_single_sourced() -> None:
+    # D3: MINIO_ROOT_PASSWORD is required (compose refuses without it), and the
+    # one value feeds MinIO's server password AND every Langfuse S3 client key.
+    compose = cli.compose_file_path()
+    base = ["docker", "compose", "-f", str(compose), "--profile", "full", "config"]
+
+    # Unset -> compose refuses (fail-closed / required).
+    env_no = {k: v for k, v in os.environ.items() if k != "MINIO_ROOT_PASSWORD"}
+    refused = subprocess.run([*base, "-q"], capture_output=True, text=True, env=env_no)
+    assert refused.returncode != 0
+    assert "MINIO_ROOT_PASSWORD" in refused.stderr
+
+    # Set -> every Langfuse S3 secret key resolves to the single MinIO value.
+    env_yes = {**os.environ, "MINIO_ROOT_PASSWORD": "single-source-check-value"}
+    ok = subprocess.run(base, capture_output=True, text=True, check=True, env=env_yes)
+    secret_lines = [ln for ln in ok.stdout.splitlines() if "SECRET_ACCESS_KEY:" in ln]
+    assert secret_lines  # sanity: we found the client keys
+    assert all("single-source-check-value" in ln for ln in secret_lines)
 
 
 def test_qdrant_and_temporal_healthchecks_avoid_missing_tools() -> None:
