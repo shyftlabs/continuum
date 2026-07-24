@@ -323,6 +323,9 @@ services:
       - qdrant_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
+      # Keyless by default (loopback-only dev); if you set QDRANT_API_KEY the
+      # server REQUIRES it and Continuum's client sends the same value (D4).
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-}
     restart: unless-stopped
     networks:
       - orchestrator-network
