@@ -119,7 +119,7 @@ class MemoryConfig(BaseModel):
 
     # Vector Store Provider Selection
     vector_store_provider: Literal["qdrant", "milvus"] = Field(
-        default_factory=lambda: settings.vector_store_provider,  # type: ignore[return-value]
+        default_factory=lambda: settings.vector_store_provider,
         description="Vector store provider: 'qdrant' or 'milvus'",
     )
 
