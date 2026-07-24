@@ -192,14 +192,18 @@ class TestFailClosedCredential:
     def test_weak_password_refuses_build(self, monkeypatch):
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
         c = RedisConnector(
-            SessionConfig(enabled=True, redis_host="localhost", redis_password="miniosecret")
+            SessionConfig(enabled=True, redis_host="localhost", redis_password="myredissecret")
         )
         with pytest.raises(InsecureConfigurationError, match="SESSION_REDIS_PASSWORD"):
             c.build_client()
 
     def test_blank_password_refuses_build(self, monkeypatch):
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="localhost"))
+        # Force blank explicitly — don't rely on the default, which reads the
+        # ambient SESSION_REDIS_PASSWORD env and would make this env-dependent.
+        c = RedisConnector(
+            SessionConfig(enabled=True, redis_host="localhost", redis_password="")
+        )
         with pytest.raises(InsecureConfigurationError):
             c.build_client()
 

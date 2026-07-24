@@ -39,7 +39,7 @@ class TestDegradeMode:
         # regardless of fallback_mode. (Phase 5)
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
         cfg = SessionConfig(enabled=True, redis_host="localhost",
-                            redis_password="miniosecret", fallback_mode="degrade")
+                            redis_password="myredissecret", fallback_mode="degrade")
         sc = SessionClient(session_config=cfg, auto_initialize=False)
         with pytest.raises(InsecureConfigurationError):
             await sc.get_or_create_session(user_id="a")
@@ -51,7 +51,7 @@ class TestDegradeMode:
         monkeypatch.setenv("CONTINUUM_ALLOW_INSECURE", "1")
         monkeypatch.setattr(RedisSessionProvider, "aping", AsyncMock(return_value=False))
         cfg = SessionConfig(enabled=True, redis_host="localhost",
-                            redis_password="miniosecret", fallback_mode="degrade")
+                            redis_password="myredissecret", fallback_mode="degrade")
         sc = SessionClient(session_config=cfg, auto_initialize=False)
         await sc.get_or_create_session(user_id="a")
         assert isinstance(sc._provider, MemorySessionProvider)

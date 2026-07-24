@@ -25,13 +25,11 @@ class TestIsWeakSecret:
             None,
             "",
             "   ",
-            "miniosecret",
-            "MinioSecret",  # case-insensitive
             "sdk123456789",
             "myredissecret",
+            "MyRedisSecret",  # case-insensitive
             "CHANGEME_generate_with_openssl_rand_hex_32",  # substring
             "changeme",
-            "7b443ebc4c3a0944f7c8f5cb72077e71444a3beda18d845433c55ec506164c16",
         ],
     )
     def test_weak_values(self, value):
@@ -63,7 +61,7 @@ class TestEnforceCredential:
         with pytest.raises(InsecureConfigurationError, match="SESSION_REDIS_PASSWORD"):
             enforce_credential(
                 service="Session Redis",
-                credential="miniosecret",
+                credential="myredissecret",
                 env_var="SESSION_REDIS_PASSWORD",
             )
 
@@ -85,7 +83,7 @@ class TestEnforceCredential:
         # Must NOT raise when the hatch is set.
         enforce_credential(
             service="Session Redis",
-            credential="miniosecret",
+            credential="myredissecret",
             env_var="SESSION_REDIS_PASSWORD",
         )
         assert warnings, "expected a warning when escape hatch is set"
@@ -95,6 +93,6 @@ class TestEnforceCredential:
         with pytest.raises(InsecureConfigurationError):
             enforce_credential(
                 service="Session Redis",
-                credential="miniosecret",
+                credential="myredissecret",
                 env_var="SESSION_REDIS_PASSWORD",
             )

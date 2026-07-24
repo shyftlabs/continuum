@@ -31,19 +31,16 @@ ALLOW_INSECURE_ENV = "CONTINUUM_ALLOW_INSECURE"
 #: Truthy values recognised for :data:`ALLOW_INSECURE_ENV`.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
-#: Known-weak credential values shipped as placeholders/defaults across the
-#: repo's ``.env.template`` and ``docker-compose.yml``. Compared case-insensitively.
+#: Known-weak values shipped as defaults for the credentials this guard checks
+#: — the Session Redis password and the Qdrant/Milvus token. Compared
+#: case-insensitively. Blank/``changeme`` placeholders are handled separately in
+#: :func:`is_weak_secret`. (Secrets consumed only by the bundled Langfuse stack —
+#: MinIO/ClickHouse/Langfuse keys — are intentionally NOT listed here: the guard
+#: never sees them, so listing them would be dead weight.)
 WEAK_SECRETS = frozenset(
     {
-        "miniosecret",
-        "sdk123456789",
-        "myredissecret",
-        "mysecret",
-        "mysalt",
-        "clickhouse",
-        "changeme",
-        # Langfuse's shipped default ENCRYPTION_KEY.
-        "7b443ebc4c3a0944f7c8f5cb72077e71444a3beda18d845433c55ec506164c16",
+        "sdk123456789",  # old committed SESSION_REDIS_PASSWORD (finding D2)
+        "myredissecret",  # docker-compose.yml Redis default (REDIS_AUTH)
     }
 )
 
