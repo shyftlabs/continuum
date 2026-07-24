@@ -5,6 +5,9 @@ Provides configuration classes for long-term memory settings using mem0.
 """
 
 import os
+import stat
+import tempfile
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -32,6 +35,38 @@ def _gateway_memory_model(model: str) -> str:
     if bare.startswith(_OPENAI_FAMILY_PREFIXES):
         return f"openai/{bare}"
     return "openai/gpt-4o-mini"
+
+
+def _secure_fallback_history_dir() -> Path:
+    """Return a private, per-uid directory under the system temp dir for the
+    memory-history DB, used when ``HOME`` is unwritable (e.g. ``/nonexistent``
+    in a Docker ``appuser`` container).
+
+    Writing a fixed, world-guessable name straight into the shared temp dir is a
+    symlink/race hazard (Bandit B108, CWE-377/59): a co-tenant could pre-create
+    that path as a symlink and redirect our writes. Instead we create (or reuse)
+    ``<tmp>/continuum-<uid>`` owned by us with ``0700`` permissions, and refuse
+    it if it is a symlink, not owned by us, or group/other-accessible — so the
+    DB lands somewhere no other user can tamper with, while staying stable
+    across runs so history persists.
+    """
+    uid = os.getuid()  # POSIX-only path; the /nonexistent fallback is Linux-container-specific
+    base = Path(tempfile.gettempdir()) / f"continuum-{uid}"
+    base.mkdir(mode=0o700, exist_ok=True)
+    info = base.lstat()
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != uid
+        or (info.st_mode & 0o077)
+    ):
+        raise MemoryConfigurationError(
+            f"Refusing to use insecure memory-history fallback directory {base!s}: "
+            "it must be a non-symlink directory owned by the current user with "
+            "0700 permissions. Set MEMORY_HISTORY_DB_PATH to a writable, private path.",
+            config_key="history_db_path",
+        )
+    return base
 
 
 class MemoryConfig(BaseModel):
@@ -436,14 +471,14 @@ class MemoryConfig(BaseModel):
         """
         # Expand history path (mem0 doesn't do this automatically)
         history_path = os.path.expanduser(self.history_db_path)
-        # Container environments (e.g. Docker appuser) often have HOME=/nonexistent;
-        # avoid [Errno 13] Permission denied by using /tmp when path is under /nonexistent
+        # Container environments (e.g. Docker appuser) often have HOME=/nonexistent,
+        # which is unwritable. Fall back to a private, per-uid 0700 directory under
+        # the system temp dir instead of a fixed world-writable /tmp path, which
+        # would be a symlink/race hazard (B108 / CWE-377).
         if history_path.startswith("/nonexistent"):
-            history_path = "/tmp/orchestrator_memory_history.db"
+            history_path = str(_secure_fallback_history_dir() / "orchestrator_memory_history.db")
 
         # Ensure parent directory exists
-        from pathlib import Path
-
         Path(history_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Build embedder configuration
