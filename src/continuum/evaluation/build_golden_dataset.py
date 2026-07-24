@@ -279,6 +279,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             timeout=30,
         )
         raw = response.choices[0].message.content
+        if raw is None:
+            return None
         data = json.loads(raw)
 
         question = data.get("question", "").strip()
@@ -573,7 +575,7 @@ async def main(output_path: Path, run_eval: bool) -> None:
 
     from collections import Counter
 
-    counts = Counter(c.metadata.get("source_type") for c in cases)
+    counts = Counter(c.metadata.get("source_type", "unknown") for c in cases)
     for st, n in sorted(counts.items()):
         print(f"  {st:<20} {n} cases")
 
