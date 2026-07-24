@@ -74,6 +74,23 @@ DB_URL = os.environ.get(
     "postgresql://taxpilot:taxpilot_dev@localhost:5432/taxpilot",
 )
 
+# The only source_type values that may be interpolated into a SQL string.
+# load_chunks_from_db() runs via `docker exec psql` (no driver-side parameter
+# binding), so source_type is validated against this allowlist first —
+# untrusted input can never reach the query, keeping the f-string SQL safe.
+ALLOWED_SOURCE_TYPES: frozenset[str] = frozenset(
+    {"irc", "treasury_reg", "tax_court", "appellate", "scotus", "fed_claims", "treaty"}
+)
+
+
+def _require_known_source_type(source_type: str) -> str:
+    """Reject any source_type not in :data:`ALLOWED_SOURCE_TYPES` (SQL-injection guard)."""
+    if source_type not in ALLOWED_SOURCE_TYPES:
+        raise ValueError(
+            f"Unknown source_type {source_type!r}; expected one of {sorted(ALLOWED_SOURCE_TYPES)}"
+        )
+    return source_type
+
 
 # ---------------------------------------------------------------------------
 # Question templates per source type
@@ -196,8 +213,9 @@ def load_chunks_from_db(source_type: str, samples: int) -> list[dict[str, Any]]:
     """
     import subprocess
 
+    _require_known_source_type(source_type)
     sql = (
-        f"SELECT DISTINCT source_ref, section_title "
+        f"SELECT DISTINCT source_ref, section_title "  # nosec B608 - source_type validated against ALLOWED_SOURCE_TYPES
         f"FROM tax_law_chunks "
         f"WHERE source_type = '{source_type}' "
         f"AND section_title IS NOT NULL AND section_title != '' "

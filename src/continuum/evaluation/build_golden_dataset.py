@@ -80,6 +80,25 @@ SAMPLE_TARGETS: dict[str, int] = {
     "treaty": 13,  # all available
 }
 
+# The only source_type values that may be interpolated into a SQL string. The
+# psql calls below run via `docker exec` (no driver-side parameter binding), so
+# source_type is validated against this allowlist first — untrusted input can
+# never reach the query, which is what keeps the f-string SQL injection-safe.
+ALLOWED_SOURCE_TYPES: frozenset[str] = frozenset(SAMPLE_TARGETS)
+
+
+def _require_known_source_type(source_type: str) -> str:
+    """Reject any source_type not in :data:`ALLOWED_SOURCE_TYPES`.
+
+    Guards the pgvector queries against SQL injection by construction: the value
+    is interpolated into SQL, so it must be one of the known, hardcoded types.
+    """
+    if source_type not in ALLOWED_SOURCE_TYPES:
+        raise ValueError(
+            f"Unknown source_type {source_type!r}; expected one of {sorted(ALLOWED_SOURCE_TYPES)}"
+        )
+    return source_type
+
 
 # ---------------------------------------------------------------------------
 # pgvector queries via docker exec
@@ -114,8 +133,9 @@ def _psql(sql: str, timeout: int = 60) -> list[dict[str, str]]:
 
 def get_source_refs(source_type: str, limit: int) -> list[str]:
     """Return randomly sampled distinct source_refs for a source type."""
+    _require_known_source_type(source_type)
     rows = _psql(
-        f"SELECT DISTINCT source_ref FROM tax_law_chunks "
+        f"SELECT DISTINCT source_ref FROM tax_law_chunks "  # nosec B608 - source_type validated against ALLOWED_SOURCE_TYPES
         f"WHERE source_type = '{source_type}' ORDER BY source_ref;"
     )
     all_refs = [r["source_ref"] for r in rows]
@@ -131,11 +151,15 @@ def get_chunks_for_refs(source_type: str, source_refs: list[str]) -> dict[str, l
     if not source_refs:
         return {}
 
+    _require_known_source_type(source_type)
+    # source_refs originate from the DB; escape defensively regardless (single
+    # quotes doubled) before building the IN list. MAX_CHUNK_CHARS is an int
+    # program constant.
     escaped = [ref.replace("'", "''") for ref in source_refs]
     in_clause = ", ".join(f"'{r}'" for r in escaped)
 
     rows = _psql(
-        f"SELECT id, source_ref, section_title, chunk_index, "
+        f"SELECT id, source_ref, section_title, chunk_index, "  # nosec B608 - source_type validated; source_refs escaped; MAX_CHUNK_CHARS is int
         f"left(content, {MAX_CHUNK_CHARS}) AS content "
         f"FROM tax_law_chunks "
         f"WHERE source_type = '{source_type}' "
