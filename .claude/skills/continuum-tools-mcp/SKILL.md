@@ -197,6 +197,16 @@ list → namespaced.
 - Don't mix `namespace_tools` settings between `ToolExecutor` and
   `MCPUtil.get_*_function_tools()` — the model would call names the
   registry can't resolve. Both default to `True`.
+- Don't use a dynamic `tool_filter` without passing `metadata` to whatever
+  builds the tool list — `initialize(metadata=...)` /
+  `refresh_registry(..., metadata=...)` on `ToolExecutor`, or
+  `get_all_function_tools(..., metadata=...)`. Omit it and the filter sees
+  `None`, every tool is excluded "for safety", and the agent silently gets
+  zero tools.
+- Don't filter the `ToolExecutor` registry per caller — it is built once and
+  shared, and must contain everything dispatchable. Per-caller lists come
+  from `MCPUtil.get_all_function_tools(metadata=...)`; per-turn narrowing
+  comes from tool-attention.
 - Don't have duplicate tool names across servers when
   `namespace_tools=False` — `ToolExecutor.initialize()` and
   `get_all_function_tools()` both raise `MCPError`.

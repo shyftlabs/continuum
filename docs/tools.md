@@ -255,6 +255,46 @@ server = MCPServerStreamableHttp({"url": "..."}, tool_filter=admin_only)
 await server.list_tools(metadata={"role": "admin"})
 ```
 
+### Where `metadata` comes from
+
+A dynamic filter reads `context.metadata`, so whatever builds the tool list has to
+supply it. **If it doesn't, the filter sees `None`** — `admin_only` above raises
+`AttributeError`, `_apply_dynamic_tool_filter` treats that as "exclude for safety",
+and you get an agent with **zero tools** and only debug-level logs. Both entry
+points accept it:
+
+```python
+# per request — the tool list varies by caller
+tools = await MCPUtil.get_all_function_tools(servers, metadata={"role": role})
+
+# once at startup — fixed for the executor's lifetime
+executor = ToolExecutor({server: None})
+await executor.initialize(metadata={"tenant": "acme"})
+await executor.refresh_registry({server: None}, metadata={"tenant": "acme"})
+```
+
+### Which one to use
+
+They are not interchangeable, because they produce artefacts with different
+lifetimes:
+
+| | `ToolExecutor` + `get_tool_definitions()` | `MCPUtil.get_all_function_tools()` |
+|---|---|---|
+| Fetches per server | once | once per call |
+| Tool list | fixed for the executor's life | rebuilt per call |
+| `metadata` | executor-lifetime (tenant, environment) | **per caller** |
+| Also builds the dispatch table | yes | no — you still need an executor |
+
+Prefer the executor: one fetch, and the LLM-facing names cannot drift from the
+dispatch keys. Reach for `MCPUtil` when the visible tool set **varies per
+caller** — the executor is built once and shared across every run, and its
+registry must contain everything dispatchable (`execute_tool_call` rejects any
+name missing from it), so it cannot hold one user's filtered view.
+
+Note that per-turn narrowing is a separate mechanism: tool-attention (§3) trims
+the list the model sees each turn while leaving the registry complete. Filtering
+the registry itself is only for tools this deployment must never dispatch at all.
+
 ---
 
 ## 6 · Run artifacts

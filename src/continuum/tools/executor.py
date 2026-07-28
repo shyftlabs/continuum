@@ -465,13 +465,28 @@ class ToolExecutor:
         if captured:
             logger.info(f"📥 Captured context variables from {tool_name}: {', '.join(captured)}")
 
-    async def initialize(self) -> None:
+    async def initialize(self, metadata: dict[str, Any] | None = None) -> None:
         """Initialize the tool registry from MCP servers.
 
         This must be called after creating the executor if tool_registry was provided.
+
+        Args:
+            metadata: Optional filtering context forwarded to ``server.list_tools()``,
+                where it reaches a dynamic ``tool_filter`` as
+                ``ToolFilterContext.metadata``. Without it a metadata-reading filter
+                sees ``None``; ``_apply_dynamic_tool_filter`` treats the resulting
+                error as "exclude for safety", so the registry silently ends up empty.
+
+                This is **executor-lifetime** context (a tenant, an environment), not
+                per-caller context. The executor is built once and shared across every
+                run, and the registry must contain everything dispatchable
+                (``execute_tool_call`` rejects anything missing from it). For a tool
+                list that varies per caller, filter the LLM-facing list instead --
+                ``MCPUtil.get_all_function_tools(servers, metadata=...)`` per request,
+                or tool-attention -- and leave the registry complete.
         """
         if self._tool_registry_config:
-            await self._build_registry(self._tool_registry_config)
+            await self._build_registry(self._tool_registry_config, metadata=metadata)
         self._initialized = True
 
     def get_tool_definitions(
@@ -511,12 +526,14 @@ class ToolExecutor:
         self,
         tool_registry: dict["MCPServer", list[str] | None],
         target: dict[str, tuple["MCPServer", "MCPTool"]] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Build the internal tool name to (server, tool) mapping.
 
         Args:
             tool_registry: Mapping of servers to allowed tool lists.
             target: Dict to write into. Defaults to self.tool_registry.
+            metadata: Optional filtering context forwarded to ``server.list_tools()``.
 
         Raises:
             MCPError: If two servers contribute the same registry key. The key is
@@ -528,7 +545,7 @@ class ToolExecutor:
         dest = target if target is not None else self.tool_registry
         for server, allowed_tools in tool_registry.items():
             try:
-                mcp_tools = await server.list_tools()
+                mcp_tools = await server.list_tools(metadata=metadata)
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list
@@ -857,15 +874,25 @@ class ToolExecutor:
         """Get list of available tool names."""
         return list(self.tool_registry.keys())
 
-    async def refresh_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
+    async def refresh_registry(
+        self,
+        tool_registry: dict["MCPServer", list[str] | None],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Refresh the tool registry from MCP servers.
 
         Builds into a temporary dict first, then swaps it in so concurrent
         tool calls keep hitting the old registry until the new one is ready.
+
+        Args:
+            tool_registry: Mapping of servers to allowed tool lists.
+            metadata: Optional filtering context forwarded to ``server.list_tools()``.
+                See :meth:`initialize` for why this is executor-lifetime context
+                rather than per-caller context.
         """
         temp: dict[str, tuple[MCPServer, MCPTool]] = {}
         try:
-            await self._build_registry(tool_registry, target=temp)
+            await self._build_registry(tool_registry, target=temp, metadata=metadata)
         except Exception:
             # Build failed — old registry is untouched, tools remain available
             raise

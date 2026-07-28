@@ -438,3 +438,80 @@ class TestDuplicateRegistryKeyRaises:
         await executor.initialize()
 
         assert set(executor.tool_registry) == {"server-a__read_file", "server-b__read_file"}
+
+
+class TestExecutorForwardsMetadata:
+    """ToolExecutor must be able to pass metadata to list_tools().
+
+    Without it, a dynamic tool_filter -- whose predicate reads
+    ToolFilterContext.metadata -- receives None. The documented `admin_only`
+    pattern then raises AttributeError per tool, which _apply_dynamic_tool_filter
+    catches and treats as "exclude for safety", so the agent silently ends up
+    with zero tools. That gap is the only reason MCPUtil.get_all_function_tools
+    still has to exist for agent-building.
+    """
+
+    @pytest.mark.asyncio
+    async def test_initialize_forwards_metadata_to_list_tools(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = _make_list_tools_server("srv", ["search"])
+
+        executor = ToolExecutor(tool_registry={server: None})
+        await executor.initialize(metadata={"role": "admin"})
+
+        server.list_tools.assert_awaited_with(metadata={"role": "admin"})
+
+    @pytest.mark.asyncio
+    async def test_initialize_without_metadata_passes_none(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = _make_list_tools_server("srv", ["search"])
+
+        executor = ToolExecutor(tool_registry={server: None})
+        await executor.initialize()
+
+        server.list_tools.assert_awaited_with(metadata=None)
+
+    @pytest.mark.asyncio
+    async def test_refresh_registry_forwards_metadata(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = _make_list_tools_server("srv", ["search"])
+
+        executor = ToolExecutor(tool_registry={server: None})
+        await executor.initialize()
+        await executor.refresh_registry({server: None}, metadata={"role": "ops"})
+
+        server.list_tools.assert_awaited_with(metadata={"role": "ops"})
+
+    @pytest.mark.asyncio
+    async def test_metadata_reaches_a_filtering_server_through_executor(self):
+        """End-to-end: a server that filters on metadata must see it via ToolExecutor,
+        not only via MCPUtil.get_all_function_tools. Mirrors what
+        _apply_dynamic_tool_filter does with ToolFilterContext.metadata.
+        """
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+
+        class _AdminOnlyServer(MCPServerFunction):
+            async def list_tools(self, metadata=None):
+                tools = await super().list_tools(metadata)
+                if not (metadata and metadata.get("role") == "admin"):
+                    return []
+                return tools
+
+        def _server():
+            return _AdminOnlyServer(
+                name="srv",
+                tools=[{"name": "echo", "fn": lambda args: "ok", "description": "Echo"}],
+            )
+
+        admin_exec = ToolExecutor(tool_registry={_server(): None})
+        await admin_exec.initialize(metadata={"role": "admin"})
+        assert "srv__echo" in admin_exec.tool_registry
+
+        # Without forwarding, both cases would look like this one.
+        guest_exec = ToolExecutor(tool_registry={_server(): None})
+        await guest_exec.initialize(metadata={"role": "guest"})
+        assert guest_exec.tool_registry == {}
