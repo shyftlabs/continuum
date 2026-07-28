@@ -92,6 +92,11 @@ class ClinicAgent:
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
             client_session_timeout_seconds=self.config.mcp_timeout,
+            # Explicit name: tool names are namespaced (<server>__<tool>), and
+            # without this the server name is derived from mcp_url -- so the
+            # tool names, and the policy resources in config.py that match them,
+            # would change whenever the URL does.
+            name="clinic",
         )
         await self._mcp_server.connect()
 

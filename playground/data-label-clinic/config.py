@@ -90,7 +90,11 @@ def build_policy_store() -> PolicyStore:
         AccessPolicy(
             name="phi-no-exfiltration-tools",
             subjects=[PHI],
-            resources=["tool:send_referral_email", "tool:web_lookup"],
+            # MCP tool resources are namespaced: "<server>__<tool>". The server
+            # is named "clinic" in agent.py. A bare "tool:send_referral_email"
+            # would match nothing here -- and since default_effect is "allow",
+            # an unmatched DENY silently stops blocking. See docs/tools.md §6.5.
+            resources=["tool:clinic__send_referral_email", "tool:clinic__web_lookup"],
             effect="deny",
             denial_message="This operation would send PHI to a third party and is not permitted.",
         )

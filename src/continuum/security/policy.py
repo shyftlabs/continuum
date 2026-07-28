@@ -62,6 +62,13 @@ class PolicyStore:
             AccessPolicy(name="read", subjects=["*"],
                          resources=["tool:get_*"], effect="allow"),
         ])
+
+    Tool resources are the LLM-facing tool name. **MCP** tools are namespaced by
+    default, so theirs is ``tool:<server>__<name>`` -- scope a whole server with
+    ``tool:weather__*``, or span both shapes with ``tool:*get_*``. Local function
+    tools keep bare names. This matters most for ``deny`` rules: with the default
+    ``default_effect="allow"``, a rule that matches nothing stops blocking rather
+    than failing closed. See docs/tools.md section 6.5.
     """
 
     _policies: list[AccessPolicy] = field(default_factory=list)
