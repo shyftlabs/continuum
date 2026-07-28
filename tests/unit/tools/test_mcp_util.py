@@ -8,13 +8,14 @@ Covers:
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from mcp.types import TextContent, Tool
 
 from continuum.tools.types import ToolContextConfig
-from continuum.tools.util import MCPUtil
+from continuum.tools.util import MCPUtil, build_namespaced_tool_name
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -189,15 +190,26 @@ class TestNamespaceTools:
         assert len(tools) == 2
 
     @pytest.mark.asyncio
+    async def test_namespace_defaults_to_true(self):
+        """Namespacing is the default, so duplicate names across servers coexist."""
+        server_a = _make_list_tools_server("server-a", ["search"])
+        server_b = _make_list_tools_server("server-b", ["search"])
+
+        tools = await MCPUtil.get_all_function_tools([server_a, server_b])
+
+        names = {t.function.name for t in tools}
+        assert names == {"server-a__search", "server-b__search"}
+
+    @pytest.mark.asyncio
     async def test_namespace_false_raises_on_duplicate_names(self):
-        """With namespace_tools=False (default), duplicate tool names raise MCPError."""
+        """With namespace_tools=False, duplicate tool names raise MCPError."""
         from continuum.tools.exceptions import MCPError
 
         server_a = _make_list_tools_server("server-a", ["search"])
         server_b = _make_list_tools_server("server-b", ["search"])
 
         with pytest.raises(MCPError):
-            await MCPUtil.get_all_function_tools([server_a, server_b])
+            await MCPUtil.get_all_function_tools([server_a, server_b], namespace_tools=False)
 
     @pytest.mark.asyncio
     async def test_namespace_false_unique_names_no_error(self):
@@ -205,7 +217,7 @@ class TestNamespaceTools:
         server_a = _make_list_tools_server("server-a", ["search"])
         server_b = _make_list_tools_server("server-b", ["list"])
 
-        tools = await MCPUtil.get_all_function_tools([server_a, server_b])
+        tools = await MCPUtil.get_all_function_tools([server_a, server_b], namespace_tools=False)
 
         names = {t.function.name for t in tools}
         assert "search" in names
@@ -233,8 +245,8 @@ class TestNamespaceTools:
         assert "echo" not in executor.tool_registry
 
     @pytest.mark.asyncio
-    async def test_executor_namespace_false_stores_plain_keys(self):
-        """ToolExecutor default (namespace_tools=False) stores plain tool names."""
+    async def test_executor_defaults_to_namespaced_keys(self):
+        """ToolExecutor namespaces registry keys by default."""
         from continuum.tools.executor import ToolExecutor
         from continuum.tools.mcp import MCPServerFunction
 
@@ -247,5 +259,146 @@ class TestNamespaceTools:
         executor = ToolExecutor(tool_registry={server: None})
         await executor.initialize()
 
+        assert "my-server__echo" in executor.tool_registry
+        assert "echo" not in executor.tool_registry
+
+    @pytest.mark.asyncio
+    async def test_executor_namespace_false_stores_plain_keys(self):
+        """With namespace_tools=False, ToolExecutor stores plain tool names."""
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+
+        server = MCPServerFunction(
+            name="my-server",
+            tools=[{"name": "echo", "fn": lambda args: "ok", "description": "Echo"}],
+        )
+        await server.connect()
+
+        executor = ToolExecutor(tool_registry={server: None}, namespace_tools=False)
+        await executor.initialize()
+
         assert "echo" in executor.tool_registry
         assert "my-server__echo" not in executor.tool_registry
+
+
+# ---------------------------------------------------------------------------
+# Namespaced name construction (provider charset + length budget)
+# ---------------------------------------------------------------------------
+
+# OpenAI and Anthropic both enforce this on function names.
+PROVIDER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+class TestBuildNamespacedToolName:
+    @pytest.mark.parametrize(
+        "server_name",
+        [
+            "stdio: npx",
+            "sse: https://api.example.com/mcp",
+            "streamable_http: https://mcp.internal.corp:8443/v1/mcp",
+            "sse: https://mcp-gateway.prod.us-east-1.internal.example-corp.com/v2/mcp",
+            "weather",
+        ],
+    )
+    def test_auto_derived_server_names_produce_valid_keys(self, server_name):
+        """Auto-derived names carry ': ', '/', '.' and ':' -- all provider-invalid."""
+        key = build_namespaced_tool_name(server_name, "read_file")
+        assert PROVIDER_NAME_RE.match(key), key
+
+    def test_long_server_name_is_truncated_within_budget(self):
+        server = "sse: https://mcp-gateway.prod.us-east-1.internal.example-corp.com/v2/mcp"
+        key = build_namespaced_tool_name(server, "list_directory_contents")
+        assert len(key) <= 64
+        assert PROVIDER_NAME_RE.match(key)
+
+    def test_tool_name_survives_truncation_intact(self):
+        """The tool name carries the semantics -- only the prefix may be shortened."""
+        server = "sse: https://mcp-gateway.prod.us-east-1.internal.example-corp.com/v2/mcp"
+        key = build_namespaced_tool_name(server, "list_directory_contents")
+        assert key.endswith("__list_directory_contents")
+
+    def test_truncated_prefixes_stay_distinct(self):
+        """Two URLs differing only late would collide under naive truncation."""
+        a = "sse: https://mcp-gateway.prod.us-east-1.internal.example-corp.com/v2/mcp"
+        b = "sse: https://mcp-gateway.prod.us-east-1.internal.example-corp.com/v3/mcp"
+        tool = "list_directory_contents"
+        assert build_namespaced_tool_name(a, tool) != build_namespaced_tool_name(b, tool)
+
+    def test_is_deterministic(self):
+        """Stable across calls so provider prompt caches are not invalidated."""
+        server = "sse: https://api.example.com/mcp"
+        assert build_namespaced_tool_name(server, "read_file") == build_namespaced_tool_name(
+            server, "read_file"
+        )
+
+    def test_clean_server_name_is_untouched(self):
+        assert build_namespaced_tool_name("weather", "read_file") == "weather__read_file"
+
+
+class TestDuplicateRegistryKeyRaises:
+    """_build_registry must fail closed: a shadowed tool would inherit the
+    original's PolicyStore grant, since policy resources are keyed by name."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_bare_names_raise(self):
+        from continuum.tools.exceptions import MCPError
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+
+        def _srv(name):
+            return MCPServerFunction(
+                name=name,
+                tools=[{"name": "read_file", "fn": lambda args: "ok", "description": "Read"}],
+            )
+
+        server_a, server_b = _srv("server-a"), _srv("server-b")
+        await server_a.connect()
+        await server_b.connect()
+
+        executor = ToolExecutor(
+            tool_registry={server_a: None, server_b: None}, namespace_tools=False
+        )
+        with pytest.raises(MCPError, match="Duplicate tool name"):
+            await executor.initialize()
+
+    @pytest.mark.asyncio
+    async def test_same_server_name_collides_even_when_namespaced(self):
+        """Namespacing does not save you when two servers share a name -- which is
+        easy, since names are auto-derived from the URL."""
+        from continuum.tools.exceptions import MCPError
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+
+        def _srv():
+            return MCPServerFunction(
+                name="dup-server",
+                tools=[{"name": "read_file", "fn": lambda args: "ok", "description": "Read"}],
+            )
+
+        server_a, server_b = _srv(), _srv()
+        await server_a.connect()
+        await server_b.connect()
+
+        executor = ToolExecutor(tool_registry={server_a: None, server_b: None})
+        with pytest.raises(MCPError, match="Duplicate tool name"):
+            await executor.initialize()
+
+    @pytest.mark.asyncio
+    async def test_distinct_servers_coexist_when_namespaced(self):
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+
+        def _srv(name):
+            return MCPServerFunction(
+                name=name,
+                tools=[{"name": "read_file", "fn": lambda args: "ok", "description": "Read"}],
+            )
+
+        server_a, server_b = _srv("server-a"), _srv("server-b")
+        await server_a.connect()
+        await server_b.connect()
+
+        executor = ToolExecutor(tool_registry={server_a: None, server_b: None})
+        await executor.initialize()
+
+        assert set(executor.tool_registry) == {"server-a__read_file", "server-b__read_file"}

@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, Any
 from continuum.llm.types import ChatMessage, ToolCall
 from continuum.logging import get_logger
 from continuum.observability.decorators import trace_tool
-from continuum.tools.exceptions import MCPToolError
+from continuum.tools.exceptions import MCPError, MCPToolError
 from continuum.tools.types import (
     MCPToolArtifact,
     RunArtifacts,
     ToolContextState,
 )
-from continuum.tools.util import MCPUtil
+from continuum.tools.util import MCPUtil, build_namespaced_tool_name
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -187,7 +187,7 @@ class ToolExecutor:
         tool_registry: dict["MCPServer", list[str] | None] | None = None,
         config: ToolExecutorConfig | None = None,
         context_state: ToolContextState | None = None,
-        namespace_tools: bool = False,
+        namespace_tools: bool = True,
     ):
         """
         Initialize the tool executor.
@@ -200,9 +200,17 @@ class ToolExecutor:
             config: Configuration for rate limiting and concurrency control.
             context_state: Shared context state for variable capture/injection.
                 If None, a new empty state is created.
-            namespace_tools: When True, registry keys are prefixed with the server name
-                (e.g. "my-server__search"). Must match the namespace_tools setting used
-                in MCPUtil.get_all_function_tools so the LLM-facing names align.
+            namespace_tools: When True (the default), registry keys are prefixed with
+                the server name (e.g. "my-server__search") so tools from different
+                servers cannot shadow one another. Set False for bare tool names --
+                then a duplicate name across servers raises MCPError rather than
+                silently overwriting. Must match the namespace_tools setting used in
+                MCPUtil.get_all_function_tools so the LLM-facing names align.
+
+                Note the split: PolicyStore resources and tool-attention
+                ``always_promote`` match the *namespaced* key, while ``tool_filter``
+                and the per-server ``allowed_tools`` list above match the server's
+                *raw* tool name.
         """
         self.tool_registry: dict[str, tuple[MCPServer, MCPTool]] = {}
         self._tool_registry_config = tool_registry
@@ -509,6 +517,13 @@ class ToolExecutor:
         Args:
             tool_registry: Mapping of servers to allowed tool lists.
             target: Dict to write into. Defaults to self.tool_registry.
+
+        Raises:
+            MCPError: If two servers contribute the same registry key. The key is
+                the LLM-facing tool name, and a model's tool call carries only that
+                name -- so a collision makes the call unroutable. Overwriting instead
+                would let a later-registered server shadow an earlier one and inherit
+                any PolicyStore grant written against the shared name.
         """
         dest = target if target is not None else self.tool_registry
         for server, allowed_tools in tool_registry.items():
@@ -517,13 +532,28 @@ class ToolExecutor:
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list
+                    # Note: allowed_tools matches the server's RAW tool name, before
+                    # any namespace prefix is applied.
                     if allowed_tools is None or tool.name in allowed_tools:
                         registry_key = (
-                            f"{server.name}__{tool.name}" if self._namespace_tools else tool.name
+                            build_namespaced_tool_name(server.name, tool.name)
+                            if self._namespace_tools
+                            else tool.name
                         )
                         if registry_key in dest:
-                            logger.warning(f"Tool '{registry_key}' already registered, overwriting")
+                            existing_server, _ = dest[registry_key]
+                            raise MCPError(
+                                f"Duplicate tool name '{registry_key}': provided by both "
+                                f"'{existing_server.name}' and '{server.name}'. "
+                                f"Exclude one via the per-server allowed_tools list or a "
+                                f"tool_filter, or give the servers distinct names.",
+                                server_name=server.name,
+                            )
                         dest[registry_key] = (server, tool)
+            except MCPError:
+                # Already carries a precise, actionable message (e.g. the duplicate
+                # tool name above). Re-raise without the generic wrapper log.
+                raise
             except Exception as e:
                 logger.error(f"Error building tool registry for server {server.name}: {e}")
                 raise
@@ -631,8 +661,15 @@ class ToolExecutor:
 
                 # CAPTURE: Context variables from result after execution
                 # This may fail if result is not valid JSON, but that's okay - we continue
+                #
+                # Match on tool.name (the server's RAW name), not tool_name (the
+                # possibly-namespaced registry key): ToolContextConfig is attached to
+                # one specific server, so its capture_from list naturally names that
+                # server's own tools. Requiring "myserver__create_session" inside a
+                # config already scoped to "myserver" would be redundant and would
+                # silently stop matching whenever namespace_tools changes.
                 try:
-                    self._capture_context_variables(server, tool_name, result)
+                    self._capture_context_variables(server, tool.name, result)
                 except Exception as capture_error:
                     # Context capture failures should not break tool execution
                     # Log but continue - the tool result is still valid

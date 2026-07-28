@@ -295,10 +295,12 @@ class TestToolContextConfig:
         executor = ToolExecutor(tool_registry={server: None})
         await executor.initialize()
 
+        # The LLM sees the namespaced key (namespace_tools defaults to True), so a
+        # real tool call arrives prefixed. capture_from still matches the raw name.
         tc = ToolCall(
             id="tc-s1",
             type="function",
-            function=FunctionCall(name="create_session", arguments="{}"),
+            function=FunctionCall(name="session-server__create_session", arguments="{}"),
         )
         await executor.execute_tool_call(tc)
 
@@ -342,14 +344,14 @@ class TestToolContextConfig:
             ToolCall(
                 id="tc-w1",
                 type="function",
-                function=FunctionCall(name="create_session", arguments="{}"),
+                function=FunctionCall(name="work-server__create_session", arguments="{}"),
             )
         )
         await executor.execute_tool_call(
             ToolCall(
                 id="tc-w2",
                 type="function",
-                function=FunctionCall(name="do_work", arguments="{}"),
+                function=FunctionCall(name="work-server__do_work", arguments="{}"),
             )
         )
 

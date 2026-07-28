@@ -142,6 +142,7 @@ executor = ToolExecutor(
         timeout_seconds=30.0,
     ),
     context_state=None,
+    namespace_tools=True,                 # default; see "Tool namespacing" below
 )
 await executor.initialize()
 ```
@@ -295,14 +296,106 @@ captured widget before forwarding to a frontend.
 
 ---
 
+## 6.5 · Tool namespacing
+
+**Default: `namespace_tools=True`.** Every MCP tool reaches the LLM as
+`<server>__<tool>` — `weather__get_forecast`, not `get_forecast`.
+
+### Why
+
+A model's tool call carries only a name:
+
+```json
+{"function": {"name": "get_forecast", "arguments": "..."}}
+```
+
+There is no server field, so within one agent's tool list a name must map to
+exactly one tool. Tool-name uniqueness in MCP is scoped to a single server, and
+collisions in the wild are common — a survey of public servers found `search`
+exposed by 32 different ones. Prefixing is what the MCP specification
+recommends for clients that aggregate servers, and what Claude Code
+(`mcp__<server>__<tool>`) and Cursor (`mcp_<server>_<tool>`) do.
+
+### Name shape
+
+Provider APIs constrain function names to `^[a-zA-Z0-9_-]{1,64}$`. Server names
+are auto-derived from the transport when you don't pass `name=`
+(`"sse: https://api.example.com/mcp"`), so the prefix is sanitized:
+
+| Server name | Resulting key for tool `read_file` |
+|---|---|
+| `weather` | `weather__read_file` |
+| `sse: https://api.example.com/mcp` | `sse_https_api_example_com_mcp__read_file` |
+| a long URL | prefix truncated with a 6-char digest suffix, e.g. `sse_https_mcp-gateway_prod_us-ea_832e17__read_file` |
+
+The **tool name is never truncated** — it carries the semantics the model reasons
+about, so the prefix absorbs the budget. The digest keeps two long URLs that
+differ only late (`/v2/` vs `/v3/`) from collapsing to the same key. Naming your
+servers explicitly (`MCPServerSse({...}, name="weather")`) gives shorter, more
+readable tool names.
+
+### Raw names vs namespaced names
+
+Some settings match the server's **raw** tool name, others the **namespaced**
+key. Getting this wrong fails silently.
+
+| Setting | Matches | Example |
+|---|---|---|
+| `tool_filter` (`allowed_tool_names` / `blocked_tool_names`) | **raw** | `"read_file"` |
+| `ToolExecutor(tool_registry={server: [...]})` allow-list | **raw** | `"read_file"` |
+| `ToolContextVariable(capture_from=..., inject_into=...)` | **raw** | `"create_session"` |
+| `PolicyStore` resources | **namespaced** | `"tool:weather__read_file"` |
+| `ToolAttentionConfig(always_promote=[...])` | **namespaced** | `"weather__read_file"` |
+
+The rule: anything scoped to **one server** takes raw names (the server already
+identifies itself); anything operating on the **merged LLM-facing list** takes
+namespaced keys.
+
+Per-server policies work naturally with the namespaced form:
+
+```python
+PolicyStore.default_deny([
+    AccessPolicy(name="weather-ro", subjects=["*"],
+                 resources=["tool:weather__*"], effect="allow"),
+])
+```
+
+### Turning it off
+
+```python
+executor = ToolExecutor({a: None, b: None}, namespace_tools=False)
+tools = await MCPUtil.get_all_function_tools([a, b], namespace_tools=False)
+```
+
+Both must agree, or the model calls names the registry cannot resolve. With
+namespacing off, a duplicate tool name across servers raises `MCPError` rather
+than letting one server silently shadow the other.
+
+### Migrating from bare names
+
+If you are upgrading from a version that defaulted to `namespace_tools=False`:
+
+1. **`PolicyStore` rules must be re-pointed.** `resources=["tool:delete_*"]` no
+   longer matches `weather__delete_file`. Because the default `default_effect`
+   is `"allow"`, an unmatched **deny** rule stops applying — write
+   `["tool:*__delete_*"]` (or set `default_effect="deny"`).
+2. **`always_promote` entries** need the prefix.
+3. **Recorded traces, evals, and golden datasets** that assert on tool names
+   need updating.
+4. Provider prompt caches invalidate once on the switch.
+
+To keep the old behaviour, pass `namespace_tools=False` everywhere.
+
+---
+
 ## 7 · `MCPUtil`
 
 `from continuum.tools import MCPUtil`
 
 | Method | Returns | Notes |
 |---|---|---|
-| `await MCPUtil.get_function_tools(server, normalize_schemas=True, strict_mode=False, metadata=None)` | `list[ToolDefinition]` | LLM-shaped tools from one server |
-| `await MCPUtil.get_all_function_tools(servers, normalize_schemas=True, strict_mode=False, metadata=None)` | `list[ToolDefinition]` | Across multiple servers; raises `MCPError` on duplicate tool names |
+| `await MCPUtil.get_function_tools(server, normalize_schemas=True, strict_mode=False, metadata=None, namespace_tools=True)` | `list[ToolDefinition]` | LLM-shaped tools from one server |
+| `await MCPUtil.get_all_function_tools(servers, normalize_schemas=True, strict_mode=False, metadata=None, namespace_tools=True)` | `list[ToolDefinition]` | Across multiple servers; with `namespace_tools=False`, raises `MCPError` on duplicate tool names |
 | `MCPUtil.to_function_tool(tool, server, normalize_schemas=True, strict_mode=False)` | `ToolDefinition` | Convert one MCP tool |
 | `await MCPUtil.invoke_mcp_tool(server, tool, input_json, trace_id=None, span_id=None, metadata=None)` | `str` | JSON-string result |
 | `await MCPUtil.invoke_mcp_tool_with_artifact(server, tool, input_json, ...)` | `tuple[str, MCPToolArtifact]` | Result text + full artifact |
@@ -373,8 +466,18 @@ gets the captured value injected automatically.
   of "no tools available" reports.
 - **`ToolExecutor.initialize()` is required** when you build it with a
   `tool_registry` argument.
-- **Tool names must be unique across servers** when using
-  `MCPUtil.get_all_function_tools(...)`.
+- **Tool names must be unique across the merged list.** By default
+  `namespace_tools=True` guarantees this by prefixing with the server name. If
+  you set `namespace_tools=False`, two servers exposing the same tool name raise
+  `MCPError` — from `ToolExecutor.initialize()` as well as
+  `MCPUtil.get_all_function_tools(...)`. See §6.5.
+- **`namespace_tools` must match** between `ToolExecutor` and any
+  `MCPUtil.get_*_function_tools(...)` call feeding the same agent, or the model
+  will call names the registry cannot resolve.
+- **Raw vs namespaced names:** `tool_filter`, per-server allow-lists, and
+  `ToolContextVariable` match the server's **raw** tool name; `PolicyStore`
+  resources and tool-attention `always_promote` match the **namespaced** key.
+  See the table in §6.5.
 - **`use_structured_content=True`** changes what gets sent to the LLM —
   prefer leaving it `False` unless you specifically want the structured
   payload as text.

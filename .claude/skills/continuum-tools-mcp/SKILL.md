@@ -161,9 +161,31 @@ from orchestrator.tools import normalize_schema_for_llm, ensure_strict_json_sche
 
 ```python
 tools = await MCPUtil.get_function_tools(server)
-all_tools = await MCPUtil.get_all_function_tools([s1, s2])  # raises on duplicate names
+all_tools = await MCPUtil.get_all_function_tools([s1, s2])
 text, art = await MCPUtil.invoke_mcp_tool_with_artifact(server, tool, '{"k":"v"}')
 ```
+
+---
+
+## Tool namespacing
+
+`namespace_tools=True` is the **default** on both `ToolExecutor` and
+`MCPUtil.get_*_function_tools()`. Tools reach the LLM as `<server>__<tool>`
+(e.g. `weather__get_forecast`), so two servers can expose the same tool name.
+The prefix is sanitized to the provider's `^[a-zA-Z0-9_-]{1,64}$`.
+
+Which name a setting matches:
+
+| Setting | Name |
+|---|---|
+| `tool_filter` allow/block lists | **raw** (`read_file`) |
+| `ToolExecutor(tool_registry={server: [...]})` | **raw** |
+| `ToolContextVariable(capture_from=, inject_into=)` | **raw** |
+| `PolicyStore` resources | **namespaced** (`tool:weather__read_file`) |
+| `ToolAttentionConfig(always_promote=)` | **namespaced** |
+
+Rule of thumb: scoped to one server → raw; operating on the merged LLM-facing
+list → namespaced.
 
 ---
 
@@ -172,8 +194,14 @@ text, art = await MCPUtil.invoke_mcp_tool_with_artifact(server, tool, '{"k":"v"}
 - Don't forget `await server.connect()` — top cause of "no tools".
 - Don't forget `await executor.initialize()` if you build the executor
   with a `tool_registry`.
-- Don't have duplicate tool names across servers if you use
-  `get_all_function_tools()` — it raises `MCPError`.
+- Don't mix `namespace_tools` settings between `ToolExecutor` and
+  `MCPUtil.get_*_function_tools()` — the model would call names the
+  registry can't resolve. Both default to `True`.
+- Don't have duplicate tool names across servers when
+  `namespace_tools=False` — `ToolExecutor.initialize()` and
+  `get_all_function_tools()` both raise `MCPError`.
+- Don't write `PolicyStore` rules against bare tool names — resources match
+  the namespaced key (`tool:weather__read_file`).
 - Don't change `use_structured_content=True` casually — it changes what
   the LLM sees.
 - Don't expose unsafe tools to a low-trust agent — use `tool_filter` or
