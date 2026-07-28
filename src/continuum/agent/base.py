@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from continuum.agent.config import AgentConfig, AgentMemoryConfig
 from continuum.agent.exceptions import AgentConfigurationError
 from continuum.agent.types import (
+    HANDOFF_TOOL_PREFIX,
     Handoff,
     MemoryScope,
 )
@@ -465,8 +466,8 @@ class BaseAgent:
         Returns:
             Tuple of (is_handoff, target_agent_name)
         """
-        if tool_name.startswith("handoff_to_"):
-            target = tool_name[len("handoff_to_") :]
+        if tool_name.startswith(HANDOFF_TOOL_PREFIX):
+            target = tool_name[len(HANDOFF_TOOL_PREFIX) :]
             if self.can_handoff_to(target):
                 return True, target
         return False, None

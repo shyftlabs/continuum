@@ -122,10 +122,16 @@ class ToolAttentionRouter:
         # Semantic search
         routed = set(self._registry.search(query, k))
 
-        # Always-promote: builtins + config + handoff tools (transfer_to_*)
+        # Always-promote: builtins + config + handoff tools. A handoff is control
+        # flow, not a task tool -- if semantic routing drops it, the agent loses the
+        # ability to reach a specialist on that turn. Uses the shared constant
+        # because this check previously hardcoded "transfer_to_", which nothing in
+        # the SDK emits, so it never matched.
+        from continuum.agent.types import HANDOFF_TOOL_PREFIX
+
         always: set[str] = _BUILTIN_ALWAYS_PROMOTE | set(self._config.always_promote)
         for name in (_tool_name(t) for t in all_tools):
-            if name.startswith("transfer_to_"):
+            if name.startswith(HANDOFF_TOOL_PREFIX):
                 always.add(name)
 
         promoted = routed | always

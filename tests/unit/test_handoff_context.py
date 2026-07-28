@@ -25,8 +25,13 @@ def _make_agent(name="agent-a"):
 
 
 def _make_tool_call(target_name: str):
+    from continuum.agent.types import HANDOFF_TOOL_PREFIX
+
     tc = MagicMock()
-    tc.function.name = f"transfer_to_{target_name}"
+    # execute_handoff() is called directly below with an explicit target, so this
+    # name is not what routes the call -- but it must still be the prefix the SDK
+    # actually emits, or the fixture teaches a name that does not exist.
+    tc.function.name = f"{HANDOFF_TOOL_PREFIX}{target_name}"
     tc.function.arguments = '{"reason": "test handoff"}'
     tc.id = "tc-1"
     return tc

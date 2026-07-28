@@ -217,6 +217,17 @@ class TokenUsage:
 # Handoff Types
 # =============================================================================
 
+HANDOFF_TOOL_PREFIX = "handoff_to_"
+"""Prefix of the synthetic tool the LLM calls to trigger a handoff.
+
+Single source of truth. The name is built here, parsed in
+``BaseAgent.is_handoff_tool_call``, and matched in the tool-attention router --
+three files that must agree. They previously did not: the router looked for
+``transfer_to_`` (the OpenAI Agents SDK's convention, which AGENTS.md lists as a
+known-wrong reference for Continuum), so handoff tools were never force-promoted
+and could be dropped from a turn by semantic routing.
+"""
+
 
 @dataclass
 class Handoff:
@@ -241,7 +252,7 @@ class Handoff:
         return {
             "type": "function",
             "function": {
-                "name": f"handoff_to_{self.target_agent}",
+                "name": f"{HANDOFF_TOOL_PREFIX}{self.target_agent}",
                 "description": f"Hand off the conversation to {self.target_agent}. {self.description}",
                 "parameters": {
                     "type": "object",

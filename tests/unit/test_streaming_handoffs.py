@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from continuum.agent.types import (
+    HANDOFF_TOOL_PREFIX,
     AgentEvent,
     AgentResponse,
     EventType,
@@ -56,7 +57,7 @@ def _make_handoff_tool_call(target: str) -> ToolCall:
         id="tc-handoff-1",
         type="function",
         function=FunctionCall(
-            name=f"transfer_to_{target}",
+            name=f"{HANDOFF_TOOL_PREFIX}{target}",
             arguments='{"reason": "test handoff"}',
         ),
     )
@@ -83,7 +84,7 @@ def _make_agent(name: str = "source-agent", handoff_target: str = "target-agent"
     agent.is_handoff_tool_call = MagicMock(
         side_effect=lambda tool_name: (
             (True, handoff_target)
-            if tool_name == f"transfer_to_{handoff_target}"
+            if tool_name == f"{HANDOFF_TOOL_PREFIX}{handoff_target}"
             else (False, None)
         )
     )

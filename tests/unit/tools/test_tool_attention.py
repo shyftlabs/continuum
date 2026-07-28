@@ -452,11 +452,34 @@ class TestToolAttentionRouterRoute:
         assert "think" in names
 
     def test_always_includes_handoff_tools(self):
+        """The name must be the one Handoff.to_tool_definition() actually emits.
+
+        This previously asserted "transfer_to_billing" -- a prefix nothing in the
+        SDK produces (it is the OpenAI Agents SDK convention, and AGENTS.md lists
+        it as a known-wrong reference). The test passed against a dead branch
+        while real handoff tools went unpromoted.
+        """
+        from continuum.agent.types import Handoff
+
+        real_name = Handoff(target_agent="billing", description="Billing").to_tool_definition()[
+            "function"
+        ]["name"]
+        assert real_name == "handoff_to_billing", "handoff naming changed; update the router too"
+
+        tools = self._tools(["search", real_name, "checkout", "get_cart", "delete"])
+        router = _make_router_with_mock_registry(["search"], min_tools=3)
+        result = router.route(self._messages(), tools, _make_context())
+        names = [_tool_name(t) for t in result]
+        assert real_name in names
+
+    def test_does_not_promote_the_foreign_transfer_to_prefix(self):
+        """Guard against the old name creeping back: transfer_to_* is not a
+        Continuum handoff and must not be force-promoted."""
         tools = self._tools(["search", "transfer_to_billing", "checkout", "get_cart", "delete"])
         router = _make_router_with_mock_registry(["search"], min_tools=3)
         result = router.route(self._messages(), tools, _make_context())
         names = [_tool_name(t) for t in result]
-        assert "transfer_to_billing" in names
+        assert "transfer_to_billing" not in names
 
     def test_always_promote_config_respected(self):
         tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
