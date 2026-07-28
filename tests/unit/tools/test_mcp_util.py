@@ -335,6 +335,42 @@ class TestBuildNamespacedToolName:
         assert build_namespaced_tool_name("weather", "read_file") == "weather__read_file"
 
 
+class TestNamespaceAppliedExactlyOnce:
+    """get_function_tools namespaces by default, and get_all_function_tools must
+    not prefix a second time on top of it."""
+
+    @pytest.mark.asyncio
+    async def test_get_function_tools_namespaces_by_default(self):
+        """Must match ToolExecutor's default: a bare tool list paired with a
+        namespacing registry leaves the model calling unresolvable names."""
+        server = _make_list_tools_server("weather", ["get_forecast"])
+
+        tools = await MCPUtil.get_function_tools(server)
+
+        assert {t.function.name for t in tools} == {"weather__get_forecast"}
+
+    @pytest.mark.asyncio
+    async def test_get_function_tools_can_opt_out(self):
+        server = _make_list_tools_server("weather", ["get_forecast"])
+
+        tools = await MCPUtil.get_function_tools(server, namespace_tools=False)
+
+        assert {t.function.name for t in tools} == {"get_forecast"}
+
+    @pytest.mark.asyncio
+    async def test_get_all_function_tools_does_not_double_prefix(self):
+        """get_all_function_tools delegates to get_function_tools, which now
+        namespaces on its own -- so the prefix must be suppressed there and
+        applied once at this level."""
+        server = _make_list_tools_server("weather", ["get_forecast"])
+
+        tools = await MCPUtil.get_all_function_tools([server])
+
+        names = {t.function.name for t in tools}
+        assert names == {"weather__get_forecast"}
+        assert "weather__weather__get_forecast" not in names
+
+
 class TestDuplicateRegistryKeyRaises:
     """_build_registry must fail closed: a shadowed tool would inherit the
     original's PolicyStore grant, since policy resources are keyed by name."""

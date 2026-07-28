@@ -277,6 +277,44 @@ class TestToolContextConfig:
     """ToolContextConfig captures a value from one tool and injects it into the next."""
 
     @pytest.mark.asyncio
+    async def test_capture_from_matches_raw_tool_name_not_registry_key(self):
+        """ToolContextConfig is attached to one server, so capture_from names that
+        server's own tools by their RAW name. Matching the namespaced registry key
+        instead would force the redundant "srv__create_session" inside a config
+        already scoped to srv, and would silently stop capturing whenever
+        namespace_tools changed.
+        """
+        from continuum.llm.types import FunctionCall, ToolCall
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.mcp import MCPServerFunction
+        from continuum.tools.types import ToolContextConfig, ToolContextVariable
+
+        def create_session() -> dict:
+            """Create a session and return session_id."""
+            return {"session_id": "raw-name-match", "status": "created"}
+
+        config = ToolContextConfig(
+            # RAW name, deliberately NOT "session-server__create_session"
+            variables=[ToolContextVariable(name="session_id", capture_from=["create_session"])],
+            auto_capture_common=False,
+        )
+        server = MCPServerFunction("session-server", [create_session], context_config=config)
+        # namespace_tools defaults to True, so the registry key IS prefixed
+        executor = ToolExecutor(tool_registry={server: None})
+        await executor.initialize()
+        assert "session-server__create_session" in executor.tool_registry
+
+        await executor.execute_tool_call(
+            ToolCall(
+                id="tc-raw",
+                type="function",
+                function=FunctionCall(name="session-server__create_session", arguments="{}"),
+            )
+        )
+
+        assert executor.context_state.get(server.name, "session_id") == "raw-name-match"
+
+    @pytest.mark.asyncio
     async def test_captures_session_id_from_tool_result(self):
         from continuum.llm.types import FunctionCall, ToolCall
         from continuum.tools.executor import ToolExecutor

@@ -315,6 +315,9 @@ store = PolicyStore.default_deny([
     AccessPolicy(name="reads", subjects=["support"],
                  resources=["tool:get_*"], effect="allow"),
 ])
+# `get_order` / `refund_order` below are local function tools, which keep bare
+# names. MCP tools are namespaced by default (`tool:<server>__<name>`), so a
+# rule covering those needs `tool:*__get_*` — see docs/tools.md §6.5.
 
 agent = BaseAgent(
     name="support",

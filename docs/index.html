@@ -2484,7 +2484,7 @@ store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
 store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
     name=<span class="str">"confidential-no-exfil"</span>,
     subjects=[<span class="str">"confidential"</span>],
-    resources=[<span class="str">"tool:send_*"</span>, <span class="str">"tool:web_*"</span>],   <span class="cm"># globs supported</span>
+    resources=[<span class="str">"tool:*send_*"</span>, <span class="str">"tool:*web_*"</span>],   <span class="cm"># leading * also covers namespaced MCP tools (server__send_email)</span>
     effect=<span class="str">"deny"</span>,
     denial_message=<span class="str">"Confidential data may not leave via this tool."</span>,
 ))</pre></div>
@@ -2513,7 +2513,7 @@ ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)</pre>
   <table>
     <tr><th>Sink</th><th>Resource string</th><th>What a deny does</th></tr>
     <tr><td>Model routing</td><td><code>llm:&lt;model&gt;</code></td><td>raises <code>ModelAccessDeniedError</code> (catch → reroute to an allowed model)</td></tr>
-    <tr><td>Tool call</td><td><code>tool:&lt;name&gt;</code> (globs)</td><td>tool result becomes <code>POLICY DENIED: …</code> (tool not run; model sees it)</td></tr>
+    <tr><td>Tool call</td><td><code>tool:&lt;name&gt;</code> (globs). MCP tools are namespaced by default, so the resource is <code>tool:&lt;server&gt;__&lt;name&gt;</code>; local function tools keep bare names</td><td>tool result becomes <code>POLICY DENIED: …</code> (tool not run; model sees it)</td></tr>
     <tr><td>Long-term memory</td><td><code>memory:&lt;scope&gt;</code> or <code>memory:*</code></td><td>write blocked (<code>MemoryAccessDeniedError</code> on explicit add; auto-store skipped)</td></tr>
     <tr><td>Telemetry</td><td><code>telemetry</code></td><td>payload replaced with <code>{"_redacted": "…"}</code> before egress</td></tr>
     <tr><td>Short-term session</td><td><code>session</code></td><td>assistant answer stored as a placeholder, not verbatim</td></tr>
@@ -2605,7 +2605,7 @@ agent = <span class="cls">BaseAgent</span>(
 )</pre></div>
 
   <h3>Passing tools explicitly with MCPUtil</h3>
-  <p>If you need the tool definitions as Python objects (e.g. to inspect, filter, or pass them manually), use <code>MCPUtil.get_function_tools()</code>:</p>
+  <p>If you need the tool definitions as Python objects (e.g. to inspect, filter, or pass them manually), use <code>MCPUtil.get_function_tools()</code>. Tool names are <strong>namespaced by default</strong> — the LLM sees <code>&lt;server&gt;__&lt;tool&gt;</code>, so two servers can expose the same tool name. Keep <code>namespace_tools</code> consistent between this call and <code>ToolExecutor</code> (both default <code>True</code>), or the model will call names the registry cannot resolve.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.tools <span class="kw">import</span> <span class="cls">MCPUtil</span>, <span class="cls">ToolExecutor</span>
 
 <span class="cm"># Get tool definitions from a connected server</span>

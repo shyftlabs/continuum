@@ -183,6 +183,13 @@ agent = BaseAgent(name="tool-agent", instructions="...", mcp_servers=[local, rem
 # or: agent.tools=tools + agent.tool_executor=ToolExecutor({local: None, remote: None})
 ```
 
+MCP tool names are **namespaced by default** — the LLM sees
+`<server>__<tool>`, so two servers may expose the same tool name. Keep
+`namespace_tools` consistent between `MCPUtil.get_*_function_tools()` and
+`ToolExecutor` (both default `True`). `PolicyStore` resources match the
+namespaced key (`tool:myserver__read_file`); `tool_filter` and per-server
+allow-lists match the raw name. See `docs/tools.md` §6.5.
+
 ### Handoffs
 
 ```python
