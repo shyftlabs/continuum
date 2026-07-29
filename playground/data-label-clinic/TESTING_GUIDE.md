@@ -337,11 +337,15 @@ python server.py
 continuum mcp inspect http://localhost:8911/mcp --name clinic \
   --write-pins tool-pins.json
 
-# 2. the operator "updates" the server
+# 2. the operator "updates" the server.
+#    Ctrl-C the clean one FIRST. Both bind :8911, and the second just logs
+#    "address already in use" and exits -- leaving you pinning and inspecting
+#    the old server while believing you switched.
 CLINIC_POISON=1 python server.py
 
-# 3. reconnect
-python agent.py
+# 3. reconnect. web.py connects to MCP at startup; agent.py is a library
+#    module with no __main__, so `python agent.py` would exit silently.
+python web.py
 ```
 
 Expected on step 3:
@@ -363,7 +367,7 @@ cached catalogue and never re-read the server at all.
 rm -f tool-pins.json
 CLINIC_POISON=1 python server.py
 continuum mcp inspect http://localhost:8911/mcp --name clinic --write-pins tool-pins.json
-python agent.py
+python web.py
 ```
 
 Three separate things to check, because they are three different mechanisms:

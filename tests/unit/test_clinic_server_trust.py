@@ -237,3 +237,44 @@ def _as_tool(name: str, description: str) -> Tool:
         description=description,
         inputSchema={"type": "object", "properties": {}},
     )
+
+
+class TestTestingGuideCommandsAreRunnable:
+    """Every `python X.py` in TESTING_GUIDE.md must name a runnable script.
+
+    The guide first shipped saying `python agent.py`, but agent.py is a library
+    module with no __main__ block -- it imports, defines a class, and exits
+    silently. A reader following step 4 saw no output and no warning, and had no
+    way to tell whether the tripwire had failed or the command had.
+
+    Silent-success is exactly the failure mode the guide is documenting, so it
+    should not be the guide's own.
+    """
+
+    def _guide_commands(self) -> set[str]:
+        import re
+
+        text = (CLINIC_DIR / "TESTING_GUIDE.md").read_text()
+        return set(re.findall(r"^\s*(?:[A-Z_]+=\S+\s+)?python (\S+\.py)", text, re.MULTILINE))
+
+    def test_the_scan_finds_commands(self):
+        """A silently-empty scan reads exactly like a clean one."""
+        assert self._guide_commands(), "no `python X.py` commands found in the guide"
+
+    def test_every_documented_script_exists(self):
+        for script in self._guide_commands():
+            assert (CLINIC_DIR / script).exists(), f"{script} does not exist"
+
+    def test_every_documented_script_has_a_main_block(self):
+        import ast
+
+        for script in sorted(self._guide_commands()):
+            tree = ast.parse((CLINIC_DIR / script).read_text())
+            has_main = any(
+                isinstance(n, ast.If)
+                and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.left, ast.Name)
+                and n.test.left.id == "__name__"
+                for n in tree.body
+            )
+            assert has_main, f"{script} has no __main__ block; `python {script}` does nothing"
