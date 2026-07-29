@@ -261,3 +261,56 @@ class TestAgentCreateAgentResourceInjection:
         )
         assert '{{"id"' not in instructions
         assert '"Dog Food"' not in instructions
+
+
+# ---------------------------------------------------------------------------
+# MCP server naming
+#
+# With namespace_tools defaulting to True, the server name is no longer a
+# display label -- it is the prefix on every LLM-facing tool name, and so part
+# of the identity that policies, digest pins, always_promote and capture/inject
+# match against. Leaving it unset falls back to
+# f"streamable_http: {url}", which sanitises to a 39-character prefix carrying
+# the host and port: move the server to another port and every tool silently
+# gets a new name.
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerNaming:
+    @pytest.mark.asyncio
+    async def test_connect_mcp_passes_an_explicit_server_name(self):
+        import agent as agent_mod
+        from config import ShopConfig
+
+        shop = agent_mod.LocalShopAgent(ShopConfig())
+
+        fake_server = MagicMock()
+        fake_server.connect = AsyncMock()
+        fake_executor = MagicMock()
+        fake_executor.initialize = AsyncMock()
+        fake_executor.get_tool_definitions = MagicMock(return_value=[])
+
+        with (
+            patch.object(agent_mod, "MCPServerStreamableHttp", return_value=fake_server) as ctor,
+            patch.object(agent_mod, "CartDebugToolExecutor", return_value=fake_executor),
+            patch.object(shop, "_fetch_resources", new=AsyncMock()),
+        ):
+            await shop._connect_mcp()
+
+        assert ctor.call_args.kwargs.get("name"), (
+            "MCPServerStreamableHttp was constructed without name=; tool names "
+            "fall back to the transport+URL label."
+        )
+
+    def test_server_name_does_not_embed_the_environment(self):
+        from config import default_config
+
+        from continuum.tools.util import build_namespaced_tool_name
+
+        name = default_config.mcp_server_name
+        for tool in ("search_products", "get_product", "add_to_cart", "view_cart", "checkout"):
+            namespaced = build_namespaced_tool_name(name, tool)
+            assert namespaced == f"{name}__{tool}"
+            assert len(namespaced) <= 64
+            assert "localhost" not in namespaced
+            assert "8888" not in namespaced

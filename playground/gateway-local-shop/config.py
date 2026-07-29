@@ -41,6 +41,12 @@ class ShopConfig:
     mcp_url: str = "http://localhost:8888/mcp"
     mcp_timeout: float = 10.0
 
+    # Prefix on every LLM-facing tool name ("shop__search_products"), so it is
+    # part of the identity that policies, digest pins and always_promote match.
+    # Keep it short and environment-independent: the unset fallback derives from
+    # the transport and URL, which bakes the host and port into every tool name.
+    mcp_server_name: str = "shop"
+
     agent_name: str = "shop-assistant"
     # Model name is sent as-is to the gateway — gateway routes to the provider.
     # Must be in the virtual key's allowed_models list (conf.json).
