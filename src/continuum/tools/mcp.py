@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import hashlib
 import inspect
 import json
 import typing
@@ -73,6 +74,28 @@ def _clean_schema(node: Any) -> Any:
     if isinstance(node, str):
         return strip_hidden_chars(node)
     return node
+
+
+def _tool_digest(tool: MCPTool) -> str:
+    """Identity of a tool's *instructional surface*, as the model will read it.
+
+    Covers description and inputSchema, not the name -- the name is the key these
+    digests are stored under. The schema is canonicalised (sorted keys) so
+    cosmetic reordering by the server does not read as a change.
+
+    Computed over the RAW bytes, before _clean_tool() strips invisible
+    characters: hashing the cleaned text would let an attacker add or remove
+    zero-width codepoints freely without tripping the tripwire.
+    """
+    payload = json.dumps(
+        {
+            "description": tool.description or "",
+            "inputSchema": tool.inputSchema or {},
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _clean_tool(tool: MCPTool) -> MCPTool:
@@ -211,6 +234,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        tool_pin_path: str | Path | None = None,
     ):
         """
         Args:
@@ -238,6 +262,19 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast on
                 misconfiguration. Default False so slow servers are not penalized.
+            tool_pin_path: Optional JSON file in which to persist per-tool digests, so a
+                description that changes between *process runs* is still reported
+                ("approved today, poisoned next week" -- security finding F3).
+
+                Defaults to None: digests are kept in memory only. That already
+                catches drift across a reconnect, the main window, and avoids a
+                library creating files nobody asked for. Detection is best-effort
+                either way -- an unreadable or unwritable pin file is logged and
+                ignored rather than failing the agent.
+
+                A digest change is reported, not blocked: a developer editing their
+                own server's descriptions is the common case, so this is a tripwire
+                (warn, then re-pin), not a gate.
         """
         super().__init__(
             use_structured_content=use_structured_content,
@@ -259,6 +296,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         self.cache_tools_list = cache_tools_list
         self.server_initialize_result: InitializeResult | None = None
         self.validate_on_connect = validate_on_connect
+
+        # Tool-digest baseline (F3 rug-pull detection). None path => memory only.
+        self._tool_pin_path: Path | None = Path(tool_pin_path) if tool_pin_path else None
+        self._tool_digests: dict[str, str] | None = None
 
         self.client_session_timeout_seconds = client_session_timeout_seconds
         self.max_retry_attempts = max_retry_attempts
@@ -345,6 +386,88 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 continue
 
         return filtered_tools
+
+    # --- tool-digest drift detection (F3) ------------------------------------
+
+    def _load_tool_digests(self) -> dict[str, str]:
+        """Read this server's pinned digests. Best-effort: a missing, corrupt or
+        unreadable pin file degrades to "no baseline", which is the behaviour
+        before pinning existed -- never a failure that takes the agent down."""
+        if self._tool_digests is not None:
+            return self._tool_digests
+        digests: dict[str, str] = {}
+        if self._tool_pin_path is not None:
+            try:
+                raw = json.loads(self._tool_pin_path.read_text(encoding="utf-8"))
+                stored = raw.get(self.name, {}) if isinstance(raw, dict) else {}
+                if isinstance(stored, dict):
+                    digests = {k: v for k, v in stored.items() if isinstance(v, str)}
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError) as e:
+                logger.warning(f"Ignoring unreadable MCP tool-pin file {self._tool_pin_path}: {e}")
+        self._tool_digests = digests
+        return digests
+
+    def _save_tool_digests(self, digests: dict[str, str]) -> None:
+        """Persist digests for this server, preserving other servers' entries."""
+        self._tool_digests = digests
+        if self._tool_pin_path is None:
+            return
+        try:
+            existing: dict[str, Any] = {}
+            try:
+                loaded = json.loads(self._tool_pin_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except (FileNotFoundError, ValueError):
+                pass
+            existing[self.name] = digests
+            self._tool_pin_path.parent.mkdir(parents=True, exist_ok=True)
+            self._tool_pin_path.write_text(
+                json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
+            )
+        except OSError as e:
+            logger.warning(f"Could not write MCP tool-pin file {self._tool_pin_path}: {e}")
+
+    def _check_tool_digests(self, tools: list[MCPTool]) -> None:
+        """Report tools whose instructional surface changed since last seen.
+
+        Tripwire semantics -- warn on *change*, then re-pin. Comparing forever
+        against the original would re-warn on every fetch once a description is
+        legitimately updated, and a warning that always fires is a warning nobody
+        reads.
+
+        Added and removed tools are logged at INFO, not WARNING: a catalogue
+        growing or shrinking is ordinary. A tool that stayed but changed its
+        description is the rug-pull signal.
+        """
+        previous = self._load_tool_digests()
+        current = {tool.name: _tool_digest(tool) for tool in tools}
+
+        if not previous:
+            self._save_tool_digests(current)
+            return
+
+        changed = [name for name, d in current.items() if name in previous and previous[name] != d]
+        added = sorted(set(current) - set(previous))
+        removed = sorted(set(previous) - set(current))
+
+        if changed:
+            logger.warning(
+                f"MCP server '{self.name}' changed the description or schema of "
+                f"{sorted(changed)} since they were last seen. If you did not update "
+                f"this server, treat it as untrusted: a tool description reaches the "
+                f"model's prompt verbatim and can instruct it. Re-pinning to the new "
+                f"values (drift from the recorded catalogue, NOT a verification)."
+            )
+        if added or removed:
+            logger.info(
+                f"MCP server '{self.name}' tool catalogue changed shape: "
+                f"added={added} removed={removed}"
+            )
+
+        self._save_tool_digests(current)
 
     @abc.abstractmethod
     def create_streams(
@@ -441,6 +564,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # inside it would protect almost nobody; this is the single point
             # every caller passes through. Cleaning at fetch time (not on every
             # call) means the cache holds already-clean objects.
+            #
+            # Digest BEFORE cleaning: hashing the stripped text would let an
+            # attacker add or remove invisible characters without tripping it.
+            self._check_tool_digests(result.tools)
             self._tools_list = [_clean_tool(t) for t in result.tools]
             self._cache_dirty = False
             tools = self._tools_list
@@ -666,6 +793,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        tool_pin_path: str | Path | None = None,
     ):
         """Create a new MCP server based on the stdio transport.
 
@@ -698,6 +826,8 @@ class MCPServerStdio(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -709,6 +839,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            tool_pin_path=tool_pin_path,
         )
 
         self.params = StdioServerParameters(
@@ -775,6 +906,7 @@ class MCPServerSse(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        tool_pin_path: str | Path | None = None,
     ):
         """Create a new MCP server based on the HTTP with SSE transport.
 
@@ -809,6 +941,8 @@ class MCPServerSse(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -820,6 +954,7 @@ class MCPServerSse(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            tool_pin_path=tool_pin_path,
         )
 
         self.params = params
@@ -889,6 +1024,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        tool_pin_path: str | Path | None = None,
     ):
         """Create a new MCP server based on the Streamable HTTP transport.
 
@@ -924,6 +1060,8 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls (e.g., capturing session_id).
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -935,6 +1073,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            tool_pin_path=tool_pin_path,
         )
 
         self.params = params
