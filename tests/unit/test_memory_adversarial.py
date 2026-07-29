@@ -542,8 +542,22 @@ class TestConfigBoundaries:
         )
         assert not config.is_configured()
 
-    def test_history_db_path_nonexistent_docker_falls_back_to_tmp(self):
-        """Docker containers may have HOME=/nonexistent — must fall back to /tmp."""
+    def test_history_db_path_nonexistent_docker_falls_back_to_temp_dir(self):
+        """Docker containers may have HOME=/nonexistent — must fall back to a
+        writable per-uid directory under the system temp dir.
+
+        Asserted against tempfile.gettempdir() rather than a literal "/tmp":
+        that is "/tmp" on Linux but "/var/folders/.../T" on macOS, so hardcoding
+        it made this pass in CI and fail on a developer's machine.
+
+        This covers the *wiring* — that to_mem0_config() actually swaps an
+        unwritable path for the fallback. The security properties of the
+        directory itself (0700, owned by us, not a symlink) are covered in
+        tests/unit/memory/test_history_fallback.py.
+        """
+        import os
+        import tempfile
+
         config = MemoryConfig(
             enabled=True,
             qdrant_host="localhost",
@@ -553,7 +567,11 @@ class TestConfigBoundaries:
             history_db_path="/nonexistent/memory.db",
         )
         mem0_cfg = config.to_mem0_config()
-        assert mem0_cfg["history_db_path"].startswith("/tmp")
+        resolved = mem0_cfg["history_db_path"]
+
+        assert not resolved.startswith("/nonexistent"), "the unwritable path must not survive"
+        assert resolved.startswith(tempfile.gettempdir())
+        assert f"continuum-{os.getuid()}" in resolved, "must be the per-uid private dir"
 
     def test_unsupported_embedder_provider_raises(self):
         from continuum.memory.exceptions import MemoryConfigurationError
