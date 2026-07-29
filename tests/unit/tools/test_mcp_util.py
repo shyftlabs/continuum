@@ -8,7 +8,9 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import re
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -515,3 +517,132 @@ class TestExecutorForwardsMetadata:
         guest_exec = ToolExecutor(tool_registry={_server(): None})
         await guest_exec.initialize(metadata={"role": "guest"})
         assert guest_exec.tool_registry == {}
+
+
+class TestContextVariableNamesAreValidated:
+    """capture_from / inject_into name tools by exact string.
+
+    A name that matches nothing is a silent no-op: the variable is never
+    captured, so the later injection has nothing to inject and the tool runs
+    without it -- no error, no log. Same failure shape as the always_promote bug
+    (a5e15a0) and the PolicyStore deny that stopped denying (cd993fa).
+    """
+
+    @staticmethod
+    def _config(**kwargs):
+        from continuum.tools.types import ToolContextConfig, ToolContextVariable
+
+        return ToolContextConfig(
+            variables=[ToolContextVariable(name="session_id", **kwargs)],
+            auto_capture_common=False,
+        )
+
+    @staticmethod
+    def _server(name: str, tool_names: list[str], config):
+        from continuum.tools.mcp import MCPServerFunction
+
+        return MCPServerFunction(
+            name=name,
+            tools=[
+                {"name": tn, "fn": lambda args: "ok", "description": f"Tool {tn}"}
+                for tn in tool_names
+            ],
+            context_config=config,
+        )
+
+    @pytest.mark.asyncio
+    async def test_warns_when_capture_from_matches_no_tool(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server("srv", ["do_work"], self._config(capture_from=["create_sesion"]))
+        await server.connect()
+
+        with _captured_tool_warnings() as warnings:
+            await ToolExecutor(tool_registry={server: None}).initialize()
+
+        assert any("create_sesion" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_warns_when_inject_into_matches_no_tool(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server("srv", ["do_work"], self._config(inject_into=["do_wrok"]))
+        await server.connect()
+
+        with _captured_tool_warnings() as warnings:
+            await ToolExecutor(tool_registry={server: None}).initialize()
+
+        assert any("do_wrok" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_every_name_matches(self):
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server(
+            "srv",
+            ["create_session", "do_work"],
+            self._config(capture_from=["create_session"], inject_into=["do_work"]),
+        )
+        await server.connect()
+
+        with _captured_tool_warnings() as warnings:
+            await ToolExecutor(tool_registry={server: None}).initialize()
+
+        assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_none_means_all_tools_and_must_not_warn(self):
+        """capture_from=None is 'capture from any tool' (see
+        ToolContextConfig.should_capture), not an empty list of names."""
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server("srv", ["do_work"], self._config())
+        await server.connect()
+
+        with _captured_tool_warnings() as warnings:
+            await ToolExecutor(tool_registry={server: None}).initialize()
+
+        assert warnings == []
+
+    @pytest.mark.asyncio
+    async def test_matches_the_raw_tool_name_not_the_namespaced_key(self):
+        """ToolContextConfig is attached to one server, so its names are that
+        server's own -- writing 'srv__create_session' inside a config already
+        scoped to srv would be redundant. Mirrors the capture fix in 10e7b79."""
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server(
+            "srv", ["create_session"], self._config(capture_from=["create_session"])
+        )
+        await server.connect()
+
+        # namespace_tools=True (default) => registry key is "srv__create_session"
+        with _captured_tool_warnings() as warnings:
+            executor = ToolExecutor(tool_registry={server: None})
+            await executor.initialize()
+
+        assert "srv__create_session" in executor.tool_registry
+        assert warnings == [], "the raw name matched, so there is nothing to warn about"
+
+
+@contextmanager
+def _captured_tool_warnings():
+    """Collect WARNINGs from the executor's logger.
+
+    caplog cannot see them: the "continuum" parent logger sets propagate=False
+    and owns its handler, so records never reach root.
+    """
+    messages: list[str] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                messages.append(record.getMessage())
+
+    handler = _Collector()
+    logger = logging.getLogger("continuum.tools.executor")
+    logger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        logger.removeHandler(handler)

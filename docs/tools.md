@@ -204,8 +204,13 @@ server = MCPServerStreamableHttp({"url": "..."}, context_config=ctx_cfg)
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `name` | `str` | required | Variable to capture/inject |
-| `capture_from` | `list[str] \| None` | `None` | Tool names to capture from (None = all) |
-| `inject_into` | `list[str] \| None` | `None` | Tool names to inject into (None = all matching) |
+| `capture_from` | `list[str] \| None` | `None` | Tool names to capture from (None = all). **Raw** names, not namespaced (§6.5) |
+| `inject_into` | `list[str] \| None` | `None` | Tool names to inject into (None = all matching). **Raw** names |
+
+> A name here that matches no tool on the server is logged as a warning at
+> `initialize()`. It would otherwise be a silent no-op — the variable is never
+> captured, so the injection has nothing to supply and the tool simply runs
+> without it.
 | `json_path` | `str \| None` | `None` | JSONPath; default uses `name` as a top-level key |
 | `scope` | `Literal["session","run"]` | `"session"` | Run-scoped values are cleared between runs |
 | `override_llm_value` | `bool` | `True` | Override an LLM-provided value with the captured one |

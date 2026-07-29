@@ -522,6 +522,45 @@ class ToolExecutor:
             definitions.append(tool_def)
         return definitions
 
+    @staticmethod
+    def _warn_on_unmatched_context_tool_names(
+        server: "MCPServer", mcp_tools: list["MCPTool"]
+    ) -> None:
+        """Report capture_from / inject_into entries that name no real tool.
+
+        These are matched by exact string, so a typo or a stale name is a pure
+        no-op: nothing is ever captured, the later injection has nothing to
+        supply, and the tool runs without the value -- no error, no log. The same
+        silent-no-match shape as the always_promote entries and the PolicyStore
+        deny rule that stopped denying.
+
+        Names are compared against the server's RAW tool names, not the
+        namespaced registry keys: a ToolContextConfig is attached to one server,
+        so writing "srv__create_session" inside a config already scoped to srv
+        would be redundant, and would break whenever namespace_tools changed.
+
+        ``None`` means "every tool" (see ``ToolContextConfig.should_capture``),
+        not an empty name list, so it is skipped rather than reported.
+        """
+        config = getattr(server, "context_config", None)
+        if config is None or not getattr(config, "variables", None):
+            return
+
+        available = {tool.name for tool in mcp_tools}
+        for variable in config.variables:
+            for field_name in ("capture_from", "inject_into"):
+                configured = getattr(variable, field_name, None)
+                if not configured:  # None => all tools; [] => nothing to check
+                    continue
+                unmatched = sorted(set(configured) - available)
+                if unmatched:
+                    logger.warning(
+                        f"ToolContextVariable '{variable.name}' on server "
+                        f"'{server.name}': {field_name} names no such tool "
+                        f"{unmatched}. Available: {sorted(available)}. Use the "
+                        f"server's own tool names, not the namespaced keys."
+                    )
+
     async def _build_registry(
         self,
         tool_registry: dict["MCPServer", list[str] | None],
@@ -546,6 +585,7 @@ class ToolExecutor:
         for server, allowed_tools in tool_registry.items():
             try:
                 mcp_tools = await server.list_tools(metadata=metadata)
+                self._warn_on_unmatched_context_tool_names(server, mcp_tools)
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list
