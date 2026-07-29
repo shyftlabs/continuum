@@ -18,6 +18,7 @@ Usage::
     continuum status
     continuum logs [SERVICE] [-f]
     continuum config-path
+    continuum mcp inspect URL [--write-pins PATH]
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import sys
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 # Stable project name so containers/volumes are identical regardless of where the
 # wheel is installed (otherwise compose derives it from the install directory).
@@ -337,6 +339,66 @@ def _cmd_config_path(_: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mcp_inspect(args: argparse.Namespace) -> int:
+    """Print a remote MCP server's tool catalogue for human review.
+
+    Exists because "read the descriptions before you trust a server" was advice
+    nobody could act on: there was no way to see what a server ships without
+    hand-writing an async script (security finding F3).
+
+    The pin file is a *byproduct* of reviewing, written only when asked. A command
+    that emitted pins without showing the contents would make pin-without-reading
+    the easy path.
+    """
+    import asyncio
+    import json
+
+    from continuum.tools.mcp import MCPServerStreamableHttp
+    from continuum.tools.pinning import format_tool_catalog, snapshot_tool_digests
+
+    async def _run() -> int:
+        server = MCPServerStreamableHttp(
+            params={"url": args.url},
+            name=args.name or args.url,
+            cache_tools_list=False,
+        )
+        try:
+            await server.connect()
+            # Bypass list_tools() so the catalogue is shown exactly as sent --
+            # unfiltered and, crucially, with invisible characters intact so they
+            # can be reported rather than silently cleaned.
+            assert server.session is not None
+            result = await server.session.list_tools()
+            tools = result.tools
+        except Exception as e:  # noqa: BLE001 - surface any connection failure plainly
+            print(f"Could not inspect {args.url}: {e}", file=sys.stderr)
+            return 1
+        finally:
+            await server.cleanup()
+
+        print(format_tool_catalog(server.name, tools))
+
+        if args.write_pins:
+            path = Path(args.write_pins)
+            existing: dict[str, Any] = {}
+            if path.exists():
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        existing = loaded
+                except ValueError:
+                    print(f"Overwriting unparseable pin file {path}.", file=sys.stderr)
+            existing[server.name] = snapshot_tool_digests(server.name, tools)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
+            print(f"\nPinned {len(tools)} tool(s) for '{server.name}' to {path}.")
+            print("Pass tool_pin_path= to the MCPServer to have drift reported at runtime.")
+
+        return 0
+
+    return asyncio.run(_run())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="continuum",
@@ -372,6 +434,30 @@ def build_parser() -> argparse.ArgumentParser:
         "config-path", help="Print the path to the bundled docker-compose.yml."
     )
     config_path.set_defaults(func=_cmd_config_path)
+
+    mcp = sub.add_parser("mcp", help="Inspect MCP servers before trusting them.")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+    inspect_cmd = mcp_sub.add_parser(
+        "inspect",
+        help="Print a server's tool descriptions and schemas for review.",
+        description=(
+            "Print every tool description and parameter description a remote MCP "
+            "server reports. This text reaches the model's prompt verbatim and "
+            "instructs it, so read it before connecting an agent to the server. "
+            "Hidden/invisible characters are flagged rather than removed."
+        ),
+    )
+    inspect_cmd.add_argument("url", help="Streamable-HTTP MCP endpoint, e.g. http://host:8931/mcp")
+    inspect_cmd.add_argument("--name", help="Name to record for this server (defaults to the URL).")
+    inspect_cmd.add_argument(
+        "--write-pins",
+        metavar="PATH",
+        help=(
+            "After printing, record each tool's digest to PATH. Pass the same path as "
+            "tool_pin_path= to the MCPServer to have later changes reported."
+        ),
+    )
+    inspect_cmd.set_defaults(func=_cmd_mcp_inspect)
 
     return parser
 

@@ -183,6 +183,20 @@ damage with `PolicyStore.default_deny()` — the only control that helps against
 server you cannot vet. `tool_filter` matches `tool.name`, and a poisoned tool
 keeps an innocent name.
 
+```bash
+continuum mcp inspect URL                      # print all descriptions + schemas
+continuum mcp inspect URL --write-pins PATH    # ...then record the digests
+```
+
+```python
+# report later changes
+MCPServerStreamableHttp({"url": ...}, name="weather", tool_pin_path=PATH)
+# or block them
+tool_filter=create_tool_pinning_filter(snapshot_tool_digests("weather", reviewed))
+```
+
+A pin means *unchanged since you looked*, never *safe* — review first.
+
 ---
 
 ## Tool namespacing

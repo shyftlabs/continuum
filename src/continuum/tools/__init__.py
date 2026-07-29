@@ -19,6 +19,11 @@ try:
         MCPServerStreamableHttpParams,
         function_tool,
     )
+    from .pinning import (
+        create_tool_pinning_filter,
+        format_tool_catalog,
+        snapshot_tool_digests,
+    )
     from .schema import (
         ensure_strict_json_schema,
         normalize_schema_for_llm,
@@ -64,6 +69,10 @@ __all__ = [
     "ToolFilterContext",
     "ToolFilterStatic",
     "create_static_tool_filter",
+    # Tool pinning / review (F3)
+    "create_tool_pinning_filter",
+    "format_tool_catalog",
+    "snapshot_tool_digests",
     # Tool context (session/state management)
     "ToolContextConfig",
     "ToolContextState",
