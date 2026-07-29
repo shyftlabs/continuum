@@ -5,6 +5,7 @@ Utilities for MCP tool integration.
 import hashlib
 import json
 import re
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from continuum.llm.types import ToolDefinition
@@ -19,6 +20,11 @@ if TYPE_CHECKING:
     from .types import MCPToolArtifact
 
 logger = get_logger(__name__)
+
+# Servers already reported for an auto-derived namespace prefix. Weak so a
+# discarded server does not keep itself alive, and kept out of the server object
+# so we never write attributes onto a user-supplied instance.
+_WARNED_DERIVED_NAME_SERVERS: "weakref.WeakSet[Any]" = weakref.WeakSet()
 
 # OpenAI and Anthropic both constrain function names to ^[a-zA-Z0-9_-]{1,64}$.
 # Server names are auto-derived from the transport when not supplied explicitly
@@ -129,6 +135,7 @@ class MCPUtil:
                 server, normalize_schemas, strict_mode, metadata, namespace_tools=False
             )
             if namespace_tools:
+                cls._warn_if_server_name_is_derived(server)
                 for tool_def in server_tools:
                     tool_def.function.name = build_namespaced_tool_name(
                         server.name, tool_def.function.name
@@ -145,6 +152,43 @@ class MCPUtil:
             tools.extend(server_tools)
 
         return tools
+
+    @staticmethod
+    def _warn_if_server_name_is_derived(server: "MCPServer") -> None:
+        """Report a server whose namespace prefix was invented by the transport.
+
+        Without name=, the transports fall back to a display label built from the
+        URL or command ("streamable_http: http://localhost:8890/mcp"). Harmless
+        while it only appeared in error messages; under namespacing it becomes the
+        prefix on every LLM-facing tool name, which means:
+
+        - tool identity carries the host and port, so moving the server to another
+          port silently renames every tool and quietly breaks policy resources,
+          digest pins, always_promote and capture/inject -- all exact-string
+          matches that fail by doing nothing;
+        - the prefix eats ~39 of the 64 characters providers allow, so longer tool
+          names get hash-truncated into unreadable ids;
+        - the model sees the transport and URL instead of a meaningful namespace.
+
+        Warned once per server: registry rebuilds re-enter this path and the
+        advice does not change.
+        """
+        if not getattr(server, "name_is_derived", False):
+            return
+        if server in _WARNED_DERIVED_NAME_SERVERS:
+            return
+        try:
+            _WARNED_DERIVED_NAME_SERVERS.add(server)
+        except TypeError:  # pragma: no cover - server not weak-referenceable
+            pass
+        logger.warning(
+            "MCP server was created without name=, so its tools are namespaced with "
+            "the auto-derived prefix %r. That prefix encodes the transport and URL, "
+            "so tool names change when the server moves and are truncated to fit the "
+            "64-character provider limit. Pass name='<short-stable-name>' to the "
+            "server constructor.",
+            sanitize_name_component(server.name),
+        )
 
     @classmethod
     async def get_function_tools(
@@ -197,6 +241,7 @@ class MCPUtil:
                 for tool in mcp_tools
             ]
             if namespace_tools:
+                cls._warn_if_server_name_is_derived(server)
                 for tool_def in tool_definitions:
                     tool_def.function.name = build_namespaced_tool_name(
                         server.name, tool_def.function.name

@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.types import TextContent, Tool
 
+from continuum.tools.mcp import MCPServerSse, MCPServerStdio, MCPServerStreamableHttp
 from continuum.tools.types import ToolContextConfig
 from continuum.tools.util import MCPUtil, build_namespaced_tool_name
 
@@ -646,3 +647,137 @@ def _captured_tool_warnings():
         yield messages
     finally:
         logger.removeHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# Auto-derived server names under namespacing
+#
+# The transports fall back to f"streamable_http: {url}" / f"stdio: {command}"
+# when no name= is given. That was written as a display label for error
+# messages. With namespace_tools defaulting to True it became the prefix on
+# every LLM-facing tool name -- so tool identity now carries the host and port,
+# and moving the server to another port silently renames every tool, breaking
+# policies, digest pins, always_promote and capture/inject by exact-string
+# match. It also eats 39 of the 64-character provider budget.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _captured_util_warnings():
+    """Collect WARNINGs from continuum.tools.util (caplog cannot: propagate=False)."""
+    messages: list[str] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                messages.append(record.getMessage())
+
+    handler = _Collector()
+    logger = logging.getLogger("continuum.tools.util")
+    logger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        logger.removeHandler(handler)
+
+
+class TestDerivedServerNameFlag:
+    """Each transport must report whether its name was supplied or invented."""
+
+    def test_streamable_http_without_name_is_derived(self):
+        s = MCPServerStreamableHttp(params={"url": "http://localhost:8890/mcp"})
+        assert s.name_is_derived is True
+
+    def test_streamable_http_with_name_is_not_derived(self):
+        s = MCPServerStreamableHttp(params={"url": "http://localhost:8890/mcp"}, name="shop")
+        assert s.name_is_derived is False
+
+    def test_sse_without_name_is_derived(self):
+        s = MCPServerSse(params={"url": "http://localhost:8889/sse"})
+        assert s.name_is_derived is True
+
+    def test_stdio_without_name_is_derived(self):
+        s = MCPServerStdio(params={"command": "python", "args": ["x.py"]})
+        assert s.name_is_derived is True
+
+    def test_stdio_with_name_is_not_derived(self):
+        s = MCPServerStdio(params={"command": "python", "args": ["x.py"]}, name="files")
+        assert s.name_is_derived is False
+
+
+class TestDerivedNameWarning:
+    def _server(self, derived: bool, name: str = "streamable_http: http://localhost:8890/mcp"):
+        server = _make_server(name=name)
+        server.name_is_derived = derived
+        server.list_tools = AsyncMock(return_value=[_fake_tool()])
+        return server
+
+    @pytest.mark.asyncio
+    async def test_warns_when_namespacing_an_auto_derived_name(self):
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=True)
+        assert any("name=" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_the_name_was_supplied(self):
+        server = self._server(derived=False, name="shop")
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=True)
+        assert not warnings, warnings
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_namespacing_is_off(self):
+        """Without namespacing the derived name stays a display label, which is
+        what it was designed to be -- nothing to warn about."""
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=False)
+        assert not warnings, warnings
+
+    @pytest.mark.asyncio
+    async def test_warns_only_once_per_server(self):
+        """Registry rebuilds re-enter this path; the advice does not change."""
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=True)
+            await MCPUtil.get_function_tools(server, namespace_tools=True)
+        assert len(warnings) == 1, warnings
+
+    @pytest.mark.asyncio
+    async def test_warning_names_the_prefix_the_tools_actually_got(self):
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            tools = await MCPUtil.get_function_tools(server, namespace_tools=True)
+        prefix = tools[0].function.name.rsplit("__", 1)[0]
+        assert any(prefix in m for m in warnings), (prefix, warnings)
+
+    @pytest.mark.asyncio
+    async def test_warns_via_get_all_function_tools(self):
+        """get_all_function_tools applies the prefix itself and passes
+        namespace_tools=False downward, so it needs its own check -- this is the
+        aggregating entry point most multi-server code uses."""
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_all_function_tools([server], namespace_tools=True)
+        assert any("name=" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_no_warning_via_get_all_function_tools_when_namespacing_off(self):
+        server = self._server(derived=True)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_all_function_tools([server], namespace_tools=False)
+        assert not warnings, warnings
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_executor_builds_a_namespaced_registry(self):
+        """ToolExecutor namespaces registry keys in _build_registry without going
+        through MCPUtil, so it is a third independent site."""
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server(derived=True)
+        server.connect = AsyncMock()
+        executor = ToolExecutor(tool_registry={server: None}, namespace_tools=True)
+        with _captured_util_warnings() as warnings:
+            await executor.initialize()
+        assert any("name=" in m for m in warnings), warnings

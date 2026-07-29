@@ -166,6 +166,19 @@ class MCPServer(abc.ABC):
         """A readable name for the server."""
         pass
 
+    @property
+    def name_is_derived(self) -> bool:
+        """True when no name= was supplied and the transport invented one.
+
+        The invented names ("streamable_http: http://host:port/mcp") were meant
+        as display labels for error messages. Under namespace_tools they became
+        the prefix on every LLM-facing tool name, i.e. part of the identity that
+        policies, digest pins, always_promote and capture/inject match by exact
+        string -- so an invented one couples tool identity to the host and port.
+        Subclasses that can be constructed without a name override this.
+        """
+        return False
+
     @abc.abstractmethod
     async def cleanup(self):
         """Cleanup the server. For example, this might mean closing a subprocess or
@@ -852,6 +865,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
         )
 
         self._name = name or f"stdio: {self.params.command}"
+        self._name_is_derived = name is None
 
     def create_streams(
         self,
@@ -869,6 +883,10 @@ class MCPServerStdio(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
 
 
 class MCPServerSseParams(TypedDict):
@@ -959,6 +977,7 @@ class MCPServerSse(_MCPServerWithClientSession):
 
         self.params = params
         self._name = name or f"sse: {self.params['url']}"
+        self._name_is_derived = name is None
 
     def create_streams(
         self,
@@ -981,6 +1000,10 @@ class MCPServerSse(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
 
 
 class MCPServerStreamableHttpParams(TypedDict):
@@ -1078,6 +1101,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
 
         self.params = params
         self._name = name or f"streamable_http: {self.params['url']}"
+        self._name_is_derived = name is None
 
     def create_streams(
         self,
@@ -1112,6 +1136,10 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
 
 
 # =============================================================================

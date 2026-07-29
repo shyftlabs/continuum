@@ -532,9 +532,33 @@ are auto-derived from the transport when you don't pass `name=`
 
 The **tool name is never truncated** — it carries the semantics the model reasons
 about, so the prefix absorbs the budget. The digest keeps two long URLs that
-differ only late (`/v2/` vs `/v3/`) from collapsing to the same key. Naming your
-servers explicitly (`MCPServerSse({...}, name="weather")`) gives shorter, more
-readable tool names.
+differ only late (`/v2/` vs `/v3/`) from collapsing to the same key.
+
+### Always pass `name=`
+
+```python
+MCPServerStreamableHttp({"url": "http://localhost:8890/mcp"}, name="shop")
+```
+
+Not a style preference. Without it you get a 39-character prefix that **encodes
+the host and port**:
+
+```
+streamable_http_http_localhost_8890_mcp__search_products
+```
+
+Two consequences, both quiet:
+
+- **Tool identity moves with your environment.** Deploy that server behind
+  `https://mcp.prod.internal/` and every tool is renamed. Policy resources,
+  digest pins, `always_promote` and `capture_from`/`inject_into` all match by
+  exact string, so they stop matching — and each fails by doing *nothing*, not
+  by raising.
+- **The prefix eats the budget.** 39 characters of prefix leaves 23 for the tool
+  name; anything longer gets hash-truncated into an unreadable id.
+
+Continuum logs a warning, once per server, when it namespaces a tool list whose
+server name was auto-derived. Treat it as an error in anything you deploy.
 
 ### Raw names vs namespaced names
 
