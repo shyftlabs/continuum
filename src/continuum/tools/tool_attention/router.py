@@ -130,9 +130,28 @@ class ToolAttentionRouter:
         from continuum.agent.types import HANDOFF_TOOL_PREFIX
 
         always: set[str] = _BUILTIN_ALWAYS_PROMOTE | set(self._config.always_promote)
+        available: set[str] = set()
         for name in (_tool_name(t) for t in all_tools):
+            available.add(name)
             if name.startswith(HANDOFF_TOOL_PREFIX):
                 always.add(name)
+
+        # always_promote is matched by exact string against the LLM-facing name,
+        # which for MCP tools is namespaced ("fs__read_file"). An entry that hits
+        # nothing is otherwise a pure no-op: the tool keeps competing on relevance
+        # and can vanish from a turn, with no error and no log. Report it rather
+        # than guess -- matching bare names loosely would promote every server's
+        # copy when two expose the same tool. Only user-supplied entries are
+        # checked; the builtins are injected by get_tools_for_llm() and are
+        # legitimately absent from most tool lists.
+        unmatched = set(self._config.always_promote) - available
+        if unmatched:
+            logger.warning(
+                "tool-attention: always_promote entries matched no tool: %s. "
+                "Available: %s. MCP tool names are namespaced (<server>__<tool>).",
+                sorted(unmatched),
+                sorted(available),
+            )
 
         promoted = routed | always
 

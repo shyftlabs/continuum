@@ -12,7 +12,9 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import sys
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -393,6 +395,32 @@ class TestExtractUserQuery:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _captured_warnings():
+    """Collect WARNING messages from the router's logger.
+
+    pytest's caplog cannot see these: the "continuum" parent logger sets
+    propagate=False and installs its own stdout handler, so records never reach
+    the root logger where caplog's handler lives. Attaching a handler to the
+    specific logger is the pattern used elsewhere in this suite (see
+    tests/unit/test_session_midsession_fallback.py).
+    """
+    messages: list[str] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                messages.append(record.getMessage())
+
+    handler = _Collector()
+    logger = logging.getLogger("continuum.tools.tool_attention.router")
+    logger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        logger.removeHandler(handler)
+
+
 def _make_router_with_mock_registry(
     search_returns: list[str],
     k: int = 5,
@@ -489,6 +517,49 @@ class TestToolAttentionRouterRoute:
         result = router.route(self._messages(), tools, _make_context())
         names = [_tool_name(t) for t in result]
         assert "get_cart" in names
+
+    def test_warns_when_always_promote_matches_no_tool(self):
+        """A misspelled or un-namespaced entry is a silent no-op otherwise.
+
+        always_promote is matched by exact string against the LLM-facing tool
+        name, which for MCP tools is namespaced ("fs__read_file"). A user who
+        writes the bare name gets no promotion, no error and no log -- they only
+        notice when a tool they believed guaranteed goes missing from a turn.
+        """
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"],
+            min_tools=3,
+            always_promote=["read_file"],  # no such tool
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert any("read_file" in m and "always_promote" in m for m in warnings), warnings
+
+    def test_no_warning_when_always_promote_entries_all_match(self):
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"], min_tools=3, always_promote=["get_cart"]
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "always_promote" in m], warnings
+
+    def test_builtin_always_promote_names_are_never_reported_unmatched(self):
+        """think / continuum_headroom_retrieve are injected by get_tools_for_llm and
+        are legitimately absent from most tool lists -- warning about them would be
+        noise on every turn."""
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(["search"], min_tools=3)
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "always_promote" in m], warnings
 
     def test_stores_promoted_set_in_context_metadata(self):
         tools = self._tools(["search", "add_to_cart", "checkout", "get_cart", "delete"])
