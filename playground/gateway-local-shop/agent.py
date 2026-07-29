@@ -32,6 +32,7 @@ from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manage
 from continuum.exceptions import InsecureConfigurationError
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
+from continuum.tools.util import NAMESPACE_SEPARATOR
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
     validate_conversation_id,
@@ -40,14 +41,30 @@ from continuum.utils.sanitization import (
 
 logger = get_logger(__name__)
 
-_CART_TOOLS = {"get_cart", "cart", "get_cart_items"}
+# Server tools that are supposed to carry a total (server.py). add_to_cart is
+# deliberately absent: it returns only a message and cart_size, so gating it
+# here would fire the "NO totals" warning on every successful add.
+_CART_TOOLS = {"view_cart", "checkout"}
 _TOTAL_KEYS = {"total", "subtotal", "total_cents", "subtotal_cents", "taxes", "tax_cents"}
+
+
+def _raw_tool_name(tool_name: str) -> str:
+    """Strip the MCP namespace prefix from an LLM-facing tool name.
+
+    _on_tool_result receives tool_call.function.name, which with
+    namespace_tools enabled is "shop__view_cart". Only the configured prefix is
+    removed, so a tool whose own name contains "__" survives intact and the
+    unnamespaced name still matches.
+    """
+    prefix = f"{default_config.mcp_server_name}{NAMESPACE_SEPARATOR}"
+    return tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
 
 
 class CartDebugToolExecutor(ToolExecutor):
     """ToolExecutor subclass that adds cart-specific debug logging after each tool call."""
 
     def _on_tool_result(self, tool_name: str, result: str, artifact: Any) -> None:
+        tool_name = _raw_tool_name(tool_name)
         sc = artifact.structured_content if artifact else None
 
         # Log totals from structuredContent for any tool that returns them

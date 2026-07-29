@@ -13,8 +13,10 @@ Covers:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -314,3 +316,101 @@ class TestMCPServerNaming:
             assert len(namespaced) <= 64
             assert "localhost" not in namespaced
             assert "8888" not in namespaced
+
+
+# ---------------------------------------------------------------------------
+# CartDebugToolExecutor
+#
+# The ⚠️ branch is the whole point of this subclass: it fires when a cart tool
+# returns but its totals never reached the LLM ("why does the agent say my cart
+# is $0?"). It was gated on _CART_TOOLS = {"get_cart", "cart", "get_cart_items"}
+# while the server exposes view_cart -- so it had never once executed. The hook
+# also receives the LLM-facing name, which namespacing made "shop__view_cart".
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _captured_agent_logs():
+    """Collect records from the playground agent's logger.
+
+    caplog cannot see these: the "continuum" parent sets propagate=False, so
+    records never reach the root logger. Same pattern as
+    tests/unit/tools/test_tool_attention.py.
+    """
+    records: list[tuple[int, str]] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append((record.levelno, record.getMessage()))
+
+    handler = _Collector()
+    logger = logging.getLogger("continuum.agent")
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+
+
+def _artifact(structured: dict | None):
+    art = MagicMock()
+    art.structured_content = structured
+    return art
+
+
+class TestCartDebugToolExecutor:
+    def _executor(self):
+        import agent as agent_mod
+
+        return agent_mod.CartDebugToolExecutor.__new__(agent_mod.CartDebugToolExecutor)
+
+    def test_cart_tools_are_tools_the_server_actually_exposes(self):
+        """The guard the original set lacked: every configured cart tool must be
+        a real server tool, or the branch silently never runs."""
+        import agent as agent_mod
+        import server as server_mod
+
+        exposed = {
+            name
+            for name, obj in vars(server_mod).items()
+            if callable(obj) and not name.startswith("_")
+        }
+        for name in agent_mod._CART_TOOLS:
+            assert name in exposed, f"{name!r} is not a tool on server.py"
+
+    def test_warns_when_a_cart_tool_returns_no_totals(self):
+        ex = self._executor()
+        with _captured_agent_logs() as records:
+            ex._on_tool_result(
+                "shop__view_cart", "{}", _artifact({"items": [], "message": "Cart is empty"})
+            )
+        warnings = [m for lvl, m in records if lvl >= logging.WARNING]
+        assert any("NO totals" in m for m in warnings), records
+
+    def test_logs_totals_when_a_cart_tool_returns_them(self):
+        ex = self._executor()
+        with _captured_agent_logs() as records:
+            ex._on_tool_result("shop__checkout", "{}", _artifact({"total": 20.97, "order_id": "X"}))
+        assert any("sending to LLM" in m for _, m in records), records
+
+    def test_non_cart_tools_do_not_trigger_the_cart_branch(self):
+        ex = self._executor()
+        with _captured_agent_logs() as records:
+            ex._on_tool_result("shop__search_products", "[]", _artifact({"results": []}))
+        assert not [m for lvl, m in records if lvl >= logging.WARNING], records
+
+    def test_add_to_cart_is_not_treated_as_a_totals_bearing_tool(self):
+        """add_to_cart legitimately returns no total, so gating it would fire the
+        ⚠️ on every successful add."""
+        ex = self._executor()
+        with _captured_agent_logs() as records:
+            ex._on_tool_result(
+                "shop__add_to_cart", "{}", _artifact({"message": "Added", "cart_size": 1})
+            )
+        assert not [m for lvl, m in records if lvl >= logging.WARNING], records
+
+    def test_detection_still_works_when_namespacing_is_disabled(self):
+        ex = self._executor()
+        with _captured_agent_logs() as records:
+            ex._on_tool_result("view_cart", "{}", _artifact({"items": []}))
+        assert any("NO totals" in m for lvl, m in records if lvl >= logging.WARNING), records
