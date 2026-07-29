@@ -167,6 +167,24 @@ text, art = await MCPUtil.invoke_mcp_tool_with_artifact(server, tool, '{"k":"v"}
 
 ---
 
+## Server trust
+
+A third-party server's tool `description` / `inputSchema` reach the model's
+prompt verbatim and steer its behaviour — treat adding a server like adding a
+dependency.
+
+Continuum strips invisible characters from fetched catalogues and invalidates the
+tools cache on `connect()`. It does **not** filter description wording (a
+description is legitimately instructional; filtering it breaks real tools).
+
+What to do: read the descriptions before trusting a server; restrict with
+`tool_filter=create_static_tool_filter(allowed_tool_names=[...])`; and bound the
+damage with `PolicyStore.default_deny()` — the only control that helps against a
+server you cannot vet. `tool_filter` matches `tool.name`, and a poisoned tool
+keeps an innocent name.
+
+---
+
 ## Tool namespacing
 
 `namespace_tools=True` is the **default** on both `ToolExecutor` and
