@@ -672,3 +672,76 @@ class TestApplyToolAttention:
 
         result = await apply_tool_attention(agent, self._messages(), _make_context())
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _BUILTIN_ALWAYS_PROMOTE integrity
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinAlwaysPromoteStaysUnnamespaced:
+    """_BUILTIN_ALWAYS_PROMOTE holds bare names ("think", not "srv__think").
+
+    That is correct only because both builtins are appended directly in
+    BaseAgent.get_tools_for_llm() and never pass through
+    ToolExecutor._build_registry(), which is the only place tool names get a
+    "<server>__" prefix. Nothing enforces that. If either tool were ever
+    re-homed onto an MCP server it would arrive namespaced, the hardcoded set
+    here would match nothing, and the tool would silently lose its guaranteed
+    slot -- no error, no log, exactly like the user-facing always_promote bug.
+
+    These tests exist to make that refactor fail loudly instead.
+    """
+
+    def test_think_tool_is_registered_under_its_bare_name(self, monkeypatch):
+        from continuum.agent.base import BaseAgent
+        from continuum.agent.config import AgentConfig
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "headroom_enabled", False)
+        agent = BaseAgent(
+            name="t",
+            instructions="x",
+            tools=[_make_dict_tool("search", "Search")],
+            config=AgentConfig(react_mode=True),
+        )
+
+        names = [_tool_name(t) for t in agent.get_tools_for_llm()]
+
+        assert "think" in names
+        assert not [n for n in names if n.endswith("__think")]
+
+    def test_retrieve_tool_is_registered_under_its_bare_name(self, monkeypatch):
+        from continuum.agent.base import BaseAgent
+        from continuum.config import settings
+        from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        agent = BaseAgent(name="t", instructions="x", tools=[_make_dict_tool("search", "Search")])
+
+        names = [_tool_name(t) for t in agent.get_tools_for_llm()]
+
+        assert RETRIEVE_TOOL_NAME in names
+        assert not [n for n in names if n.endswith(f"__{RETRIEVE_TOOL_NAME}")]
+
+    def test_every_builtin_entry_corresponds_to_a_real_tool_name(self, monkeypatch):
+        """Guards the other direction: a typo in the set, or a renamed builtin,
+        leaves an entry that can never match."""
+        from continuum.agent.base import BaseAgent
+        from continuum.agent.config import AgentConfig
+        from continuum.config import settings
+        from continuum.tools.tool_attention.router import _BUILTIN_ALWAYS_PROMOTE
+
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        agent = BaseAgent(
+            name="t",
+            instructions="x",
+            tools=[_make_dict_tool("search", "Search")],
+            config=AgentConfig(react_mode=True),
+        )
+
+        names = {_tool_name(t) for t in agent.get_tools_for_llm()}
+
+        assert _BUILTIN_ALWAYS_PROMOTE <= names, (
+            f"entries with no matching tool: {sorted(_BUILTIN_ALWAYS_PROMOTE - names)}"
+        )
