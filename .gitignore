@@ -159,3 +159,8 @@ extensions/
 
 # Redis TLS test certs (generated locally by tests/integration/redis_tls/gen_certs.sh — never commit)
 tests/integration/redis_tls/certs/
+
+# Tool-catalogue digest pins are per-environment trust decisions (F3), not
+# shared config: committing one would silently approve a catalogue on behalf of
+# whoever clones the repo.
+playground/**/tool-pins.json

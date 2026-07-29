@@ -65,13 +65,51 @@ ONPREM_MODEL = "gpt-4o-mini"  # PHI-approved fallback (stand-in for on-prem)
 
 
 def build_policy_store() -> PolicyStore:
-    """The four deny rules a PHI-tainted run trips — one per gate.
+    """The PHI deny rules, on top of a fail-closed base.
 
     Subjects are matched against ``[agent_name, *sorted(labels)]``, so a rule
     whose subject is ``"phi"`` fires for any run carrying the phi label,
     regardless of which agent is running.
+
+    Two layers, and the distinction matters:
+
+    * **Fail-closed base** (``default_deny``) — anything not explicitly allowed
+      is refused. This is what bounds an MCP server that was hostile from the
+      very first connect (finding F3). A poisoned tool description reaches the
+      model's prompt verbatim and can instruct it to call ``read_file`` or
+      ``fetch_manifest``; no digest catches that, because nothing *changed*.
+      What stops it is that the model's persuasion is not authority: a tool this
+      store never allowed does not execute, whatever name the attacker picked.
+      A blocklist cannot do this -- it only blocks tools thought of in advance.
+    * **PHI deny rules** — the demo's actual subject: provenance-driven gating.
+      Deny overrides allow, so these still fire on top of the allow-list below.
     """
-    store = PolicyStore()
+    store = PolicyStore.default_deny()
+
+    # 0. BASELINE ALLOW — the resources an untainted run legitimately needs.
+    #    Under default_deny these must be named or the agent cannot run at all:
+    #    every gate (llm, memory, telemetry, session, tool) would refuse.
+    store.add_policy(
+        AccessPolicy(
+            name="clinic-baseline",
+            subjects=["*"],
+            resources=[
+                f"llm:{CLOUD_MODEL}",
+                f"llm:{ONPREM_MODEL}",
+                "memory:*",
+                "telemetry",
+                "session",
+                # The four tools server.py exposes, named individually rather
+                # than as "tool:clinic__*": a glob would re-admit whatever a
+                # compromised server adds later, which is the hole this closes.
+                "tool:clinic__clinic_info",
+                "tool:clinic__lookup_patient",
+                "tool:clinic__send_referral_email",
+                "tool:clinic__web_lookup",
+            ],
+            effect="allow",
+        )
+    )
 
     # 1. MODEL ROUTING — a PHI run may not use the cloud model (exact match so
     #    the on-prem gpt-4o-mini tier is unaffected).
@@ -163,6 +201,15 @@ def mask_ssn(prompt: str, content: str) -> tuple[str, bool, str | None]:
 class ClinicConfig:
     mcp_url: str = "http://localhost:8911/mcp"
     mcp_timeout: float = 10.0
+
+    # Where the tool-catalogue digests live. On first connect the descriptions
+    # and schemas are recorded here; on every later fetch they are compared, and
+    # a change after you approved the server is reported (finding F3). Catches a
+    # "rug pull" -- a server edited post-approval. It cannot vouch for a server
+    # that shipped poisoned text from the start: nothing changed, so there is
+    # nothing to detect. Review with `continuum mcp inspect` before trusting,
+    # and rely on the fail-closed policy above to bound what a tool can do.
+    tool_pin_path: str = os.path.join(os.path.dirname(__file__), "tool-pins.json")
 
     agent_name: str = "clinic-intake-assistant"
     cloud_model: str = CLOUD_MODEL

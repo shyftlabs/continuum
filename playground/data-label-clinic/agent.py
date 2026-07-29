@@ -97,6 +97,10 @@ class ClinicAgent:
             # tool names, and the policy resources in config.py that match them,
             # would change whenever the URL does.
             name="clinic",
+            # Record the description/schema of every tool on first connect and
+            # compare on each later fetch, so a server edited after you approved
+            # it is reported instead of silently reaching the model's prompt.
+            tool_pin_path=self.config.tool_pin_path,
         )
         await self._mcp_server.connect()
 
