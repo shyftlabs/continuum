@@ -10,8 +10,11 @@ Provides structured logging with support for:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
+import re
 import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -29,6 +32,82 @@ _trace_id: ContextVar[str | None] = ContextVar("trace_id", default=None)
 _span_id: ContextVar[str | None] = ContextVar("span_id", default=None)
 _user_id: ContextVar[str | None] = ContextVar("user_id", default=None)
 _session_id: ContextVar[str | None] = ContextVar("session_id", default=None)
+
+_EMAIL_RE = re.compile(r"(?i)(?<![\w.+-])[\w.+-]+@[\w.-]+\.[a-z]{2,}")
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[a-z0-9._~+/=-]+")
+_JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b")
+_UUID_RE = re.compile(
+    r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|"
+    r"authorization|cookie)\s*[:=]\s*[^\s,;]+"
+)
+_SENSITIVE_KEYS = {
+    "access_token",
+    "authorization",
+    "cookie",
+    "email",
+    "id_token",
+    "name",
+    "password",
+    "refresh_token",
+    "secret",
+    "token",
+}
+
+
+def _sanitize_log_text(value: object) -> str:
+    """Redact common PII and credential shapes before they leave the process."""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = _EMAIL_RE.sub("[email]", text)
+    text = _BEARER_RE.sub(r"\1 [credential]", text)
+    text = _JWT_RE.sub("[credential]", text)
+    text = _UUID_RE.sub("[identifier]", text)
+    return _SECRET_ASSIGNMENT_RE.sub(r"\1=[redacted]", text)
+
+
+def _safe_log_value(value: Any, *, field_name: str = "", depth: int = 0) -> Any:
+    """Sanitize structured extras without recursively expanding arbitrary data."""
+    normalized_name = field_name.casefold()
+    if any(marker in normalized_name for marker in _SENSITIVE_KEYS):
+        return "[redacted]"
+    if depth >= 4:
+        return "[truncated]"
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_log_value(
+                item,
+                field_name=str(key),
+                depth=depth + 1,
+            )
+            for key, item in list(value.items())[:50]
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_log_value(item, depth=depth + 1) for item in list(value)[:50]]
+    if isinstance(value, str):
+        return _sanitize_log_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _sanitize_log_text(type(value).__name__)
+
+
+def _identifier_alias(value: str) -> str:
+    key = settings.log_pii_hmac_key
+    if not key:
+        # Development compatibility only. Production configuration refuses to
+        # start without a secret HMAC key.
+        key = "continuum-development-log-alias-key"
+    digest = hmac.new(key.encode(), value.encode(), hashlib.sha256).hexdigest()
+    return f"hmac:{digest[:16]}"
+
+
+def _safe_log_context() -> dict[str, str | None]:
+    context = get_log_context()
+    for key in ("user_id", "session_id"):
+        if context.get(key):
+            context[key] = _identifier_alias(context[key] or "")
+    return context
 
 
 class LogLevel(str, Enum):
@@ -128,33 +207,45 @@ class JSONFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        production = settings.environment == "production"
         log_data = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            # Production logs intentionally carry only a stable event marker.
+            # Arbitrary model, tool, provider, and exception text can contain
+            # names or business data that pattern-based redaction cannot prove
+            # safe.
+            "message": (
+                "continuum_log_event" if production else _sanitize_log_text(record.getMessage())
+            ),
             "module": record.module,
             "function": record.funcName,
             "line": record.lineno,
         }
 
         # Add context from context vars
-        context = get_log_context()
+        context = _safe_log_context()
         for key, value in context.items():
             if value:
                 log_data[key] = value
 
         # Add extra fields from record
-        if hasattr(record, "extra_data"):
-            log_data.update(record.extra_data)
+        if hasattr(record, "extra_data") and not production:
+            log_data.update(_safe_log_value(record.extra_data))
 
         # Add exception info if present
         if record.exc_info:
             log_data["exception"] = {
                 "type": record.exc_info[0].__name__ if record.exc_info[0] else None,
-                "message": str(record.exc_info[1]) if record.exc_info[1] else None,
-                "traceback": self.formatException(record.exc_info),
             }
+            if not production:
+                log_data["exception"]["message"] = (
+                    _sanitize_log_text(record.exc_info[1]) if record.exc_info[1] else None
+                )
+                log_data["exception"]["traceback"] = _sanitize_log_text(
+                    self.formatException(record.exc_info)
+                )
 
         # Add environment
         log_data["environment"] = settings.environment
@@ -186,7 +277,7 @@ class DevelopmentFormatter(logging.Formatter):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Build context string
-        context = get_log_context()
+        context = _safe_log_context()
         context_parts = []
         if context.get("trace_id"):
             context_parts.append(f"trace={context['trace_id'][:8]}")
@@ -195,11 +286,14 @@ class DevelopmentFormatter(logging.Formatter):
         context_str = f" [{', '.join(context_parts)}]" if context_parts else ""
 
         # Format the message
-        message = f"{timestamp} {color}{record.levelname:8}{reset} {record.name}{context_str} - {record.getMessage()}"
+        message = (
+            f"{timestamp} {color}{record.levelname:8}{reset} {record.name}"
+            f"{context_str} - {_sanitize_log_text(record.getMessage())}"
+        )
 
         # Add exception if present
         if record.exc_info:
-            message += f"\n{self.formatException(record.exc_info)}"
+            message += f"\n{_sanitize_log_text(self.formatException(record.exc_info))}"
 
         return message
 
@@ -236,7 +330,7 @@ class LangfuseHandler(logging.Handler):
             return
 
         try:
-            context = get_log_context()
+            context = _safe_log_context()
             trace_id = context.get("trace_id")
 
             # Build metadata
@@ -252,7 +346,8 @@ class LangfuseHandler(logging.Handler):
             # Add exception info
             if record.exc_info and record.exc_info[1]:
                 metadata["exception_type"] = type(record.exc_info[1]).__name__
-                metadata["exception_message"] = str(record.exc_info[1])
+                if settings.environment != "production":
+                    metadata["exception_message"] = _sanitize_log_text(record.exc_info[1])
 
             # Add context
             for key, value in context.items():
@@ -265,8 +360,14 @@ class LangfuseHandler(logging.Handler):
                     client.client.event(
                         trace_id=trace_id,
                         name=f"log.{record.levelname.lower()}",
-                        input={"message": record.getMessage()},
-                        metadata=metadata,
+                        input={
+                            "message": (
+                                "continuum_log_event"
+                                if settings.environment == "production"
+                                else _sanitize_log_text(record.getMessage())
+                            )
+                        },
+                        metadata=_safe_log_value(metadata),
                         level="ERROR" if record.levelno >= logging.ERROR else "WARNING",
                     )
                 except Exception:

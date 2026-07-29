@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # Logging Configuration
     # -------------------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # HMAC key used to create non-reversible log aliases for user/session
+    # identifiers. Avenlo wires this to its production PII hash key.
+    log_pii_hmac_key: str | None = None
 
     # -------------------------------------------------------------------------
     # Smart Gateway integration
@@ -402,6 +405,12 @@ class Settings(BaseSettings):
             self.memory_llm_model = self.default_llm_model
         if "context_summarization_model" not in fields_set:
             self.context_summarization_model = self.default_llm_model
+        if self.environment == "production" and (
+            not self.log_pii_hmac_key or len(self.log_pii_hmac_key.encode()) < 32
+        ):
+            raise ValueError("LOG_PII_HMAC_KEY must contain at least 32 bytes in production")
+        if self.environment == "production" and self.log_level in {"DEBUG", "INFO"}:
+            raise ValueError("Production LOG_LEVEL must be WARNING or stricter")
         return self
 
     def __repr__(self) -> str:
