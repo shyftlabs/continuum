@@ -78,6 +78,7 @@ class IncidentAgent:
 
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
+            name=self.config.mcp_server_name,
             client_session_timeout_seconds=self.config.mcp_timeout,
         )
         await self._mcp_server.connect()
