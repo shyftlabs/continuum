@@ -93,6 +93,30 @@ class TestFormatToolCatalog:
         out = format_tool_catalog("srv", [])
         assert "no tools" in out.lower()
 
+    def test_shows_the_namespaced_name_policies_must_use(self):
+        """The raw name is not what PolicyStore or always_promote match.
+
+        Those take the LLM-facing key, which is namespaced (<server>__<tool>).
+        Printing only the raw name shows the reader the wrong string -- and with
+        an auto-derived server name the right one is unguessable, since it is
+        sanitized and may be hash-truncated.
+        """
+        out = format_tool_catalog("db", [_tool("delete_user", "Delete a user.")])
+
+        assert "tool:db__delete_user" in out
+
+    def test_namespaced_name_is_correct_for_an_auto_derived_server_name(self):
+        """The case where a human cannot work it out: ':' , '/' and '.' are
+        stripped, and a long URL gets truncated with a digest."""
+        from continuum.tools.util import build_namespaced_tool_name
+
+        server_name = "sse: https://db.internal.example.com/mcp"
+        out = format_tool_catalog(server_name, [_tool("delete_user", "Delete a user.")])
+
+        expected = build_namespaced_tool_name(server_name, "delete_user")
+        assert f"tool:{expected}" in out
+        assert "sse: https://" not in expected  # unguessable by hand -- hence printing it
+
 
 # ---------------------------------------------------------------------------
 # snapshot_tool_digests

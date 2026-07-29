@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
 from continuum.tools.mcp import _tool_digest
+from continuum.tools.util import build_namespaced_tool_name
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -109,6 +110,13 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
 
         out.append(f"{'─' * 72}")
         out.append(f"{tool.name}   [digest {digest[:_DIGEST_PREVIEW]}]")
+        # The raw name above is what the server calls it; this is what the model
+        # sees and what PolicyStore / always_promote match. With an auto-derived
+        # server name the prefix is sanitized and may be hash-truncated, so it is
+        # not something a reader can work out -- print it rather than expect them
+        # to guess, or they write tool:delete_user, match nothing, and a deny
+        # rule silently stops denying.
+        out.append(f"  policy resource:  tool:{build_namespaced_tool_name(server_name, tool.name)}")
         out.append("")
         out.append(f"  {description or '(no description)'}")
 

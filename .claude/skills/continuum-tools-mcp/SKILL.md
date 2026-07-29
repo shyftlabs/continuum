@@ -184,8 +184,8 @@ server you cannot vet. `tool_filter` matches `tool.name`, and a poisoned tool
 keeps an innocent name.
 
 ```bash
-continuum mcp inspect URL                      # print all descriptions + schemas
-continuum mcp inspect URL --write-pins PATH    # ...then record the digests
+continuum mcp inspect URL --name weather                   # descriptions + schemas
+continuum mcp inspect URL --name weather --write-pins PATH # ...then record digests
 ```
 
 ```python
@@ -196,6 +196,12 @@ tool_filter=create_tool_pinning_filter(snapshot_tool_digests("weather", reviewed
 ```
 
 A pin means *unchanged since you looked*, never *safe* — review first.
+
+**Always pass `name=` to a server.** It becomes the `<server>__<tool>` prefix
+the model sees and that `PolicyStore` resources match. Without it the prefix is
+derived from the URL (`tool:sse_https_db_internal_example_com_mcp__delete_user`)
+and changes whenever the URL does, silently breaking every policy rule.
+`mcp inspect` prints the exact `policy resource:` string to use.
 
 ---
 

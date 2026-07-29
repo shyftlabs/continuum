@@ -57,7 +57,7 @@ constructor shape (only the `params` payload differs).
 |---|---|---|---|
 | `params` | TypedDict | required | See per-transport details below |
 | `cache_tools_list` | `bool` | `False` | Cache `list_tools()` across calls; invalidate via `server.invalidate_tools_cache()` |
-| `name` | `str \| None` | auto | Human-readable name (auto-generated from command/url if `None`) |
+| `name` | `str \| None` | auto | **Set this.** It becomes the `<server>__<tool>` prefix the model sees and that `PolicyStore` / `always_promote` match. Auto-derived from command/url otherwise, which makes those names long and URL-dependent (§6.4) |
 | `client_session_timeout_seconds` | `float \| None` | `5` | Read timeout for the MCP `ClientSession` |
 | `tool_filter` | `ToolFilter \| None` | `None` | See Section 5 |
 | `use_structured_content` | `bool` | `False` | Prefer `tool_result.structured_content` over text content |
@@ -66,6 +66,7 @@ constructor shape (only the `params` payload differs).
 | `message_handler` | `MessageHandlerFnT \| None` | `None` | Hook for raw MCP messages |
 | `context_config` | `ToolContextConfig \| None` | `None` | See Section 4 |
 | `validate_on_connect` | `bool` | `False` | If `True`, calls `list_tools()` after connect to fail fast on a broken server |
+| `tool_pin_path` | `str \| Path \| None` | `None` | JSON file recording each tool's description/schema digest, so a change between runs is reported (§6.4). In-memory only when `None` |
 
 ### Common methods
 
@@ -380,12 +381,33 @@ nothing. Any attacker aware of such a filter simply rephrases.
 
 ### What you should do
 
-**1. Read the descriptions before you trust a server.** There's no substitute.
+**1. Give every server an explicit, short `name=`.** Do this first — everything
+below depends on it.
+
+```python
+MCPServerStreamableHttp({"url": "http://localhost:8931/mcp"}, name="weather")
+```
+
+Tool names reach the model as `<server>__<tool>`, and that namespaced form is
+what `PolicyStore` resources and tool-attention `always_promote` match. Without
+a `name=`, the prefix is derived from the URL, sanitized, and possibly truncated
+with a hash:
+
+```
+name="weather"  →  tool:weather__delete_user            # you can write this
+no name         →  tool:sse_https_db_internal_example_com_mcp__delete_user
+```
+
+The second is not something you'd write by hand — and it **changes whenever the
+URL does**, silently breaking every policy rule that referenced it. An explicit
+name makes tool names short, readable, and stable across environments.
+
+**2. Read the descriptions before you trust a server.** There's no substitute.
 `tool_filter` matches on `tool.name`, and a poisoned tool keeps an innocent name
 like `get_weather`.
 
 ```bash
-continuum mcp inspect http://localhost:8931/mcp
+continuum mcp inspect http://localhost:8931/mcp --name weather
 ```
 
 Prints every tool description **and** every parameter description, unabridged,
@@ -393,6 +415,7 @@ and flags any hidden characters rather than removing them:
 
 ```
 get_weather   [digest 343f0dd2e1ef]
+  policy resource:  tool:weather__get_weather
 
   Get the weather forecast for a city.󠁡󠁮󠁤󠀠󠁥󠁭󠁡󠁩󠁬…
 
@@ -436,7 +459,7 @@ A pin proves *unchanged since you looked* — never *safe*. Pin a server that wa
 malicious from the start and you have pinned the poison. That is why reviewing
 comes first and the pin file is a byproduct of it.
 
-**2. Expose only the tools you need** (see §5):
+**3. Expose only the tools you need** (see §5):
 
 ```python
 server = MCPServerStreamableHttp(
@@ -445,7 +468,7 @@ server = MCPServerStreamableHttp(
 )
 ```
 
-**3. Bound the damage with authorization — the only control that helps against a
+**4. Bound the damage with authorization — the only control that helps against a
 server you cannot vet.** A poisoned description can only cause harm if the tool
 it asks for is callable. Deny by default:
 
@@ -465,9 +488,8 @@ permitted. `default_deny()` inverts that. Note the resources use the
 **namespaced** tool name; with multiple servers you need `namespace_tools=True`
 for per-server globs like `tool:docs__*` to mean anything (§6.5).
 
-**4. Pin the server itself.** Only connect to servers on an allowlist you
-maintain, and give each an explicit `name=` so its tool names stay stable
-(§6.5).
+**5. Pin the server itself.** Only connect to servers on an allowlist you
+maintain.
 
 ---
 
