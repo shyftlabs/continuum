@@ -326,6 +326,12 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
     async def connect(self):
         """Connect to the server."""
+        # A reconnect may reach a different server process, so any catalogue
+        # captured before it is stale by definition. Without this, a tool
+        # description swapped across a reconnect is invisible when
+        # cache_tools_list=True -- no fetch happens, so nothing re-reads the
+        # descriptions (security finding F3, MCP rug-pull).
+        self._cache_dirty = True
         try:
             transport = await self.exit_stack.enter_async_context(self.create_streams())
             # streamablehttp_client returns (read, write, get_session_id)
