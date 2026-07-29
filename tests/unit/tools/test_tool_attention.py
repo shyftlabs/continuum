@@ -310,6 +310,70 @@ class TestToolSummaryRegistry:
 
 
 # ---------------------------------------------------------------------------
+# ToolSummaryRegistry — pruning of stale entries
+#
+# The collection is deliberately persistent across restarts, and _sync_upsert
+# only ever upserts. Renaming or removing a tool therefore leaves its embedding
+# behind forever, and search() keeps returning the dead name inside top-k --
+# burning a routing slot on a tool the router will silently discard. Flipping
+# namespace_tools to True renamed every MCP tool at once and made this visible
+# (observed: 2 of 3 routed names no longer existed).
+# ---------------------------------------------------------------------------
+
+
+class TestToolSummaryRegistryPruning:
+    def _ready_registry(self, existing: list[str], **kwargs) -> tuple[ToolSummaryRegistry, MagicMock]:
+        cfg = ToolAttentionConfig(**kwargs)
+        registry = ToolSummaryRegistry(cfg)
+        registry._ready = True
+        mock_client = MagicMock()
+        mock_client.query.return_value = [{"tool_name": n} for n in existing]
+        mock_encoder = MagicMock()
+        mock_encoder.encode.return_value = MagicMock()
+        mock_encoder.encode.return_value.tolist.return_value = [[0.1] * 384]
+        registry._client = mock_client
+        registry._encoder = mock_encoder
+        return registry, mock_client
+
+    def test_upsert_deletes_tool_names_no_longer_present(self):
+        # Collection still holds the pre-namespacing names.
+        registry, client = self._ready_registry(
+            ["search_products", "get_product", "shop__search_products"]
+        )
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.delete.assert_called_once()
+        kwargs = client.delete.call_args.kwargs
+        assert sorted(kwargs["ids"]) == ["get_product", "search_products"]
+
+    def test_upsert_does_not_delete_when_nothing_is_stale(self):
+        registry, client = self._ready_registry(["shop__search_products"])
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.delete.assert_not_called()
+
+    def test_prune_failure_does_not_lose_the_upsert(self):
+        # Pruning is hygiene; a Milvus that refuses query() must not cost us the
+        # fresh embeddings, which are what the current run actually needs.
+        registry, client = self._ready_registry(["stale"])
+        client.query.side_effect = Exception("query unsupported")
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.upsert.assert_called_once()
+
+    def test_prune_is_scoped_to_the_configured_collection(self):
+        registry, client = self._ready_registry(["stale"], collection_name="custom_tools")
+
+        registry.refresh([_make_dict_tool("live", "Live")])
+
+        assert client.query.call_args.kwargs["collection_name"] == "custom_tools"
+        assert client.delete.call_args.kwargs["collection_name"] == "custom_tools"
+
+
+# ---------------------------------------------------------------------------
 # ToolAttentionRouter.initialize()
 # ---------------------------------------------------------------------------
 
@@ -560,6 +624,31 @@ class TestToolAttentionRouterRoute:
             router.route(self._messages(), tools, _make_context())
 
         assert not [m for m in warnings if "always_promote" in m], warnings
+
+    def test_warns_when_search_returns_names_that_are_not_live_tools(self):
+        """A stale embedding burns a top-k slot and then vanishes at the filter
+        step. The old log printed `routed=` before filtering, so a run where 2 of
+        3 routed names were dead looked identical to a healthy one."""
+        tools = self._tools(["shop__search", "shop__cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["shop__search", "search", "get_product"],  # last two are pre-rename ghosts
+            min_tools=3,
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        stale = [m for m in warnings if "get_product" in m and "search" in m]
+        assert stale, warnings
+
+    def test_no_stale_warning_when_every_routed_name_is_live(self):
+        tools = self._tools(["shop__search", "shop__cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(["shop__search", "shop__cart"], min_tools=3)
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "stale" in m.lower()], warnings
 
     def test_stores_promoted_set_in_context_metadata(self):
         tools = self._tools(["search", "add_to_cart", "checkout", "get_cart", "delete"])

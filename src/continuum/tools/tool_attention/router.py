@@ -136,6 +136,24 @@ class ToolAttentionRouter:
             if name.startswith(HANDOFF_TOOL_PREFIX):
                 always.add(name)
 
+        # Semantic search hits are primary keys in a collection that outlives the
+        # process. A tool that was renamed or removed keeps its embedding, so it
+        # can still win a top-k slot and then vanish at the filter step below --
+        # costing the turn a real candidate. The registry prunes on upsert; this
+        # catches a collection that has not been re-initialised yet, or one shared
+        # by another agent with a different tool set.
+        stale_routed = routed - available
+        if stale_routed:
+            logger.warning(
+                "tool-attention: %d of %d routed name(s) match no live tool and were "
+                "dropped: %s. Stale embeddings in collection %r are consuming routing "
+                "slots -- they are pruned on the next registry upsert.",
+                len(stale_routed),
+                len(routed),
+                sorted(stale_routed),
+                self._config.collection_name,
+            )
+
         # always_promote is matched by exact string against the LLM-facing name,
         # which for MCP tools is namespaced ("fs__read_file"). An entry that hits
         # nothing is otherwise a pure no-op: the tool keeps competing on relevance
