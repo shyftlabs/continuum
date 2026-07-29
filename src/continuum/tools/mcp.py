@@ -36,6 +36,7 @@ from mcp.types import (
 from typing_extensions import TypedDict
 
 from continuum.exceptions import ValidationError
+from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
 from continuum.tools.exceptions import MCPConnectionError, MCPError
 from continuum.tools.types import (
@@ -52,6 +53,58 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
 logger = get_logger(__name__)
+
+
+# --- tool-catalogue hardening (security finding F3) ---------------------------
+
+
+def _clean_schema(node: Any) -> Any:
+    """Recursively strip invisible characters from a JSON-Schema's string values.
+
+    Values only, never keys: a property name is the argument key the model sends
+    back and that we forward to the server, so rewriting it would break an
+    otherwise valid call. Property names are a far weaker smuggling channel than
+    free prose anyway -- ``description`` is where instructions fit.
+    """
+    if isinstance(node, dict):
+        return {k: _clean_schema(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_clean_schema(v) for v in node]
+    if isinstance(node, str):
+        return strip_hidden_chars(node)
+    return node
+
+
+def _clean_tool(tool: MCPTool) -> MCPTool:
+    """Return a copy of ``tool`` with invisible characters removed.
+
+    A tool's ``description`` and ``inputSchema`` are third-party text that reach
+    the model's prompt verbatim -- in the provider ``tools`` array always, and
+    inside a ``role: "system"`` message when tool-attention is enabled. Invisible
+    codepoints (Unicode Tags, zero-width, bidi overrides) carry instructions the
+    model's tokenizer reads but a human reviewer and a text classifier do not.
+
+    Stripping them removes that channel outright. Unlike filtering the *content*
+    of a description, it protects on FIRST contact rather than only on change,
+    and it cannot false-positive: descriptions are legitimately instructional
+    prose, but they are never legitimately invisible. TAB/LF/CR and all printable
+    text -- CJK, accents -- are preserved.
+
+    Copy-not-mutate: the objects belong to the ``mcp`` package and may be shared.
+
+    NOT a guarantee. A plainly-worded poisoned description passes through
+    untouched; that is what the digest pinning and human review steps address.
+    """
+    updates: dict[str, Any] = {}
+    if tool.description is not None:
+        cleaned = strip_hidden_chars(tool.description)
+        if cleaned != tool.description:
+            updates["description"] = cleaned
+    if tool.inputSchema:
+        cleaned_schema = _clean_schema(tool.inputSchema)
+        if cleaned_schema != tool.inputSchema:
+            updates["inputSchema"] = cleaned_schema
+    return tool.model_copy(update=updates) if updates else tool
 
 
 class MCPServer(abc.ABC):
@@ -383,7 +436,12 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         else:
             # Fetch the tools from the server
             result = await self._run_with_retries(lambda: session.list_tools())
-            self._tools_list = result.tools
+            # Harden the catalogue here -- after the wire read, before the
+            # tool_filter. tool_filter defaults to None, so anything implemented
+            # inside it would protect almost nobody; this is the single point
+            # every caller passes through. Cleaning at fetch time (not on every
+            # call) means the cache holds already-clean objects.
+            self._tools_list = [_clean_tool(t) for t in result.tools]
             self._cache_dirty = False
             tools = self._tools_list
 
