@@ -352,6 +352,51 @@ class TestApproveCommand:
         assert "no record" in capsys.readouterr().err.lower()
 
 
+class TestDocumentedCommandsAreReal:
+    """Every command string the SDK prints must actually work.
+
+    These messages are the whole remedy half of the feature -- an error that
+    names a flag the parser rejects leaves the reader worse off than silence,
+    because they now believe they know the fix. This has bitten repeatedly:
+    the pin-file version refusal named `--approve`, which never existed.
+    """
+
+    def _mcp_subparsers(self):
+        from continuum import cli
+
+        parser = cli.build_parser()
+        top = parser._subparsers._group_actions[0].choices
+        return top["mcp"]._subparsers._group_actions[0].choices
+
+    def test_every_flag_mentioned_in_source_messages_exists(self):
+        import pathlib
+        import re
+
+        source = "\n".join(
+            p.read_text(encoding="utf-8") for p in pathlib.Path("src/continuum").rglob("*.py")
+        )
+        # Every flag in the segment, not just the first: a lazy single-capture
+        # regex silently checked only `--name` and let a bogus `--approve`
+        # through on the same line.
+        referenced = {
+            (command, flag)
+            for command, tail in re.findall(r"continuum mcp (\w+)([^`\"\n]*)", source)
+            for flag in re.findall(r"--[a-z-]+", tail)
+        }
+        assert referenced, "no documented commands found -- has the scan broken?"
+        assert ("inspect", "--write-pins") in referenced, "scan missed a known reference"
+
+        subparsers = self._mcp_subparsers()
+        for command, flag in sorted(referenced):
+            assert command in subparsers, f"`continuum mcp {command}` does not exist"
+            known = {
+                option
+                for action in subparsers[command]._actions
+                for option in action.option_strings
+            }
+            assert flag in known, f"`continuum mcp {command}` has no {flag} (known: {sorted(known)})"
+
+
 def cfg_last_seen(pin_path, servers) -> None:
     """Write the runtime's record file that sits alongside `pin_path`."""
     from continuum.tools.types import ToolTrustConfig

@@ -139,7 +139,7 @@ def load_pins(path: str | Path) -> dict[str, ServerPins]:
         logger.warning(
             f"Ignoring MCP tool-pin file {file}: unsupported format version {version!r} "
             f"(this build reads version {PIN_FORMAT_VERSION}). Re-create it with "
-            f"`continuum mcp inspect URL --name SERVER --approve {file}`."
+            f"`continuum mcp inspect URL --name SERVER --write-pins {file}`."
         )
         return {}
 
