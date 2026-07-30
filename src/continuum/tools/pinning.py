@@ -45,16 +45,35 @@ logger = get_logger(__name__)
 _DIGEST_PREVIEW = 12
 
 
-def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> dict[str, str]:
-    """Map tool name to the digest of its description + schema.
+def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> dict[str, dict[str, str]]:
+    """Map tool name to its ``{"raw": ..., "effective": ...}`` digests.
 
-    Uses the same :func:`~continuum.tools.mcp._tool_digest` as the live drift
-    detector, so a pin captured here is directly comparable with what
-    ``list_tools()`` records. If the two ever diverged, review and detection
-    would disagree about what "unchanged" means.
+    Two digests because the two consumers ask different questions, and a single
+    digest silently broke one of them:
+
+    ``raw``
+        Over the bytes exactly as the server sent them. What the drift tripwire
+        in ``list_tools()`` compares, so that adding or removing invisible
+        characters cannot slip past unreported.
+
+    ``effective``
+        Over the catalogue after :func:`~continuum.tools.mcp._clean_tool` has
+        stripped invisible characters -- i.e. the text the model will actually
+        receive. What :func:`create_tool_pinning_filter` compares, because
+        ``list_tools()`` cleans tools *before* handing them to a ``tool_filter``.
+
+    They are identical for ordinary text; only a description carrying invisible
+    characters makes them differ. Comparing a cleaned tool against a raw pin
+    meant such a tool could never match, so the gate dropped it forever while
+    reporting that it "no longer matches" -- which was never achievable.
     """
     del server_name  # accepted for symmetry with the CLI/pin-file shape
-    return {tool.name: _tool_digest(tool) for tool in tools}
+    from continuum.tools.mcp import _clean_tool
+
+    return {
+        tool.name: {"raw": _tool_digest(tool), "effective": _tool_digest(_clean_tool(tool))}
+        for tool in tools
+    }
 
 
 def _format_schema_descriptions(node: Any, path: str = "") -> list[str]:
@@ -141,7 +160,7 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
 
 
 def create_tool_pinning_filter(
-    approved: dict[str, str],
+    approved: dict[str, dict[str, str]],
     *,
     on_unknown: Literal["block", "allow"] = "block",
 ) -> ToolFilterCallable:
@@ -151,16 +170,26 @@ def create_tool_pinning_filter(
     tool whose description or schema drifted never reaches the model. Use it when
     you would rather an agent lose a tool than act on text you did not review.
 
+    Compares the ``effective`` digest -- the catalogue *after* invisible
+    characters are stripped, which is what ``list_tools()`` hands a
+    ``tool_filter`` and what the model will read. So a description whose only
+    change is hidden characters still passes here: those never reach the model,
+    and reporting them is the drift tripwire's job, not this gate's.
+
     Args:
-        approved: name -> digest, from :func:`snapshot_tool_digests` or a pin file.
+        approved: ``name -> {"raw": ..., "effective": ...}``, from
+            :func:`snapshot_tool_digests` or a pin file written by
+            ``continuum mcp inspect --write-pins``.
         on_unknown: what to do with a tool absent from ``approved``. Defaults to
             ``"block"``: a tool that appeared after review was never approved, and
             the point of pinning is that only reviewed tools reach the model.
 
     Raises:
-        ValueError: if ``approved`` is empty. That would drop every tool, which is
-            almost certainly a caller passing an unpopulated pin file rather than
-            intending a total block.
+        ValueError: if ``approved`` is empty (that would drop every tool, almost
+            certainly an unpopulated pin file rather than an intended total
+            block), or if it holds bare digest strings from the single-digest pin
+            format -- those carry no indication of which digest space they are in,
+            and guessing would either drop every tool or admit a changed one.
     """
     if not approved:
         raise ValueError(
@@ -169,8 +198,25 @@ def create_tool_pinning_filter(
             "create_static_tool_filter(allowed_tool_names=[]) if a total block is intended."
         )
 
+    effective: dict[str, str] = {}
+    for name, entry in approved.items():
+        if isinstance(entry, str):
+            raise ValueError(
+                f"Pin for {name!r} is a bare digest string from the old single-digest "
+                f"format, which does not record whether it covers the raw or the "
+                f"cleaned catalogue. Re-pin: "
+                f"`continuum mcp inspect URL --name SERVER --write-pins PATH`."
+            )
+        if not isinstance(entry, dict) or "effective" not in entry:
+            raise ValueError(
+                f"Pin for {name!r} is malformed (expected a mapping with an "
+                f"'effective' key, got {entry!r}). Re-pin with "
+                f"`continuum mcp inspect --write-pins PATH`."
+            )
+        effective[name] = entry["effective"]
+
     def _pinned(context: ToolFilterContext, tool: MCPTool) -> bool:
-        expected = approved.get(tool.name)
+        expected = effective.get(tool.name)
         if expected is None:
             if on_unknown == "allow":
                 return True

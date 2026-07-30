@@ -426,3 +426,73 @@ class TestToolDigestPersistence:
         tools = await server.list_tools()
 
         assert [t.name for t in tools] == ["t"]
+
+
+# ---------------------------------------------------------------------------
+# One pin file, one format
+#
+# `mcp inspect --write-pins` and the runtime tripwire write the SAME file. If
+# they disagree about its shape, running the agent silently rewrites a pin file
+# the CLI produced -- and create_tool_pinning_filter, which reads it, then
+# either raises or (worse, if it guessed) admits a changed tool.
+# ---------------------------------------------------------------------------
+
+
+class TestPinFileFormatIsShared:
+    async def test_tripwire_writes_the_two_digest_shape(self, tmp_path):
+        pin = tmp_path / "pins.json"
+        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
+        _attach_session(server, [_tool("get_data", "Fine.")])
+        await server.list_tools()
+
+        stored = json.loads(pin.read_text())[server.name]["get_data"]
+        assert set(stored) == {"raw", "effective"}
+
+    async def test_a_cli_written_pin_file_still_gates_after_the_agent_runs(self, tmp_path):
+        """The end-to-end guarantee: review with the CLI, run the agent, and the
+        gate must still work. Previously the agent's tripwire overwrote the
+        CLI's format with bare strings."""
+        from continuum.tools.pinning import create_tool_pinning_filter, snapshot_tool_digests
+
+        raw_tool = _tool("get_data", "Fine.")
+        pin = tmp_path / "pins.json"
+        pin.write_text(json.dumps({"srv": snapshot_tool_digests("srv", [raw_tool])}))
+
+        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
+        _attach_session(server, [raw_tool])
+        await server.list_tools()
+
+        reloaded = json.loads(pin.read_text())[server.name]
+        gate = create_tool_pinning_filter(reloaded)  # must not raise
+        ctx = MagicMock()
+        ctx.server_name = server.name
+        assert gate(ctx, raw_tool) is True
+
+    async def test_tripwire_compares_raw_so_hidden_char_toggling_still_warns(self, tmp_path):
+        """The property the raw digest exists for -- it must survive the format
+        change."""
+        pin = tmp_path / "pins.json"
+        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
+
+        _attach_session(server, [_tool("get_data", "Fine.")])
+        await server.list_tools()
+
+        _attach_session(server, [_tool("get_data", "Fine.\U000e0041")])
+        with _captured_logs() as records:
+            await server.list_tools()
+
+        assert any("get_data" in m for m in _warnings(records)), _warnings(records)
+
+    async def test_a_legacy_bare_string_pin_file_is_read_not_crashed_on(self, tmp_path):
+        """Someone's pin file from the single-digest format must not take the
+        agent down; degrade to 'no baseline' and re-record, as the loader already
+        does for a corrupt file."""
+        pin = tmp_path / "pins.json"
+        pin.write_text(json.dumps({"srv": {"get_data": "a" * 64}}))
+
+        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
+        _attach_session(server, [_tool("get_data", "Fine.")])
+        await server.list_tools()  # must not raise
+
+        stored = json.loads(pin.read_text())["srv"]["get_data"]
+        assert set(stored) == {"raw", "effective"}

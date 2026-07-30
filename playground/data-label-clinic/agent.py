@@ -89,6 +89,33 @@ def build_pin_gate(pin_path: str | Path, *, server_name: str) -> Any:
     return create_tool_pinning_filter(approved)
 
 
+def resolve_pin_settings(
+    *, gate_enabled: bool, pin_path: str | Path | None = None
+) -> tuple[Any, str | None]:
+    """Return ``(tool_filter, tool_pin_path)`` — deliberately never both.
+
+    The tripwire (``tool_pin_path``) and the gate (``tool_filter``) read the same
+    file and mean different things by it. The tripwire treats it as a mutable
+    "last seen" log: on drift it warns and **rewrites** the file. The gate treats
+    it as an immutable "approved" list and only reads it.
+
+    Run both and the first erases what the second depends on. Observed live: with
+    the gate on, run one correctly dropped 3 of 5 tools from a poisoned server --
+    then the tripwire re-pinned that poisoned catalogue, so run two loaded 5
+    "approved" tools and admitted both the injected description and the
+    attacker's tool. One restart turned a working gate into no gate.
+
+    So with the gate on, the pin path is left off. Nothing is lost: the gate is
+    strictly louder than the tripwire about the same drift, and it refuses rather
+    than adapting. Re-approve deliberately with `continuum mcp inspect
+    --write-pins` when a change is expected.
+    """
+    path = pin_path if pin_path is not None else default_config.tool_pin_path
+    if gate_enabled:
+        return build_pin_gate(path, server_name="clinic"), None
+    return None, str(path)
+
+
 class ClinicAgent:
     def __init__(self, config: ClinicConfig | None = None):
         self.config = config or default_config
@@ -138,9 +165,9 @@ class ClinicAgent:
         # `continuum mcp inspect`. build_pin_gate() raises rather than skipping
         # when the file is missing -- a gate that quietly turns itself off is
         # worse than no gate, because the run still looks protected.
-        tool_filter = None
-        if os.environ.get("CLINIC_PIN_GATE") == "1":
-            tool_filter = build_pin_gate(self.config.tool_pin_path, server_name="clinic")
+        tool_filter, tool_pin_path = resolve_pin_settings(
+            gate_enabled=os.environ.get("CLINIC_PIN_GATE") == "1"
+        )
 
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
@@ -154,7 +181,8 @@ class ClinicAgent:
             # Record the description/schema of every tool on first connect and
             # compare on each later fetch, so a server edited after you approved
             # it is reported instead of silently reaching the model's prompt.
-            tool_pin_path=self.config.tool_pin_path,
+            # None when the gate is on -- see resolve_pin_settings().
+            tool_pin_path=tool_pin_path,
         )
         await self._mcp_server.connect()
 

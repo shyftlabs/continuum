@@ -403,9 +403,20 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
     # --- tool-digest drift detection (F3) ------------------------------------
 
     def _load_tool_digests(self) -> dict[str, str]:
-        """Read this server's pinned digests. Best-effort: a missing, corrupt or
-        unreadable pin file degrades to "no baseline", which is the behaviour
-        before pinning existed -- never a failure that takes the agent down."""
+        """Read this server's pinned RAW digests, keyed by tool name.
+
+        The file stores ``{"raw": ..., "effective": ...}`` per tool -- the same
+        shape ``continuum mcp inspect --write-pins`` writes, because both write
+        this file and a format disagreement would mean running the agent silently
+        broke a pin file the CLI produced. This tripwire compares ``raw`` so that
+        toggling invisible characters cannot slip past; the pinning *filter*
+        compares ``effective``, the text the model actually receives.
+
+        Best-effort: a missing, corrupt or unreadable pin file -- or one in the
+        old single-digest format -- degrades to "no baseline", which is the
+        behaviour before pinning existed, never a failure that takes the agent
+        down. The next fetch re-records in the current shape.
+        """
         if self._tool_digests is not None:
             return self._tool_digests
         digests: dict[str, str] = {}
@@ -414,7 +425,11 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 raw = json.loads(self._tool_pin_path.read_text(encoding="utf-8"))
                 stored = raw.get(self.name, {}) if isinstance(raw, dict) else {}
                 if isinstance(stored, dict):
-                    digests = {k: v for k, v in stored.items() if isinstance(v, str)}
+                    digests = {
+                        k: v["raw"]
+                        for k, v in stored.items()
+                        if isinstance(v, dict) and isinstance(v.get("raw"), str)
+                    }
             except FileNotFoundError:
                 pass
             except (OSError, ValueError) as e:
@@ -422,9 +437,19 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         self._tool_digests = digests
         return digests
 
-    def _save_tool_digests(self, digests: dict[str, str]) -> None:
-        """Persist digests for this server, preserving other servers' entries."""
+    def _save_tool_digests(self, digests: dict[str, str], tools: list[MCPTool]) -> None:
+        """Persist digests for this server, preserving other servers' entries.
+
+        Writes both the raw and the effective (post-cleaning) digest, the shape
+        ``continuum mcp inspect --write-pins`` also writes -- see
+        ``_load_tool_digests`` for why they must agree.
+        """
         self._tool_digests = digests
+        entries = {
+            tool.name: {"raw": digests[tool.name], "effective": _tool_digest(_clean_tool(tool))}
+            for tool in tools
+            if tool.name in digests
+        }
         if self._tool_pin_path is None:
             return
         try:
@@ -435,7 +460,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                     existing = loaded
             except (FileNotFoundError, ValueError):
                 pass
-            existing[self.name] = digests
+            existing[self.name] = entries
             self._tool_pin_path.parent.mkdir(parents=True, exist_ok=True)
             self._tool_pin_path.write_text(
                 json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
@@ -459,7 +484,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         current = {tool.name: _tool_digest(tool) for tool in tools}
 
         if not previous:
-            self._save_tool_digests(current)
+            self._save_tool_digests(current, tools)
             return
 
         changed = [name for name, d in current.items() if name in previous and previous[name] != d]
@@ -480,7 +505,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"added={added} removed={removed}"
             )
 
-        self._save_tool_digests(current)
+        self._save_tool_digests(current, tools)
 
     @abc.abstractmethod
     def create_streams(

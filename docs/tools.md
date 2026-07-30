@@ -449,16 +449,56 @@ server = MCPServerStreamableHttp(
 ```
 
 To **block** rather than warn — an agent losing a tool is preferable to acting on
-text you didn't review:
+text you didn't review — load the pin file `--write-pins` wrote and hand it to
+`create_tool_pinning_filter`:
 
 ```python
-from continuum.tools import create_tool_pinning_filter, snapshot_tool_digests
+import json
+from continuum.tools import create_tool_pinning_filter
 
-approved = snapshot_tool_digests("weather", reviewed_tools)
+# The file is keyed by server name at the top level.
+approved = json.loads(Path(".continuum/mcp-pins.json").read_text())["weather"]
+
 server = MCPServerStreamableHttp(
-    {"url": "..."}, name="weather", tool_filter=create_tool_pinning_filter(approved),
+    {"url": "http://localhost:8931/mcp"},
+    name="weather",
+    tool_filter=create_tool_pinning_filter(approved),
+    # NOT tool_pin_path — see "Don't use both" below.
 )
 ```
+
+Behaviour:
+
+| | |
+|---|---|
+| approved, unchanged | passes |
+| approved, description or schema changed | **dropped**, logged as a WARNING |
+| not in `approved` | **dropped** — a tool that appeared after review was never approved. `on_unknown="allow"` opts out |
+| `approved` empty | raises `ValueError` — that would drop every tool, which is almost always an unpopulated pin file rather than an intended total block |
+
+`snapshot_tool_digests(name, tools)` builds the same mapping from a `list[MCPTool]`
+if you already have one in hand. Each entry holds **two** digests:
+
+- `raw` — the bytes as the server sent them. What the drift tripwire compares, so
+  toggling invisible characters can't slip past unreported.
+- `effective` — after invisible characters are stripped, i.e. what the model
+  actually reads. What the pinning filter compares, because `list_tools()` cleans
+  tools *before* handing them to a `tool_filter`.
+
+They're identical for ordinary text. A description whose *only* change is hidden
+characters therefore still passes the gate — those never reach the model — while
+the tripwire still reports it.
+
+#### Don't use both
+
+`tool_pin_path` and a pinning `tool_filter` read the same file and mean different
+things by it. The tripwire treats it as a mutable *last seen* log and **rewrites**
+it on drift; the gate treats it as an immutable *approved* list. Enable both and
+the first erases what the second depends on — one restart after a drift warning,
+the rewritten file lists the drifted values as approved and the gate admits them.
+
+Pick one. With the gate, re-approve deliberately by re-running
+`continuum mcp inspect --write-pins` when a change is expected.
 
 A pin proves *unchanged since you looked* — never *safe*. Pin a server that was
 malicious from the start and you have pinned the poison. That is why reviewing

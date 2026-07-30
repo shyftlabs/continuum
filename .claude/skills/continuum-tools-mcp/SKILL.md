@@ -189,13 +189,19 @@ continuum mcp inspect URL --name weather --write-pins PATH # ...then record dige
 ```
 
 ```python
-# report later changes
+# report later changes (warn, then re-pin)
 MCPServerStreamableHttp({"url": ...}, name="weather", tool_pin_path=PATH)
-# or block them
-tool_filter=create_tool_pinning_filter(snapshot_tool_digests("weather", reviewed))
+# OR block them (drop the tool). Never both: the tripwire rewrites the file the
+# gate reads, so one restart after a drift warning re-approves the drifted values.
+approved = json.loads(Path(PATH).read_text())["weather"]   # keyed by server name
+MCPServerStreamableHttp({"url": ...}, name="weather",
+                        tool_filter=create_tool_pinning_filter(approved))
 ```
 
 A pin means *unchanged since you looked*, never *safe* — review first.
+Each pin holds two digests: `raw` (as sent — what the tripwire compares) and
+`effective` (after invisible chars are stripped — what the model reads and what
+the gate compares).
 
 **Always pass `name=` to a server.** It becomes the `<server>__<tool>` prefix
 the model sees and that `PolicyStore` resources match. Without it the prefix is

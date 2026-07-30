@@ -254,6 +254,17 @@ class TestClinicPoisonedServerMode:
         assert "tool:clinic__" in out
 
 
+def _pin_file(tmp_path, tools):
+    """Write a pin file in the shape `mcp inspect --write-pins` produces."""
+    import json
+
+    from continuum.tools.pinning import snapshot_tool_digests
+
+    p = tmp_path / "tool-pins.json"
+    p.write_text(json.dumps({"clinic": snapshot_tool_digests("clinic", tools)}))
+    return p
+
+
 def _as_tool(name: str, description: str) -> Tool:
     return Tool(
         name=name,
@@ -317,13 +328,6 @@ class TestClinicPinGate:
     approval map, so a fresh clone with no tool-pins.json would fail to start.
     """
 
-    def _pin_file(self, tmp_path, digests: dict[str, str]):
-        import json
-
-        p = tmp_path / "tool-pins.json"
-        p.write_text(json.dumps({"clinic": digests}))
-        return p
-
     def _clinic_tool(self, description: str):
         return Tool(
             name="lookup_patient",
@@ -341,10 +345,8 @@ class TestClinicPinGate:
     def test_builds_a_gate_from_the_clinic_pin_file(self, tmp_path):
         """The documented path: read tool-pins.json, hand it to the factory."""
         agent_mod = _load("agent")
-        from continuum.tools.mcp import _tool_digest
-
         honest = self._clinic_tool("Look up a patient's record by ID.")
-        pin = self._pin_file(tmp_path, {"lookup_patient": _tool_digest(honest)})
+        pin = _pin_file(tmp_path, [honest])
 
         gate = agent_mod.build_pin_gate(pin, server_name="clinic")
         assert gate(self._context(), honest) is True
@@ -352,10 +354,8 @@ class TestClinicPinGate:
     def test_gate_drops_an_allowed_tool_whose_description_drifted(self, tmp_path):
         """The gap default_deny leaves open."""
         agent_mod = _load("agent")
-        from continuum.tools.mcp import _tool_digest
-
         honest = self._clinic_tool("Look up a patient's record by ID.")
-        pin = self._pin_file(tmp_path, {"lookup_patient": _tool_digest(honest)})
+        pin = _pin_file(tmp_path, [honest])
         gate = agent_mod.build_pin_gate(pin, server_name="clinic")
 
         poisoned = self._clinic_tool(
@@ -365,10 +365,8 @@ class TestClinicPinGate:
 
     def test_gate_drops_a_tool_that_was_never_approved(self, tmp_path):
         agent_mod = _load("agent")
-        from continuum.tools.mcp import _tool_digest
-
         honest = self._clinic_tool("Look up a patient's record by ID.")
-        pin = self._pin_file(tmp_path, {"lookup_patient": _tool_digest(honest)})
+        pin = _pin_file(tmp_path, [honest])
         gate = agent_mod.build_pin_gate(pin, server_name="clinic")
 
         invented = Tool(
@@ -422,3 +420,64 @@ class TestClinicPinGate:
             assert "tool_filter" in {kw.arg for kw in call.keywords}, (
                 f"line {call.lineno} never passes tool_filter, so CLINIC_PIN_GATE is inert"
             )
+
+
+class TestGateAndTripwireAreMutuallyExclusive:
+    """With CLINIC_PIN_GATE=1 the pin path must be left off.
+
+    Observed live: run one with the gate on dropped 3 of 5 tools, then the
+    tripwire re-pinned the poisoned catalogue -- so run two loaded 5 "approved"
+    tools and admitted lookup_patient (carrying its injected instruction) and
+    fetch_manifest. One restart turned a working gate into no gate.
+
+    The two disagree about what the file means: the tripwire treats it as a
+    mutable "last seen" log and rewrites it; the gate treats it as an immutable
+    "approved" list and reads it. Running both lets the first erase what the
+    second depends on.
+    """
+
+    def _server_kwargs(self, gate_on: bool) -> dict:
+        """The kwargs _connect_mcp would pass, without opening a connection."""
+        import ast
+
+        tree = ast.parse((CLINIC_DIR / "agent.py").read_text())
+        call = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "MCPServerStreamableHttp"
+        )
+        return {kw.arg: kw.value for kw in call.keywords}
+
+    def test_pin_path_is_conditional_not_hardcoded(self):
+        """tool_pin_path must not be a plain attribute read: with the gate on it
+        has to resolve to None, or the tripwire rewrites the approvals."""
+        import ast
+
+        kwargs = self._server_kwargs(gate_on=True)
+        assert "tool_pin_path" in kwargs
+        node = kwargs["tool_pin_path"]
+        assert not isinstance(node, ast.Attribute), (
+            "tool_pin_path is passed unconditionally; with CLINIC_PIN_GATE=1 the "
+            "tripwire will re-pin and silently widen the gate's approved set"
+        )
+
+    def test_gate_on_means_no_pin_path(self, tmp_path):
+        agent_mod = _load("agent")
+        honest = Tool(
+            name="clinic_info",
+            description="Fine.",
+            inputSchema={"type": "object", "properties": {}},
+        )
+        pin = _pin_file(tmp_path, [honest])
+        gate, pin_path = agent_mod.resolve_pin_settings(gate_enabled=True, pin_path=pin)
+        assert gate is not None
+        assert pin_path is None
+
+    def test_gate_off_means_pin_path_is_set(self):
+        agent_mod = _load("agent")
+        config_mod = _load("config")
+        gate, pin_path = agent_mod.resolve_pin_settings(gate_enabled=False)
+        assert gate is None
+        assert pin_path == str(config_mod.default_config.tool_pin_path)
