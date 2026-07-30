@@ -139,6 +139,22 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # -------------------------------------------------------------------------
+    # MCP tool trust (security finding F3)
+    # -------------------------------------------------------------------------
+    # Posture for third-party MCP tool catalogues. Env-configurable because the
+    # right answer differs by environment -- "warn" while developing against a
+    # server you own, "block" in production -- and that should not need a code
+    # change. ToolTrustConfig reads these as its defaults.
+    #
+    # A server with no approved catalogue defaults to blocking: first contact is
+    # once per server, at setup time, and has no false positives (every one is
+    # genuinely unreviewed). Drift on an already-approved server defaults to
+    # warning: it is frequent and usually a typo fix, and a control that breaks
+    # a working deployment on benign churn is a control that gets switched off.
+    mcp_on_unreviewed: Literal["block", "warn", "allow"] = "block"
+    mcp_on_drift: Literal["block", "warn", "allow"] = "warn"
+
+    # -------------------------------------------------------------------------
     # Smart Gateway integration
     # -------------------------------------------------------------------------
     smart_gateway_url: str | None = None  # SMART_GATEWAY_URL

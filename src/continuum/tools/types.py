@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol
 
 import httpx
@@ -372,6 +373,116 @@ class ToolContextConfig:
         if var_config:
             return var_config.scope
         return "session"  # Default to session scope
+
+
+TrustAction = Literal["block", "warn", "allow"]
+"""What to do about a tool catalogue that was never approved, or that changed."""
+
+
+@dataclass
+class ToolChangeEvent:
+    """A change to a server's tool catalogue, as observed on one fetch.
+
+    Exists so an application can *react* -- page oncall, surface a banner, fail
+    a CI run. Before this the only report was a ``logger.warning``, which means
+    the sole possible response was a human watching a terminal at the moment the
+    line scrolled past.
+    """
+
+    server_name: str
+    changed: list[str] = field(default_factory=list)
+    """Tools that kept their name but altered their description or schema. The
+    rug-pull signal."""
+
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    unreviewed: list[str] = field(default_factory=list)
+    """Tools with no entry in the approved catalogue."""
+
+    def __bool__(self) -> bool:
+        return bool(self.changed or self.added or self.removed or self.unreviewed)
+
+
+@dataclass
+class ToolTrustConfig:
+    """How much to trust an MCP server's tool catalogue (security finding F3).
+
+    Grouped into a dataclass rather than added as constructor keywords because
+    ``_MCPServerWithClientSession.__init__`` already takes ten, and because
+    these four options are only meaningful together.
+
+    Example:
+        ```python
+        server = MCPServerStreamableHttp(
+            params={...},
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path="tool-pins.json"),
+        )
+        ```
+    """
+
+    pin_path: str | Path | None = None
+    """JSON file holding the *approved* catalogue -- what a human read and
+    accepted, written only by ``continuum mcp approve``.
+
+    Defaults to None: digests are kept in memory, which still catches drift
+    across a reconnect within one process and avoids a library creating files
+    nobody asked for.
+
+    The runtime never writes this file. It writes :attr:`last_seen_path`
+    instead. Sharing one file between the two is what let a tripwire rewrite
+    promote an attacker's catalogue to "approved" and silently disarm the gate
+    on the next restart.
+    """
+
+    on_unreviewed: TrustAction = field(default_factory=lambda: _settings().mcp_on_unreviewed)
+    """What to do about a server, or a tool, with no approved entry.
+
+    Defaults to ``"block"`` (see ``Settings.mcp_on_unreviewed``): pinning cannot
+    detect a catalogue that was poisoned before you ever saw it, so human review
+    is the only defence that case has, and an optional defence is no defence.
+    """
+
+    on_drift: TrustAction = field(default_factory=lambda: _settings().mcp_on_drift)
+    """What to do about an approved tool whose description or schema changed.
+
+    Defaults to ``"warn"``: benign drift (a typo fix, a clarified parameter)
+    vastly outnumbers attacks, and blocking by default means most users first
+    meet this feature as "my agent broke and I changed nothing" -- after which
+    they disable it, losing the protection for the rare real case too.
+    """
+
+    on_change: "Callable[[ToolChangeEvent], None] | None" = None
+    """Optional in-process hook, called whenever a fetch observes a change."""
+
+    @property
+    def last_seen_path(self) -> Path | None:
+        """Sibling file recording what the server last served.
+
+        Derived from :attr:`pin_path` rather than configured separately: two
+        paths to set is two paths to get inconsistent, and the pairing is not
+        something a user should have to maintain.
+
+        Hidden and distinctly named so it is obvious which file is the approval
+        and which is scratch -- the runtime rewrites this one constantly, and it
+        is the one that should be left out of version control.
+        """
+        if self.pin_path is None:
+            return None
+        path = Path(self.pin_path)
+        return path.with_name(f".{path.stem}-last-seen{path.suffix}")
+
+
+def _settings() -> Any:
+    """Read global settings lazily.
+
+    Imported inside the function so this module stays importable without
+    pulling in pydantic settings resolution at import time, and so tests can
+    clear the settings cache between cases.
+    """
+    from continuum.config import get_settings
+
+    return get_settings()
 
 
 @dataclass

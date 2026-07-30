@@ -24,10 +24,15 @@ import pytest
 from mcp.types import Tool
 
 from continuum.tools.mcp import MCPServerStreamableHttp
+from continuum.tools.types import ToolTrustConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _trust(pin_path) -> ToolTrustConfig:
+    return ToolTrustConfig(pin_path=pin_path)
 
 
 def _make_server(cache_tools_list: bool = True, **kwargs) -> MCPServerStreamableHttp:
@@ -387,13 +392,13 @@ class TestToolDigestPersistence:
     async def test_pins_survive_a_new_server_instance_when_a_path_is_given(self, tmp_path):
         pin_file = tmp_path / "mcp-tool-pins.json"
 
-        first = _make_server(cache_tools_list=False, tool_pin_path=pin_file)
+        first = _make_server(cache_tools_list=False, trust_config=_trust(pin_file))
         _attach_session(first, [_tool("t", "Original.")])
         await first.list_tools()
-        assert pin_file.exists()
+        assert first.trust_config.last_seen_path.exists()
 
-        # A fresh process: new object, same pin file, drifted catalogue.
-        second = _make_server(cache_tools_list=False, tool_pin_path=pin_file)
+        # A fresh process: new object, same paths, drifted catalogue.
+        second = _make_server(cache_tools_list=False, trust_config=_trust(pin_file))
         _attach_session(second, [_tool("t", "Poisoned.")])
 
         with _captured_logs() as records:
@@ -402,25 +407,25 @@ class TestToolDigestPersistence:
         assert _warnings(records), "a restart must still detect the change"
 
     @pytest.mark.asyncio
-    async def test_pin_file_is_namespaced_by_server(self, tmp_path):
+    async def test_record_is_namespaced_by_server(self, tmp_path):
         pin_file = tmp_path / "pins.json"
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin_file)
+        server = _make_server(cache_tools_list=False, trust_config=_trust(pin_file))
         _attach_session(server, [_tool("t", "T.")])
 
         await server.list_tools()
 
-        data = json.loads(pin_file.read_text())
-        assert "srv" in data
-        assert "t" in data["srv"]
+        data = json.loads(server.trust_config.last_seen_path.read_text())
+        assert "t" in data["servers"]["srv"]
 
     @pytest.mark.asyncio
-    async def test_unreadable_pin_file_does_not_break_tool_listing(self, tmp_path):
-        """Detection is best-effort: a corrupt pin file must not take the agent
+    async def test_unreadable_record_does_not_break_tool_listing(self, tmp_path):
+        """Detection is best-effort: a corrupt file must not take the agent
         down. It degrades to no-baseline, which is the pre-existing behaviour."""
         pin_file = tmp_path / "pins.json"
-        pin_file.write_text("{ not json")
+        cfg = _trust(pin_file)
+        cfg.last_seen_path.write_text("{ not json")
 
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin_file)
+        server = _make_server(cache_tools_list=False, trust_config=cfg)
         _attach_session(server, [_tool("t", "T.")])
 
         tools = await server.list_tools()
@@ -429,50 +434,19 @@ class TestToolDigestPersistence:
 
 
 # ---------------------------------------------------------------------------
-# One pin file, one format
+# Raw-digest comparison survives the two-file split
 #
-# `mcp inspect --write-pins` and the runtime tripwire write the SAME file. If
-# they disagree about its shape, running the agent silently rewrites a pin file
-# the CLI produced -- and create_tool_pinning_filter, which reads it, then
-# either raises or (worse, if it guessed) admits a changed tool.
+# The approved catalogue and the runtime's last-seen record are now separate
+# files with one writer each (see test_tool_trust_store.py). What must not get
+# lost in that move is *what* the tripwire compares: the raw bytes, so that
+# adding or removing invisible characters cannot slip past unreported.
 # ---------------------------------------------------------------------------
 
 
-class TestPinFileFormatIsShared:
-    async def test_tripwire_writes_the_two_digest_shape(self, tmp_path):
-        pin = tmp_path / "pins.json"
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
-        _attach_session(server, [_tool("get_data", "Fine.")])
-        await server.list_tools()
-
-        stored = json.loads(pin.read_text())[server.name]["get_data"]
-        assert set(stored) == {"raw", "effective"}
-
-    async def test_a_cli_written_pin_file_still_gates_after_the_agent_runs(self, tmp_path):
-        """The end-to-end guarantee: review with the CLI, run the agent, and the
-        gate must still work. Previously the agent's tripwire overwrote the
-        CLI's format with bare strings."""
-        from continuum.tools.pinning import create_tool_pinning_filter, snapshot_tool_digests
-
-        raw_tool = _tool("get_data", "Fine.")
-        pin = tmp_path / "pins.json"
-        pin.write_text(json.dumps({"srv": snapshot_tool_digests("srv", [raw_tool])}))
-
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
-        _attach_session(server, [raw_tool])
-        await server.list_tools()
-
-        reloaded = json.loads(pin.read_text())[server.name]
-        gate = create_tool_pinning_filter(reloaded)  # must not raise
-        ctx = MagicMock()
-        ctx.server_name = server.name
-        assert gate(ctx, raw_tool) is True
-
-    async def test_tripwire_compares_raw_so_hidden_char_toggling_still_warns(self, tmp_path):
-        """The property the raw digest exists for -- it must survive the format
-        change."""
-        pin = tmp_path / "pins.json"
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
+class TestTripwireStillComparesRawBytes:
+    async def test_hidden_char_toggling_warns(self, tmp_path):
+        cfg = _trust(tmp_path / "pins.json")
+        server = _make_server(cache_tools_list=False, trust_config=cfg)
 
         _attach_session(server, [_tool("get_data", "Fine.")])
         await server.list_tools()
@@ -483,16 +457,29 @@ class TestPinFileFormatIsShared:
 
         assert any("get_data" in m for m in _warnings(records)), _warnings(records)
 
-    async def test_a_legacy_bare_string_pin_file_is_read_not_crashed_on(self, tmp_path):
-        """Someone's pin file from the single-digest format must not take the
-        agent down; degrade to 'no baseline' and re-record, as the loader already
-        does for a corrupt file."""
+    async def test_an_approved_catalogue_still_gates_after_the_agent_runs(self, tmp_path):
+        """End-to-end: review, run the agent, and the gate must still work.
+
+        Previously the tripwire rewrote the very file the gate reads, so a
+        catalogue observed at runtime silently became the approval. Now the
+        runtime cannot reach that file at all.
+        """
+        from continuum.tools.pinning import (
+            create_tool_pinning_filter,
+            load_pins,
+            save_pins,
+            snapshot_tool_digests,
+        )
+
+        raw_tool = _tool("get_data", "Fine.")
         pin = tmp_path / "pins.json"
-        pin.write_text(json.dumps({"srv": {"get_data": "a" * 64}}))
+        save_pins(pin, {"srv": snapshot_tool_digests("srv", [raw_tool])})
 
-        server = _make_server(cache_tools_list=False, tool_pin_path=pin)
-        _attach_session(server, [_tool("get_data", "Fine.")])
-        await server.list_tools()  # must not raise
+        server = _make_server(cache_tools_list=False, trust_config=_trust(pin))
+        _attach_session(server, [raw_tool])
+        await server.list_tools()
 
-        stored = json.loads(pin.read_text())["srv"]["get_data"]
-        assert set(stored) == {"raw", "effective"}
+        gate = create_tool_pinning_filter(load_pins(pin)["srv"])  # must not raise
+        ctx = MagicMock()
+        ctx.server_name = server.name
+        assert gate(ctx, raw_tool) is True

@@ -28,6 +28,8 @@ CLI command prints the catalogue and treats the pin file as a byproduct.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from continuum.llm.untrusted_content import strip_hidden_chars
@@ -44,9 +46,21 @@ logger = get_logger(__name__)
 
 _DIGEST_PREVIEW = 12
 
+PIN_FORMAT_VERSION = 1
+"""On-disk schema version for pin files.
 
-def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> dict[str, dict[str, str]]:
-    """Map tool name to its ``{"raw": ..., "effective": ...}`` digests.
+Every lockfile carries one; this one didn't, and the cost was a compatibility
+branch that had to *infer* whether a bare digest string covered the raw or the
+cleaned catalogue -- a question the file could not answer. A version field turns
+"guess the shape" into "refuse to read what you don't understand".
+"""
+
+PinEntry = dict[str, Any]
+ServerPins = dict[str, PinEntry]
+
+
+def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> ServerPins:
+    """Map tool name to its pin entry: two digests plus the reviewed text.
 
     Two digests because the two consumers ask different questions, and a single
     digest silently broke one of them:
@@ -59,21 +73,95 @@ def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> dict[str, d
     ``effective``
         Over the catalogue after :func:`~continuum.tools.mcp._clean_tool` has
         stripped invisible characters -- i.e. the text the model will actually
-        receive. What :func:`create_tool_pinning_filter` compares, because
-        ``list_tools()`` cleans tools *before* handing them to a ``tool_filter``.
+        receive. What the pinning gate compares, because ``list_tools()`` cleans
+        tools *before* handing them to a ``tool_filter``.
 
     They are identical for ordinary text; only a description carrying invisible
     characters makes them differ. Comparing a cleaned tool against a raw pin
     meant such a tool could never match, so the gate dropped it forever while
     reporting that it "no longer matches" -- which was never achievable.
+
+    ``description`` and ``inputSchema`` are stored alongside because a digest
+    records *that* something changed and can never record *what*. Every
+    human-facing step -- reviewing a diff, deciding whether to approve -- needs
+    the previous text, and ``- "82f31…" + "9db49…"`` is not reviewable.
     """
     del server_name  # accepted for symmetry with the CLI/pin-file shape
     from continuum.tools.mcp import _clean_tool
 
     return {
-        tool.name: {"raw": _tool_digest(tool), "effective": _tool_digest(_clean_tool(tool))}
+        tool.name: {
+            "raw": _tool_digest(tool),
+            "effective": _tool_digest(_clean_tool(tool)),
+            "description": tool.description or "",
+            "inputSchema": tool.inputSchema or {},
+        }
         for tool in tools
     }
+
+
+def load_pins(path: str | Path) -> dict[str, ServerPins]:
+    """Read a pin file, returning ``server name -> tool name -> entry``.
+
+    Best-effort by design: a missing, unreadable, corrupt, or
+    future-versioned file degrades to "no baseline" rather than taking an agent
+    down. Trust *bookkeeping* is advisory; the enforcement decision built on top
+    of it is where failures should be loud.
+
+    A version this code does not recognise is refused rather than parsed
+    optimistically -- a newer writer may mean something different by the same
+    keys, and quietly misreading an approval is worse than having none.
+    """
+    file = Path(path)
+    try:
+        raw = json.loads(file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning(f"Ignoring unreadable MCP tool-pin file {file}: {e}")
+        return {}
+
+    if not isinstance(raw, dict):
+        logger.warning(f"Ignoring malformed MCP tool-pin file {file}: expected a JSON object.")
+        return {}
+
+    version = raw.get("version")
+    if version != PIN_FORMAT_VERSION:
+        logger.warning(
+            f"Ignoring MCP tool-pin file {file}: unsupported format version {version!r} "
+            f"(this build reads version {PIN_FORMAT_VERSION}). Re-create it with "
+            f"`continuum mcp inspect URL --name SERVER --approve {file}`."
+        )
+        return {}
+
+    servers = raw.get("servers")
+    if not isinstance(servers, dict):
+        logger.warning(f"Ignoring MCP tool-pin file {file}: no 'servers' object.")
+        return {}
+
+    return {
+        name: {tool: entry for tool, entry in pins.items() if isinstance(entry, dict)}
+        for name, pins in servers.items()
+        if isinstance(pins, dict)
+    }
+
+
+def save_pins(path: str | Path, servers: dict[str, ServerPins]) -> None:
+    """Write ``servers`` to ``path`` in the current pin-file format.
+
+    Whole-file write: callers pass the complete mapping, so merging is an
+    explicit step they perform rather than something this function guesses at.
+    Replacing a server entry wholesale is exactly the bug that made approval
+    all-or-nothing -- one drifted tool forced you to either bless every other
+    change or lose the tool.
+
+    Sorted keys because the file is meant to be diffed; a reordering diff is a
+    diff nobody reads.
+    """
+    file = Path(path)
+    payload = {"version": PIN_FORMAT_VERSION, "servers": servers}
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _format_schema_descriptions(node: Any, path: str = "") -> list[str]:

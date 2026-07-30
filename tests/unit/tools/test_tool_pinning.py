@@ -130,8 +130,8 @@ class TestSnapshotToolDigests:
         digests = snapshot_tool_digests("srv", [_tool("a", "A."), _tool("b", "B.")])
         assert set(digests) == {"a", "b"}
         for entry in digests.values():
-            assert set(entry) == {"raw", "effective"}
-            assert all(len(v) == 64 for v in entry.values())
+            assert {"raw", "effective"} <= set(entry)
+            assert all(len(entry[k]) == 64 for k in ("raw", "effective"))
 
     def test_raw_digest_matches_the_live_drift_detector(self):
         """A pin captured here must be comparable with what list_tools() records,
@@ -228,6 +228,59 @@ class TestMcpInspectCommand:
         )
         assert args.write_pins == "pins.json"
 
+    def test_written_pins_are_readable_by_load_pins(self, tmp_path, monkeypatch):
+        """The CLI writes the approved catalogue; the runtime reads it.
+
+        A format disagreement between them means review produces a file the
+        agent silently ignores -- the reviewer believes they pinned something
+        and nothing is pinned.
+        """
+        from continuum import cli
+        from continuum.tools.pinning import load_pins
+
+        path = tmp_path / "pins.json"
+        _fake_inspect(monkeypatch, [_tool("get_data", "Fine.")])
+        args = cli.build_parser().parse_args(
+            ["mcp", "inspect", "http://x/mcp", "--name", "srv", "--write-pins", str(path)]
+        )
+
+        assert cli._cmd_mcp_inspect(args) == 0
+        assert "get_data" in load_pins(path)["srv"]
+
+    def test_writing_one_server_leaves_another_alone(self, tmp_path, monkeypatch):
+        from continuum import cli
+        from continuum.tools.pinning import load_pins, save_pins, snapshot_tool_digests
+
+        path = tmp_path / "pins.json"
+        save_pins(path, {"other": snapshot_tool_digests("other", [_tool("x", "X.")])})
+
+        _fake_inspect(monkeypatch, [_tool("get_data", "Fine.")])
+        args = cli.build_parser().parse_args(
+            ["mcp", "inspect", "http://x/mcp", "--name", "srv", "--write-pins", str(path)]
+        )
+        cli._cmd_mcp_inspect(args)
+
+        assert set(load_pins(path)) == {"other", "srv"}
+
+
+def _fake_inspect(monkeypatch, tools):
+    """Stand in for a live MCP server so the CLI can be driven end-to-end."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    result = MagicMock()
+    result.tools = tools
+
+    class _Server:
+        def __init__(self, *a, **k):
+            self.name = k.get("name") or "srv"
+            self.session = MagicMock()
+            self.session.list_tools = AsyncMock(return_value=result)
+
+        connect = AsyncMock()
+        cleanup = AsyncMock()
+
+    monkeypatch.setattr("continuum.tools.mcp.MCPServerStreamableHttp", _Server)
+
 
 # ---------------------------------------------------------------------------
 # Raw vs effective digests
@@ -261,7 +314,17 @@ class TestSnapshotRecordsBothDigests:
     def test_snapshot_records_raw_and_effective(self):
         snap = snapshot_tool_digests("clinic", [_hidden_char_tool()])
         entry = snap["clinic_info"]
-        assert set(entry) == {"raw", "effective"}
+        assert {"raw", "effective"} <= set(entry)
+
+    def test_snapshot_records_the_reviewed_text_alongside_the_digests(self):
+        """A digest says *that* something changed, never *what*.
+
+        Without the text on disk there is nothing to diff, so "review the
+        difference and decide" has no mechanism behind it.
+        """
+        entry = snapshot_tool_digests("clinic", [_hidden_char_tool()])["clinic_info"]
+        assert "Answer a general clinic question." in entry["description"]
+        assert entry["inputSchema"] == {"type": "object", "properties": {}}
 
     def test_the_two_differ_when_hidden_characters_are_present(self):
         entry = snapshot_tool_digests("clinic", [_hidden_char_tool()])["clinic_info"]

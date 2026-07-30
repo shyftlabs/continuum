@@ -48,3 +48,20 @@ class MCPToolError(MCPError):
 
     default_message = "MCP tool error"
     default_error_code = "MCP_TOOL_ERROR"
+
+
+class MCPServerUnreviewedError(MCPError):
+    """Raised when a server has no approved tool catalogue (security finding F3).
+
+    Pinning cannot catch a server that was hostile from first contact -- pin the
+    poison and you have pinned the poison. The only defence is a person reading
+    the descriptions before they reach a prompt, so leaving that step optional
+    would mean the one case with no automated defence is also the one case with
+    no forced human step.
+
+    Deliberately *not* an ``MCPConnectionError``: nothing is wrong with the
+    connection, and reporting it as one sends the reader to the network.
+    """
+
+    default_message = "MCP server tool catalogue has not been reviewed"
+    default_error_code = "MCP_SERVER_UNREVIEWED"

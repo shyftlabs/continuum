@@ -33,7 +33,6 @@ import sys
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
 
 # Stable project name so containers/volumes are identical regardless of where the
 # wheel is installed (otherwise compose derives it from the install directory).
@@ -351,10 +350,14 @@ def _cmd_mcp_inspect(args: argparse.Namespace) -> int:
     the easy path.
     """
     import asyncio
-    import json
 
     from continuum.tools.mcp import MCPServerStreamableHttp
-    from continuum.tools.pinning import format_tool_catalog, snapshot_tool_digests
+    from continuum.tools.pinning import (
+        format_tool_catalog,
+        load_pins,
+        save_pins,
+        snapshot_tool_digests,
+    )
 
     async def _run() -> int:
         server = MCPServerStreamableHttp(
@@ -380,19 +383,19 @@ def _cmd_mcp_inspect(args: argparse.Namespace) -> int:
 
         if args.write_pins:
             path = Path(args.write_pins)
-            existing: dict[str, Any] = {}
-            if path.exists():
-                try:
-                    loaded = json.loads(path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        existing = loaded
-                except ValueError:
-                    print(f"Overwriting unparseable pin file {path}.", file=sys.stderr)
+            # Merge, never replace the whole file: other servers' approvals are
+            # not ours to discard. save_pins/load_pins are shared with the
+            # runtime so the file this writes is the file the agent reads --
+            # a format disagreement would mean review produces a pin nothing
+            # honours, and the reviewer would never know.
+            existing = load_pins(path)
             existing[server.name] = snapshot_tool_digests(server.name, tools)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
+            save_pins(path, existing)
             print(f"\nPinned {len(tools)} tool(s) for '{server.name}' to {path}.")
-            print("Pass tool_pin_path= to the MCPServer to have drift reported at runtime.")
+            print(
+                "Pass trust_config=ToolTrustConfig(pin_path=...) to the MCPServer "
+                "to have drift reported at runtime."
+            )
 
         return 0
 

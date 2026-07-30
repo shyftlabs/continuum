@@ -39,13 +39,14 @@ from typing_extensions import TypedDict
 from continuum.exceptions import ValidationError
 from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
-from continuum.tools.exceptions import MCPConnectionError, MCPError
+from continuum.tools.exceptions import MCPConnectionError, MCPError, MCPServerUnreviewedError
 from continuum.tools.types import (
     HttpClientFactory,
     ToolContextConfig,
     ToolFilter,
     ToolFilterContext,
     ToolFilterStatic,
+    ToolTrustConfig,
 )
 
 T = TypeVar("T")
@@ -247,7 +248,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
-        tool_pin_path: str | Path | None = None,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """
         Args:
@@ -275,19 +276,16 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast on
                 misconfiguration. Default False so slow servers are not penalized.
-            tool_pin_path: Optional JSON file in which to persist per-tool digests, so a
-                description that changes between *process runs* is still reported
-                ("approved today, poisoned next week" -- security finding F3).
+            trust_config: How much to trust this server's tool catalogue -- where the
+                approved catalogue lives and what to do when a tool is unreviewed or
+                has changed (security finding F3). See
+                :class:`~continuum.tools.types.ToolTrustConfig`.
 
-                Defaults to None: digests are kept in memory only. That already
-                catches drift across a reconnect, the main window, and avoids a
-                library creating files nobody asked for. Detection is best-effort
-                either way -- an unreadable or unwritable pin file is logged and
-                ignored rather than failing the agent.
-
-                A digest change is reported, not blocked: a developer editing their
-                own server's descriptions is the common case, so this is a tripwire
-                (warn, then re-pin), not a gate.
+                Defaults to memory-only: digests are kept for the life of the process,
+                which still catches drift across a reconnect and avoids a library
+                creating files nobody asked for. Give it a ``pin_path`` to detect a
+                description that changes between *process runs* ("approved today,
+                poisoned next week").
         """
         super().__init__(
             use_structured_content=use_structured_content,
@@ -311,7 +309,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         self.validate_on_connect = validate_on_connect
 
         # Tool-digest baseline (F3 rug-pull detection). None path => memory only.
-        self._tool_pin_path: Path | None = Path(tool_pin_path) if tool_pin_path else None
+        self._trust_config: ToolTrustConfig = trust_config or ToolTrustConfig()
         self._tool_digests: dict[str, str] | None = None
 
         self.client_session_timeout_seconds = client_session_timeout_seconds
@@ -402,71 +400,92 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
     # --- tool-digest drift detection (F3) ------------------------------------
 
+    @property
+    def trust_config(self) -> ToolTrustConfig:
+        """This server's tool-catalogue trust settings (never None)."""
+        return self._trust_config
+
+    def _load_approved(self) -> dict[str, dict[str, Any]]:
+        """This server's *approved* catalogue -- what a human read and accepted.
+
+        Read-only from the runtime's point of view. Nothing on this code path
+        ever writes it: that is the whole point of the split. When the tripwire
+        and the gate shared one file, a fetch that observed a poisoned catalogue
+        rewrote the approval, so the gate matched the poison on the next start
+        and reported nothing.
+        """
+        from continuum.tools.pinning import load_pins
+
+        path = self._trust_config.pin_path
+        if path is None:
+            return {}
+        return load_pins(path).get(self.name, {})
+
     def _load_tool_digests(self) -> dict[str, str]:
-        """Read this server's pinned RAW digests, keyed by tool name.
+        """Baseline RAW digests for the drift tripwire, keyed by tool name.
 
-        The file stores ``{"raw": ..., "effective": ...}`` per tool -- the same
-        shape ``continuum mcp inspect --write-pins`` writes, because both write
-        this file and a format disagreement would mean running the agent silently
-        broke a pin file the CLI produced. This tripwire compares ``raw`` so that
-        toggling invisible characters cannot slip past; the pinning *filter*
-        compares ``effective``, the text the model actually receives.
+        Compares ``raw`` -- the bytes as sent -- so that toggling invisible
+        characters cannot slip past unreported. The pinning gate compares
+        ``effective`` instead, because that is the text the model receives.
 
-        Best-effort: a missing, corrupt or unreadable pin file -- or one in the
-        old single-digest format -- degrades to "no baseline", which is the
-        behaviour before pinning existed, never a failure that takes the agent
-        down. The next fetch re-records in the current shape.
+        Prefers the last-seen record and falls back to the approved catalogue
+        when there is none. A freshly deployed machine has an approval but no
+        last-seen file, and treating that as "no baseline" would make the first
+        run after every deploy silent about drift -- the run most likely to meet
+        a server that changed while nobody was watching.
+
+        Best-effort throughout: a missing, corrupt or unreadable file degrades
+        to "no baseline" rather than taking the agent down.
         """
         if self._tool_digests is not None:
             return self._tool_digests
-        digests: dict[str, str] = {}
-        if self._tool_pin_path is not None:
-            try:
-                raw = json.loads(self._tool_pin_path.read_text(encoding="utf-8"))
-                stored = raw.get(self.name, {}) if isinstance(raw, dict) else {}
-                if isinstance(stored, dict):
-                    digests = {
-                        k: v["raw"]
-                        for k, v in stored.items()
-                        if isinstance(v, dict) and isinstance(v.get("raw"), str)
-                    }
-            except FileNotFoundError:
-                pass
-            except (OSError, ValueError) as e:
-                logger.warning(f"Ignoring unreadable MCP tool-pin file {self._tool_pin_path}: {e}")
-        self._tool_digests = digests
-        return digests
+
+        from continuum.tools.pinning import load_pins
+
+        entries: dict[str, Any] = {}
+        last_seen = self._trust_config.last_seen_path
+        if last_seen is not None:
+            entries = load_pins(last_seen).get(self.name, {})
+        if not entries:
+            entries = self._load_approved()
+
+        self._tool_digests = {
+            name: entry["raw"]
+            for name, entry in entries.items()
+            if isinstance(entry, dict) and isinstance(entry.get("raw"), str)
+        }
+        return self._tool_digests
 
     def _save_tool_digests(self, digests: dict[str, str], tools: list[MCPTool]) -> None:
-        """Persist digests for this server, preserving other servers' entries.
+        """Record what the server just served, into the last-seen file only.
 
-        Writes both the raw and the effective (post-cleaning) digest, the shape
-        ``continuum mcp inspect --write-pins`` also writes -- see
-        ``_load_tool_digests`` for why they must agree.
+        Never touches the approved catalogue -- see :meth:`_load_approved`.
+
+        Failure to write is a log line, never an exception. A read-only
+        production filesystem should lose the drift *diagnostic* and keep the
+        *gate*, which reads the approved file and is unaffected.
         """
+        from continuum.tools.pinning import load_pins, save_pins, snapshot_tool_digests
+
         self._tool_digests = digests
-        entries = {
-            tool.name: {"raw": digests[tool.name], "effective": _tool_digest(_clean_tool(tool))}
-            for tool in tools
-            if tool.name in digests
-        }
-        if self._tool_pin_path is None:
+        path = self._trust_config.last_seen_path
+        if path is None:
             return
+
+        recorded = {
+            name: entry
+            for name, entry in snapshot_tool_digests(self.name, tools).items()
+            if name in digests
+        }
         try:
-            existing: dict[str, Any] = {}
-            try:
-                loaded = json.loads(self._tool_pin_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    existing = loaded
-            except (FileNotFoundError, ValueError):
-                pass
-            existing[self.name] = entries
-            self._tool_pin_path.parent.mkdir(parents=True, exist_ok=True)
-            self._tool_pin_path.write_text(
-                json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
-            )
+            existing = load_pins(path)
+            existing[self.name] = recorded
+            save_pins(path, existing)
         except OSError as e:
-            logger.warning(f"Could not write MCP tool-pin file {self._tool_pin_path}: {e}")
+            logger.warning(
+                f"Could not write MCP tool-record file {path}: {e}. Drift across process "
+                f"restarts will not be reported; enforcement is unaffected."
+            )
 
     def _check_tool_digests(self, tools: list[MCPTool]) -> None:
         """Report tools whose instructional surface changed since last seen.
@@ -569,6 +588,14 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
             if self.validate_on_connect:
                 await self.list_tools()
+        except MCPServerUnreviewedError:
+            # Deliberately ahead of the catch-all below. Nothing is wrong with
+            # the connection: the catalogue has not been reviewed, and the
+            # message names the command that fixes it. Rewrapping as
+            # MCPConnectionError would bury that in `original_error` and send
+            # the reader to debug the network instead.
+            await self.cleanup()
+            raise
         except (Exception, asyncio.CancelledError) as e:
             logger.error(f"Error initializing MCP server: {e}")
             await self.cleanup()
@@ -831,7 +858,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
-        tool_pin_path: str | Path | None = None,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the stdio transport.
 
@@ -864,7 +891,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
-            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+            trust_config: Tool-catalogue trust settings; see
                 _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
@@ -877,7 +904,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
-            tool_pin_path=tool_pin_path,
+            trust_config=trust_config,
         )
 
         self.params = StdioServerParameters(
@@ -949,7 +976,7 @@ class MCPServerSse(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
-        tool_pin_path: str | Path | None = None,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the HTTP with SSE transport.
 
@@ -984,7 +1011,7 @@ class MCPServerSse(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
-            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+            trust_config: Tool-catalogue trust settings; see
                 _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
@@ -997,7 +1024,7 @@ class MCPServerSse(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
-            tool_pin_path=tool_pin_path,
+            trust_config=trust_config,
         )
 
         self.params = params
@@ -1072,7 +1099,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
-        tool_pin_path: str | Path | None = None,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the Streamable HTTP transport.
 
@@ -1108,7 +1135,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls (e.g., capturing session_id).
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
-            tool_pin_path: Optional JSON file for persisting per-tool digests; see
+            trust_config: Tool-catalogue trust settings; see
                 _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
@@ -1121,7 +1148,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
-            tool_pin_path=tool_pin_path,
+            trust_config=trust_config,
         )
 
         self.params = params

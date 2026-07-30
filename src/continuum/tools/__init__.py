@@ -6,6 +6,7 @@ agent capabilities with external tools and resources.
 """
 
 try:
+    from .exceptions import MCPServerUnreviewedError
     from .executor import ToolExecutor
     from .mcp import (
         FunctionTool,
@@ -20,8 +21,11 @@ try:
         function_tool,
     )
     from .pinning import (
+        PIN_FORMAT_VERSION,
         create_tool_pinning_filter,
         format_tool_catalog,
+        load_pins,
+        save_pins,
         snapshot_tool_digests,
     )
     from .schema import (
@@ -31,6 +35,7 @@ try:
     from .types import (
         MCPToolArtifact,
         RunArtifacts,
+        ToolChangeEvent,
         ToolContextConfig,
         ToolContextState,
         ToolContextVariable,
@@ -38,6 +43,8 @@ try:
         ToolFilterCallable,
         ToolFilterContext,
         ToolFilterStatic,
+        ToolTrustConfig,
+        TrustAction,
         create_static_tool_filter,
     )
     from .util import MCPUtil
@@ -69,9 +76,16 @@ __all__ = [
     "ToolFilterContext",
     "ToolFilterStatic",
     "create_static_tool_filter",
-    # Tool pinning / review (F3)
+    # Tool trust: review, pinning, drift (F3)
+    "MCPServerUnreviewedError",
+    "PIN_FORMAT_VERSION",
+    "ToolChangeEvent",
+    "ToolTrustConfig",
+    "TrustAction",
     "create_tool_pinning_filter",
     "format_tool_catalog",
+    "load_pins",
+    "save_pins",
     "snapshot_tool_digests",
     # Tool context (session/state management)
     "ToolContextConfig",
