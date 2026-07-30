@@ -29,6 +29,7 @@ CLI command prints the catalogue and treats the pin file as a byproduct.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -162,6 +163,172 @@ def save_pins(path: str | Path, servers: dict[str, ServerPins]) -> None:
     payload = {"version": PIN_FORMAT_VERSION, "servers": servers}
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+@dataclass
+class ToolDiff:
+    """One tool's difference between the approved catalogue and a later one.
+
+    Carries the full entries, not just a verdict, because the point of the diff
+    is that a person reads the text and decides. ``approved`` is None for a tool
+    that appeared after review; ``current`` is None for one that vanished.
+    """
+
+    name: str
+    status: Literal["changed", "added", "removed"]
+    approved: PinEntry | None
+    current: PinEntry | None
+
+    @property
+    def hidden_char_delta(self) -> int:
+        """How many invisible characters this change adds.
+
+        Reported rather than silently cleaned: the live path strips them, but a
+        reviewer must be told the server sent hidden text. It is the single
+        strongest signal a server is hostile, and hiding it defeats the review.
+        """
+        after = self.current.get("description", "") if self.current else ""
+        before = self.approved.get("description", "") if self.approved else ""
+        return (len(after) - len(strip_hidden_chars(after))) - (
+            len(before) - len(strip_hidden_chars(before))
+        )
+
+
+def diff_catalogs(approved: ServerPins, current: ServerPins) -> list[ToolDiff]:
+    """Compare an approved catalogue against a later one.
+
+    Returns only the differences, sorted by tool name: a review should list
+    what needs deciding, not restate the whole catalogue. Sorted because
+    unstable ordering makes two runs of the same command look different.
+
+    Comparison is over the ``raw`` digest -- the bytes as the server sent them
+    -- so that adding or removing invisible characters cannot slip past.
+    """
+    names = sorted(set(approved) | set(current))
+    diffs: list[ToolDiff] = []
+    for name in names:
+        before, after = approved.get(name), current.get(name)
+        if before is None:
+            diffs.append(ToolDiff(name, "added", None, after))
+        elif after is None:
+            diffs.append(ToolDiff(name, "removed", before, None))
+        elif before.get("raw") != after.get("raw"):
+            diffs.append(ToolDiff(name, "changed", before, after))
+    return diffs
+
+
+def _gutter(marker: str, description: str | None) -> list[str]:
+    """Render a description with every line inside the +/- gutter.
+
+    Descriptions are multi-line, and a payload is typically appended on a new
+    one. Marking only the first line would leave the injected text flush-left,
+    where it reads as commentary about the diff rather than as part of the
+    description being added -- which is precisely the misreading that helps an
+    attacker.
+    """
+    text = description or "(no description)"
+    return [f"  {marker} {line}" for line in text.splitlines() or [""]]
+
+
+def format_catalog_diff(server_name: str, diffs: list[ToolDiff]) -> str:
+    """Render differences for a person to read and act on."""
+    if not diffs:
+        return f"Server '{server_name}': no differences from the approved catalogue."
+
+    out: list[str] = [
+        f"Server '{server_name}' — {len(diffs)} unreviewed difference(s)",
+        "",
+    ]
+    for diff in diffs:
+        out.append("─" * 72)
+        header = f"{diff.name}   [{diff.status}]"
+        if diff.hidden_char_delta > 0:
+            header += f"   *** {diff.hidden_char_delta} hidden character(s) added ***"
+        out.append(header)
+        out.append("")
+        if diff.approved is not None:
+            out.extend(_gutter("-", diff.approved.get("description")))
+        if diff.current is not None:
+            out.extend(_gutter("+", diff.current.get("description")))
+        if diff.approved is not None and diff.current is not None:
+            before = diff.approved.get("inputSchema")
+            after = diff.current.get("inputSchema")
+            if before != after:
+                out.append("")
+                out.append(f"  - schema: {json.dumps(before, sort_keys=True)}")
+                out.append(f"  + schema: {json.dumps(after, sort_keys=True)}")
+
+    out.append("─" * 72)
+    out.append("")
+    # A report of a problem carries its own remedy: without the command, the
+    # reader knows something is wrong and not what to do about it.
+    out.append("Approve the changes you have read and accept:")
+    out.append(f"  continuum mcp approve {server_name} --tool NAME")
+    out.append(f"  continuum mcp approve {server_name} --all")
+    return "\n".join(out)
+
+
+def approve_tools(
+    pin_path: str | Path,
+    server_name: str,
+    current: ServerPins,
+    *,
+    tools: list[str] | None = None,
+) -> list[str]:
+    """Merge selected entries of ``current`` into the approved catalogue.
+
+    Merge, never replace. Replacing a server's whole entry is what made
+    approval all-or-nothing: with one benign typo fix and one injection, you had
+    to either bless the injection to recover the typo fix or lose the unrelated
+    tool for good. Enforcement was already per-tool; this makes approval match.
+
+    Args:
+        pin_path: the approved catalogue. Created if absent.
+        server_name: which server's entry to update; others are left alone.
+        current: the catalogue being approved *from* -- usually the runtime's
+            last-seen record, i.e. the text that was just shown in a diff.
+        tools: names to approve. ``None`` approves the whole of ``current``.
+            A name absent from ``current`` but present in the approved
+            catalogue is a removal, and approving it drops the entry.
+
+    Returns:
+        The names acted on, sorted.
+
+    Raises:
+        ValueError: on an empty selection, or a name in neither catalogue --
+            approving nothing while reporting success would let a typo'd tool
+            name read as "approved".
+    """
+    existing = load_pins(pin_path)
+    approved = dict(existing.get(server_name, {}))
+
+    if tools is None:
+        selected = sorted(set(current) | set(approved))
+    else:
+        selected = sorted(set(tools))
+        if not selected:
+            raise ValueError(
+                "approve_tools() received an empty tool selection. Pass tools=None to "
+                "approve the whole catalogue."
+            )
+        unknown = [t for t in selected if t not in current and t not in approved]
+        if unknown:
+            raise ValueError(
+                f"No such tool(s) on server {server_name!r}: {unknown}. "
+                f"Check for a typo -- approving a name that does not exist would "
+                f"report success and change nothing. "
+                f"Known: {sorted(set(current) | set(approved))}"
+            )
+
+    for name in selected:
+        if name in current:
+            approved[name] = current[name]
+        else:
+            approved.pop(name, None)
+
+    existing[server_name] = approved
+    save_pins(pin_path, existing)
+    return selected
 
 
 def _format_schema_descriptions(node: Any, path: str = "") -> list[str]:

@@ -22,7 +22,11 @@ try:
     )
     from .pinning import (
         PIN_FORMAT_VERSION,
+        ToolDiff,
+        approve_tools,
         create_tool_pinning_filter,
+        diff_catalogs,
+        format_catalog_diff,
         format_tool_catalog,
         load_pins,
         save_pins,
@@ -82,7 +86,11 @@ __all__ = [
     "ToolChangeEvent",
     "ToolTrustConfig",
     "TrustAction",
+    "ToolDiff",
+    "approve_tools",
     "create_tool_pinning_filter",
+    "diff_catalogs",
+    "format_catalog_diff",
     "format_tool_catalog",
     "load_pins",
     "save_pins",

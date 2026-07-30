@@ -43,6 +43,10 @@ PROJECT_NAME = "continuum"
 # every profile to avoid orphaning minimal/standard containers.
 _LIFECYCLE_ALL_PROFILES = {"down", "ps", "logs"}
 
+# Conventional name for the approved MCP tool catalogue, so `mcp diff` and
+# `mcp approve` need no flag in the common case.
+DEFAULT_PIN_FILE = "tool-pins.json"
+
 MANAGED_BEGIN = "# >>> continuum managed >>>"
 MANAGED_END = "# <<< continuum managed <<<"
 
@@ -402,6 +406,93 @@ def _cmd_mcp_inspect(args: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+# --- offline review of a recorded catalogue --------------------------------
+#
+# Both commands below work from files alone, never a live server. The runtime
+# already recorded what it was served; asking the server again would mean
+# reviewing whatever it happens to say now rather than the text the diff
+# showed, and would make review impossible from a machine that cannot reach it.
+
+
+def _read_catalogues(args: argparse.Namespace) -> tuple[Path, dict, dict]:
+    """Return (pin path, approved entries, last-seen entries) for one server."""
+    from continuum.tools.pinning import load_pins
+    from continuum.tools.types import ToolTrustConfig
+
+    pin_path = Path(args.pins)
+    last_seen_path = ToolTrustConfig(pin_path=pin_path).last_seen_path
+    assert last_seen_path is not None  # pin_path is not None, so neither is this
+    return (
+        pin_path,
+        load_pins(pin_path).get(args.server, {}),
+        load_pins(last_seen_path).get(args.server, {}),
+    )
+
+
+def _cmd_mcp_diff(args: argparse.Namespace) -> int:
+    """Show what changed since the catalogue was approved.
+
+    Exits non-zero when differences remain, so it works as a CI gate the same
+    way `npm ci` fails on a stale lockfile.
+    """
+    from continuum.tools.pinning import diff_catalogs, format_catalog_diff
+
+    _, approved, last_seen = _read_catalogues(args)
+
+    if not last_seen:
+        # Distinct from "no differences": nothing has run against this server
+        # yet, so there is nothing to compare. Reporting it as clean would be a
+        # false all-clear.
+        print(
+            f"Server '{args.server}' has not been observed yet — run the agent once, "
+            f"then re-run this command to see what it served."
+        )
+        return 0
+
+    diffs = diff_catalogs(approved, last_seen)
+    print(format_catalog_diff(args.server, diffs))
+    return 1 if diffs else 0
+
+
+def _cmd_mcp_approve(args: argparse.Namespace) -> int:
+    """Promote reviewed entries from the last-seen record into the approved file."""
+    from continuum.tools.pinning import approve_tools
+
+    if not args.tool and not args.all:
+        # Defaulting to --all would make the dangerous option the one you get
+        # by not thinking about it.
+        print(
+            "Specify what to approve: --tool NAME (repeatable) or --all. "
+            "Run `continuum mcp diff` first to see the differences.",
+            file=sys.stderr,
+        )
+        return 2
+
+    pin_path, _, last_seen = _read_catalogues(args)
+    if not last_seen:
+        # Approving from an absent record would write an empty catalogue, which
+        # under on_unreviewed="block" silently blocks every tool on the server
+        # and reads as "the server is broken".
+        print(
+            f"No record of server '{args.server}' — nothing to approve. Run the agent "
+            f"once so its catalogue is observed, or use "
+            f"`continuum mcp inspect URL --name {args.server} --write-pins {pin_path}`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        approved = approve_tools(
+            pin_path, args.server, last_seen, tools=args.tool if args.tool else None
+        )
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(f"Approved {len(approved)} tool(s) for '{args.server}' in {pin_path}: {approved}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="continuum",
@@ -456,11 +547,59 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-pins",
         metavar="PATH",
         help=(
-            "After printing, record each tool's digest to PATH. Pass the same path as "
-            "tool_pin_path= to the MCPServer to have later changes reported."
+            "After printing, record the reviewed catalogue to PATH. Pass the same path "
+            "as ToolTrustConfig(pin_path=...) to the MCPServer to have later changes "
+            "reported."
         ),
     )
     inspect_cmd.set_defaults(func=_cmd_mcp_inspect)
+
+    diff_cmd = mcp_sub.add_parser(
+        "diff",
+        help="Show how a server's tools changed since you approved them.",
+        description=(
+            "Compare the approved catalogue against what the server last served. "
+            "Works from files alone -- no connection needed -- so what you review is "
+            "the text the agent actually saw. Exits non-zero while differences remain, "
+            "so it can gate CI."
+        ),
+    )
+    diff_cmd.add_argument("server", help="Server name, as passed to MCPServer(name=...).")
+    diff_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    diff_cmd.set_defaults(func=_cmd_mcp_diff)
+
+    approve_cmd = mcp_sub.add_parser(
+        "approve",
+        help="Accept reviewed changes into the approved catalogue.",
+        description=(
+            "Promote entries from the server's last-seen record into the approved "
+            "catalogue. Per tool, so one benign change can be accepted without also "
+            "approving an unrelated one you have not accepted. Run `mcp diff` first."
+        ),
+    )
+    approve_cmd.add_argument("server", help="Server name, as passed to MCPServer(name=...).")
+    approve_cmd.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Approve this tool. Repeatable.",
+    )
+    approve_cmd.add_argument(
+        "--all", action="store_true", help="Approve every difference for this server."
+    )
+    approve_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    approve_cmd.set_defaults(func=_cmd_mcp_approve)
 
     return parser
 
