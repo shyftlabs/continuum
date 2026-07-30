@@ -33,6 +33,7 @@ from mcp.types import (
     ListPromptsResult,
     Resource,
     TextContent,
+    ToolListChangedNotification,
 )
 from typing_extensions import TypedDict
 
@@ -42,6 +43,7 @@ from continuum.logging import get_logger
 from continuum.tools.exceptions import MCPConnectionError, MCPError, MCPServerUnreviewedError
 from continuum.tools.types import (
     HttpClientFactory,
+    ToolChangeEvent,
     ToolContextConfig,
     ToolFilter,
     ToolFilterContext,
@@ -311,12 +313,14 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # Tool-digest baseline (F3 rug-pull detection). None path => memory only.
         self._trust_config: ToolTrustConfig = trust_config or ToolTrustConfig()
         self._tool_digests: dict[str, str] | None = None
+        self._previous_entries: dict[str, Any] = {}
         self._warned_inert_policy: bool = False
 
         self.client_session_timeout_seconds = client_session_timeout_seconds
         self.max_retry_attempts = max_retry_attempts
         self.retry_backoff_seconds_base = retry_backoff_seconds_base
-        self.message_handler = message_handler
+        self._caller_message_handler = message_handler
+        self.message_handler = self._handle_session_message
 
         # The cache is always dirty at startup, so that we fetch tools at least once
         self._cache_dirty = True
@@ -401,6 +405,33 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
     # --- tool-digest drift detection (F3) ------------------------------------
 
+    async def _handle_session_message(self, message: Any) -> None:
+        """Watch for ``notifications/tools/list_changed``, then defer to the caller.
+
+        Closes the ``cache_tools_list=True`` blind spot. The digest check runs
+        only on the fetch branch of ``list_tools()``, so with caching on the
+        catalogue is read once at connect and a mid-session swap is served from
+        that copy for the life of the process. MCP has a notification for
+        exactly this; nothing was listening to it.
+
+        Ours runs *first* and unconditionally: a caller's handler raising must
+        not silently disable cache invalidation, or a server could keep its
+        swap hidden by provoking an exception in someone else's code.
+        """
+        try:
+            notification = getattr(message, "root", None)
+            if isinstance(notification, ToolListChangedNotification):
+                logger.info(
+                    f"MCP server '{self.name}' announced a tool-list change; "
+                    f"the catalogue will be re-fetched and re-checked."
+                )
+                self._cache_dirty = True
+        except Exception as e:  # noqa: BLE001 - never let bookkeeping break the session
+            logger.warning(f"Could not inspect MCP session message from '{self.name}': {e}")
+
+        if self._caller_message_handler is not None:
+            await self._caller_message_handler(message)
+
     @property
     def trust_config(self) -> ToolTrustConfig:
         """This server's tool-catalogue trust settings (never None)."""
@@ -450,6 +481,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         if not entries:
             entries = self._load_approved()
 
+        # Kept whole, not just as digests: rename detection needs the previous
+        # inputSchema to recognise that a removed tool and an added one are the
+        # same tool under a new name.
+        self._previous_entries = entries
         self._tool_digests = {
             name: entry["raw"]
             for name, entry in entries.items()
@@ -469,15 +504,18 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         from continuum.tools.pinning import load_pins, save_pins, snapshot_tool_digests
 
         self._tool_digests = digests
-        path = self._trust_config.last_seen_path
-        if path is None:
-            return
-
         recorded = {
             name: entry
             for name, entry in snapshot_tool_digests(self.name, tools).items()
             if name in digests
         }
+        # In-memory too, so rename detection works across fetches within one
+        # process even when no pin path is configured.
+        self._previous_entries = recorded
+
+        path = self._trust_config.last_seen_path
+        if path is None:
+            return
         try:
             existing = load_pins(path)
             existing[self.name] = recorded
@@ -488,46 +526,126 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"restarts will not be reported; enforcement is unaffected."
             )
 
-    def _check_tool_digests(self, tools: list[MCPTool]) -> None:
+    def _detect_renames(
+        self, added: list[str], removed: list[str], tools: list[MCPTool]
+    ) -> list[tuple[str, str]]:
+        """Pair each removed tool with an added one of identical schema shape.
+
+        Comparison elsewhere is keyed by tool name, so delete-and-re-add routes
+        around the drift alarm completely: editing ``send_referral_email`` in
+        place is a WARNING, while replacing it with a poisoned ``send_email``
+        is two INFO lines that read like a developer tidying up. Same outcome
+        for an attacker, no alarm.
+
+        Evidence that two tools are the same one renamed, either of:
+
+        * an identical **non-trivial** schema -- unrelated tools rarely share an
+          exact parameter set. Trivial schemas do not count: a great many tools
+          take no arguments, so "both have no parameters" would make every
+          no-argument tool removed plus any no-argument tool added look like a
+          rename, and a warning that fires on ordinary churn is one nobody
+          reads;
+        * the new description beginning with the whole of the old one, i.e.
+          text was appended. That is the shape of the attack -- keep the
+          plausible description, add the instruction -- and it covers the
+          no-argument tools the schema rule deliberately skips.
+
+        Matching on description *equality* would be useless here: changing the
+        description is the entire point of the manoeuvre.
+        """
+        if not (added and removed):
+            return []
+        previous = self._previous_entries
+        by_name = {tool.name: tool for tool in tools}
+
+        def _shape(schema: Any) -> str:
+            return json.dumps(schema or {}, sort_keys=True)
+
+        def _has_properties(schema: Any) -> bool:
+            return bool(isinstance(schema, dict) and schema.get("properties"))
+
+        unclaimed = list(added)
+        pairs: list[tuple[str, str]] = []
+        for gone in removed:
+            entry = previous.get(gone)
+            if not isinstance(entry, dict):
+                continue
+            old_schema = entry.get("inputSchema")
+            old_description = entry.get("description") or ""
+
+            for candidate in unclaimed:
+                tool = by_name.get(candidate)
+                if tool is None:
+                    continue
+                same_real_schema = _shape(tool.inputSchema) == _shape(old_schema) and (
+                    _has_properties(old_schema)
+                )
+                appended = bool(old_description) and (tool.description or "").startswith(
+                    old_description
+                )
+                if same_real_schema or appended:
+                    unclaimed.remove(candidate)
+                    pairs.append((gone, candidate))
+                    break
+        return pairs
+
+    def _check_tool_digests(self, tools: list[MCPTool]) -> ToolChangeEvent:
         """Report tools whose instructional surface changed since last seen.
 
-        Tripwire semantics -- warn on *change*, then re-pin. Comparing forever
-        against the original would re-warn on every fetch once a description is
-        legitimately updated, and a warning that always fires is a warning nobody
-        reads.
+        Tripwire semantics -- warn on *change*, then re-record. Comparing
+        forever against the original would re-warn on every fetch once a
+        description is legitimately updated, and a warning that always fires is
+        a warning nobody reads. Persistent reporting of an *unresolved* state is
+        the trust policy's job, against the approved catalogue.
 
         Added and removed tools are logged at INFO, not WARNING: a catalogue
         growing or shrinking is ordinary. A tool that stayed but changed its
-        description is the rug-pull signal.
+        description is the rug-pull signal -- and so is a rename, which is why
+        add+remove of the same schema shape is escalated.
         """
         previous = self._load_tool_digests()
         current = {tool.name: _tool_digest(tool) for tool in tools}
+        event = ToolChangeEvent(server_name=self.name)
 
         if not previous:
             self._save_tool_digests(current, tools)
-            return
+            return event
 
-        changed = [name for name, d in current.items() if name in previous and previous[name] != d]
-        added = sorted(set(current) - set(previous))
-        removed = sorted(set(previous) - set(current))
+        event.changed = sorted(
+            name for name, d in current.items() if name in previous and previous[name] != d
+        )
+        event.added = sorted(set(current) - set(previous))
+        event.removed = sorted(set(previous) - set(current))
+        renames = self._detect_renames(event.added, event.removed, tools)
 
-        if changed:
+        if event.changed:
             logger.warning(
                 f"MCP server '{self.name}' changed the description or schema of "
-                f"{sorted(changed)} since they were last seen. If you did not update "
+                f"{event.changed} since they were last seen. If you did not update "
                 f"this server, treat it as untrusted: a tool description reaches the "
-                f"model's prompt verbatim and can instruct it. Re-pinning to the new "
-                f"values (drift from the recorded catalogue, NOT a verification)."
+                f"model's prompt verbatim and can instruct it. Re-recording the new "
+                f"values (drift from what was last served, NOT a verification)."
             )
-        if added or removed:
+        if renames:
+            logger.warning(
+                f"MCP server '{self.name}' appears to have RENAMED "
+                f"{[f'{old} -> {new}' for old, new in renames]}: each pair has an "
+                f"identical schema but a different name, so the description change "
+                f"rides in as an add plus a remove rather than as an edit. Treat it "
+                f"as untrusted unless you renamed these yourself."
+            )
+        if event.added or event.removed:
             logger.info(
                 f"MCP server '{self.name}' tool catalogue changed shape: "
-                f"added={added} removed={removed}"
+                f"added={event.added} removed={event.removed}"
             )
 
         self._save_tool_digests(current, tools)
+        return event
 
-    def _apply_trust_policy(self, tools: list[MCPTool]) -> list[MCPTool]:
+    def _apply_trust_policy(
+        self, tools: list[MCPTool], event: ToolChangeEvent | None = None
+    ) -> list[MCPTool]:
         """Enforce ``on_unreviewed`` / ``on_drift`` against the approved catalogue.
 
         Runs on already-cleaned tools and compares the ``effective`` digest --
@@ -585,6 +703,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # until a human runs `mcp approve`, and only that clears it. The old
         # tripwire warned once and then overwrote its own baseline, so the
         # system fell silent while the difference was still unresolved.
+        if event is not None:
+            event.unreviewed = sorted(unreviewed)
         if unreviewed and cfg.on_unreviewed != "allow":
             logger.warning(
                 f"MCP server '{self.name}': {sorted(unreviewed)} "
@@ -602,6 +722,40 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"Review with `continuum mcp diff {self.name}`."
             )
         return kept
+
+    def _report_tool_change(self, event: ToolChangeEvent) -> None:
+        """Publish a catalogue change as a metric and an in-process event.
+
+        Logging alone means the only possible reaction is a human watching a
+        terminal at the moment the line scrolls past -- you cannot page oncall,
+        render a banner, or fail a CI run on it. Metrics go through the existing
+        collector rather than a bespoke channel, so drift is already scrapeable
+        by whatever the deployment exports to.
+        """
+        if not event:
+            return
+
+        try:
+            from continuum.observability.metrics import get_metrics_collector
+
+            metrics = get_metrics_collector()
+            for field_name in ("changed", "added", "removed", "unreviewed"):
+                count = len(getattr(event, field_name))
+                if count:
+                    metrics.increment(f"mcp.tool_catalog.{field_name}", count)
+        except Exception as e:  # noqa: BLE001 - reporting must not break a fetch
+            logger.debug(f"Could not record MCP tool-catalogue metrics: {e}")
+
+        callback = self._trust_config.on_change
+        if callback is None:
+            return
+        try:
+            callback(event)
+        except Exception as e:  # noqa: BLE001 - an application's hook is not ours to trust
+            logger.warning(
+                f"on_change callback for MCP server '{self.name}' raised {e!r}. The "
+                f"catalogue change was still applied; fix the callback."
+            )
 
     def _handle_unreviewed_server(self, tools: list[MCPTool], action: str) -> list[MCPTool]:
         """React to a server with no approved catalogue at all.
@@ -735,12 +889,15 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             #
             # Digest BEFORE cleaning: hashing the stripped text would let an
             # attacker add or remove invisible characters without tripping it.
-            self._check_tool_digests(result.tools)
+            event = self._check_tool_digests(result.tools)
             # Enforcement after cleaning, so the gate compares the text the
             # model will read, and before the cache, so a dropped tool is not
             # served from it on later calls.
-            self._tools_list = self._apply_trust_policy([_clean_tool(t) for t in result.tools])
+            self._tools_list = self._apply_trust_policy(
+                [_clean_tool(t) for t in result.tools], event
+            )
             self._cache_dirty = False
+            self._report_tool_change(event)
             tools = self._tools_list
 
         # Filter tools based on tool_filter
