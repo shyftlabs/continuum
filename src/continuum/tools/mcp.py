@@ -311,6 +311,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # Tool-digest baseline (F3 rug-pull detection). None path => memory only.
         self._trust_config: ToolTrustConfig = trust_config or ToolTrustConfig()
         self._tool_digests: dict[str, str] | None = None
+        self._warned_inert_policy: bool = False
 
         self.client_session_timeout_seconds = client_session_timeout_seconds
         self.max_retry_attempts = max_retry_attempts
@@ -526,6 +527,108 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
         self._save_tool_digests(current, tools)
 
+    def _apply_trust_policy(self, tools: list[MCPTool]) -> list[MCPTool]:
+        """Enforce ``on_unreviewed`` / ``on_drift`` against the approved catalogue.
+
+        Runs on already-cleaned tools and compares the ``effective`` digest --
+        the text the model will actually read. A description whose only change
+        is invisible characters therefore passes here: those never reach the
+        prompt, and reporting them is the raw-byte tripwire's job.
+
+        Enforcement needs somewhere for an approval to live. With no
+        ``pin_path`` there is no approved catalogue by construction, so nothing
+        is enforceable and this degrades to the memory-only tripwire -- without
+        that carve-out the default config (``pin_path=None``,
+        ``on_unreviewed="block"``) would refuse every server on first use.
+        """
+        cfg = self._trust_config
+        if cfg.pin_path is None:
+            if (
+                cfg.on_unreviewed == "block"
+                and cfg.requested_enforcement
+                and not self._warned_inert_policy
+            ):
+                # Only when the caller *asked* for blocking. Reaching the same
+                # combination by inheriting both defaults just means pinning is
+                # not in use, and warning about that would scold every user who
+                # never opted in, about something they did not choose.
+                self._warned_inert_policy = True
+                logger.warning(
+                    f"MCP server '{self.name}' has on_unreviewed='block' but no "
+                    f"pin_path, so there is nowhere to record an approval and nothing "
+                    f"is enforced. Set ToolTrustConfig(pin_path=...) and approve the "
+                    f"catalogue with `continuum mcp inspect`."
+                )
+            return tools
+
+        approved = self._load_approved()
+        if not approved:
+            return self._handle_unreviewed_server(tools, cfg.on_unreviewed)
+
+        kept: list[MCPTool] = []
+        unreviewed: list[str] = []
+        drifted: list[str] = []
+        for tool in tools:
+            entry = approved.get(tool.name)
+            if entry is None:
+                unreviewed.append(tool.name)
+                if cfg.on_unreviewed != "block":
+                    kept.append(tool)
+            elif _tool_digest(tool) != entry.get("effective"):
+                drifted.append(tool.name)
+                if cfg.on_drift != "block":
+                    kept.append(tool)
+            else:
+                kept.append(tool)
+
+        # Reported on every fetch, not once: this is a *state* -- it stays true
+        # until a human runs `mcp approve`, and only that clears it. The old
+        # tripwire warned once and then overwrote its own baseline, so the
+        # system fell silent while the difference was still unresolved.
+        if unreviewed and cfg.on_unreviewed != "allow":
+            logger.warning(
+                f"MCP server '{self.name}': {sorted(unreviewed)} "
+                f"{'were dropped -- they are' if cfg.on_unreviewed == 'block' else 'are'} "
+                f"not in the approved catalogue. Review with "
+                f"`continuum mcp diff {self.name}`."
+            )
+        if drifted and cfg.on_drift != "allow":
+            logger.warning(
+                f"MCP server '{self.name}': {sorted(drifted)} no longer match the "
+                f"approved description or schema"
+                f"{' and were dropped' if cfg.on_drift == 'block' else ''}. A tool "
+                f"description reaches the model's prompt verbatim and can instruct "
+                f"it; if you did not change this server, treat it as untrusted. "
+                f"Review with `continuum mcp diff {self.name}`."
+            )
+        return kept
+
+    def _handle_unreviewed_server(self, tools: list[MCPTool], action: str) -> list[MCPTool]:
+        """React to a server with no approved catalogue at all.
+
+        Blocking is the default here, unlike drift, because this case has no
+        false positives -- every occurrence really is unreviewed -- and because
+        it is the one case pinning cannot defend on its own. Pin a server that
+        was hostile from first contact and you have pinned the poison; a person
+        reading the descriptions is the only thing that catches it, so making
+        that step optional would leave the weakest case undefended.
+        """
+        if action == "allow":
+            return tools
+        message = (
+            f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
+            f"catalogue. Tool descriptions reach the model's prompt verbatim and can "
+            f"instruct it. Review them, then approve:\n\n"
+            f"  continuum mcp inspect URL --name {self.name} "
+            f"--write-pins {self._trust_config.pin_path}\n\n"
+            f"Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
+            f"servers (not recommended)."
+        )
+        if action == "warn":
+            logger.warning(message)
+            return tools
+        raise MCPServerUnreviewedError(message, server_name=self.name)
+
     @abc.abstractmethod
     def create_streams(
         self,
@@ -633,7 +736,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # Digest BEFORE cleaning: hashing the stripped text would let an
             # attacker add or remove invisible characters without tripping it.
             self._check_tool_digests(result.tools)
-            self._tools_list = [_clean_tool(t) for t in result.tools]
+            # Enforcement after cleaning, so the gate compares the text the
+            # model will read, and before the cache, so a dropped tool is not
+            # served from it on later calls.
+            self._tools_list = self._apply_trust_policy([_clean_tool(t) for t in result.tools])
             self._cache_dirty = False
             tools = self._tools_list
 

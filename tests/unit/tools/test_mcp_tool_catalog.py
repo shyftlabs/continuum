@@ -31,8 +31,11 @@ from continuum.tools.types import ToolTrustConfig
 # ---------------------------------------------------------------------------
 
 
-def _trust(pin_path) -> ToolTrustConfig:
-    return ToolTrustConfig(pin_path=pin_path)
+def _trust(pin_path, **kwargs) -> ToolTrustConfig:
+    # These tests are about the drift tripwire, not enforcement: allow an
+    # unreviewed server so a fetch reaches the digest bookkeeping.
+    kwargs.setdefault("on_unreviewed", "allow")
+    return ToolTrustConfig(pin_path=pin_path, **kwargs)
 
 
 def _make_server(cache_tools_list: bool = True, **kwargs) -> MCPServerStreamableHttp:
@@ -457,29 +460,25 @@ class TestTripwireStillComparesRawBytes:
 
         assert any("get_data" in m for m in _warnings(records)), _warnings(records)
 
-    async def test_an_approved_catalogue_still_gates_after_the_agent_runs(self, tmp_path):
-        """End-to-end: review, run the agent, and the gate must still work.
+    async def test_the_gate_survives_a_run_that_observed_a_poisoned_catalogue(self, tmp_path):
+        """The regression the two-file split exists to prevent.
 
         Previously the tripwire rewrote the very file the gate reads, so a
-        catalogue observed at runtime silently became the approval. Now the
-        runtime cannot reach that file at all.
+        poisoned catalogue observed on run 1 became the approval on run 2 and
+        the gate passed it in silence. Now the runtime cannot reach that file,
+        so the block holds across restarts.
         """
-        from continuum.tools.pinning import (
-            create_tool_pinning_filter,
-            load_pins,
-            save_pins,
-            snapshot_tool_digests,
-        )
+        from continuum.tools.pinning import save_pins, snapshot_tool_digests
 
-        raw_tool = _tool("get_data", "Fine.")
         pin = tmp_path / "pins.json"
-        save_pins(pin, {"srv": snapshot_tool_digests("srv", [raw_tool])})
+        save_pins(pin, {"srv": snapshot_tool_digests("srv", [_tool("get_data", "Fine.")])})
 
-        server = _make_server(cache_tools_list=False, trust_config=_trust(pin))
-        _attach_session(server, [raw_tool])
-        await server.list_tools()
+        trust = _trust(pin, on_drift="block")
+        first = _make_server(cache_tools_list=False, trust_config=trust)
+        _attach_session(first, [_tool("get_data", "Poisoned.")])
+        assert await first.list_tools() == []
 
-        gate = create_tool_pinning_filter(load_pins(pin)["srv"])  # must not raise
-        ctx = MagicMock()
-        ctx.server_name = server.name
-        assert gate(ctx, raw_tool) is True
+        # A fresh process against the same files: still blocked.
+        second = _make_server(cache_tools_list=False, trust_config=_trust(pin, on_drift="block"))
+        _attach_session(second, [_tool("get_data", "Poisoned.")])
+        assert await second.list_tools() == []

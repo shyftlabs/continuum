@@ -16,9 +16,18 @@ So:
 
   * :func:`format_tool_catalog` renders a catalogue for a person to read;
   * :func:`snapshot_tool_digests` captures what was reviewed;
-  * :func:`create_tool_pinning_filter` turns that snapshot into a
-    :data:`~continuum.tools.types.ToolFilter` that drops anything which no longer
-    matches.
+  * :func:`load_pins` / :func:`save_pins` persist it in a versioned file that
+    only a human command writes;
+  * :func:`diff_catalogs` and :func:`format_catalog_diff` show what changed
+    since;
+  * :func:`approve_tools` promotes reviewed entries, one tool at a time.
+
+Enforcement is not here: it belongs to the server, via
+:class:`~continuum.tools.types.ToolTrustConfig`'s ``on_unreviewed`` and
+``on_drift``. A standalone filter used to do that job, but it had to be paired
+with no pin path or the drift tripwire would rewrite the file the filter read --
+silently promoting an attacker's catalogue to "approved" one restart later.
+Folding it into the server removes the way to misconfigure it.
 
 Note the intended order: review first, pin second. A helper that produced pins
 without showing you the contents would make *pin-without-reading* the one-liner
@@ -41,7 +50,6 @@ from continuum.tools.util import build_namespaced_tool_name
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
-    from continuum.tools.types import ToolFilterCallable, ToolFilterContext
 
 logger = get_logger(__name__)
 
@@ -414,80 +422,3 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
     return "\n".join(out)
 
 
-def create_tool_pinning_filter(
-    approved: dict[str, dict[str, str]],
-    *,
-    on_unknown: Literal["block", "allow"] = "block",
-) -> ToolFilterCallable:
-    """Build a :data:`ToolFilter` that admits only tools matching ``approved``.
-
-    Unlike the warn-and-re-pin tripwire in ``list_tools()``, this *blocks*: a
-    tool whose description or schema drifted never reaches the model. Use it when
-    you would rather an agent lose a tool than act on text you did not review.
-
-    Compares the ``effective`` digest -- the catalogue *after* invisible
-    characters are stripped, which is what ``list_tools()`` hands a
-    ``tool_filter`` and what the model will read. So a description whose only
-    change is hidden characters still passes here: those never reach the model,
-    and reporting them is the drift tripwire's job, not this gate's.
-
-    Args:
-        approved: ``name -> {"raw": ..., "effective": ...}``, from
-            :func:`snapshot_tool_digests` or a pin file written by
-            ``continuum mcp inspect --write-pins``.
-        on_unknown: what to do with a tool absent from ``approved``. Defaults to
-            ``"block"``: a tool that appeared after review was never approved, and
-            the point of pinning is that only reviewed tools reach the model.
-
-    Raises:
-        ValueError: if ``approved`` is empty (that would drop every tool, almost
-            certainly an unpopulated pin file rather than an intended total
-            block), or if it holds bare digest strings from the single-digest pin
-            format -- those carry no indication of which digest space they are in,
-            and guessing would either drop every tool or admit a changed one.
-    """
-    if not approved:
-        raise ValueError(
-            "create_tool_pinning_filter() received an empty approval map, which would "
-            "drop every tool. Pass digests from snapshot_tool_digests(), or use "
-            "create_static_tool_filter(allowed_tool_names=[]) if a total block is intended."
-        )
-
-    effective: dict[str, str] = {}
-    for name, entry in approved.items():
-        if isinstance(entry, str):
-            raise ValueError(
-                f"Pin for {name!r} is a bare digest string from the old single-digest "
-                f"format, which does not record whether it covers the raw or the "
-                f"cleaned catalogue. Re-pin: "
-                f"`continuum mcp inspect URL --name SERVER --write-pins PATH`."
-            )
-        if not isinstance(entry, dict) or "effective" not in entry:
-            raise ValueError(
-                f"Pin for {name!r} is malformed (expected a mapping with an "
-                f"'effective' key, got {entry!r}). Re-pin with "
-                f"`continuum mcp inspect --write-pins PATH`."
-            )
-        effective[name] = entry["effective"]
-
-    def _pinned(context: ToolFilterContext, tool: MCPTool) -> bool:
-        expected = effective.get(tool.name)
-        if expected is None:
-            if on_unknown == "allow":
-                return True
-            logger.warning(
-                f"Tool '{tool.name}' on server '{context.server_name}' is not in the "
-                f"approved set — dropping. Re-run `continuum mcp inspect` to review "
-                f"and re-pin if this addition is expected."
-            )
-            return False
-        if _tool_digest(tool) != expected:
-            logger.warning(
-                f"Tool '{tool.name}' on server '{context.server_name}' no longer matches "
-                f"its approved description/schema — dropping. If you did not change this "
-                f"server, treat it as untrusted."
-            )
-            return False
-        return True
-
-    return _pinned

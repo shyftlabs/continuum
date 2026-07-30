@@ -378,6 +378,16 @@ class ToolContextConfig:
 TrustAction = Literal["block", "warn", "allow"]
 """What to do about a tool catalogue that was never approved, or that changed."""
 
+_FROM_SETTINGS: Any = object()
+"""Sentinel: this field was not passed, so resolve it from global Settings.
+
+Distinguishing "the user asked for this" from "this is what the default
+happened to be" matters for exactly one warning -- requesting ``block`` while
+leaving ``pin_path`` unset is a mistake worth reporting, but the same
+combination reached by inheriting both defaults is just "pinning not in use",
+and scolding every user who never opted in would be noise they cannot act on.
+"""
+
 
 @dataclass
 class ToolChangeEvent:
@@ -435,15 +445,18 @@ class ToolTrustConfig:
     on the next restart.
     """
 
-    on_unreviewed: TrustAction = field(default_factory=lambda: _settings().mcp_on_unreviewed)
+    on_unreviewed: TrustAction = _FROM_SETTINGS  # type: ignore[assignment]
     """What to do about a server, or a tool, with no approved entry.
 
     Defaults to ``"block"`` (see ``Settings.mcp_on_unreviewed``): pinning cannot
     detect a catalogue that was poisoned before you ever saw it, so human review
     is the only defence that case has, and an optional defence is no defence.
+
+    Only applies when :attr:`pin_path` is set -- without one there is nowhere
+    for an approval to live, so there is nothing to enforce.
     """
 
-    on_drift: TrustAction = field(default_factory=lambda: _settings().mcp_on_drift)
+    on_drift: TrustAction = _FROM_SETTINGS  # type: ignore[assignment]
     """What to do about an approved tool whose description or schema changed.
 
     Defaults to ``"warn"``: benign drift (a typo fix, a clarified parameter)
@@ -454,6 +467,15 @@ class ToolTrustConfig:
 
     on_change: "Callable[[ToolChangeEvent], None] | None" = None
     """Optional in-process hook, called whenever a fetch observes a change."""
+
+    def __post_init__(self) -> None:
+        self.requested_enforcement = self.on_unreviewed is not _FROM_SETTINGS
+        """True if the caller passed on_unreviewed explicitly, rather than
+        inheriting it. Lets the server tell a misconfiguration from a default."""
+        if self.on_unreviewed is _FROM_SETTINGS:
+            self.on_unreviewed = _settings().mcp_on_unreviewed
+        if self.on_drift is _FROM_SETTINGS:
+            self.on_drift = _settings().mcp_on_drift
 
     @property
     def last_seen_path(self) -> Path | None:

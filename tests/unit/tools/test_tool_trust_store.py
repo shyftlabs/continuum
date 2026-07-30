@@ -47,7 +47,11 @@ def _tool(name: str, description: str, schema: dict | None = None) -> Tool:
 def _make_server(pin_path: str | Path | None = None, **kwargs) -> MCPServerStreamableHttp:
     trust = kwargs.pop("trust_config", None)
     if trust is None and pin_path is not None:
-        trust = ToolTrustConfig(pin_path=pin_path)
+        # on_unreviewed="allow" so these tests exercise *storage* in isolation.
+        # The default blocks a server with no approved catalogue, which is
+        # correct (see test_tool_trust_enforcement.py) but would stop several
+        # of these before they reach the file they are about.
+        trust = ToolTrustConfig(pin_path=pin_path, on_unreviewed="allow")
     return MCPServerStreamableHttp(
         params={"url": "http://localhost:8888/mcp"},
         cache_tools_list=False,
