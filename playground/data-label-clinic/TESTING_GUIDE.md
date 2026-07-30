@@ -466,8 +466,15 @@ turns itself off is worse than no gate, because the run still looks protected.
 
 #### Offline equivalent
 
-`tests/unit/test_clinic_server_trust.py` asserts all of the above without a
-server: the policy is fail-closed, an invented tool is denied both tainted and
+`test_server_trust.py` in this directory asserts all of the above without a
+server. Run it by path — the SDK suite under `tests/` deliberately does not
+collect playground tests:
+
+```bash
+pytest playground/data-label-clinic/test_server_trust.py
+```
+
+It covers: the policy is fail-closed, an invented tool is denied both tainted and
 untainted, all five PHI gates still fire, poison mode really changes the served
 descriptions, the injected text reaches the inspect output, the gate drops both
 drifted and unapproved tools, and a missing pin file raises instead of silently

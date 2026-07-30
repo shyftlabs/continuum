@@ -1,10 +1,20 @@
 """Layer A for the clinic's MCP server-trust story (finding F3).
 
-The SDK-level machinery -- digest drift, invisible-character stripping, cache
-invalidation on reconnect -- is covered by tests/unit/tools/test_mcp_tool_catalog.py
-and test_tool_pinning.py. This file asserts the clinic *project* is wired to use
-it, and that its policy store bounds a server that was hostile from the very
-first connect.
+Lives in the playground, not under tests/: it asserts things about *this demo*
+-- its policy store, its config, its poisoned-server mode -- and tests/ is for
+the SDK. `pytest` from the repo root will not collect it (testpaths = ["tests"]);
+run it by path:
+
+    pytest playground/data-label-clinic/test_server_trust.py
+
+Not `pytest playground/...` as a directory -- the demo scripts here use the
+`*_test.py` suffix, which pytest also collects, and they need live servers.
+
+The SDK-level machinery it relies on -- digest drift, invisible-character
+stripping, cache invalidation on reconnect, the pinning filter itself -- is
+covered by tests/unit/tools/test_mcp_tool_catalog.py and test_tool_pinning.py.
+What this file adds is that the clinic is *wired* to use it, and that its policy
+store bounds a server that was hostile from the very first connect.
 
 That last case is the one no digest can catch: nothing "changed", so the
 tripwire is correctly silent. What contains it is authorisation -- the model may
@@ -21,9 +31,9 @@ import sys
 import pytest
 from mcp.types import Tool
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+CLINIC_DIR = pathlib.Path(__file__).resolve().parent
 
-CLINIC_DIR = pathlib.Path(__file__).resolve().parents[2] / "playground" / "data-label-clinic"
+sys.path.insert(0, str(CLINIC_DIR.parents[1] / "src"))
 
 
 def _load(module: str):

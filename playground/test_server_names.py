@@ -13,6 +13,12 @@ name=, so catching the next one needs a check that does not depend on anyone
 running the playground and reading the logs.
 
 Scoped to git-tracked files. playground/local/** is gitignored scratch space.
+
+Lives here rather than under tests/, which is for the SDK: this checks a
+convention across the demo projects. `pytest` from the repo root will not collect
+it (testpaths = ["tests"]); run it by path:
+
+    pytest playground/test_server_names.py
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MCP_SERVER_CTORS = {
     "MCPServerStreamableHttp",
