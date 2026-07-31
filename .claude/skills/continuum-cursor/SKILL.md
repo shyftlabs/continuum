@@ -23,25 +23,25 @@ alwaysApply: true
 
 # Continuum Project Rules
 
-This project uses **Continuum** (import: `orchestrator`, package: `shyftlabs-continuum`).
+This project uses **Continuum** (import: `continuum`, package: `shyftlabs-continuum`).
 
 ## Setup invariants
 
 - Python 3.13. Venv: `python3.13 -m venv .venv`
 - All public APIs are **async**. Entrypoints: `asyncio.run(main())`
-- Always `load_dotenv()` before importing orchestrator settings
+- Always `load_dotenv()` before importing continuum settings
 - `OPENAI_API_KEY` required even when using Anthropic/Gemini (mem0 embedder)
 - Infra via docker compose: Redis :6380, Milvus :19530 (or Qdrant :6333)
 
 ## Core imports
 
 \`\`\`python
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
-from orchestrator.agent.types import Handoff, MemoryScope, RunContext, EventType
-from orchestrator.llm import LLMClient, LLMConfig
-from orchestrator.memory import MemoryClient
-from orchestrator.session import SessionClient
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
+from continuum.agent.types import Handoff, MemoryScope, RunContext, EventType
+from continuum.llm import LLMClient, LLMConfig
+from continuum.memory import MemoryClient
+from continuum.session import SessionClient
 \`\`\`
 
 ## Provider routing
@@ -59,7 +59,7 @@ Use `gateway_mode="strict"|"modest"|"quality"` on BaseAgent to control routing t
 - No `litellm` — removed entirely
 - No `response_format` on Anthropic — instruct via system prompt and parse manually
 - No JSON mode + tools on Gemini simultaneously — pick one
-- MemoryScope enum: `from orchestrator.agent.types import MemoryScope` (not from `orchestrator.memory`)
+- MemoryScope enum: `from continuum.agent.types import MemoryScope` (not from `continuum.memory`)
 - SessionClient.add_message takes `ChatMessage(...)` not `role=` kwargs
 ```
 

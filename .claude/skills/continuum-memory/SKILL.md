@@ -50,9 +50,9 @@ QDRANT_COLLECTION=orchestrator_memories
 ## Quick agent setup
 
 ```python
-from orchestrator.agent import BaseAgent
-from orchestrator.agent.config import AgentMemoryConfig
-from orchestrator.agent.types import MemoryScope
+from continuum.agent import BaseAgent
+from continuum.agent.config import AgentMemoryConfig
+from continuum.agent.types import MemoryScope
 
 agent = BaseAgent(
     name="assistant",
@@ -73,7 +73,7 @@ resp = await runner.run(agent, "...", user_id="u1", session_id="s1")
 ## Direct memory access
 
 ```python
-from orchestrator.memory import MemoryClient
+from continuum.memory import MemoryClient
 
 client = MemoryClient()                       # uses env defaults
 
@@ -105,7 +105,7 @@ Every async method has a `*_sync` counterpart.
 ### Agent-side enum (use here)
 
 ```python
-from orchestrator.agent.types import MemoryScope     # str-Enum
+from continuum.agent.types import MemoryScope     # str-Enum
 MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION
 # Pass to AgentMemoryConfig
 ```
@@ -113,7 +113,7 @@ MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION
 ### Memory-side dataclass (different!)
 
 ```python
-from orchestrator.memory.scopes import MemoryScope   # dataclass
+from continuum.memory.scopes import MemoryScope   # dataclass
 MemoryScope.user("u1")
 MemoryScope.shared()
 MemoryScope.agent("billing")
@@ -134,8 +134,8 @@ MemoryScope.run("run_abc")
 ## Sessions
 
 ```python
-from orchestrator.session import SessionClient
-from orchestrator.llm.types import ChatMessage
+from continuum.session import SessionClient
+from continuum.llm.types import ChatMessage
 
 client = SessionClient()
 sid = await client.get_or_create_session(user_id="u1", agent_id="support")
@@ -169,7 +169,7 @@ agent = BaseAgent(
 Adds importance scoring, time decay, entity memory, and user profiles.
 
 ```python
-from orchestrator.memory import IntelligentMemoryClient, IntelligenceConfig
+from continuum.memory import IntelligentMemoryClient, IntelligenceConfig
 
 client = IntelligentMemoryClient(
     intelligence_config=IntelligenceConfig(
@@ -188,7 +188,7 @@ removed = await client.prune(user_id="u1", threshold=0.15)
 Wire into the container:
 
 ```python
-from orchestrator.core.container import get_container
+from continuum.core.container import get_container
 get_container().set_memory_client(IntelligentMemoryClient())
 ```
 
@@ -201,7 +201,7 @@ MEMORY_ENABLED=false
 ```
 
 ```python
-from orchestrator.core.container import Container, ContainerConfig
+from continuum.core.container import Container, ContainerConfig
 container = Container(ContainerConfig(enable_memory=False))
 ```
 

@@ -18,10 +18,10 @@ Continuum's test-friendly seams:
 
 ```python
 import pytest
-from orchestrator.agent import AgentRunner, BaseAgent
-from orchestrator.core.container import Container, ContainerConfig, reset_container
-from orchestrator.llm.types import LLMResponse, StreamChunk, Usage
-from orchestrator.protocols import ILLMClient
+from continuum.agent import AgentRunner, BaseAgent
+from continuum.core.container import Container, ContainerConfig, reset_container
+from continuum.llm.types import LLMResponse, StreamChunk, Usage
+from continuum.protocols import ILLMClient
 ```
 
 ---
@@ -71,18 +71,18 @@ assert resp.content == "Hello, world!"
 
 ```python
 import pytest
-from orchestrator.core.container import reset_container
+from continuum.core.container import reset_container
 
 @pytest.fixture(autouse=True)
 def clean_globals():
     reset_container()
     try:
-        from orchestrator.memory.client import reset_global_memory
+        from continuum.memory.client import reset_global_memory
         reset_global_memory()
     except ImportError:
         pass
     try:
-        from orchestrator.session.client import reset_global_session
+        from continuum.session.client import reset_global_session
         reset_global_session()
     except ImportError:
         pass
@@ -115,8 +115,8 @@ decorator.
 
 ```python
 import pytest, fakeredis.aioredis
-from orchestrator.session import SessionClient, SessionConfig
-from orchestrator.session.providers.redis import RedisSessionProvider
+from continuum.session import SessionClient, SessionConfig
+from continuum.session.providers.redis import RedisSessionProvider
 
 @pytest.fixture
 async def session_client(monkeypatch):
@@ -161,7 +161,7 @@ If your `MockLLM` needs to emit tool calls, populate `tool_calls` on the
 `LLMResponse`:
 
 ```python
-from orchestrator.llm.types import LLMResponse, ToolCall, FunctionCall
+from continuum.llm.types import LLMResponse, ToolCall, FunctionCall
 
 class ToolCallingMock:
     is_enabled = True
@@ -189,7 +189,7 @@ without real MCP servers.
 ## 6. Asserting on streaming events
 
 ```python
-from orchestrator.agent.types import EventType
+from continuum.agent.types import EventType
 
 async def test_streaming_emits_deltas(mock_runner):
     agent = BaseAgent(name="s", instructions="...")

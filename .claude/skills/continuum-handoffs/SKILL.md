@@ -18,14 +18,14 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md), §7.
 ## Imports
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner, Handoff
-from orchestrator.agent.types import HistorySummarizationMode, HandoffData, HandoffResult
-from orchestrator.agent.exceptions import (
+from continuum.agent import BaseAgent, AgentRunner, Handoff
+from continuum.agent.types import HistorySummarizationMode, HandoffData, HandoffResult
+from continuum.agent.exceptions import (
     HandoffNotAllowedError, HandoffDepthExceededError,
     HandoffTargetNotFoundError,
 )
-# HandoffCycleDetectedError is NOT re-exported from `orchestrator.agent`:
-from orchestrator.agent.exceptions import HandoffCycleDetectedError
+# HandoffCycleDetectedError is NOT re-exported from `continuum.agent`:
+from continuum.agent.exceptions import HandoffCycleDetectedError
 ```
 
 ---
@@ -83,7 +83,7 @@ print(resp.content)                  # the billing agent's reply
 | `HYBRID` *(default)* | LLM summary + last `recent_messages` raw messages |
 
 ```python
-from orchestrator.agent.types import HistorySummarizationMode
+from continuum.agent.types import HistorySummarizationMode
 
 Handoff(
     target_agent="billing",
@@ -113,7 +113,7 @@ detects whether a tool call is actually a handoff invocation.
 
 Cycles (e.g. `A → B → A`) are detected before the call — they raise
 `HandoffCycleDetectedError(from_agent, to_agent, agent_stack, ...)`.
-Import path: `orchestrator.agent.exceptions` (not re-exported at the
+Import path: `continuum.agent.exceptions` (not re-exported at the
 package root).
 
 ---
@@ -136,7 +136,7 @@ Streaming exposes `EventType.HANDOFF_START` / `HANDOFF_END` /
 ## Driving handoffs manually with `HandoffManager`
 
 ```python
-from orchestrator.agent import HandoffManager
+from continuum.agent import HandoffManager
 
 mgr = HandoffManager(llm_client=runner.llm_client, tracing_manager=None, max_depth=10)
 
@@ -174,7 +174,7 @@ matches the conversation shape.
 - Don't reference the handoff tool by `transfer_to_<target>` — actual
   prefix is `handoff_to_<target>`.
 - Don't try to import `HandoffCycleDetectedError` from
-  `orchestrator.agent` — only from `orchestrator.agent.exceptions`.
+  `continuum.agent` — only from `continuum.agent.exceptions`.
 - Don't crank `max_handoff_depth` to skip cycle errors — fix the routing
   logic instead. Cycles indicate either bad descriptions or a missing
   fallback agent.

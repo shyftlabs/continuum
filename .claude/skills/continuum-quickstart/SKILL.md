@@ -48,9 +48,9 @@ python -m playground.sdk_feature_test
 
 ```python
 import asyncio
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.agent.config import AgentMemoryConfig
-from orchestrator.core.container import Container, ContainerConfig
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.agent.config import AgentMemoryConfig
+from continuum.core.container import Container, ContainerConfig
 
 async def main():
     # No infra needed for this example
@@ -75,7 +75,7 @@ asyncio.run(main())
 
 | Symptom | Fix |
 |---|---|
-| `ModuleNotFoundError: orchestrator` | `source .venv/bin/activate` |
+| `ModuleNotFoundError: continuum` | `source .venv/bin/activate` |
 | `Failed to initialize mem0: Missing credentials` | Set `OPENAI_API_KEY` in `.env` (mem0 needs it for embeddings, even if you use Anthropic/Gemini for chat) |
 | `redis ConnectionError` on port 6380 | `continuum status` — make sure the SDK Redis service is healthy |
 | `ImportError` on Python startup | Wrong Python — must be 3.13 |
@@ -102,6 +102,6 @@ After "hello world" works, point them at one of:
   they're wired into `Settings`.
 - Don't add new infra services to `docker-compose.yml` casually —
   Redis, Qdrant, and the Langfuse stack are the canonical set.
-- Don't write to `src/orchestrator/` if you only intended to consume
+- Don't write to `src/continuum/` if you only intended to consume
   the library — install via pip and write your code outside the source
   tree.

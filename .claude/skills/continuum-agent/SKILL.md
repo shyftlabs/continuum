@@ -12,9 +12,9 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md).
 ## Core API
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
-from orchestrator.agent.types import (
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
+from continuum.agent.types import (
     Handoff, MemoryScope, RunContext, AgentResponse, EventType,
 )
 ```
@@ -74,7 +74,7 @@ plan: Plan = resp.structured_output
 ## Streaming
 
 ```python
-from orchestrator.agent.types import EventType
+from continuum.agent.types import EventType
 
 async for ev in runner.run_stream(agent, "..."):
     if ev.type == EventType.CONTENT_DELTA:
@@ -84,7 +84,7 @@ async for ev in runner.run_stream(agent, "..."):
 ## Memory scope (the agent enum, not the dataclass!)
 
 ```python
-from orchestrator.agent.types import MemoryScope
+from continuum.agent.types import MemoryScope
 # MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION  — string enum
 ```
 
@@ -143,7 +143,7 @@ Hooks are sync. Async hooks are not awaited.
 
 - Don't pass `role=` / `content=` to `SessionClient.add_message` — pass
   a `ChatMessage` object.
-- Don't import `MemoryScope` from `orchestrator.memory` and then pass
+- Don't import `MemoryScope` from `continuum.memory` and then pass
   it to `AgentMemoryConfig` — that's the dataclass; the agent module
   re-exports the **enum** of the same name.
 - Don't make hooks async — they're sync callables.
