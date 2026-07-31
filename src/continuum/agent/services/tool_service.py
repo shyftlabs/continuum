@@ -26,6 +26,61 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# The separator build_namespaced_tool_name() puts between server and tool.
+_NAMESPACE_SEPARATOR = "__"
+
+
+def resolve_tool_data_labels(
+    tool_data_labels: dict[str, set[str]], called_name: str
+) -> set[str]:
+    """Labels declared for ``called_name``, by namespaced or raw key.
+
+    ``tool_data_labels`` is keyed by tool name, but a server given a ``name=``
+    delivers every tool as ``<server>__<tool>``. Matching only the exact string
+    meant a raw declaration missed, no taint was applied, and every protection
+    keyed on that taint silently stopped applying. Observed live: a tool
+    returning an SSN left the run reporting ``clean``, so the rule denying
+    exfiltration tools to a PHI run never fired and a summary was emailed
+    outside with no gate tripped.
+
+    Both spellings are accepted because neither alone is right:
+
+    * the **raw** name is what a user knows -- it is in their server's source --
+      and is the only usable form when no ``name=`` was given, since the derived
+      one is ``streamable_http_http_localhost_8911_mcp__lookup_patient`` and
+      changes whenever the URL does;
+    * the **namespaced** name is needed when two servers expose the same tool
+      name, and so wins when both are declared.
+
+    Telling users to write namespaced keys instead would fix today and break on
+    the next rename -- the same silent failure, restored. ToolContextConfig
+    already compares raw names for exactly this reason.
+
+    Only a whole trailing segment counts: ``lookup_patient`` must not match
+    ``clinic__bulk_lookup_patient``. Over-tainting is safe, but labelling the
+    wrong tool makes every declaration untrustworthy.
+    """
+    if not tool_data_labels:
+        return set()
+    exact = tool_data_labels.get(called_name)
+    if exact:
+        return set(exact)
+    if _NAMESPACE_SEPARATOR in called_name:
+        raw = called_name.rsplit(_NAMESPACE_SEPARATOR, 1)[-1]
+        return set(tool_data_labels.get(raw) or ())
+    return set()
+
+
+def _matching_registry_keys(registry: dict[str, Any] | None, declared: str) -> list[str]:
+    """Registry entries a declared label name applies to."""
+    if not registry:
+        return []
+    return sorted(
+        key
+        for key in registry
+        if key == declared or key.rsplit(_NAMESPACE_SEPARATOR, 1)[-1] == declared
+    )
+
 
 class ToolService(IToolService):
     """
@@ -54,6 +109,56 @@ class ToolService(IToolService):
     def tool_executor(self) -> Any | None:
         """Get tool executor."""
         return self._tool_executor
+
+    def _warn_on_unresolvable_data_labels(self, agent: BaseAgent) -> None:
+        """Report ``tool_data_labels`` entries that name no tool, or too many.
+
+        A declaration matching nothing protects nothing and says nothing --
+        the same silent-no-op that
+        ``ToolExecutor._warn_on_unmatched_context_tool_names`` exists to catch
+        for ``capture_from`` / ``inject_into``, guarding something more
+        important. It is what a rename leaves behind.
+
+        A raw name matching several servers still taints all of them, which
+        fails closed and is therefore safe. It is reported anyway: labelling an
+        unrelated server's tool PHI blocks benign work, and the natural
+        response to that is to loosen the policy rather than to disambiguate.
+
+        Once per agent -- this runs on every batch, and a warning repeated each
+        turn is one people filter out.
+        """
+        if getattr(agent, "_warned_unresolvable_data_labels", False):
+            return
+        registry = getattr(getattr(agent, "tool_executor", None), "tool_registry", None)
+        if not registry:
+            return  # nothing to compare against yet
+        try:
+            agent._warned_unresolvable_data_labels = True  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            pass  # a frozen/slotted agent just gets the warning again
+
+        unmatched: list[str] = []
+        ambiguous: dict[str, list[str]] = {}
+        for declared in agent.config.tool_data_labels:
+            matches = _matching_registry_keys(registry, declared)
+            if not matches:
+                unmatched.append(declared)
+            elif len(matches) > 1:
+                ambiguous[declared] = matches
+
+        if unmatched:
+            logger.warning(
+                f"Agent '{agent.name}' declares data labels for {sorted(unmatched)}, which "
+                f"match no tool on any connected server, so those labels are never applied "
+                f"and anything gated on them silently stops applying. Known tools: "
+                f"{sorted(registry)}"
+            )
+        for declared, matches in sorted(ambiguous.items()):
+            logger.warning(
+                f"Agent '{agent.name}' declares data labels for '{declared}', which matches "
+                f"{matches} on more than one server -- all of them are labelled. Use the "
+                f"namespaced name to label only the one you mean."
+            )
 
     async def execute_tool_call(
         self,
@@ -203,8 +308,12 @@ class ToolService(IToolService):
                     if results:
                         result = self._message_to_dict(results[0])
                         # Tool provenance: a declared tool's result taints the run.
-                        if agent.config and agent.config.tool_data_labels.get(tool_name):
-                            context.taint(*agent.config.tool_data_labels[tool_name])
+                        if agent.config:
+                            labels = resolve_tool_data_labels(
+                                agent.config.tool_data_labels, tool_name
+                            )
+                            if labels:
+                                context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
@@ -262,8 +371,12 @@ class ToolService(IToolService):
                     if results:
                         result = self._message_to_dict(results[0])
                         # Tool provenance: a declared tool's result taints the run.
-                        if agent.config and agent.config.tool_data_labels.get(tool_name):
-                            context.taint(*agent.config.tool_data_labels[tool_name])
+                        if agent.config:
+                            labels = resolve_tool_data_labels(
+                                agent.config.tool_data_labels, tool_name
+                            )
+                            if labels:
+                                context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
                         # Log tool result
@@ -354,13 +467,14 @@ class ToolService(IToolService):
         # order- and concurrency-independent and fails safe (a declared tool that
         # errors/returns nothing still taints, which is the conservative choice).
         if agent.config and agent.config.tool_data_labels:
+            self._warn_on_unresolvable_data_labels(agent)
             for tc in tool_calls:
                 name = (
                     tc.function.name
                     if hasattr(tc, "function")
                     else tc.get("function", {}).get("name", "")
                 )
-                labels = agent.config.tool_data_labels.get(name)
+                labels = resolve_tool_data_labels(agent.config.tool_data_labels, name)
                 if labels:
                     context.taint(*labels)
 
