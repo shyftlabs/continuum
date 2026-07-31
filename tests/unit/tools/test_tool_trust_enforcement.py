@@ -170,6 +170,66 @@ class TestUnreviewedServer:
         assert "srv" in message
         assert "mcp inspect" in message
 
+    async def test_the_command_is_copy_pasteable_not_a_placeholder(self, tmp_path):
+        """The server knows its own URL; making the reader supply it is a chore.
+
+        Half-concrete advice is worse than none -- the pin path was already
+        substituted, so a literal `URL` next to it reads like a formatting bug
+        and invites pasting the line unedited.
+        """
+        pin = tmp_path / "pins.json"
+        server = MCPServerStreamableHttp(
+            params={"url": "http://127.0.0.1:8911/mcp"},
+            cache_tools_list=False,
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = [_tool("a", "A.")]
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        message = str(caught.value)
+        assert "http://127.0.0.1:8911/mcp" in message
+        assert " URL " not in message
+
+    async def test_a_stdio_server_is_not_told_to_run_a_command_that_cannot_work(self, tmp_path):
+        """`continuum mcp inspect` speaks streamable HTTP only.
+
+        Handing a stdio user that command sends them to debug a tool that was
+        never going to connect to their server.
+        """
+        from continuum.tools.mcp import MCPServerStdio
+
+        pin = tmp_path / "pins.json"
+        server = MCPServerStdio(
+            params={"command": "python", "args": ["srv.py"]},
+            cache_tools_list=False,
+            name="local",
+            trust_config=ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = [_tool("a", "A.")]
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        message = str(caught.value)
+        # Naming the command to explain that it does NOT apply is fine, and
+        # more useful than silence -- what must not appear is a runnable
+        # invocation presented as the remedy.
+        assert "continuum mcp inspect --name" not in message
+        assert f"continuum mcp inspect {server.name}" not in message
+        assert "only speaks streamable HTTP" in message
+        assert "save_pins" in message, "must say what to do instead"
+
     async def test_warn_lists_the_tools_and_says_so(self, tmp_path):
         trust = ToolTrustConfig(pin_path=tmp_path / "pins.json", on_unreviewed="warn")
         server = _server(trust, [_tool("a", "A.")])

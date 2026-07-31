@@ -170,6 +170,17 @@ class MCPServer(abc.ABC):
         pass
 
     @property
+    def review_url(self) -> str | None:
+        """URL ``continuum mcp inspect`` could review this server at, if any.
+
+        None when the CLI cannot reach it -- ``mcp inspect`` speaks streamable
+        HTTP only, so pointing a stdio user at it would send them to debug a
+        tool that was never going to connect. Transports it can review override
+        this so error messages carry a command that runs as written.
+        """
+        return None
+
+    @property
     def name_is_derived(self) -> bool:
         """True when no name= was supplied and the transport invented one.
 
@@ -769,12 +780,32 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         """
         if action == "allow":
             return tools
+
+        # Substitute the real URL rather than a placeholder: the server knows
+        # it, so making the reader supply it is a chore, and a literal "URL"
+        # sitting beside an already-substituted pin path reads like a
+        # formatting bug and invites pasting the line unedited. When the CLI
+        # cannot reach this transport, say what to do instead of naming a
+        # command that was never going to connect.
+        url = self.review_url
+        if url is not None:
+            remedy = (
+                f"Review them, then approve:\n\n"
+                f"  continuum mcp inspect {url} --name {self.name} "
+                f"--write-pins {self._trust_config.pin_path}\n"
+            )
+        else:
+            remedy = (
+                f"Review them, then record the approval. `continuum mcp inspect` "
+                f"only speaks streamable HTTP, so for this transport call "
+                f"continuum.tools.pinning.format_tool_catalog() to read the "
+                f"catalogue and save_pins() to write "
+                f"{self._trust_config.pin_path}.\n"
+            )
         message = (
             f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
             f"catalogue. Tool descriptions reach the model's prompt verbatim and can "
-            f"instruct it. Review them, then approve:\n\n"
-            f"  continuum mcp inspect URL --name {self.name} "
-            f"--write-pins {self._trust_config.pin_path}\n\n"
+            f"instruct it. {remedy}\n"
             f"Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
             f"servers (not recommended)."
         )
@@ -1294,6 +1325,10 @@ class MCPServerSse(_MCPServerWithClientSession):
         self._name = name or f"sse: {self.params['url']}"
         self._name_is_derived = name is None
 
+    @property
+    def review_url(self) -> str | None:
+        return self.params["url"]
+
     def create_streams(
         self,
     ) -> AbstractAsyncContextManager[
@@ -1417,6 +1452,10 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
         self.params = params
         self._name = name or f"streamable_http: {self.params['url']}"
         self._name_is_derived = name is None
+
+    @property
+    def review_url(self) -> str | None:
+        return self.params["url"]
 
     def create_streams(
         self,
