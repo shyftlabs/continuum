@@ -476,6 +476,7 @@ def _cmd_mcp_diff(args: argparse.Namespace) -> int:
 def _cmd_mcp_approve(args: argparse.Namespace) -> int:
     """Promote reviewed entries from the last-seen record into the approved file."""
     from continuum.tools.pinning import approve_tools
+    from continuum.tools.types import ToolTrustConfig
 
     if not args.tool and not args.all:
         # Defaulting to --all would make the dangerous option the one you get
@@ -492,10 +493,19 @@ def _cmd_mcp_approve(args: argparse.Namespace) -> int:
         # Approving from an absent record would write an empty catalogue, which
         # under on_unreviewed="block" silently blocks every tool on the server
         # and reads as "the server is broken".
+        # Almost always a wrong path rather than a server nobody has run: the
+        # runtime writes the record on every fetch, including the fetch it then
+        # refuses. Telling someone to "run the agent once" when they just did
+        # sends them in a circle -- and the old wording also named a literal
+        # `URL` nobody can paste.
+        record_path = ToolTrustConfig(
+            pin_path=pin_path, record_path=getattr(args, "record", None)
+        ).last_seen_path
         print(
-            f"No record of server '{args.server}' — nothing to approve. Run the agent "
-            f"once so its catalogue is observed, or use "
-            f"`continuum mcp inspect URL --name {args.server} --write-pins {pin_path}`.",
+            f"No record of server '{args.server}' at {record_path} — nothing to approve.\n"
+            f"Check --pins points where the application's ToolTrustConfig(pin_path=...) "
+            f"does (and --record if it sets record_path). If the agent has genuinely "
+            f"never run against this server, run it once so its catalogue is observed.",
             file=sys.stderr,
         )
         return 1

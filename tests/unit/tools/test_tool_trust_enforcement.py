@@ -203,6 +203,36 @@ class TestUnreviewedServer:
             "the fused shortcut must not be what a refusal recommends"
         )
 
+    async def test_the_approve_step_names_the_application_s_own_pin_path(self, tmp_path):
+        """`mcp approve` defaults to ./tool-pins.json, which is rarely where it is.
+
+        Emitting a bare `mcp approve clinic --all` for an application that keeps
+        its catalogue elsewhere produces "no record of server 'clinic'" while
+        the record sits in the configured directory. Half-substituted advice --
+        URL filled in, path not -- is the same failure as the literal `URL`
+        placeholder this message already had once.
+        """
+        pin = tmp_path / "tool-trust" / "pins.json"
+        server = MCPServerStreamableHttp(
+            params={"url": "http://127.0.0.1:8911/mcp"},
+            cache_tools_list=False,
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = [_tool("a", "A.")]
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        approve_line = next(
+            line for line in str(caught.value).splitlines() if "mcp approve" in line
+        )
+        assert str(pin) in approve_line, approve_line
+
     async def test_the_command_is_copy_pasteable_not_a_placeholder(self, tmp_path):
         """The server knows its own URL; making the reader supply it is a chore.
 

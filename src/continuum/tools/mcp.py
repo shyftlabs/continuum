@@ -796,12 +796,18 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # (`mcp diff` then `mcp approve`). The shortcut still exists for
         # approving before ever running the agent; it is just not what a
         # refusal should recommend.
+        # --pins is spelled out because the CLI defaults to ./tool-pins.json,
+        # which is rarely where an application keeps it. A bare
+        # `mcp approve NAME --all` then reports "no record" while the record
+        # sits in the configured directory -- the same half-substituted advice
+        # as the literal `URL` placeholder this message carried once.
+        pins = self._trust_config.pin_path
         url = self.review_url
         if url is not None:
             remedy = (
                 f"Read them, then accept them:\n\n"
                 f"  continuum mcp inspect {url} --name {self.name}\n"
-                f"  continuum mcp approve {self.name} --all\n\n"
+                f"  continuum mcp approve {self.name} --all --pins {pins}\n\n"
                 f"Use `--tool NAME` instead of `--all` to accept only some of them.\n"
             )
         else:
@@ -809,8 +815,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"Read them, then record the approval. `continuum mcp inspect` "
                 f"only speaks streamable HTTP, so for this transport call "
                 f"continuum.tools.pinning.format_tool_catalog() to read the "
-                f"catalogue, then `continuum mcp approve {self.name} --all` to "
-                f"write {self._trust_config.pin_path}.\n"
+                f"catalogue, then:\n\n"
+                f"  continuum mcp approve {self.name} --all --pins {pins}\n"
             )
         message = (
             f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "

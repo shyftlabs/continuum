@@ -426,6 +426,27 @@ class TestApproveCommand:
 
         assert set(load_pins(pin)["clinic"]) == {"a", "b"}
 
+    def test_a_missing_record_suggests_checking_the_path(self, tmp_path, capsys):
+        """"No record" is far more often a wrong --pins than a server never run.
+
+        The advice must not send someone to re-run an agent that has already
+        run -- and must not name a literal URL placeholder, which the earlier
+        version of this message did.
+        """
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"clinic": _pins(_tool("a", "A."))})  # approved, but no record
+
+        rc = cli._cmd_mcp_approve(
+            _parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin)])
+        )
+
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "--pins" in err or "--record" in err, "point at the likely cause"
+        assert " URL " not in err, "no placeholder anyone has to substitute"
+
     def test_nothing_observed_yet_is_an_error_not_an_empty_approval(self, tmp_path, capsys):
         """Approving from an absent record would write an empty catalogue.
 
