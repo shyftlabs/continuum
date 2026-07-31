@@ -801,14 +801,19 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # `mcp approve NAME --all` then reports "no record" while the record
         # sits in the configured directory -- the same half-substituted advice
         # as the literal `URL` placeholder this message carried once.
+        #
+        # It goes BEFORE --all so the part most likely to be edited is last.
+        # Swapping --all for --tool NAME is the usual next move after reading a
+        # catalogue, and behind an absolute path it means retyping past the
+        # path to reach it; trailing, it is one edit from shell history.
         pins = self._trust_config.pin_path
         url = self.review_url
         if url is not None:
             remedy = (
                 f"Read them, then accept them:\n\n"
                 f"  continuum mcp inspect {url} --name {self.name}\n"
-                f"  continuum mcp approve {self.name} --all --pins {pins}\n\n"
-                f"Use `--tool NAME` instead of `--all` to accept only some of them.\n"
+                f"  continuum mcp approve {self.name} --pins {pins} --all\n\n"
+                f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         else:
             remedy = (
@@ -816,7 +821,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"only speaks streamable HTTP, so for this transport call "
                 f"continuum.tools.pinning.format_tool_catalog() to read the "
                 f"catalogue, then:\n\n"
-                f"  continuum mcp approve {self.name} --all --pins {pins}\n"
+                f"  continuum mcp approve {self.name} --pins {pins} --all\n\n"
+                f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         message = (
             f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "

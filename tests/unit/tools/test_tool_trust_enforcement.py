@@ -233,6 +233,35 @@ class TestUnreviewedServer:
         )
         assert str(pin) in approve_line, approve_line
 
+    async def test_the_part_you_edit_comes_last(self, tmp_path):
+        """--all must sit at the end, after the long path.
+
+        Swapping `--all` for `--tool NAME` is the single most likely edit after
+        reading a catalogue, and burying it mid-line means retyping past an
+        absolute path to reach it. Trailing, it is one backspace-and-type from
+        shell history.
+        """
+        pin = tmp_path / "tool-trust" / "pins.json"
+        server = MCPServerStreamableHttp(
+            params={"url": "http://127.0.0.1:8911/mcp"},
+            cache_tools_list=False,
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = [_tool("a", "A.")]
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        approve_line = next(
+            line for line in str(caught.value).splitlines() if "mcp approve" in line
+        )
+        assert approve_line.rstrip().endswith("--all"), approve_line
+
     async def test_the_command_is_copy_pasteable_not_a_placeholder(self, tmp_path):
         """The server knows its own URL; making the reader supply it is a chore.
 
