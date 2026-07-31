@@ -12,16 +12,16 @@ Authoritative source: [`docs/tools.md`](../../../docs/tools.md).
 ## Imports
 
 ```python
-from orchestrator.tools import (
+from continuum.tools import (
     MCPServerStdio, MCPServerSse, MCPServerStreamableHttp,
     ToolExecutor, MCPUtil,
     ToolContextConfig, ToolContextVariable,
     create_static_tool_filter, ToolFilterContext,
     MCPToolArtifact, RunArtifacts,
 )
-# `ToolExecutorConfig` is not in the `orchestrator.tools` namespace —
+# `ToolExecutorConfig` is not in the `continuum.tools` namespace —
 # import it from the executor module directly.
-from orchestrator.tools.executor import ToolExecutorConfig
+from continuum.tools.executor import ToolExecutorConfig
 ```
 
 ---
@@ -55,7 +55,7 @@ await remote.connect()
 ## Quickest agent wiring
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner
+from continuum.agent import BaseAgent, AgentRunner
 
 agent = BaseAgent(
     name="tool-agent",
@@ -149,7 +149,7 @@ context, structured data lands in `run_artifacts`.
 ## Schema utilities
 
 ```python
-from orchestrator.tools import normalize_schema_for_llm, ensure_strict_json_schema
+from continuum.tools import normalize_schema_for_llm, ensure_strict_json_schema
 
 # Most users don't call these directly — MCPUtil.get_function_tools handles
 # normalization. Reach for them if a model rejects an MCP tool's schema.
@@ -186,28 +186,59 @@ keeps an innocent name.
 ```bash
 continuum mcp inspect URL --name weather                   # descriptions + schemas
 continuum mcp inspect URL --name weather --write-pins PATH # ...then record digests
+continuum mcp diff weather --pins PATH                     # exit 1 while changed
+continuum mcp approve weather --pins PATH --tool NAME      # per tool, merges
+continuum mcp approve weather --pins PATH --all
+continuum mcp rename OLD NEW --pins PATH                   # server name moved
 ```
+
+`diff` / `approve` work from files alone — you review the text the agent saw,
+not whatever the server says now. Add `--record PATH` if the app sets
+`record_path`.
 
 ```python
-# report later changes (warn, then re-pin)
-MCPServerStreamableHttp({"url": ...}, name="weather", tool_pin_path=PATH)
-# OR block them (drop the tool). Never both: the tripwire rewrites the file the
-# gate reads, so one restart after a drift warning re-approves the drifted values.
-approved = json.loads(Path(PATH).read_text())["weather"]   # keyed by server name
+from continuum.tools import ToolTrustConfig
+
 MCPServerStreamableHttp({"url": ...}, name="weather",
-                        tool_filter=create_tool_pinning_filter(approved))
+                        trust_config=ToolTrustConfig(pin_path=PATH))
 ```
 
+| Field | Default | Meaning |
+|---|---|---|
+| `pin_path` | `None` | The approved catalogue. **Required for enforcement** — without it both settings below only report |
+| `record_path` | sibling `.tool-pins-last-seen.json` | Where the runtime logs what was served |
+| `on_unreviewed` | `"block"` | No entry in the approved catalogue. No false positives, and the one case pinning cannot defend alone |
+| `on_drift` | `"warn"` | Approved tool whose text changed. Usually a typo fix; blocking by default gets the feature switched off |
+| `on_change` | `None` | `Callable[[ToolChangeEvent], None]` — page oncall, fail CI |
+
+`block` and `warn` both log a WARNING; only `allow` is silent. The mode decides
+keep-vs-drop, not whether you are told. Env overrides: `MCP_ON_UNREVIEWED`,
+`MCP_ON_DRIFT`.
+
+**Two files, one writer each.** `tool-pins.json` is written only by a human
+command (commit it); `.tool-pins-last-seen.json` only by the runtime (gitignore
+it). When one file did both, the tripwire rewrote what the gate read and a
+poisoned catalogue became "approved" one restart later. In production mount the
+approval read-only and point `record_path` somewhere writable.
+
 A pin means *unchanged since you looked*, never *safe* — review first.
-Each pin holds two digests: `raw` (as sent — what the tripwire compares) and
-`effective` (after invisible chars are stripped — what the model reads and what
-the gate compares).
+Each pin holds two digests over description + `inputSchema`: `raw` (as sent —
+what the tripwire compares) and `effective` (after invisible chars are stripped
+— what the model reads and what the gate compares).
+
+**Two boundaries.** Pinning covers the *catalogue*, not tool *results* — a
+server with pristine descriptions can still inject through what it returns;
+that is what `AgentConfig(tool_data_labels=...)` plus a `PolicyStore` rule is
+for. And the gate runs on each `list_tools()` fetch, not on each tool call, so
+an app that builds its registry once at startup gets one check per process.
 
 **Always pass `name=` to a server.** It becomes the `<server>__<tool>` prefix
-the model sees and that `PolicyStore` resources match. Without it the prefix is
-derived from the URL (`tool:sse_https_db_internal_example_com_mcp__delete_user`)
-and changes whenever the URL does, silently breaking every policy rule.
-`mcp inspect` prints the exact `policy resource:` string to use.
+the model sees and that `PolicyStore` resources match, **and** it is the key
+your approvals are filed under. Without it both are derived from the URL
+(`tool:sse_https_db_internal_example_com_mcp__delete_user`) and change whenever
+the URL does — silently breaking policy rules, and loudly orphaning every
+approval. Continuum warns once per server when a derived name is namespaced or
+pinned. `mcp inspect` prints the `policy resource:` strings to use.
 
 ---
 
@@ -225,11 +256,18 @@ Which name a setting matches:
 | `tool_filter` allow/block lists | **raw** (`read_file`) |
 | `ToolExecutor(tool_registry={server: [...]})` | **raw** |
 | `ToolContextVariable(capture_from=, inject_into=)` | **raw** |
+| `tool-pins.json` tool keys | **raw** (under a server-name key) |
+| `AgentConfig(tool_data_labels=)` | **either** — exact match wins |
 | `PolicyStore` resources | **namespaced** (`tool:weather__read_file`) |
 | `ToolAttentionConfig(always_promote=)` | **namespaced** |
 
 Rule of thumb: scoped to one server → raw; operating on the merged LLM-facing
 list → namespaced.
+
+Pin files are raw-keyed because the trust gate runs inside `list_tools()`,
+before any prefix is applied — so flipping `namespace_tools` does not
+invalidate your approvals. `tool_data_labels` takes either spelling, and an
+entry matching no tool (or several) is logged once per agent.
 
 ---
 
@@ -255,7 +293,14 @@ list → namespaced.
   `namespace_tools=False` — `ToolExecutor.initialize()` and
   `get_all_function_tools()` both raise `MCPError`.
 - Don't write `PolicyStore` rules against bare tool names — resources match
-  the namespaced key (`tool:weather__read_file`).
+  the namespaced key (`tool:weather__read_file`). With
+  `namespace_tools=False` it is the bare name; `mcp inspect` prints both
+  because it cannot know which you use.
+- Don't set `on_unreviewed="block"` without a `pin_path` — there is nowhere an
+  approval can live, so nothing is enforced. Continuum warns when you ask for
+  it explicitly.
+- Don't re-approve a server whose *name* changed — that re-blesses whatever it
+  serves now, without reading. `continuum mcp rename` moves the entry instead.
 - Don't change `use_structured_content=True` casually — it changes what
   the LLM sees.
 - Don't expose unsafe tools to a low-trust agent — use `tool_filter` or
