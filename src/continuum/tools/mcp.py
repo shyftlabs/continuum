@@ -787,20 +787,30 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # formatting bug and invites pasting the line unedited. When the CLI
         # cannot reach this transport, say what to do instead of naming a
         # command that was never going to connect.
+        # Two commands, not one. `mcp inspect --write-pins` prints the
+        # catalogue and writes the approval in a single keystroke, so accepting
+        # a server costs exactly as much as glancing at it. Nothing can make
+        # anyone read -- SSH shows a host-key fingerprint nobody compares --
+        # but splitting the steps makes acceptance a deliberate act rather than
+        # a byproduct of looking, which is the shape drift already uses
+        # (`mcp diff` then `mcp approve`). The shortcut still exists for
+        # approving before ever running the agent; it is just not what a
+        # refusal should recommend.
         url = self.review_url
         if url is not None:
             remedy = (
-                f"Review them, then approve:\n\n"
-                f"  continuum mcp inspect {url} --name {self.name} "
-                f"--write-pins {self._trust_config.pin_path}\n"
+                f"Read them, then accept them:\n\n"
+                f"  continuum mcp inspect {url} --name {self.name}\n"
+                f"  continuum mcp approve {self.name} --all\n\n"
+                f"Use `--tool NAME` instead of `--all` to accept only some of them.\n"
             )
         else:
             remedy = (
-                f"Review them, then record the approval. `continuum mcp inspect` "
+                f"Read them, then record the approval. `continuum mcp inspect` "
                 f"only speaks streamable HTTP, so for this transport call "
                 f"continuum.tools.pinning.format_tool_catalog() to read the "
-                f"catalogue and save_pins() to write "
-                f"{self._trust_config.pin_path}.\n"
+                f"catalogue, then `continuum mcp approve {self.name} --all` to "
+                f"write {self._trust_config.pin_path}.\n"
             )
         message = (
             f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "

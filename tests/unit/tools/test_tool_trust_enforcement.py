@@ -170,6 +170,39 @@ class TestUnreviewedServer:
         assert "srv" in message
         assert "mcp inspect" in message
 
+    async def test_review_and_approval_are_offered_as_two_separate_acts(self, tmp_path):
+        """Approving must be something you do, not a side effect of looking.
+
+        `mcp inspect --write-pins` prints the catalogue and writes the approval
+        in one keystroke, so accepting a server costs exactly as much as
+        glancing at it. Splitting them cannot make anyone read -- nothing can --
+        but it makes acceptance a deliberate second act rather than a byproduct,
+        which is the same shape drift already uses (`mcp diff` then
+        `mcp approve`).
+        """
+        pin = tmp_path / "pins.json"
+        server = MCPServerStreamableHttp(
+            params={"url": "http://127.0.0.1:8911/mcp"},
+            cache_tools_list=False,
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = [_tool("a", "A.")]
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        message = str(caught.value)
+        assert "continuum mcp inspect" in message, "step 1: read the descriptions"
+        assert "continuum mcp approve clinic" in message, "step 2: accept them"
+        assert "--write-pins" not in message, (
+            "the fused shortcut must not be what a refusal recommends"
+        )
+
     async def test_the_command_is_copy_pasteable_not_a_placeholder(self, tmp_path):
         """The server knows its own URL; making the reader supply it is a chore.
 
@@ -228,7 +261,10 @@ class TestUnreviewedServer:
         assert "continuum mcp inspect --name" not in message
         assert f"continuum mcp inspect {server.name}" not in message
         assert "only speaks streamable HTTP" in message
-        assert "save_pins" in message, "must say what to do instead"
+        # Only the *review* half is CLI-less for stdio; `mcp approve` reads the
+        # record file, which the runtime writes whatever the transport.
+        assert "format_tool_catalog" in message, "must say how to read the catalogue"
+        assert "continuum mcp approve local" in message, "must say how to accept it"
 
     async def test_warn_lists_the_tools_and_says_so(self, tmp_path):
         trust = ToolTrustConfig(pin_path=tmp_path / "pins.json", on_unreviewed="warn")
