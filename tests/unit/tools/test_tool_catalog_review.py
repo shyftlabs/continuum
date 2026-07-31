@@ -276,6 +276,24 @@ class TestDiffCommand:
 
         assert cli._cmd_mcp_diff(_parse(["mcp", "diff", "clinic", "--pins", str(pin)])) == 0
 
+    def test_finding_neither_file_is_not_reported_as_clean(self, tmp_path, capsys):
+        """A wrong --pins path must not read as "nothing to worry about".
+
+        With no approval *and* no record, the likeliest explanation is that the
+        path is wrong -- the application put them somewhere else. Saying "not
+        observed yet" implies we found the approval and are waiting on a run,
+        and exiting 0 turns a misconfiguration into a clean bill of health. In
+        CI that is a gate that passes because it was pointed at nothing.
+        """
+        from continuum import cli
+
+        missing = tmp_path / "nowhere" / "tool-pins.json"
+        rc = cli._cmd_mcp_diff(_parse(["mcp", "diff", "clinic", "--pins", str(missing)]))
+
+        out = capsys.readouterr().out
+        assert rc == 2, "neither clean (0) nor drifted (1) -- this is a configuration problem"
+        assert str(missing) in out, "name the path that was searched"
+
     def test_no_record_yet_is_explained_not_crashed_on(self, tmp_path, capsys):
         from continuum import cli
 

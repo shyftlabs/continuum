@@ -171,10 +171,17 @@ tests/integration/redis_tls/certs/
 # approved catalogue is a lockfile and belongs in version control. A demo's
 # "third-party server" is a file three directories away, maintained by the
 # same people -- nothing about it is a stable external dependency.
-playground/**/tool-pins.json
+# The same rule covers the runtime's record of what a server last served,
+# which sits beside the approval. That one is rewritten on every fetch, so
+# committing it would dirty the working tree on each `python web.py` -- and
+# unlike the approval above, it is ignored in real applications too.
+#
+# Whole directory rather than two filenames: the demos keep both in
+# tool-trust/ so re-testing from scratch is `rm -rf tool-trust`, and ignoring
+# the folder means anything else that lands there is covered without a new rule.
+playground/**/tool-trust/
 
-# The runtime's record of what a server last served. Rewritten on every run,
-# so committing it would dirty the working tree on each `python web.py`.
-# Always generated, never authored -- unlike the pin file above, this one is
-# ignored in real applications too.
+# Older layout, before both files moved into tool-trust/. Kept so a working
+# tree that predates the move does not suddenly show them as untracked.
+playground/**/tool-pins.json
 playground/**/.tool-pins-last-seen.json

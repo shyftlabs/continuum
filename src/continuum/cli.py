@@ -443,7 +443,20 @@ def _cmd_mcp_diff(args: argparse.Namespace) -> int:
     """
     from continuum.tools.pinning import diff_catalogs, format_catalog_diff
 
-    _, approved, last_seen = _read_catalogues(args)
+    pin_path, approved, last_seen = _read_catalogues(args)
+
+    if not approved and not last_seen:
+        # Neither file has anything for this server. Far more often a wrong
+        # --pins path than a genuinely untouched setup, and reporting it as
+        # "not observed yet" with exit 0 turns a misconfiguration into a clean
+        # bill of health -- in CI, a gate that passes because it was pointed at
+        # nothing. Exit 2 so it is neither "clean" nor "drifted".
+        print(
+            f"No catalogue for server '{args.server}' at {pin_path} (or its record).\n"
+            f"Check --pins points where the application's ToolTrustConfig(pin_path=...) "
+            f"does, and --record if it sets record_path."
+        )
+        return 2
 
     if not last_seen:
         # Distinct from "no differences": nothing has run against this server
