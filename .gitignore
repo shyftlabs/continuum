@@ -162,5 +162,19 @@ tests/integration/redis_tls/certs/
 
 # Tool-catalogue digest pins are per-environment trust decisions (F3), not
 # shared config: committing one would silently approve a catalogue on behalf of
-# whoever clones the repo.
+# whoever clones the repo. Reviewing the catalogue is the lesson these demos
+# exist to teach, and a checked-in pin file would also go stale on every edit
+# to a server.py docstring, spraying spurious drift warnings at everyone who
+# pulls.
+#
+# Note this is the opposite of the advice for a real application, where the
+# approved catalogue is a lockfile and belongs in version control. A demo's
+# "third-party server" is a file three directories away, maintained by the
+# same people -- nothing about it is a stable external dependency.
 playground/**/tool-pins.json
+
+# The runtime's record of what a server last served. Rewritten on every run,
+# so committing it would dirty the working tree on each `python web.py`.
+# Always generated, never authored -- unlike the pin file above, this one is
+# ignored in real applications too.
+playground/**/.tool-pins-last-seen.json
