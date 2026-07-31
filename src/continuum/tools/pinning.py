@@ -238,8 +238,15 @@ def _gutter(marker: str, description: str | None) -> list[str]:
     return [f"  {marker} {line}" for line in text.splitlines() or [""]]
 
 
-def format_catalog_diff(server_name: str, diffs: list[ToolDiff]) -> str:
-    """Render differences for a person to read and act on."""
+def format_catalog_diff(
+    server_name: str, diffs: list[ToolDiff], pin_path: str | Path | None = None
+) -> str:
+    """Render differences for a person to read and act on.
+
+    ``pin_path`` is echoed into the suggested approve commands. Without it they
+    target the CLI default, so reviewing ``--pins somewhere/else.json`` would
+    print a remedy pointing at a different file than the one just read.
+    """
     if not diffs:
         return f"Server '{server_name}': no differences from the approved catalogue."
 
@@ -271,8 +278,9 @@ def format_catalog_diff(server_name: str, diffs: list[ToolDiff]) -> str:
     # A report of a problem carries its own remedy: without the command, the
     # reader knows something is wrong and not what to do about it.
     out.append("Approve the changes you have read and accept:")
-    out.append(f"  continuum mcp approve {server_name} --tool NAME")
-    out.append(f"  continuum mcp approve {server_name} --all")
+    pins = f" --pins {pin_path}" if pin_path is not None else ""
+    out.append(f"  continuum mcp approve {server_name}{pins} --tool NAME")
+    out.append(f"  continuum mcp approve {server_name}{pins} --all")
     return "\n".join(out)
 
 

@@ -469,7 +469,7 @@ def _cmd_mcp_diff(args: argparse.Namespace) -> int:
         return 0
 
     diffs = diff_catalogs(approved, last_seen)
-    print(format_catalog_diff(args.server, diffs))
+    print(format_catalog_diff(args.server, diffs, pin_path=pin_path))
     return 1 if diffs else 0
 
 

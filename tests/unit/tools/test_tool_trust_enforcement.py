@@ -369,6 +369,38 @@ class TestUnreviewedTool:
 
         assert [t.name for t in await server.list_tools()] == ["known"]
 
+    async def test_the_review_hint_names_the_pin_path(self, tmp_path):
+        """`mcp diff NAME` alone defaults to ./tool-pins.json.
+
+        For any application that keeps its catalogue elsewhere, pasting the
+        bare command reports "No catalogue for server ... at tool-pins.json" --
+        so a warning about a dropped tool sends the reader to a dead end. Same
+        half-substituted advice as the refusal message, in the other direction.
+        """
+        pin = tmp_path / "tool-trust" / "pins.json"
+        _approve(pin, _tool("known", "K."))
+        server = _server(
+            ToolTrustConfig(pin_path=pin, on_unreviewed="block"),
+            [_tool("known", "K."), _tool("sneaked_in", "S.")],
+        )
+
+        with _captured_logs() as records:
+            await server.list_tools()
+
+        hint = next(w for w in _warnings(records) if "mcp diff" in w)
+        assert str(pin) in hint, hint
+
+    async def test_the_drift_hint_names_the_pin_path(self, tmp_path):
+        pin = tmp_path / "tool-trust" / "pins.json"
+        _approve(pin, _tool("a", "Original."))
+        server = _server(ToolTrustConfig(pin_path=pin), [_tool("a", "Poisoned.")])
+
+        with _captured_logs() as records:
+            await server.list_tools()
+
+        hint = next(w for w in _warnings(records) if "mcp diff" in w)
+        assert str(pin) in hint, hint
+
     async def test_warn_keeps_it(self, tmp_path):
         pin = tmp_path / "pins.json"
         _approve(pin, _tool("known", "K."))

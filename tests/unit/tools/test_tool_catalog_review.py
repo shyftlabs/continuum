@@ -140,6 +140,21 @@ class TestFormatCatalogDiff:
 
         assert "mcp approve" in out
 
+    def test_the_remedy_carries_the_pin_path_it_was_read_from(self):
+        """Otherwise the suggested command targets ./tool-pins.json instead.
+
+        `mcp diff --pins somewhere/else.json` printing `mcp approve clinic
+        --all` sends the reader to a different file than the one they just
+        reviewed -- at best "no record", at worst approving against the wrong
+        catalogue.
+        """
+        diffs = diff_catalogs(_pins(), _pins(_tool("a", "A.")))
+        out = format_catalog_diff("clinic", diffs, pin_path="tool-trust/pins.json")
+
+        approve_lines = [ln for ln in out.splitlines() if "mcp approve" in ln]
+        assert approve_lines
+        assert all("tool-trust/pins.json" in ln for ln in approve_lines), approve_lines
+
     def test_no_differences_says_so(self):
         assert "no differences" in format_catalog_diff("clinic", []).lower()
 

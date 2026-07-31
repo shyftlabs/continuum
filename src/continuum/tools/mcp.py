@@ -716,12 +716,15 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # system fell silent while the difference was still unresolved.
         if event is not None:
             event.unreviewed = sorted(unreviewed)
+        # --pins spelled out: the CLI defaults to ./tool-pins.json, which is
+        # rarely where an application keeps it, so a bare `mcp diff NAME`
+        # answers "No catalogue for server ..." and the warning dead-ends.
+        review = f"continuum mcp diff {self.name} --pins {cfg.pin_path}"
         if unreviewed and cfg.on_unreviewed != "allow":
             logger.warning(
                 f"MCP server '{self.name}': {sorted(unreviewed)} "
                 f"{'were dropped -- they are' if cfg.on_unreviewed == 'block' else 'are'} "
-                f"not in the approved catalogue. Review with "
-                f"`continuum mcp diff {self.name}`."
+                f"not in the approved catalogue. Review with `{review}`."
             )
         if drifted and cfg.on_drift != "allow":
             logger.warning(
@@ -730,7 +733,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"{' and were dropped' if cfg.on_drift == 'block' else ''}. A tool "
                 f"description reaches the model's prompt verbatim and can instruct "
                 f"it; if you did not change this server, treat it as untrusted. "
-                f"Review with `continuum mcp diff {self.name}`."
+                f"Review with `{review}`."
             )
         return kept
 
