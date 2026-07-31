@@ -288,6 +288,81 @@ class TestDiffCommand:
         assert "not been observed" in capsys.readouterr().out.lower()
 
 
+class TestRelocatedRecord:
+    """The CLI must look where the runtime actually wrote.
+
+    Both commands derive the record from --pins by default. If a deployment
+    moved it (so the approval can be mounted read-only), that derivation points
+    at nothing and review reports "not observed yet" for a server that has been
+    running for weeks -- a false all-clear.
+    """
+
+    def test_diff_accepts_a_record_path(self):
+        args = _parse(["mcp", "diff", "clinic", "--record", "/var/lib/app/rec.json"])
+
+        assert args.record == "/var/lib/app/rec.json"
+
+    def test_diff_reads_the_relocated_record(self, tmp_path, capsys):
+        from continuum import cli
+
+        pin = tmp_path / "ro" / "approved.json"
+        rec = tmp_path / "rw" / "record.json"
+        save_pins(pin, {"clinic": _pins(_tool("a", "Original."))})
+        save_pins(rec, {"clinic": _pins(_tool("a", "Poisoned."))})
+
+        rc = cli._cmd_mcp_diff(
+            _parse(["mcp", "diff", "clinic", "--pins", str(pin), "--record", str(rec)])
+        )
+
+        assert rc == 1
+        assert "Poisoned." in capsys.readouterr().out
+
+    def test_approving_a_read_only_approval_explains_itself(self, tmp_path, capsys):
+        """The expected failure in the deployment this flag exists for.
+
+        Mounting the approval read-only is the advice; someone will then try to
+        approve on that box. A traceback tells them the tool broke. What is
+        actually true is that this copy is immutable by design and the change
+        belongs where the file is authored.
+        """
+        from continuum import cli
+
+        pin = tmp_path / "approved.json"
+        rec = tmp_path / "record.json"
+        save_pins(pin, {"clinic": _pins(_tool("a", "Original."))})
+        save_pins(rec, {"clinic": _pins(_tool("a", "Reviewed."))})
+        pin.chmod(0o444)
+        try:
+            rc = cli._cmd_mcp_approve(
+                _parse(
+                    ["mcp", "approve", "clinic", "--all", "--pins", str(pin), "--record", str(rec)]
+                )
+            )
+            assert rc == 1
+            err = capsys.readouterr().err
+            assert "read-only" in err.lower() or "permission" in err.lower()
+            assert str(pin) in err
+        finally:
+            pin.chmod(0o644)
+
+    def test_approve_reads_the_relocated_record(self, tmp_path):
+        from continuum import cli
+
+        pin = tmp_path / "ro" / "approved.json"
+        rec = tmp_path / "rw" / "record.json"
+        save_pins(pin, {"clinic": _pins(_tool("a", "Original."))})
+        save_pins(rec, {"clinic": _pins(_tool("a", "Reviewed."))})
+
+        rc = cli._cmd_mcp_approve(
+            _parse(
+                ["mcp", "approve", "clinic", "--all", "--pins", str(pin), "--record", str(rec)]
+            )
+        )
+
+        assert rc == 0
+        assert load_pins(pin)["clinic"]["a"]["description"] == "Reviewed."
+
+
 class TestApproveCommand:
     def test_parses_repeated_tool_flags(self):
         args = _parse(["mcp", "approve", "clinic", "--tool", "a", "--tool", "b"])

@@ -465,6 +465,27 @@ class ToolTrustConfig:
     they disable it, losing the protection for the rare real case too.
     """
 
+    record_path: str | Path | None = None
+    """Where the runtime records what the server last served.
+
+    Defaults to a hidden sibling of :attr:`pin_path`, which is right for
+    development: one path to configure, and the pairing is not something anyone
+    should have to keep consistent by hand.
+
+    Set it when the two files need different storage. A hardened deployment
+    wants the approval read-only -- it is a security decision, and leaving it
+    writable makes it softer than the code it protects -- while the record must
+    be writable, since the runtime rewrites it on every fetch. Deriving one from
+    the other forces both into a single directory, so mounting the approval
+    read-only would silently cost the record, and with it ``mcp diff`` and
+    ``mcp approve``::
+
+        ToolTrustConfig(
+            pin_path="/etc/myapp/approved.json",        # read-only mount
+            record_path="/var/lib/myapp/record.json",   # writable volume
+        )
+    """
+
     on_change: "Callable[[ToolChangeEvent], None] | None" = None
     """Optional in-process hook, called whenever a fetch observes a change."""
 
@@ -479,16 +500,14 @@ class ToolTrustConfig:
 
     @property
     def last_seen_path(self) -> Path | None:
-        """Sibling file recording what the server last served.
+        """Where the record lives: :attr:`record_path`, or a derived sibling.
 
-        Derived from :attr:`pin_path` rather than configured separately: two
-        paths to set is two paths to get inconsistent, and the pairing is not
-        something a user should have to maintain.
-
-        Hidden and distinctly named so it is obvious which file is the approval
-        and which is scratch -- the runtime rewrites this one constantly, and it
-        is the one that should be left out of version control.
+        The derived name is hidden and distinctly suffixed so it is obvious
+        which file is the approval and which is scratch -- the runtime rewrites
+        this one constantly, and it is the one to leave out of version control.
         """
+        if self.record_path is not None:
+            return Path(self.record_path)
         if self.pin_path is None:
             return None
         path = Path(self.pin_path)

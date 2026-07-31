@@ -420,7 +420,13 @@ def _read_catalogues(args: argparse.Namespace) -> tuple[Path, dict, dict]:
     from continuum.tools.types import ToolTrustConfig
 
     pin_path = Path(args.pins)
-    last_seen_path = ToolTrustConfig(pin_path=pin_path).last_seen_path
+    # --record mirrors ToolTrustConfig(record_path=...): a deployment that
+    # mounts the approval read-only has to put the record elsewhere, and
+    # without this the CLI would derive a path nothing writes and report "not
+    # observed yet" for a server that has been running for weeks.
+    last_seen_path = ToolTrustConfig(
+        pin_path=pin_path, record_path=getattr(args, "record", None)
+    ).last_seen_path
     assert last_seen_path is not None  # pin_path is not None, so neither is this
     return (
         pin_path,
@@ -487,6 +493,19 @@ def _cmd_mcp_approve(args: argparse.Namespace) -> int:
         )
     except ValueError as e:
         print(str(e), file=sys.stderr)
+        return 1
+    except OSError as e:
+        # Expected wherever the approval is deliberately immutable -- a
+        # read-only mount is the recommended production shape, so someone will
+        # run this there. A traceback would read as "the tool is broken"; what
+        # is true is that this copy cannot be the place the decision is made.
+        print(
+            f"Could not write {pin_path}: {e}.\n"
+            f"If this deployment mounts the approved catalogue read-only, that is "
+            f"working as intended -- approve where the file is authored (and "
+            f"reviewed), then redeploy it.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Approved {len(approved)} tool(s) for '{args.server}' in {pin_path}: {approved}")
@@ -571,6 +590,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
     )
+    diff_cmd.add_argument(
+        "--record",
+        metavar="PATH",
+        help=(
+            "Where the runtime records what the server served. Defaults to a hidden "
+            "sibling of --pins; set it only if the application set "
+            "ToolTrustConfig(record_path=...)."
+        ),
+    )
     diff_cmd.set_defaults(func=_cmd_mcp_diff)
 
     approve_cmd = mcp_sub.add_parser(
@@ -598,6 +626,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PIN_FILE,
         metavar="PATH",
         help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    approve_cmd.add_argument(
+        "--record",
+        metavar="PATH",
+        help=(
+            "Where the runtime records what the server served. Defaults to a hidden "
+            "sibling of --pins; set it only if the application set "
+            "ToolTrustConfig(record_path=...)."
+        ),
     )
     approve_cmd.set_defaults(func=_cmd_mcp_approve)
 

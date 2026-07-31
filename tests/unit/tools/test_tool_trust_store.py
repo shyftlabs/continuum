@@ -368,6 +368,76 @@ class TestToolTrustConfigDefaults:
         assert ToolTrustConfig().last_seen_path is None
 
 
+class TestRecordPathCanBeRelocated:
+    """The two files have opposite storage needs in a hardened deployment.
+
+    The approval should be read-only -- it is a security decision, and leaving
+    it writable makes it softer than the code it protects. The record must be
+    writable, because the runtime rewrites it on every fetch. Deriving the
+    record as a sibling forces both into one directory, so "mount the approval
+    read-only" silently costs you the record, and with it `mcp diff` and
+    `mcp approve` -- in production, against a real third-party server, which is
+    exactly where the evidence of what was served matters most.
+    """
+
+    def test_defaults_to_a_sibling_of_the_pin_file(self, tmp_path):
+        cfg = ToolTrustConfig(pin_path=tmp_path / "approved.json")
+
+        assert cfg.last_seen_path == tmp_path / ".approved-last-seen.json"
+
+    def test_an_explicit_record_path_wins(self, tmp_path):
+        cfg = ToolTrustConfig(
+            pin_path=tmp_path / "ro" / "approved.json",
+            record_path=tmp_path / "rw" / "record.json",
+        )
+
+        assert cfg.last_seen_path == tmp_path / "rw" / "record.json"
+
+    def test_a_record_path_works_without_a_pin_path(self, tmp_path):
+        """Drift across restarts is worth having even with no approval yet."""
+        cfg = ToolTrustConfig(record_path=tmp_path / "record.json")
+
+        assert cfg.pin_path is None
+        assert cfg.last_seen_path == tmp_path / "record.json"
+
+    async def test_the_runtime_writes_the_relocated_record(self, tmp_path):
+        ro, rw = tmp_path / "ro", tmp_path / "rw"
+        ro.mkdir()
+        cfg = ToolTrustConfig(
+            pin_path=ro / "approved.json",
+            record_path=rw / "record.json",
+            on_unreviewed="allow",
+        )
+        server = _make_server(trust_config=cfg)
+        _attach_session(server, [_tool("a", "hello")])
+
+        await server.list_tools()
+
+        assert (rw / "record.json").exists()
+        assert list(ro.iterdir()) == [], "the approval directory must stay untouched"
+
+    async def test_a_read_only_approval_directory_still_records(self, tmp_path):
+        """The deployment shape this exists for."""
+        ro, rw = tmp_path / "ro", tmp_path / "rw"
+        ro.mkdir()
+        rw.mkdir()
+        save_pins(ro / "approved.json", {"srv": snapshot_tool_digests("srv", [_tool("a", "A.")])})
+        ro.chmod(0o500)
+        try:
+            cfg = ToolTrustConfig(pin_path=ro / "approved.json", record_path=rw / "record.json")
+            server = _make_server(trust_config=cfg)
+            _attach_session(server, [_tool("a", "A.")])
+
+            with _captured_logs() as records:
+                tools = await server.list_tools()
+
+            assert [t.name for t in tools] == ["a"]
+            assert _warnings(records) == [], "nothing should fail or complain"
+            assert (rw / "record.json").exists()
+        finally:
+            ro.chmod(0o700)
+
+
 # ---------------------------------------------------------------------------
 # D. MCPServerUnreviewedError
 # ---------------------------------------------------------------------------
