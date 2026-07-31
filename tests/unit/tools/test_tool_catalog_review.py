@@ -536,3 +536,168 @@ def cfg_last_seen(pin_path, servers) -> None:
         json.dumps({"version": 1, "servers": servers}, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+# ---------------------------------------------------------------------------
+# Hidden characters anywhere in the reviewable text
+# ---------------------------------------------------------------------------
+
+
+class TestHiddenCharactersInSchemas:
+    """A parameter description is prose the model reads, and can hide the same
+    invisible payload a tool description can.
+
+    Counting only the tool description meant a schema-borne payload was shown to
+    the reviewer as raw JSON -- where, being invisible, it looked like an
+    ordinary parameter rename. Enforcement was never affected; the *review* step
+    was, and review is the only thing that catches a first-contact poisoning.
+    """
+
+    def _schema(self, description: str) -> dict:
+        return {
+            "type": "object",
+            "properties": {"to": {"type": "string", "description": description}},
+        }
+
+    def test_counts_hidden_characters_smuggled_into_a_parameter(self):
+        approved = _pins(_tool("a", "Fine.", self._schema("Recipient.")))
+        current = _pins(_tool("a", "Fine.", self._schema(f"Recipient.{HIDDEN}")))
+
+        assert diff_catalogs(approved, current)[0].hidden_char_delta == 1
+
+    def test_the_count_survives_json_serialisation(self):
+        """Guards the specific way this fix can be written and do nothing.
+
+        The schema has to be serialised to be scanned, and json.dumps escapes
+        non-ASCII by default -- turning U+E0041 into the seven ASCII characters
+        \\ u E 0 0 4 1, which strip_hidden_chars leaves alone. The delta would
+        come back 0 and the fix would look correct.
+        """
+        current = _pins(_tool("a", "Fine.", self._schema(f"R.{HIDDEN}{HIDDEN}")))
+        approved = _pins(_tool("a", "Fine.", self._schema("R.")))
+
+        assert diff_catalogs(approved, current)[0].hidden_char_delta == 2
+
+    def test_an_ordinary_schema_change_reports_none(self):
+        approved = _pins(_tool("a", "Fine.", self._schema("Recipient.")))
+        current = _pins(_tool("a", "Fine.", self._schema("Recipient address.")))
+
+        assert diff_catalogs(approved, current)[0].hidden_char_delta == 0
+
+    def test_description_and_schema_payloads_are_both_counted(self):
+        approved = _pins(_tool("a", "Fine.", self._schema("Recipient.")))
+        current = _pins(_tool("a", f"Fine.{HIDDEN}", self._schema(f"Recipient.{HIDDEN}")))
+
+        assert diff_catalogs(approved, current)[0].hidden_char_delta == 2
+
+    def test_the_banner_fires_for_a_schema_only_payload(self):
+        approved = _pins(_tool("a", "Fine.", self._schema("Recipient.")))
+        current = _pins(_tool("a", "Fine.", self._schema(f"Recipient.{HIDDEN}")))
+
+        out = format_catalog_diff("srv", diff_catalogs(approved, current))
+
+        assert "hidden character(s) added" in out
+
+
+# ---------------------------------------------------------------------------
+# `continuum mcp rename` -- re-file an approval a server outgrew
+# ---------------------------------------------------------------------------
+
+
+class TestRenameCommand:
+    """Moving an approval between server names, without re-approving it.
+
+    `mcp approve NEW --all` cannot do this: it merges from the last-seen record,
+    which is keyed by server name too and is empty under a name nothing has run
+    as. Without this command the rename advice would dead-end -- the same
+    half-substituted remedy that has already had to be fixed three times.
+
+    It is a move, not an approval: the entries are unchanged by definition, so
+    nothing needs re-reading and no digest is recomputed.
+    """
+
+    def test_moves_the_entry_and_clears_the_old_key(self, tmp_path):
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"old": _pins(_tool("a", "A."), _tool("b", "B."))})
+
+        rc = cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+
+        stored = load_pins(pin)
+        assert rc == 0
+        assert "old" not in stored
+        assert sorted(stored["new"]) == ["a", "b"]
+
+    def test_the_entries_are_copied_verbatim(self, tmp_path):
+        """A rename that recomputed digests would quietly re-approve whatever the
+        file happened to contain."""
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        before = _pins(_tool("a", "A."))
+        save_pins(pin, {"old": before})
+
+        cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+
+        assert load_pins(pin)["new"] == before
+
+    def test_other_servers_are_untouched(self, tmp_path):
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"old": _pins(_tool("a", "A.")), "keep": _pins(_tool("z", "Z."))})
+
+        cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+
+        assert sorted(load_pins(pin)) == ["keep", "new"]
+
+    def test_unknown_source_fails_without_writing(self, tmp_path, capsys):
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"keep": _pins(_tool("z", "Z."))})
+
+        rc = cli._cmd_mcp_rename(_parse(["mcp", "rename", "ghost", "new", "--pins", str(pin)]))
+
+        assert rc == 1
+        assert "ghost" in capsys.readouterr().err
+        assert sorted(load_pins(pin)) == ["keep"]
+
+    def test_refuses_to_overwrite_an_existing_approval(self, tmp_path, capsys):
+        """Merging silently would let a rename bless a catalogue nobody compared
+        against the one already approved under that name."""
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"old": _pins(_tool("a", "A.")), "new": _pins(_tool("b", "B."))})
+
+        rc = cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+
+        assert rc == 1
+        assert sorted(load_pins(pin)["new"]) == ["b"]
+        assert sorted(load_pins(pin)["old"]) == ["a"]
+
+    def test_reports_a_read_only_approval_plainly(self, tmp_path, capsys):
+        from continuum import cli
+
+        pin = tmp_path / "pins.json"
+        save_pins(pin, {"old": _pins(_tool("a", "A."))})
+        pin.chmod(0o444)
+        try:
+            rc = cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+        finally:
+            pin.chmod(0o644)
+
+        assert rc == 1
+        assert "read-only" in capsys.readouterr().err.lower()
+
+    def test_missing_pin_file_is_not_a_traceback(self, tmp_path, capsys):
+        from continuum import cli
+
+        pin = tmp_path / "absent.json"
+
+        rc = cli._cmd_mcp_rename(_parse(["mcp", "rename", "old", "new", "--pins", str(pin)]))
+
+        assert rc == 1
+        assert "old" in capsys.readouterr().err

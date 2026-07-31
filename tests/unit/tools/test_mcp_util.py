@@ -781,3 +781,75 @@ class TestDerivedNameWarning:
         with _captured_util_warnings() as warnings:
             await executor.initialize()
         assert any("name=" in m for m in warnings), warnings
+
+
+class TestDerivedNameWarningWhenPinning:
+    """A derived name breaks tool *pins* whether or not tools are namespaced.
+
+    The pin file is keyed by ``server.name`` (``MCPServer._load_approved``), so a
+    server that names itself after its URL files its approvals under that URL.
+    Move it to another port and the key no longer matches: every approval is
+    orphaned and the agent refuses the server as unreviewed.
+
+    Namespacing has nothing to do with that. Gating the warning on namespacing
+    left the pin case -- the one with the loudest failure -- unannounced.
+    """
+
+    def _server(self, *, pin_path, name="streamable_http: http://localhost:8890/mcp"):
+        from continuum.tools.types import ToolTrustConfig
+
+        server = _make_server(name=name)
+        server.name_is_derived = True
+        server.list_tools = AsyncMock(return_value=[_fake_tool()])
+        server.trust_config = ToolTrustConfig(pin_path=pin_path)
+        return server
+
+    @pytest.mark.asyncio
+    async def test_warns_when_pinned_even_without_namespacing(self, tmp_path):
+        server = self._server(pin_path=tmp_path / "tool-pins.json")
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=False)
+        assert any("name=" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_the_pin_warning_names_the_consequence_for_approvals(self, tmp_path):
+        """Not the namespacing consequence -- tool names are not changing here.
+
+        Someone reading "your tool names will be truncated" while their agent
+        refuses to start has been told about the wrong failure.
+        """
+        server = self._server(pin_path=tmp_path / "tool-pins.json")
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=False)
+        (message,) = warnings
+        assert "approv" in message.lower(), message
+        assert "64-character" not in message, message
+
+    @pytest.mark.asyncio
+    async def test_still_silent_when_neither_namespaced_nor_pinned(self, tmp_path):
+        """The original carve-out: a derived name is just a display label here."""
+        server = self._server(pin_path=None)
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=False)
+        assert not warnings, warnings
+
+    @pytest.mark.asyncio
+    async def test_namespaced_and_pinned_reports_both_consequences(self, tmp_path):
+        server = self._server(pin_path=tmp_path / "tool-pins.json")
+        with _captured_util_warnings() as warnings:
+            await MCPUtil.get_function_tools(server, namespace_tools=True)
+        (message,) = warnings
+        assert "approv" in message.lower(), message
+        assert "64-character" in message, message
+
+    @pytest.mark.asyncio
+    async def test_executor_warns_for_a_pinned_server_without_namespacing(self, tmp_path):
+        """The executor gated this call on namespacing too -- three sites, one bug."""
+        from continuum.tools.executor import ToolExecutor
+
+        server = self._server(pin_path=tmp_path / "tool-pins.json")
+        server.connect = AsyncMock()
+        executor = ToolExecutor(tool_registry={server: None}, namespace_tools=False)
+        with _captured_util_warnings() as warnings:
+            await executor.initialize()
+        assert any("name=" in m for m in warnings), warnings

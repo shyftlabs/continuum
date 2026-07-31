@@ -164,9 +164,18 @@ class ToolAttentionRouter:
         # legitimately absent from most tool lists.
         unmatched = set(self._config.always_promote) - available
         if unmatched:
+            # The hint used to assert that MCP tool names *are* namespaced. They
+            # are only when namespace_tools is on, and the router sees names, not
+            # settings -- so half the readers went hunting for a prefix bug in a
+            # config that was already correct, while the real causes (a rename, or
+            # a tool the trust gate dropped before it ever reached this list) went
+            # unlooked-for. State the rule conditionally and let Available decide it.
             logger.warning(
                 "tool-attention: always_promote entries matched no tool: %s. "
-                "Available: %s. MCP tool names are namespaced (<server>__<tool>).",
+                "Available: %s. Entries match the LLM-facing name exactly: for MCP "
+                "tools that is <server>__<tool> when namespace_tools is on (the "
+                "default) and the bare name when it is off. A name that looks right "
+                "may also have been dropped by the tool-trust gate before reaching here.",
                 sorted(unmatched),
                 sorted(available),
             )

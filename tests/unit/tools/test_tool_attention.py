@@ -602,6 +602,27 @@ class TestToolAttentionRouterRoute:
 
         assert any("read_file" in m and "always_promote" in m for m in warnings), warnings
 
+    def test_the_advice_does_not_assert_namespacing_as_a_fact(self):
+        """`namespace_tools=False` makes the raw name the LLM-facing key.
+
+        The router sees only names; it cannot tell which setting is in force.
+        Stating "MCP tool names are namespaced" unconditionally sends half the
+        readers hunting for a prefix bug in a config that is already correct --
+        and the real cause (a rename, or a tool dropped by the trust gate) goes
+        unlooked-for.
+        """
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"], min_tools=3, always_promote=["read_file"]
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        (message,) = [m for m in warnings if "always_promote" in m]
+        assert "namespace_tools" in message, message
+        assert "MCP tool names are namespaced" not in message, message
+
     def test_no_warning_when_always_promote_entries_all_match(self):
         tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
         router = _make_router_with_mock_registry(

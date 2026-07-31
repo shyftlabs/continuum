@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import weakref
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from continuum.llm.types import ToolDefinition
@@ -129,13 +130,17 @@ class MCPUtil:
         tools = []
         tool_names: set[str] = set()
         for server in servers:
+            # Before delegating, not after: the inner call now warns for a pinned
+            # server even with namespace_tools=False, and the once-per-server guard
+            # would let that suppress this site's message -- which is the accurate
+            # one, because this is where the prefix is actually applied.
+            cls._warn_if_server_name_is_derived(server, namespaced=namespace_tools)
             # Fetch unprefixed and apply the namespace here, so the prefix is added
             # exactly once regardless of get_function_tools' own default.
             server_tools = await cls.get_function_tools(
                 server, normalize_schemas, strict_mode, metadata, namespace_tools=False
             )
             if namespace_tools:
-                cls._warn_if_server_name_is_derived(server)
                 for tool_def in server_tools:
                     tool_def.function.name = build_namespaced_tool_name(
                         server.name, tool_def.function.name
@@ -154,26 +159,39 @@ class MCPUtil:
         return tools
 
     @staticmethod
-    def _warn_if_server_name_is_derived(server: "MCPServer") -> None:
-        """Report a server whose namespace prefix was invented by the transport.
+    def _warn_if_server_name_is_derived(server: "MCPServer", *, namespaced: bool) -> None:
+        """Report a server identified by a label the transport invented.
 
         Without name=, the transports fall back to a display label built from the
         URL or command ("streamable_http: http://localhost:8890/mcp"). Harmless
-        while it only appeared in error messages; under namespacing it becomes the
-        prefix on every LLM-facing tool name, which means:
+        while it only appeared in error messages. It stops being harmless as soon
+        as something keys off it, and two things do:
 
-        - tool identity carries the host and port, so moving the server to another
-          port silently renames every tool and quietly breaks policy resources,
-          digest pins, always_promote and capture/inject -- all exact-string
-          matches that fail by doing nothing;
-        - the prefix eats ~39 of the 64 characters providers allow, so longer tool
-          names get hash-truncated into unreadable ids;
-        - the model sees the transport and URL instead of a meaningful namespace.
+        *Namespacing* makes it the prefix on every LLM-facing tool name, so tool
+        identity carries the host and port -- moving the server renames every
+        tool and breaks policy resources, always_promote and capture/inject, all
+        exact-string matches that fail by doing nothing. The prefix also eats ~39
+        of the 64 characters providers allow, hash-truncating longer names.
+
+        *Pinning* files the approved catalogue under it (``_load_approved``), so
+        moving the server orphans every approval and the agent refuses it as
+        unreviewed -- with a message that reads "new server, go read its tools"
+        rather than "you renamed one".
+
+        These are independent: pins are keyed by the raw name whether or not
+        tools are namespaced. Gating this warning on namespacing alone therefore
+        left the pin case silent, which is the case with the louder failure.
 
         Warned once per server: registry rebuilds re-enter this path and the
         advice does not change.
         """
         if not getattr(server, "name_is_derived", False):
+            return
+        # isinstance, not truthiness: pin_path is str | Path | None, and a test
+        # double's attribute access answers with a truthy mock for anything.
+        pin_path = getattr(getattr(server, "trust_config", None), "pin_path", None)
+        pinned = isinstance(pin_path, (str, Path))
+        if not (namespaced or pinned):
             return
         if server in _WARNED_DERIVED_NAME_SERVERS:
             return
@@ -181,13 +199,26 @@ class MCPUtil:
             _WARNED_DERIVED_NAME_SERVERS.add(server)
         except TypeError:  # pragma: no cover - server not weak-referenceable
             pass
+
+        consequences = []
+        if namespaced:
+            consequences.append(
+                f"Its tools are namespaced with the prefix "
+                f"{sanitize_name_component(server.name)!r}, so tool names change when the "
+                f"server moves and are truncated to fit the 64-character provider limit."
+            )
+        if pinned:
+            consequences.append(
+                f"Its approved tool catalogue is filed under that name in {pin_path}, so "
+                f"moving the server orphans every approval and the agent then refuses it "
+                f"as unreviewed."
+            )
         logger.warning(
-            "MCP server was created without name=, so its tools are namespaced with "
-            "the auto-derived prefix %r. That prefix encodes the transport and URL, "
-            "so tool names change when the server moves and are truncated to fit the "
-            "64-character provider limit. Pass name='<short-stable-name>' to the "
-            "server constructor.",
-            sanitize_name_component(server.name),
+            "MCP server was created without name=, so it is identified by the "
+            "auto-derived label %r, which encodes the transport and URL. %s Pass "
+            "name='<short-stable-name>' to the server constructor.",
+            server.name,
+            " ".join(consequences),
         )
 
     @classmethod
@@ -240,8 +271,8 @@ class MCPUtil:
                 cls.to_function_tool(tool, server, normalize_schemas, strict_mode)
                 for tool in mcp_tools
             ]
+            cls._warn_if_server_name_is_derived(server, namespaced=namespace_tools)
             if namespace_tools:
-                cls._warn_if_server_name_is_derived(server)
                 for tool_def in tool_definitions:
                     tool_def.function.name = build_namespaced_tool_name(
                         server.name, tool_def.function.name

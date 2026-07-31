@@ -535,6 +535,37 @@ def _cmd_mcp_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mcp_rename(args: argparse.Namespace) -> int:
+    """Move a server's approvals to a new name, without re-approving them."""
+    from continuum.tools.pinning import rename_server
+
+    pin_path = Path(args.pins)
+    try:
+        moved = rename_server(pin_path, args.old, args.new)
+    except KeyError as e:
+        # KeyError stringifies with its own quotes; the message is already one.
+        print(e.args[0], file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(
+            f"Could not write {pin_path}: {e}.\n"
+            f"If this deployment mounts the approved catalogue read-only, that is "
+            f"working as intended -- rename where the file is authored, then redeploy it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Moved {moved} approved tool(s) from '{args.old}' to '{args.new}' in {pin_path}.")
+    print(
+        "The runtime's last-seen record is keyed by server name too, and is not "
+        "moved: it is rewritten on the next fetch."
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="continuum",
@@ -660,6 +691,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     approve_cmd.set_defaults(func=_cmd_mcp_approve)
+
+    rename_cmd = mcp_sub.add_parser(
+        "rename",
+        help="Re-file a server's approvals under a different name.",
+        description=(
+            "Move an approved catalogue from one server name to another. Approvals "
+            "are keyed by the name passed to MCPServer(name=...) -- and a server "
+            "created without one is named after its URL, so moving it orphans every "
+            "approval and the agent then refuses it as unreviewed. This is a move, "
+            "not an approval: entries are copied verbatim, so nothing needs "
+            "re-reading. Use `mcp approve` when the tools themselves changed."
+        ),
+    )
+    rename_cmd.add_argument("old", help="Name the approvals are currently filed under.")
+    rename_cmd.add_argument("new", help="Name the server reports now.")
+    rename_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    rename_cmd.set_defaults(func=_cmd_mcp_rename)
 
     return parser
 

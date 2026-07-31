@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import shlex
 import typing
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -655,7 +656,11 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         return event
 
     def _apply_trust_policy(
-        self, tools: list[MCPTool], event: ToolChangeEvent | None = None
+        self,
+        tools: list[MCPTool],
+        event: ToolChangeEvent | None = None,
+        *,
+        raw_tools: list[MCPTool] | None = None,
     ) -> list[MCPTool]:
         """Enforce ``on_unreviewed`` / ``on_drift`` against the approved catalogue.
 
@@ -669,6 +674,11 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         is enforceable and this degrades to the memory-only tripwire -- without
         that carve-out the default config (``pin_path=None``,
         ``on_unreviewed="block"``) would refuse every server on first use.
+
+        ``raw_tools`` is the same catalogue before ``_clean_tool``. Only the
+        rename check reads it, and only raw bytes can answer the question it
+        asks -- "are these the bytes a human already approved?" -- since the
+        cleaned form is identical whether or not the server hid characters in it.
         """
         cfg = self._trust_config
         if cfg.pin_path is None:
@@ -692,7 +702,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
         approved = self._load_approved()
         if not approved:
-            return self._handle_unreviewed_server(tools, cfg.on_unreviewed)
+            return self._handle_unreviewed_server(tools, cfg.on_unreviewed, raw_tools)
 
         kept: list[MCPTool] = []
         unreviewed: list[str] = []
@@ -719,7 +729,15 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # --pins spelled out: the CLI defaults to ./tool-pins.json, which is
         # rarely where an application keeps it, so a bare `mcp diff NAME`
         # answers "No catalogue for server ..." and the warning dead-ends.
-        review = f"continuum mcp diff {self.name} --pins {cfg.pin_path}"
+        #
+        # shlex.quote because a server without name= is called
+        # "streamable_http: http://host:8890/mcp" -- a string with a space, which
+        # bare would hand argparse a truncated name plus stray positionals. Simple
+        # names pass through unchanged, so the common case reads the same.
+        review = (
+            f"continuum mcp diff {shlex.quote(self.name)} "
+            f"--pins {shlex.quote(str(cfg.pin_path))}"
+        )
         if unreviewed and cfg.on_unreviewed != "allow":
             logger.warning(
                 f"MCP server '{self.name}': {sorted(unreviewed)} "
@@ -771,7 +789,24 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"catalogue change was still applied; fix the callback."
             )
 
-    def _handle_unreviewed_server(self, tools: list[MCPTool], action: str) -> list[MCPTool]:
+    def _find_prior_approval(self, raw_tools: list[MCPTool] | None) -> str | None:
+        """The name this exact catalogue is already approved under, if any."""
+        if not raw_tools or self._trust_config.pin_path is None:
+            return None
+        from continuum.tools.pinning import find_identical_catalog, load_pins
+
+        return find_identical_catalog(
+            load_pins(self._trust_config.pin_path),
+            {tool.name: _tool_digest(tool) for tool in raw_tools},
+            exclude=self.name,
+        )
+
+    def _handle_unreviewed_server(
+        self,
+        tools: list[MCPTool],
+        action: str,
+        raw_tools: list[MCPTool] | None = None,
+    ) -> list[MCPTool]:
         """React to a server with no approved catalogue at all.
 
         Blocking is the default here, unlike drift, because this case has no
@@ -780,9 +815,21 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         was hostile from first contact and you have pinned the poison; a person
         reading the descriptions is the only thing that catches it, so making
         that step optional would leave the weakest case undefended.
+
+        Two situations reach here and they need opposite advice. A genuinely new
+        server must be read. A server whose *name* moved -- the transports derive
+        one from the URL when ``name=`` is omitted, so a port change renames it --
+        was read already, and telling its owner to re-read four unchanged
+        descriptions teaches them that this refusal is noise to be cleared with
+        ``--all``. That is the rubber-stamp the feature exists to prevent, so the
+        two are distinguished before anything is printed.
         """
         if action == "allow":
             return tools
+
+        prior = self._find_prior_approval(raw_tools)
+        if prior is not None:
+            return self._handle_renamed_server(tools, action, prior)
 
         # Substitute the real URL rather than a placeholder: the server knows
         # it, so making the reader supply it is a chore, and a literal "URL"
@@ -809,13 +856,14 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # Swapping --all for --tool NAME is the usual next move after reading a
         # catalogue, and behind an absolute path it means retyping past the
         # path to reach it; trailing, it is one edit from shell history.
-        pins = self._trust_config.pin_path
+        pins = shlex.quote(str(self._trust_config.pin_path))
+        name = shlex.quote(self.name)
         url = self.review_url
         if url is not None:
             remedy = (
                 f"Read them, then accept them:\n\n"
-                f"  continuum mcp inspect {url} --name {self.name}\n"
-                f"  continuum mcp approve {self.name} --pins {pins} --all\n\n"
+                f"  continuum mcp inspect {shlex.quote(url)} --name {name}\n"
+                f"  continuum mcp approve {name} --pins {pins} --all\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         else:
@@ -824,7 +872,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"only speaks streamable HTTP, so for this transport call "
                 f"continuum.tools.pinning.format_tool_catalog() to read the "
                 f"catalogue, then:\n\n"
-                f"  continuum mcp approve {self.name} --pins {pins} --all\n\n"
+                f"  continuum mcp approve {name} --pins {pins} --all\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         message = (
@@ -833,6 +881,48 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             f"instruct it. {remedy}\n"
             f"Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
             f"servers (not recommended)."
+        )
+        if action == "warn":
+            logger.warning(message)
+            return tools
+        raise MCPServerUnreviewedError(message, server_name=self.name)
+
+    def _handle_renamed_server(
+        self, tools: list[MCPTool], action: str, prior: str
+    ) -> list[MCPTool]:
+        """Refuse a server whose approval is filed under its former name.
+
+        Says re-file, not re-approve, and deliberately never prints ``--all``.
+        ``mcp approve`` merges from the last-seen record, which is keyed by
+        server name too and is empty under a name nothing has run as -- so the
+        command would dead-end on "no record", the same half-substituted advice
+        that has already had to be fixed three times. ``mcp rename`` moves the
+        entry instead, which needs no re-reading because the digests are, by the
+        test that got us here, identical.
+
+        The refusal stands rather than auto-migrating. "Only a human command
+        writes tool-pins.json" is what made the two-file split work; a runtime
+        that rewrites approvals whenever it recognises them is the same shape as
+        the original bug, where the tripwire promoted a poisoned catalogue to
+        "approved".
+        """
+        pins = shlex.quote(str(self._trust_config.pin_path))
+        message = (
+            f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
+            f"catalogue under that name.\n\n"
+            f"All {len(tools)} are byte-identical to the catalogue approved under "
+            f"'{prior}', so this server was renamed or moved rather than newly "
+            f"added. Nothing here needs re-reading.\n\n"
+            f"Re-file the approval you already made:\n\n"
+            f"  continuum mcp rename {shlex.quote(prior)} {shlex.quote(self.name)} "
+            f"--pins {pins}\n\n"
+            + (
+                "Then pass name='<short-stable-name>' to the server constructor: "
+                "without it the name is derived from the URL, so this recurs on "
+                "every move.\n"
+                if self.name_is_derived
+                else ""
+            )
         )
         if action == "warn":
             logger.warning(message)
@@ -950,7 +1040,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # model will read, and before the cache, so a dropped tool is not
             # served from it on later calls.
             self._tools_list = self._apply_trust_policy(
-                [_clean_tool(t) for t in result.tools], event
+                [_clean_tool(t) for t in result.tools], event, raw_tools=result.tools
             )
             self._cache_dirty = False
             self._report_tool_change(event)

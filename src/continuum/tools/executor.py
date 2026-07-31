@@ -586,8 +586,9 @@ class ToolExecutor:
             try:
                 mcp_tools = await server.list_tools(metadata=metadata)
                 self._warn_on_unmatched_context_tool_names(server, mcp_tools)
-                if self._namespace_tools:
-                    MCPUtil._warn_if_server_name_is_derived(server)
+                MCPUtil._warn_if_server_name_is_derived(
+                    server, namespaced=self._namespace_tools
+                )
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list

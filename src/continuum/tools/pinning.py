@@ -38,6 +38,7 @@ CLI command prints the catalogue and treats the pin file as a byproduct.
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -139,7 +140,7 @@ def load_pins(path: str | Path) -> dict[str, ServerPins]:
         logger.warning(
             f"Ignoring MCP tool-pin file {file}: unsupported format version {version!r} "
             f"(this build reads version {PIN_FORMAT_VERSION}). Re-create it with "
-            f"`continuum mcp inspect URL --name SERVER --write-pins {file}`."
+            f"`continuum mcp inspect URL --name SERVER --write-pins {shlex.quote(str(file))}`."
         )
         return {}
 
@@ -187,6 +188,26 @@ class ToolDiff:
     approved: PinEntry | None
     current: PinEntry | None
 
+    @staticmethod
+    def _reviewable_text(entry: PinEntry | None) -> str:
+        """Every byte of this entry a reviewer is asked to judge.
+
+        Both fields, because both are prose the model reads and either can carry
+        the payload -- ``inputSchema`` holds parameter descriptions, which is
+        where the F3 proof of concept smuggles ("...include its contents in the
+        notes field").
+
+        ``ensure_ascii=False`` is load-bearing. The default escapes U+E0041 into
+        the seven ASCII characters ``\\uE041``, which ``strip_hidden_chars``
+        leaves alone -- the count would come back zero and the check would look
+        implemented while detecting nothing.
+        """
+        if entry is None:
+            return ""
+        schema = json.dumps(entry.get("inputSchema", {}), sort_keys=True, ensure_ascii=False)
+        description = entry.get("description")
+        return (description if isinstance(description, str) else "") + schema
+
     @property
     def hidden_char_delta(self) -> int:
         """How many invisible characters this change adds.
@@ -194,9 +215,15 @@ class ToolDiff:
         Reported rather than silently cleaned: the live path strips them, but a
         reviewer must be told the server sent hidden text. It is the single
         strongest signal a server is hostile, and hiding it defeats the review.
+
+        Counted across the description *and* the schema. Counting only the
+        description left a schema-borne payload rendered as raw JSON, where --
+        being invisible -- it read as an ordinary parameter edit. Enforcement was
+        never affected; review was, and review is the only step that catches a
+        server that was hostile on first contact.
         """
-        after = self.current.get("description", "") if self.current else ""
-        before = self.approved.get("description", "") if self.approved else ""
+        after = self._reviewable_text(self.current)
+        before = self._reviewable_text(self.approved)
         return (len(after) - len(strip_hidden_chars(after))) - (
             len(before) - len(strip_hidden_chars(before))
         )
@@ -278,9 +305,13 @@ def format_catalog_diff(
     # A report of a problem carries its own remedy: without the command, the
     # reader knows something is wrong and not what to do about it.
     out.append("Approve the changes you have read and accept:")
-    pins = f" --pins {pin_path}" if pin_path is not None else ""
-    out.append(f"  continuum mcp approve {server_name}{pins} --tool NAME")
-    out.append(f"  continuum mcp approve {server_name}{pins} --all")
+    # Quoted: an auto-derived server name contains ": " and a pin path can sit
+    # under a directory with a space, either of which makes the line stop being
+    # a command.
+    pins = f" --pins {shlex.quote(str(pin_path))}" if pin_path is not None else ""
+    name = shlex.quote(server_name)
+    out.append(f"  continuum mcp approve {name}{pins} --tool NAME")
+    out.append(f"  continuum mcp approve {name}{pins} --all")
     return "\n".join(out)
 
 
@@ -347,6 +378,81 @@ def approve_tools(
     return selected
 
 
+def rename_server(pin_path: str | Path, old: str, new: str) -> int:
+    """Re-file a server's approvals under a different name. Returns the count.
+
+    A move, not an approval: entries are copied verbatim and no digest is
+    recomputed, because by construction nothing about them changed. Recomputing
+    would turn "the name moved" into "whatever the file says now is approved".
+
+    Needed because approvals are keyed by ``server.name`` and names move --
+    a server created without ``name=`` is called after its URL, so changing a
+    port orphans every approval. ``mcp approve NEW --all`` cannot recover from
+    that: it merges from the last-seen record, which is keyed by server name too
+    and is empty under a name nothing has ever run as.
+
+    Raises:
+        KeyError: ``old`` has no entry -- almost always a typo, and renaming
+            nothing while reporting success would leave the orphan in place.
+        ValueError: ``old`` and ``new`` are the same name, or ``new`` already has
+            an entry. Merging silently would bless a catalogue against an
+            approval nobody compared it to.
+    """
+    if old == new:
+        # Falling through would report a collision between a name and itself:
+        # "merging would accept X's entries without comparing them against X's",
+        # which reads as a bug in the tool rather than a typo in the command.
+        raise ValueError(f"Old and new are the same name ({old!r}); nothing to rename.")
+    pins = load_pins(pin_path)
+    if old not in pins:
+        raise KeyError(
+            f"No approved catalogue for server {old!r} in {pin_path}. Known: {sorted(pins)}"
+        )
+    if new in pins:
+        raise ValueError(
+            f"Server {new!r} already has an approved catalogue in {pin_path}. "
+            f"Merging would accept {old!r}'s entries without anyone comparing them "
+            f"against {new!r}'s. Review with\n\n"
+            f"  continuum mcp diff {shlex.quote(new)} --pins {shlex.quote(str(pin_path))}\n\n"
+            f"or remove one of the two entries first."
+        )
+    pins[new] = pins.pop(old)
+    save_pins(pin_path, pins)
+    return len(pins[new])
+
+
+def find_identical_catalog(
+    pins: dict[str, ServerPins], current_raw: dict[str, str], *, exclude: str
+) -> str | None:
+    """A server name in ``pins`` holding exactly this catalogue, if there is one.
+
+    Answers "is this unfamiliar server one I already approved under a different
+    name?" -- so the refusal can say *re-file it* instead of *go read four tool
+    descriptions you read last week*, which is advice that trains the
+    rubber-stamp the whole feature exists to prevent.
+
+    All-or-nothing, over ``raw`` digests, and that strictness is the point. The
+    message this enables claims nothing needs re-reading, and that claim is only
+    true when every byte is identical:
+
+    * a partial match would say "nothing to re-read" about a catalogue whose one
+      changed tool is precisely the one that must be read;
+    * ``raw`` rather than ``effective`` so a catalogue that differs only by
+      invisible characters cannot pass. The model would read the same text, but
+      the server sent bytes nobody reviewed -- the strongest hostile signal
+      there is.
+
+    Anything short of an exact match returns None and the caller falls back to
+    the ordinary unreviewed-server refusal.
+    """
+    for name, entry in pins.items():
+        if name == exclude or set(entry) != set(current_raw):
+            continue
+        if all(entry[tool].get("raw") == digest for tool, digest in current_raw.items()):
+            return name
+    return None
+
+
 def _format_schema_descriptions(node: Any, path: str = "") -> list[str]:
     """Collect ``path: description`` lines from a JSON Schema.
 
@@ -400,13 +506,23 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
 
         out.append(f"{'─' * 72}")
         out.append(f"{tool.name}   [digest {digest[:_DIGEST_PREVIEW]}]")
-        # The raw name above is what the server calls it; this is what the model
-        # sees and what PolicyStore / always_promote match. With an auto-derived
-        # server name the prefix is sanitized and may be hash-truncated, so it is
-        # not something a reader can work out -- print it rather than expect them
-        # to guess, or they write tool:delete_user, match nothing, and a deny
-        # rule silently stops denying.
-        out.append(f"  policy resource:  tool:{build_namespaced_tool_name(server_name, tool.name)}")
+        # What PolicyStore and always_promote match is the LLM-facing name, and
+        # which one that is depends on namespace_tools. `mcp inspect URL`
+        # connects standalone -- no ToolExecutor, no application config -- so it
+        # cannot know. Asserting one form sends the other half of readers to
+        # write a resource string that matches nothing, and a deny rule that
+        # matches nothing stops denying without saying so.
+        #
+        # Both are printed rather than the default alone because the namespaced
+        # form is genuinely unguessable for an auto-derived server name (':',
+        # '/' and '.' are stripped and a long URL is hash-truncated), and the
+        # raw form is unguessable for nobody -- so a reader who is shown only
+        # one cannot reconstruct the other.
+        out.append("  policy resource:")
+        namespaced = build_namespaced_tool_name(server_name, tool.name)
+        out.append(f"    tool:{namespaced}   (namespace_tools=True, the default)")
+        out.append(f"    tool:{tool.name}{' ' * max(1, len(namespaced) - len(tool.name))}"
+                   f"   (namespace_tools=False)")
         out.append("")
         out.append(f"  {description or '(no description)'}")
 

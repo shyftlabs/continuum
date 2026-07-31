@@ -119,6 +119,21 @@ class TestFormatToolCatalog:
         assert f"tool:{expected}" in out
         assert "sse: https://" not in expected  # unguessable by hand -- hence printing it
 
+    def test_shows_the_un_namespaced_name_too(self):
+        """`namespace_tools=False` makes the raw name the LLM-facing key.
+
+        `mcp inspect URL` connects standalone -- no ToolExecutor, no config --
+        so it cannot know which setting the application uses. Printing one form
+        as fact means half of all readers copy a resource string that matches
+        nothing, and a deny rule that matches nothing stops denying without
+        saying so. Print both and label them.
+        """
+        out = format_tool_catalog("db", [_tool("delete_user", "Delete a user.")])
+
+        assert "tool:db__delete_user" in out
+        assert "tool:delete_user" in out
+        assert "namespace_tools" in out
+
 
 # ---------------------------------------------------------------------------
 # snapshot_tool_digests
