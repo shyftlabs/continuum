@@ -1289,3 +1289,79 @@ class TestTheRefusalSaysWhyTheCliCannotBeUsed:
             await server.list_tools()
 
         assert "header" in str(caught.value).lower(), str(caught.value)
+
+
+class TestTheReadStepIsActionable:
+    """A dotted path is not an instruction.
+
+    `continuum.tools.pinning.review_server(server)` sits directly above a
+    pasteable `continuum mcp approve ...` line, so it reads as a command and is
+    not one: nothing to run, no import, and no statement of where `server` comes
+    from. A reader who cannot act on the read step approves without it -- which
+    makes the remedy's shape, not its wording, the thing that decides whether
+    anyone reviews.
+
+    The SDK cannot emit a runnable command here: it does not know the caller's
+    module layout, and guessing one would be the same class of error as printing
+    `mcp inspect` for a server it cannot reach. What it can do is show the two
+    lines of real code and say where they go.
+    """
+
+    def _stdio(self, tmp_path):
+        from continuum.tools.mcp import MCPServerStdio
+
+        server = MCPServerStdio(
+            params={"command": "python", "args": ["s.py"]},
+            cache_tools_list=False,
+            name="local",
+            trust_config=ToolTrustConfig(pin_path=tmp_path / "pins.json", on_unreviewed="block"),
+        )
+        session = AsyncMock()
+        session.list_tools = AsyncMock(return_value=MagicMock(tools=[_tool("a", "A.")]))
+        server.session = session
+        return server
+
+    @pytest.mark.asyncio
+    async def test_the_single_server_refusal_shows_the_import(self, tmp_path):
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._stdio(tmp_path).list_tools()
+
+        message = str(caught.value)
+        assert "from continuum.tools import review_server" in message, message
+        assert "await review_server(server)" in message, message
+
+    @pytest.mark.asyncio
+    async def test_it_says_where_that_code_goes(self, tmp_path):
+        """"Call review_server" is useless without "where you build this
+        server" -- the reader has an exception, not a REPL with `server` in it."""
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._stdio(tmp_path).list_tools()
+
+        assert "where you build" in str(caught.value).lower(), str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_the_aggregated_refusal_shows_it_too(self, tmp_path):
+        """The per-server block is what a multi-server refusal composes from, so
+        the import has to be in the block and not in surrounding prose."""
+        from continuum.tools.executor import ToolExecutor
+
+        pins = tmp_path / "pins.json"
+        save_pins(pins, {"other": snapshot_tool_digests("other", [_tool("z", "Z.")])})
+        a = _named_server("clinic", ToolTrustConfig(pin_path=pins), [_tool("a", "A.")])
+        b = self._stdio(tmp_path)
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await ToolExecutor(dict.fromkeys([a, b]))._build_registry(
+                dict.fromkeys([a, b]), target={}
+            )
+
+        assert "from continuum.tools import review_server" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_the_dotted_path_is_gone(self, tmp_path):
+        """It looked like a command. Nothing that is not runnable should sit in
+        a block of runnable lines without being marked as code to write."""
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._stdio(tmp_path).list_tools()
+
+        assert "continuum.tools.pinning.review_server" not in str(caught.value)

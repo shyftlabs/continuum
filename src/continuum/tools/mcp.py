@@ -895,9 +895,23 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # step dropped for precisely the servers hardest to read, which is
             # the approve-without-reading path printed by the SDK itself.
             reason = self.review_unavailable_reason or "it is not reachable with a bare URL"
+            # Real code, not a dotted path. `continuum.tools.pinning.review_server`
+            # sat directly above a pasteable `mcp approve` line, so it read as a
+            # command and was not one: nothing to run, no import, and no statement
+            # of where `server` comes from -- the reader has an exception, not a
+            # REPL holding the object. A read step nobody can act on is a read
+            # step nobody performs, and then the approve line below is the only
+            # thing left that works.
+            #
+            # A runnable one-liner is not available: the SDK does not know the
+            # caller's module layout, and guessing one would be the same mistake
+            # as printing `mcp inspect` for a server it cannot reach.
             commands = (
-                f"  # {reason}, so read it here first:\n"
-                f"  #   continuum.tools.pinning.review_server(server)\n"
+                f"  # {reason}. Read it where you build this server, before connecting:\n"
+                f"  #\n"
+                f"  #     from continuum.tools import review_server\n"
+                f"  #     await review_server(server)\n"
+                f"  #\n"
                 f"  continuum mcp approve {name} --pins {pins} --all"
             )
             # Names the library call, not the CLI. `mcp inspect` passes a bare
@@ -907,9 +921,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # server object instead, so headers, env, cwd and transport are
             # right by construction rather than retyped and liable to drift.
             remedy = (
-                f"Read them, then record the approval. {reason[0].upper()}{reason[1:]}, "
-                f"so call continuum.tools.pinning.review_server(server) to read the "
-                f"catalogue, then:\n\n"
+                f"Read them, then record the approval.\n\n"
                 f"{commands}\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
