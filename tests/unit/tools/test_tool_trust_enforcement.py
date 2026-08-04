@@ -956,6 +956,40 @@ class TestEveryUnreviewedServerIsNamedAtOnce:
         assert "continuum mcp approve pharmacy" in message, message
 
     @pytest.mark.asyncio
+    async def test_a_server_the_cli_cannot_review_still_shows_how_to_read_it(self, tmp_path):
+        """The aggregate composes each server's *commands*, and for a server with
+        no CLI review route those were only the approve line.
+
+        So the combined refusal listed one server with "read it, then approve"
+        and the next with just "approve" -- the read step silently dropped for
+        exactly the servers hardest to read. That is the approve-without-reading
+        path the whole design works to avoid, printed by the SDK itself.
+        """
+        from continuum.tools.mcp import MCPServerStdio
+
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        http = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+        local = MCPServerStdio(
+            params={"command": "python", "args": ["srv.py"]},
+            cache_tools_list=False,
+            name="local",
+            trust_config=ToolTrustConfig(pin_path=pins),
+        )
+        session = AsyncMock()
+        session.list_tools = AsyncMock(return_value=MagicMock(tools=[_tool("b", "B.")]))
+        local.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as excinfo:
+            await self._executor(http, local)._build_registry(
+                dict.fromkeys([http, local]), target={}
+            )
+
+        message = str(excinfo.value)
+        assert "continuum mcp inspect" in message, "the HTTP server keeps its CLI route"
+        assert "review_server" in message, "the stdio server must still say how to read it"
+
+    @pytest.mark.asyncio
     async def test_server_name_still_carries_one_for_existing_handlers(self, tmp_path):
         """`except MCPServerUnreviewedError as e: log(e.context["server_name"])`
         already exists in the wild. Dropping the field to add a plural one would

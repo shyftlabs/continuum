@@ -875,7 +875,17 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         else:
-            commands = f"  continuum mcp approve {name} --pins {pins} --all"
+            # The read step is inside `commands`, as a shell comment, because
+            # `commands` is what a multi-server refusal composes from. Leaving it
+            # in the surrounding prose meant the aggregate listed one server as
+            # "read it, then approve" and the next as bare "approve" -- the read
+            # step dropped for precisely the servers hardest to read, which is
+            # the approve-without-reading path printed by the SDK itself.
+            commands = (
+                f"  # read it first -- `mcp inspect` cannot reach this server:\n"
+                f"  #   continuum.tools.pinning.review_server(server)\n"
+                f"  continuum mcp approve {name} --pins {pins} --all"
+            )
             # Names the library call, not the CLI. `mcp inspect` passes a bare
             # URL, which reaches unauthenticated streamable HTTP and nothing
             # else -- not stdio (no URL), not SSE (wrong protocol), not a server
