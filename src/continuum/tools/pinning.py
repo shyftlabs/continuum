@@ -568,7 +568,6 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
     for tool in tools:
         digest = _tool_digest(tool)
         description = tool.description or ""
-        cleaned = strip_hidden_chars(description)
 
         out.append(f"{'─' * 72}")
         out.append(f"{tool.name}   [digest {digest[:_DIGEST_PREVIEW]}]")
@@ -592,21 +591,32 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
         out.append("")
         out.append(f"  {description or '(no description)'}")
 
-        if cleaned != description:
-            removed = len(description) - len(cleaned)
-            out.append("")
-            out.append(
-                f"  *** WARNING: {removed} hidden/invisible character(s) in this description. ***"
-            )
-            out.append("  These are readable by the model but not by you. Treat this server")
-            out.append("  as hostile unless you can explain them.")
-            out.append(f"  Visible text only: {cleaned!r}")
-
         param_lines = _format_schema_descriptions(tool.inputSchema or {})
         if param_lines:
             out.append("")
             out.append("  Parameters:")
             out.extend(f"    {line}" for line in param_lines)
+
+        # Counted over the description AND the parameter descriptions, because a
+        # payload hides in either and ToolDiff.hidden_char_delta already covers
+        # both. Checking only the description here meant `mcp diff` announced a
+        # schema-borne payload while this view printed it silently -- and this is
+        # the worse place to miss it. The diff view only runs against a catalogue
+        # someone already approved; this one is first contact, the case pinning
+        # cannot defend at all, where a person reading the output IS the defence.
+        hidden_sources = [description, *param_lines]
+        removed = sum(len(t) - len(strip_hidden_chars(t)) for t in hidden_sources)
+        if removed:
+            out.append("")
+            out.append(
+                f"  *** WARNING: {removed} hidden/invisible character(s) in this tool. ***"
+            )
+            out.append("  These are readable by the model but not by you. Treat this server")
+            out.append("  as hostile unless you can explain them.")
+            for text in hidden_sources:
+                visible = strip_hidden_chars(text)
+                if visible != text:
+                    out.append(f"  Visible text only: {visible!r}")
 
     out.append(f"{'─' * 72}")
     return "\n".join(out)
