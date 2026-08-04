@@ -65,3 +65,20 @@ class MCPServerUnreviewedError(MCPError):
 
     default_message = "MCP server tool catalogue has not been reviewed"
     default_error_code = "MCP_SERVER_UNREVIEWED"
+
+    def __init__(self, message: str | None = None, *, commands: str | None = None, **kwargs: Any):
+        """
+        Args:
+            commands: the shell commands that resolve *this* server, already
+                shell-quoted. Carried so a caller holding several of these --
+                ``ToolExecutor`` building a registry over multiple servers --
+                can compose one refusal listing each server's own commands
+                instead of repeating the shared preamble per server.
+
+                A plain attribute, deliberately not ``context``: ``__str__``
+                renders every context entry inline as ``k=v``, so a multi-line
+                command block there reappears mangled after "| Context:" --
+                duplicating the commands in a form nobody can paste.
+        """
+        super().__init__(message, **kwargs)
+        self.commands = commands

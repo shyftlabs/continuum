@@ -538,6 +538,28 @@ an unrelated one you have not read.
 
 Add `--record PATH` to both commands if the application sets `record_path`.
 
+#### Gate it in CI, not at startup
+
+Runtime blocking is the backstop. The control you actually want runs before
+anything deploys — same reason lockfile checks live in CI rather than in an
+application's boot path:
+
+```bash
+# fails the build while any server's catalogue differs from what was approved
+fail=0
+for server in clinic pharmacy; do
+    continuum mcp diff "$server" --pins .continuum/tool-pins.json || fail=1
+done
+exit $fail
+```
+
+`|| fail=1` rather than `set -e`, so one drifted server does not hide the
+others — the point is to learn about every one of them in a single run.
+
+Without this, an unreviewed server is discovered when the process starts and
+refuses, which in Kubernetes is a CrashLoopBackOff and an oncall page for
+something a build step could have caught.
+
 #### When the server's *name* changes
 
 Approvals are keyed by `server.name`. A server created without `name=` is named
@@ -877,6 +899,12 @@ gets the captured value injected automatically.
   the gap and you debug the model. See the table in §6.4.
 - **Trust checks run on `list_tools()` fetches, not on tool calls.** If your app
   builds its registry once at startup, that is one check per process.
+- **With several servers, one refusal names them all.** `ToolExecutor` collects
+  every `MCPServerUnreviewedError` across the registry build and raises once, so
+  you learn the whole job rather than one server per restart. Connection
+  failures are *not* folded in — a server you cannot reach needs a different
+  remedy. `e.context["server_names"]` holds the list; `server_name` still holds
+  the first, for handlers written against the single-server shape.
 - **`ToolExecutor.initialize()` is required** when you build it with a
   `tool_registry` argument.
 - **Tool names must be unique across the merged list.** By default

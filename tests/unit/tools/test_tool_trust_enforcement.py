@@ -885,3 +885,150 @@ class TestSuggestedCommandsSurviveAShell:
 
         assert "same name" in str(excinfo.value).lower(), str(excinfo.value)
         assert list(load_pins(pins)) == ["clinic"]
+
+
+# ---------------------------------------------------------------------------
+# Several unreviewed servers, one error
+# ---------------------------------------------------------------------------
+
+
+class TestEveryUnreviewedServerIsNamedAtOnce:
+    """Refusing at the first unreviewed server hides the rest of the work.
+
+    `_build_registry` fetches each server's catalogue in turn, so a raise on the
+    first aborts before the second is ever checked. The operator approves it,
+    restarts, and meets the same error for the next one -- one deploy cycle per
+    server, and in Kubernetes each cycle is a CrashLoopBackOff with exponential
+    backoff. Which server is "first" is also just dict insertion order, so two
+    environments listing the same servers differently report different errors
+    for the same underlying state, which breaks runbooks and alert matching.
+
+    Fail-fast is about *when* (before serving traffic), not about how little to
+    report. Compilers, Pydantic, terraform plan and npm ci all validate
+    everything and fail once.
+
+    Only ``MCPServerUnreviewedError`` is aggregated. A server that cannot be
+    reached needs a different remedy -- retry, check the network -- and merging
+    the two produces a message telling you to do two unrelated things.
+    """
+
+    def _executor(self, *servers):
+        from continuum.tools.executor import ToolExecutor
+
+        return ToolExecutor(tool_registry=dict.fromkeys(servers))
+
+    def _unreviewed(self, name: str, tools: list[Tool], pins):
+        return _named_server(name, ToolTrustConfig(pin_path=pins), tools)
+
+    def _approved(self, name: str, tools: list[Tool], pins):
+        existing = load_pins(pins)
+        existing[name] = snapshot_tool_digests(name, tools)
+        save_pins(pins, existing)
+        return _named_server(name, ToolTrustConfig(pin_path=pins), tools)
+
+    @pytest.mark.asyncio
+    async def test_one_error_names_every_unreviewed_server(self, tmp_path):
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        a = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+        b = self._unreviewed("pharmacy", [_tool("b", "B.")], pins)
+
+        with pytest.raises(MCPServerUnreviewedError) as excinfo:
+            await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target={})
+
+        message = str(excinfo.value)
+        assert "clinic" in message, message
+        assert "pharmacy" in message, message
+
+    @pytest.mark.asyncio
+    async def test_each_server_gets_its_own_approve_command(self, tmp_path):
+        """A combined error that names two servers but one command is worse than
+        two errors -- the reader runs it and half the problem remains."""
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        a = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+        b = self._unreviewed("pharmacy", [_tool("b", "B.")], pins)
+
+        with pytest.raises(MCPServerUnreviewedError) as excinfo:
+            await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target={})
+
+        message = str(excinfo.value)
+        assert "continuum mcp approve clinic" in message, message
+        assert "continuum mcp approve pharmacy" in message, message
+
+    @pytest.mark.asyncio
+    async def test_server_name_still_carries_one_for_existing_handlers(self, tmp_path):
+        """`except MCPServerUnreviewedError as e: log(e.context["server_name"])`
+        already exists in the wild. Dropping the field to add a plural one would
+        make those handlers report None for a security refusal."""
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        a = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+        b = self._unreviewed("pharmacy", [_tool("b", "B.")], pins)
+
+        with pytest.raises(MCPServerUnreviewedError) as excinfo:
+            await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target={})
+
+        assert excinfo.value.context["server_name"] == "clinic"
+        assert excinfo.value.context["server_names"] == ["clinic", "pharmacy"]
+
+    @pytest.mark.asyncio
+    async def test_a_reviewed_server_is_not_named(self, tmp_path):
+        pins = tmp_path / "tool-pins.json"
+        ok_tools = [_tool("b", "B.")]
+        b = self._approved("pharmacy", ok_tools, pins)
+        a = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+
+        with pytest.raises(MCPServerUnreviewedError) as excinfo:
+            await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target={})
+
+        message = str(excinfo.value)
+        assert "clinic" in message
+        assert "pharmacy" not in message, message
+
+    @pytest.mark.asyncio
+    async def test_a_single_unreviewed_server_is_reported_exactly_as_before(self, tmp_path):
+        """Most applications have one server. Aggregation must not reword the
+        message they already see, or every runbook quoting it goes stale."""
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        tools = [_tool("a", "A.")]
+
+        direct = _named_server("clinic", ToolTrustConfig(pin_path=pins), tools)
+        with pytest.raises(MCPServerUnreviewedError) as alone:
+            await direct.list_tools()
+
+        a = self._unreviewed("clinic", tools, pins)
+        with pytest.raises(MCPServerUnreviewedError) as via_registry:
+            await self._executor(a)._build_registry(dict.fromkeys([a]), target={})
+
+        assert str(via_registry.value) == str(alone.value)
+
+    @pytest.mark.asyncio
+    async def test_a_connection_failure_is_not_folded_in(self, tmp_path):
+        """Different cause, different remedy. Aggregating them would produce one
+        message telling the reader to both read a catalogue and fix a network."""
+        from continuum.tools.exceptions import MCPConnectionError
+
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        a = self._unreviewed("clinic", [_tool("a", "A.")], pins)
+        b = self._unreviewed("pharmacy", [_tool("b", "B.")], pins)
+        b.list_tools = AsyncMock(side_effect=MCPConnectionError("down", server_name="pharmacy"))
+
+        with pytest.raises(MCPConnectionError):
+            await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target={})
+
+    @pytest.mark.asyncio
+    async def test_warn_mode_still_registers_every_tool(self, tmp_path):
+        """Nothing raises, so nothing is collected and the registry is complete."""
+        pins = tmp_path / "tool-pins.json"
+        save_pins(pins, {"unrelated": snapshot_tool_digests("unrelated", [_tool("z", "Z.")])})
+        cfg = {"pin_path": pins, "on_unreviewed": "warn"}
+        a = _named_server("clinic", ToolTrustConfig(**cfg), [_tool("a", "A.")])
+        b = _named_server("pharmacy", ToolTrustConfig(**cfg), [_tool("b", "B.")])
+
+        registry: dict = {}
+        await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target=registry)
+
+        assert sorted(registry) == ["clinic__a", "pharmacy__b"]

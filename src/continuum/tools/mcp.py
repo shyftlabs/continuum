@@ -859,20 +859,29 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         pins = shlex.quote(str(self._trust_config.pin_path))
         name = shlex.quote(self.name)
         url = self.review_url
+        # `commands` is the part that is specific to THIS server. It is carried
+        # on the exception so a caller holding several of them -- ToolExecutor
+        # building a registry over multiple servers -- can compose one refusal
+        # listing every server's own commands, instead of repeating the shared
+        # preamble and the `--all` footnote once per server.
         if url is not None:
+            commands = (
+                f"  continuum mcp inspect {shlex.quote(url)} --name {name}\n"
+                f"  continuum mcp approve {name} --pins {pins} --all"
+            )
             remedy = (
                 f"Read them, then accept them:\n\n"
-                f"  continuum mcp inspect {shlex.quote(url)} --name {name}\n"
-                f"  continuum mcp approve {name} --pins {pins} --all\n\n"
+                f"{commands}\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         else:
+            commands = f"  continuum mcp approve {name} --pins {pins} --all"
             remedy = (
                 f"Read them, then record the approval. `continuum mcp inspect` "
                 f"only speaks streamable HTTP, so for this transport call "
                 f"continuum.tools.pinning.format_tool_catalog() to read the "
                 f"catalogue, then:\n\n"
-                f"  continuum mcp approve {name} --pins {pins} --all\n\n"
+                f"{commands}\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
             )
         message = (
@@ -885,7 +894,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         if action == "warn":
             logger.warning(message)
             return tools
-        raise MCPServerUnreviewedError(message, server_name=self.name)
+        raise MCPServerUnreviewedError(message, server_name=self.name, commands=commands)
 
     def _handle_renamed_server(
         self, tools: list[MCPTool], action: str, prior: str
@@ -907,6 +916,9 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         "approved".
         """
         pins = shlex.quote(str(self._trust_config.pin_path))
+        commands = (
+            f"  continuum mcp rename {shlex.quote(prior)} {shlex.quote(self.name)} --pins {pins}"
+        )
         message = (
             f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
             f"catalogue under that name.\n\n"
@@ -914,8 +926,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             f"'{prior}', so this server was renamed or moved rather than newly "
             f"added. Nothing here needs re-reading.\n\n"
             f"Re-file the approval you already made:\n\n"
-            f"  continuum mcp rename {shlex.quote(prior)} {shlex.quote(self.name)} "
-            f"--pins {pins}\n\n"
+            f"{commands}\n\n"
             + (
                 "Then pass name='<short-stable-name>' to the server constructor: "
                 "without it the name is derived from the URL, so this recurs on "
@@ -927,7 +938,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         if action == "warn":
             logger.warning(message)
             return tools
-        raise MCPServerUnreviewedError(message, server_name=self.name)
+        raise MCPServerUnreviewedError(message, server_name=self.name, commands=commands)
 
     @abc.abstractmethod
     def create_streams(

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.llm.types import ChatMessage, ToolCall
 from continuum.logging import get_logger
 from continuum.observability.decorators import trace_tool
-from continuum.tools.exceptions import MCPError, MCPToolError
+from continuum.tools.exceptions import MCPError, MCPServerUnreviewedError, MCPToolError
 from continuum.tools.types import (
     MCPToolArtifact,
     RunArtifacts,
@@ -33,6 +33,37 @@ if TYPE_CHECKING:
     from continuum.tools.mcp import MCPServer
 
 logger = get_logger(__name__)
+
+
+def _combined_unreviewed_error(
+    errors: list[MCPServerUnreviewedError],
+) -> MCPServerUnreviewedError:
+    """One refusal naming every unreviewed server, with each one's own commands.
+
+    Each server needs its own approve command -- a combined error that names two
+    servers but prints one command is worse than two separate errors, because
+    the reader runs it and half the problem silently remains. The shared
+    preamble and the ``--all`` footnote appear once.
+
+    ``server_name`` is kept, holding the first, so existing
+    ``except MCPServerUnreviewedError as e: log(e.context["server_name"])``
+    handlers keep working rather than reporting None for a security refusal.
+    ``server_names`` carries the full list.
+    """
+    names = [str(e.context.get("server_name")) for e in errors]
+    blocks = [e.commands or e.message for e in errors]
+    message = (
+        f"{len(errors)} MCP servers have no approved catalogue: {names}. Tool "
+        f"descriptions reach the model's prompt verbatim and can instruct it.\n\n"
+        f"Read each server's catalogue, then accept it:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nSwap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
+        + "Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
+        + "servers (not recommended)."
+    )
+    return MCPServerUnreviewedError(
+        message, server_name=names[0], context={"server_names": names}
+    )
 
 
 # Common variable names that should be auto-captured/injected
@@ -582,6 +613,21 @@ class ToolExecutor:
                 any PolicyStore grant written against the shared name.
         """
         dest = target if target is not None else self.tool_registry
+        # Collected rather than raised on sight. Refusing at the first unreviewed
+        # server hides the rest: the operator approves it, restarts, and meets
+        # the same error for the next one -- one deploy cycle per server, each a
+        # CrashLoopBackOff in Kubernetes. Which server is "first" is also just
+        # dict insertion order, so two environments listing the same servers in
+        # a different order report different errors for identical state.
+        #
+        # Fail-fast is about *when* -- refuse before serving traffic -- not about
+        # how little to say on the way out. Compilers, Pydantic, `terraform plan`
+        # and `npm ci` all validate everything and fail once.
+        #
+        # Only this exception. A server that cannot be REACHED needs a different
+        # remedy (retry, check the network), and folding the two together
+        # produces one message telling the reader to do two unrelated things.
+        unreviewed: list[MCPServerUnreviewedError] = []
         for server, allowed_tools in tool_registry.items():
             try:
                 mcp_tools = await server.list_tools(metadata=metadata)
@@ -610,6 +656,9 @@ class ToolExecutor:
                                 server_name=server.name,
                             )
                         dest[registry_key] = (server, tool)
+            except MCPServerUnreviewedError as e:
+                # Before `except MCPError`, which it subclasses.
+                unreviewed.append(e)
             except MCPError:
                 # Already carries a precise, actionable message (e.g. the duplicate
                 # tool name above). Re-raise without the generic wrapper log.
@@ -617,6 +666,14 @@ class ToolExecutor:
             except Exception as e:
                 logger.error(f"Error building tool registry for server {server.name}: {e}")
                 raise
+
+        if len(unreviewed) == 1:
+            # Re-raise the original untouched. Most applications have one server,
+            # and rewording the message they already see would stale every
+            # runbook and log-matching alert quoting it.
+            raise unreviewed[0]
+        if unreviewed:
+            raise _combined_unreviewed_error(unreviewed)
 
     async def execute_tool_call(
         self,
