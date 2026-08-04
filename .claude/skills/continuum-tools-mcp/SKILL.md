@@ -192,9 +192,26 @@ continuum mcp approve weather --pins PATH --all
 continuum mcp rename OLD NEW --pins PATH                   # server name moved
 ```
 
-`diff` / `approve` work from files alone — you review the text the agent saw,
-not whatever the server says now. Add `--record PATH` if the app sets
-`record_path`.
+`diff` / `approve` / `rename` work from files alone — you review the text the
+agent saw, not whatever the server says now, and they behave identically for
+every transport. Add `--record PATH` if the app sets `record_path`.
+
+`mcp inspect` passes a **bare URL**, so it only reaches unauthenticated
+streamable HTTP. For stdio, SSE, or an HTTP server behind an `Authorization`
+header, review the object instead:
+
+```python
+from continuum.tools import review_server
+
+await review_server(build_my_server())            # prints the same catalogue
+await review_server(server, write_pins=PATH)      # ...and records it
+```
+
+Taking the object rather than CLI flags means headers, env, cwd and transport
+are right by construction — a retyped `--cwd` reviews a different server than
+the one your agent runs, and a pin file then vouches for something nobody read.
+Reviewing a stdio server *launches* it; pinning bounds what the model is told to
+do, not what a subprocess does at import.
 
 ```python
 from continuum.tools import ToolTrustConfig

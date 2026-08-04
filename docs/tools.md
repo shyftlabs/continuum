@@ -547,46 +547,79 @@ an unrelated one you have not read.
 
 Add `--record PATH` to both commands if the application sets `record_path`.
 
-#### Reviewing a stdio or SSE server
+#### Reviewing a server `mcp inspect` cannot reach
 
-`continuum mcp inspect` speaks **streamable HTTP only** — it builds an
-`MCPServerStreamableHttp` internally. For the other two transports the refusal
-tells you to read the catalogue from Python instead. Here is that script:
+`mcp inspect` passes a **bare URL and nothing else**. That reaches exactly one
+kind of server:
+
+| server | `mcp inspect URL` |
+|---|---|
+| streamable HTTP, no auth | ✅ |
+| streamable HTTP with an `Authorization` header | ❌ 401 |
+| streamable HTTP with a custom `httpx_client_factory` | ❌ |
+| SSE | ❌ wrong protocol |
+| stdio | ❌ no URL exists |
+| `MCPServerFunction` | ❌ nothing to connect to |
+
+For everything else, `review_server()` takes the **server object** instead:
 
 ```python
+# servers.py — one definition, imported by both the app and the review script
+PINS = ".continuum/tool-pins.json"
+
+def build_fs_server() -> MCPServerStdio:
+    return MCPServerStdio(
+        {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "./data"],
+            "env": {"NODE_ENV": "production"},
+            "cwd": "/srv/app",
+        },
+        name="fs",
+        trust_config=ToolTrustConfig(pin_path=PINS),
+    )
+```
+
+```python
+# review.py
 import asyncio
-from continuum.tools import MCPServerStdio            # or MCPServerSse
-from continuum.tools.pinning import format_tool_catalog
+from continuum.tools import review_server
+from servers import build_fs_server
 
-async def review():
-    server = MCPServerStdio({"command": "python", "args": ["my_server.py"]}, name="notes")
-    await server.connect()
-    try:
-        # session.list_tools(), not server.list_tools(): the wrapper cleans
-        # invisible characters and applies the trust gate. Review wants the
-        # bytes as sent, so hidden text can be reported rather than removed.
-        result = await server.session.list_tools()
-        print(format_tool_catalog(server.name, result.tools))
-    finally:
-        await server.cleanup()
-
-asyncio.run(review())
+asyncio.run(review_server(build_fs_server()))
 ```
 
 Same output as `mcp inspect` — full descriptions, both policy-resource forms,
-hidden characters flagged.
+hidden characters flagged. It connects if the server isn't already connected and
+closes only what it opened, so you can also review a server your agent is using.
+
+**Why the object rather than flags.** Growing the CLI to cover these cases would
+mean `--header`, `--env`, `--cwd`, `--command`, `--transport` — re-expressing the
+constructor as flags. Every field you retype can drift from what the agent
+actually runs, and reviewing the wrong server and then pinning it is worse than
+not reviewing: the pin file now vouches for something nobody read. Passing the
+object makes the reviewed server *be* the running server.
 
 Then approve with the ordinary command. **You do not need to write the pin file
 by hand:**
 
 ```bash
-continuum mcp approve notes --pins tool-pins.json --all
+continuum mcp approve fs --pins .continuum/tool-pins.json --all
 ```
 
 That works even though the server just refused to start, because the runtime
 records what it was served *before* the gate refuses — the digest check runs
 first. So one aborted run leaves a complete last-seen record, and `mcp approve`
-promotes from it.
+promotes from it. `review_server(..., write_pins=PATH)` also exists, for
+approving before the agent has ever run.
+
+Only the **review** step differs by transport. `mcp diff`, `mcp approve` and
+`mcp rename` work from files, so the ongoing workflow is identical for every
+server type.
+
+> **Reviewing a stdio server launches it.** A hostile package can act at import,
+> before any description is read. Pinning bounds what the model is *told to do*;
+> it does not sandbox a subprocess.
 
 #### Gate it in CI, not at startup
 

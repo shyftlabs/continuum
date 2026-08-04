@@ -26,6 +26,8 @@ from mcp.types import Tool
 
 from continuum.tools.pinning import format_tool_catalog, snapshot_tool_digests
 
+HIDDEN = "\U000e0041"  # Unicode Tags block -- readable by the model, not by you
+
 pytestmark = pytest.mark.unit
 
 
@@ -297,3 +299,203 @@ class TestSnapshotRecordsBothDigests:
 
         tool = _hidden_char_tool()
         assert snapshot_tool_digests("clinic", [tool])["clinic_info"]["raw"] == _tool_digest(tool)
+
+
+# ---------------------------------------------------------------------------
+# review_server -- the review path for servers the CLI cannot reach
+# ---------------------------------------------------------------------------
+
+
+class TestReviewServer:
+    """`mcp inspect` can only review what fits on a command line.
+
+    It sends a URL and nothing else -- no headers, no env, no command. That
+    covers unauthenticated streamable HTTP and nothing else: a server behind an
+    Authorization header answers it with 401, and stdio has no URL at all.
+    Growing the CLI to cover the rest means rebuilding the constructor as flags,
+    and every field retyped is a field that can drift from what the agent
+    actually runs -- reviewing the wrong server, then pinning it, is worse than
+    not reviewing at all.
+
+    Taking the server object removes the second specification. Whatever you
+    pass is, by construction, the thing your agent runs.
+    """
+
+    def _http(self, tools, **params):
+        from continuum.tools.mcp import MCPServerStreamableHttp
+
+        server = MCPServerStreamableHttp(
+            params={"url": "http://localhost:8911/mcp", **params},
+            cache_tools_list=False,
+            name="srv",
+        )
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = tools
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+        return server
+
+    @pytest.mark.asyncio
+    async def test_prints_the_catalogue(self, capsys):
+        from continuum.tools.pinning import review_server
+
+        await review_server(self._http([_tool("get_weather", "Get the weather.")]))
+
+        out = capsys.readouterr().out
+        assert "get_weather" in out
+        assert "Get the weather." in out
+
+    @pytest.mark.asyncio
+    async def test_returns_the_tools(self):
+        from continuum.tools.pinning import review_server
+
+        tools = await review_server(self._http([_tool("a", "A."), _tool("b", "B.")]))
+
+        assert [t.name for t in tools] == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_shows_hidden_characters_rather_than_stripping_them(self, capsys):
+        """The trap this helper exists to close. `server.list_tools()` cleans
+        invisible characters before returning, so reviewing through it would
+        hide the single strongest signal that a server is hostile -- and, for an
+        unreviewed server under the default policy, would refuse the review
+        outright."""
+        from continuum.tools.pinning import review_server
+
+        await review_server(self._http([_tool("a", f"Fine.{HIDDEN}")]))
+
+        assert "hidden/invisible character(s)" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_writes_nothing_by_default(self, tmp_path, capsys):
+        """Looking must not approve. If it did, pin-without-reading would be the
+        one-liner and read-then-pin the chore -- optimising the dangerous path."""
+        from continuum.tools.pinning import load_pins, review_server
+
+        pins = tmp_path / "pins.json"
+        await review_server(self._http([_tool("a", "A.")]))
+
+        assert not pins.exists()
+        assert load_pins(pins) == {}
+
+    @pytest.mark.asyncio
+    async def test_write_pins_records_the_catalogue(self, tmp_path, capsys):
+        from continuum.tools.pinning import load_pins, review_server
+
+        pins = tmp_path / "pins.json"
+        await review_server(self._http([_tool("a", "A.")]), write_pins=pins)
+
+        assert list(load_pins(pins)["srv"]) == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_write_pins_merges_rather_than_replacing(self, tmp_path, capsys):
+        """Another server's approval is not ours to discard."""
+        from continuum.tools.pinning import (
+            load_pins,
+            review_server,
+            save_pins,
+            snapshot_tool_digests,
+        )
+
+        pins = tmp_path / "pins.json"
+        save_pins(pins, {"other": snapshot_tool_digests("other", [_tool("z", "Z.")])})
+
+        await review_server(self._http([_tool("a", "A.")]), write_pins=pins)
+
+        assert sorted(load_pins(pins)) == ["other", "srv"]
+
+    @pytest.mark.asyncio
+    async def test_connects_and_closes_a_server_that_was_not_connected(self, capsys):
+        from continuum.tools.pinning import review_server
+
+        server = self._http([_tool("a", "A.")])
+        session = server.session
+        server.session = None
+        server.connect = AsyncMock(side_effect=lambda: setattr(server, "session", session))
+        server.cleanup = AsyncMock()
+
+        await review_server(server)
+
+        server.connect.assert_awaited_once()
+        server.cleanup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_leaves_an_already_connected_server_open(self, capsys):
+        """Reviewing must not tear down a transport the caller is using."""
+        from continuum.tools.pinning import review_server
+
+        server = self._http([_tool("a", "A.")])
+        server.connect = AsyncMock()
+        server.cleanup = AsyncMock()
+
+        await review_server(server)
+
+        server.connect.assert_not_awaited()
+        server.cleanup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_closes_the_transport_even_when_rendering_fails(self, capsys):
+        from continuum.tools.pinning import review_server
+
+        server = self._http([_tool("a", "A.")])
+        session = server.session
+        server.session = None
+        server.connect = AsyncMock(side_effect=lambda: setattr(server, "session", session))
+        server.cleanup = AsyncMock()
+        session.list_tools = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError):
+            await review_server(server)
+
+        server.cleanup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_works_on_a_local_function_server(self, capsys):
+        """It has no session at all. Its tools are ungated anyway, but a review
+        that raised AttributeError on one of the four server types would be a
+        helper people stop trusting."""
+        from continuum.tools import MCPServerFunction
+        from continuum.tools.pinning import review_server
+
+        def add(a: int, b: int) -> int:
+            """Add two integers."""
+            return a + b
+
+        tools = await review_server(MCPServerFunction("math", [add]))
+
+        assert [t.name for t in tools] == ["add"]
+        assert "Add two integers." in capsys.readouterr().out
+
+
+class TestReviewUrlTracksWhatTheCliCanActuallyReach:
+    """`mcp inspect` passes a URL and nothing else.
+
+    A server behind an Authorization header, or one using a custom httpx
+    client, cannot be reached by it -- so naming that command is the same
+    failure as pointing an SSE user at it: a remedy that cannot run, whose
+    failure reads as a broken network. Timeouts are excluded deliberately: they
+    change neither reachability nor the descriptions being reviewed.
+    """
+
+    def _http(self, **params):
+        from continuum.tools.mcp import MCPServerStreamableHttp
+
+        return MCPServerStreamableHttp(
+            params={"url": "https://api.vendor.com/mcp", **params}, name="vendor"
+        )
+
+    def test_a_plain_url_is_reviewable(self):
+        assert self._http().review_url == "https://api.vendor.com/mcp"
+
+    def test_an_authenticated_server_is_not(self):
+        assert self._http(headers={"Authorization": "Bearer x"}).review_url is None
+
+    def test_an_empty_header_map_does_not_count(self):
+        assert self._http(headers={}).review_url == "https://api.vendor.com/mcp"
+
+    def test_a_custom_client_factory_is_not_reviewable(self):
+        assert self._http(httpx_client_factory=lambda **kw: None).review_url is None
+
+    def test_a_custom_timeout_stays_reviewable(self):
+        assert self._http(timeout=30.0).review_url == "https://api.vendor.com/mcp"

@@ -28,6 +28,8 @@ try:
         format_catalog_diff,
         format_tool_catalog,
         load_pins,
+        rename_server,
+        review_server,
         save_pins,
         snapshot_tool_digests,
     )
@@ -91,6 +93,8 @@ __all__ = [
     "format_catalog_diff",
     "format_tool_catalog",
     "load_pins",
+    "rename_server",
+    "review_server",
     "save_pins",
     "snapshot_tool_digests",
     # Tool context (session/state management)

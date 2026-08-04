@@ -319,10 +319,9 @@ class TestUnreviewedServer:
         # invocation presented as the remedy.
         assert "continuum mcp inspect --name" not in message
         assert f"continuum mcp inspect {server.name}" not in message
-        assert "only speaks streamable HTTP" in message
         # Only the *review* half is CLI-less for stdio; `mcp approve` reads the
         # record file, which the runtime writes whatever the transport.
-        assert "format_tool_catalog" in message, "must say how to read the catalogue"
+        assert "review_server" in message, "must say how to read the catalogue"
         assert "continuum mcp approve local" in message, "must say how to accept it"
 
     async def test_warn_lists_the_tools_and_says_so(self, tmp_path):
@@ -1123,14 +1122,14 @@ class TestRemedyMatchesTheTransport:
 
         message = str(caught.value)
         assert "mcp inspect https://tools.example.com/sse" not in message, message
-        assert "format_tool_catalog" in message, message
+        assert "review_server" in message, message
 
     @pytest.mark.asyncio
     async def test_stdio_gets_the_same_offline_route(self, tmp_path):
         with pytest.raises(MCPServerUnreviewedError) as caught:
             await self._stdio(tmp_path / "pins.json").list_tools()
 
-        assert "format_tool_catalog" in str(caught.value)
+        assert "review_server" in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_every_transport_still_names_its_own_approve_command(self, tmp_path):

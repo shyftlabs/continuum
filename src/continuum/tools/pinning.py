@@ -51,6 +51,8 @@ from continuum.tools.util import build_namespaced_tool_name
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
+    from continuum.tools.mcp import MCPServer
+
 
 logger = get_logger(__name__)
 
@@ -376,6 +378,70 @@ def approve_tools(
     existing[server_name] = approved
     save_pins(pin_path, existing)
     return selected
+
+
+async def review_server(
+    server: MCPServer,
+    *,
+    write_pins: str | Path | None = None,
+) -> list[MCPTool]:
+    """Print a server's catalogue for review. Works for every server type.
+
+    ``continuum mcp inspect`` sends a URL and nothing else -- no headers, no
+    env, no command -- so it can only review unauthenticated streamable HTTP.
+    A server behind an ``Authorization`` header answers it with 401, SSE speaks
+    a protocol it does not, and stdio has no URL at all. Growing the CLI to
+    cover the rest would mean re-expressing the constructor as flags, and every
+    field retyped is a field that can drift from what the agent actually runs.
+    Reviewing the wrong server and then pinning it is worse than not reviewing:
+    the pin file now vouches for something nobody read.
+
+    Taking the server *object* removes the second specification. Whatever you
+    pass is, by construction, the configuration your agent uses.
+
+    Writes nothing unless asked. Looking must not approve -- otherwise
+    pin-without-reading is the one-liner and read-then-pin the chore, which
+    optimises the dangerous path. ``write_pins`` exists for approving before the
+    agent has ever run; the ordinary route is to read this output and then run
+    ``continuum mcp approve``, which promotes from the record the runtime wrote
+    on the fetch it refused.
+
+    Args:
+        server: any connected or unconnected MCPServer.
+        write_pins: record the catalogue as approved at this path. Merges, so
+            other servers' approvals are left alone.
+
+    Returns:
+        The tools as the server sent them, so callers can assert on them.
+    """
+    # session.list_tools(), not server.list_tools(). The wrapper strips
+    # invisible characters and applies the trust gate, so reviewing through it
+    # would hide the strongest signal a server is hostile -- and, for an
+    # unreviewed server under the default policy, would refuse the review
+    # itself. MCPServerFunction has no session; its tools are local code and
+    # ungated, so its own list_tools() is the raw catalogue.
+    session = getattr(server, "session", None)
+    opened_here = session is None and hasattr(server, "connect")
+    if opened_here:
+        await server.connect()
+        session = getattr(server, "session", None)
+    try:
+        if session is not None:
+            tools = list((await session.list_tools()).tools)
+        else:
+            tools = list(await server.list_tools())
+        print(format_tool_catalog(server.name, tools))
+        if write_pins is not None:
+            existing = load_pins(write_pins)
+            existing[server.name] = snapshot_tool_digests(server.name, tools)
+            save_pins(write_pins, existing)
+            print(f"\nPinned {len(tools)} tool(s) for '{server.name}' to {write_pins}.")
+    finally:
+        # Only what we opened. Tearing down a transport the caller is using
+        # would make reviewing a running agent's server impossible.
+        if opened_here:
+            await server.cleanup()
+    return tools
 
 
 def rename_server(pin_path: str | Path, old: str, new: str) -> int:

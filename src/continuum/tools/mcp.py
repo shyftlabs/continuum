@@ -876,10 +876,16 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             )
         else:
             commands = f"  continuum mcp approve {name} --pins {pins} --all"
+            # Names the library call, not the CLI. `mcp inspect` passes a bare
+            # URL, which reaches unauthenticated streamable HTTP and nothing
+            # else -- not stdio (no URL), not SSE (wrong protocol), not a server
+            # behind an Authorization header (401). review_server() takes the
+            # server object instead, so headers, env, cwd and transport are
+            # right by construction rather than retyped and liable to drift.
             remedy = (
                 f"Read them, then record the approval. `continuum mcp inspect` "
-                f"only speaks streamable HTTP, so for this transport call "
-                f"continuum.tools.pinning.format_tool_catalog() to read the "
+                f"passes a bare URL, which cannot reach this server, so call "
+                f"continuum.tools.pinning.review_server(server) to read the "
                 f"catalogue, then:\n\n"
                 f"{commands}\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
@@ -1592,6 +1598,22 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
 
     @property
     def review_url(self) -> str | None:
+        """The URL, but only when ``mcp inspect`` could actually connect with it.
+
+        That command passes a bare URL and nothing else, so a server behind an
+        ``Authorization`` header answers it with 401, and one using a custom
+        httpx client is unreachable for whatever reason the factory exists.
+        Naming it anyway is the same failure as pointing an SSE user at it: a
+        remedy that cannot run, failing in a way that reads as a broken network
+        rather than as an unusable command.
+
+        Only those two, deliberately. A custom ``timeout`` changes neither
+        whether the CLI can connect nor the descriptions being reviewed, so
+        treating it as unreviewable would push people off the easy path for
+        nothing.
+        """
+        if self.params.get("headers") or self.params.get("httpx_client_factory"):
+            return None
         return self.params["url"]
 
     def create_streams(
