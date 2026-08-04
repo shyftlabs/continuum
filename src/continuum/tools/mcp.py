@@ -1451,9 +1451,20 @@ class MCPServerSse(_MCPServerWithClientSession):
         self._name = name or f"sse: {self.params['url']}"
         self._name_is_derived = name is None
 
-    @property
-    def review_url(self) -> str | None:
-        return self.params["url"]
+    # review_url stays None -- inherited, deliberately not overridden.
+    #
+    # This server HAS a URL, but that is not the question review_url answers.
+    # `continuum mcp inspect` builds an MCPServerStreamableHttp unconditionally
+    # (cli.py), so handing it an SSE endpoint produces a command that parses,
+    # connects with the wrong protocol, and fails in a way that reads like a
+    # broken server or a broken network. An SSE user gets the same offline route
+    # as stdio, which works.
+    #
+    # This override existed and returned params["url"], which is the fourth time
+    # this feature printed a remedy that cannot run: the literal `URL`
+    # placeholder, the `--approve` flag that never existed, `mcp approve` without
+    # `--pins`, and this. The shell-quoting test cannot catch it -- the command
+    # is perfectly well-formed, it just talks a protocol the CLI does not speak.
 
     def create_streams(
         self,

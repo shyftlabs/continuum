@@ -491,6 +491,15 @@ Both defaults can be changed globally with the `MCP_ON_UNREVIEWED` /
 `MCP_ON_DRIFT` environment variables; an explicit `ToolTrustConfig` argument
 wins over them.
 
+**`MCPServerFunction` is outside all of this** and takes no `trust_config` —
+passing one is a `TypeError`. It wraps your own callables in your own process,
+so the "description" is a docstring in your own repo, not third-party text off a
+wire. Gating it would refuse the agent after every docstring edit and make
+`mcp approve --all` a routine step, training the reflex the rest of this design
+works to prevent. Its name is also required positionally, so none of the
+derived-name problems below apply. The trust settings are for the three remote
+transports: `MCPServerStdio`, `MCPServerSse`, `MCPServerStreamableHttp`.
+
 #### Two files, one writer each
 
 ```
@@ -537,6 +546,47 @@ Approval is **per tool** and merges: accepting one benign change does not bless
 an unrelated one you have not read.
 
 Add `--record PATH` to both commands if the application sets `record_path`.
+
+#### Reviewing a stdio or SSE server
+
+`continuum mcp inspect` speaks **streamable HTTP only** — it builds an
+`MCPServerStreamableHttp` internally. For the other two transports the refusal
+tells you to read the catalogue from Python instead. Here is that script:
+
+```python
+import asyncio
+from continuum.tools import MCPServerStdio            # or MCPServerSse
+from continuum.tools.pinning import format_tool_catalog
+
+async def review():
+    server = MCPServerStdio({"command": "python", "args": ["my_server.py"]}, name="notes")
+    await server.connect()
+    try:
+        # session.list_tools(), not server.list_tools(): the wrapper cleans
+        # invisible characters and applies the trust gate. Review wants the
+        # bytes as sent, so hidden text can be reported rather than removed.
+        result = await server.session.list_tools()
+        print(format_tool_catalog(server.name, result.tools))
+    finally:
+        await server.cleanup()
+
+asyncio.run(review())
+```
+
+Same output as `mcp inspect` — full descriptions, both policy-resource forms,
+hidden characters flagged.
+
+Then approve with the ordinary command. **You do not need to write the pin file
+by hand:**
+
+```bash
+continuum mcp approve notes --pins tool-pins.json --all
+```
+
+That works even though the server just refused to start, because the runtime
+records what it was served *before* the gate refuses — the digest check runs
+first. So one aborted run leaves a complete last-seen record, and `mcp approve`
+promotes from it.
 
 #### Gate it in CI, not at startup
 

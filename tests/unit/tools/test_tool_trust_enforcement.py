@@ -1032,3 +1032,166 @@ class TestEveryUnreviewedServerIsNamedAtOnce:
         await self._executor(a, b)._build_registry(dict.fromkeys([a, b]), target=registry)
 
         assert sorted(registry) == ["clinic__a", "pharmacy__b"]
+
+
+# ---------------------------------------------------------------------------
+# The remedy has to match the transport
+# ---------------------------------------------------------------------------
+
+
+class TestRemedyMatchesTheTransport:
+    """`continuum mcp inspect` speaks streamable HTTP and nothing else.
+
+    `cli.py` builds an `MCPServerStreamableHttp` unconditionally, so
+    `review_url` answers one question only: *can that command reach this
+    server?* Having a URL is not the same question -- an SSE endpoint is a URL
+    the CLI cannot speak, and handing it over produced a command that fails on
+    the wire and reads like a broken server or a broken network.
+
+    Fourth instance of one defect shape in this feature: refuse correctly, then
+    print something that cannot run. The literal `URL` placeholder, the
+    `--approve` flag that never existed, `mcp approve` without `--pins`, and
+    now the wrong transport. The shell-quoting test cannot catch this one --
+    the command parses perfectly, it just talks the wrong protocol.
+    """
+
+    def _session(self, server, tools):
+        session = AsyncMock()
+        result = MagicMock()
+        result.tools = tools
+        session.list_tools = AsyncMock(return_value=result)
+        server.session = session
+        return server
+
+    def _stdio(self, pins):
+        from continuum.tools.mcp import MCPServerStdio
+
+        return self._session(
+            MCPServerStdio(
+                params={"command": "python", "args": ["srv.py"]},
+                cache_tools_list=False,
+                name="local",
+                trust_config=ToolTrustConfig(pin_path=pins, on_unreviewed="block"),
+            ),
+            [_tool("a", "A.")],
+        )
+
+    def _sse(self, pins):
+        from continuum.tools.mcp import MCPServerSse
+
+        return self._session(
+            MCPServerSse(
+                params={"url": "https://tools.example.com/sse"},
+                cache_tools_list=False,
+                name="events",
+                trust_config=ToolTrustConfig(pin_path=pins, on_unreviewed="block"),
+            ),
+            [_tool("a", "A.")],
+        )
+
+    def _http(self, pins):
+        return self._session(
+            MCPServerStreamableHttp(
+                params={"url": "https://tools.example.com/mcp"},
+                cache_tools_list=False,
+                name="remote",
+                trust_config=ToolTrustConfig(pin_path=pins, on_unreviewed="block"),
+            ),
+            [_tool("a", "A.")],
+        )
+
+    def test_only_streamable_http_offers_a_review_url(self, tmp_path):
+        pins = tmp_path / "pins.json"
+        assert self._http(pins).review_url == "https://tools.example.com/mcp"
+        assert self._sse(pins).review_url is None
+        assert self._stdio(pins).review_url is None
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_is_told_to_run_mcp_inspect(self, tmp_path):
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._http(tmp_path / "pins.json").list_tools()
+
+        message = str(caught.value)
+        assert "continuum mcp inspect https://tools.example.com/mcp" in message, message
+
+    @pytest.mark.asyncio
+    async def test_sse_is_not_told_to_inspect_an_endpoint_the_cli_cannot_speak(self, tmp_path):
+        """The bug: an SSE URL handed to a streamable-HTTP client. It parses, it
+        connects to nothing, and the reader goes to debug their network."""
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._sse(tmp_path / "pins.json").list_tools()
+
+        message = str(caught.value)
+        assert "mcp inspect https://tools.example.com/sse" not in message, message
+        assert "format_tool_catalog" in message, message
+
+    @pytest.mark.asyncio
+    async def test_stdio_gets_the_same_offline_route(self, tmp_path):
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await self._stdio(tmp_path / "pins.json").list_tools()
+
+        assert "format_tool_catalog" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_every_transport_still_names_its_own_approve_command(self, tmp_path):
+        """Whatever the review route, approval is the same command -- and it
+        works because the runtime records what it was served *before* refusing,
+        so `mcp approve` has something to promote."""
+        pins = tmp_path / "pins.json"
+        for build, name in ((self._http, "remote"), (self._sse, "events"), (self._stdio, "local")):
+            with pytest.raises(MCPServerUnreviewedError) as caught:
+                await build(pins).list_tools()
+            assert f"continuum mcp approve {name} --pins" in str(caught.value), name
+
+    @pytest.mark.asyncio
+    async def test_the_record_exists_after_a_refusal(self, tmp_path):
+        """Load-bearing for the non-HTTP route. `mcp approve` promotes from the
+        last-seen record, which is written by the digest check that runs *before*
+        the gate -- so a refused server is still approvable without a second run
+        and without `mcp inspect`."""
+        pins = tmp_path / "pins.json"
+        server = self._stdio(pins)
+
+        with pytest.raises(MCPServerUnreviewedError):
+            await server.list_tools()
+
+        record = ToolTrustConfig(pin_path=pins).last_seen_path
+        assert record is not None and record.exists()
+        assert list(load_pins(record)["local"]) == ["a"]
+
+
+class TestLocalFunctionToolsAreOutsideTheTrustLayer:
+    """`MCPServerFunction` wraps your own callables, in your own process.
+
+    Pinning exists because a third party's description is attacker-controlled
+    text arriving over a wire. Here the description is your own docstring, in
+    your own repo. Applying the gate would refuse the agent after every edit and
+    make `mcp approve --all` a routine step -- training exactly the reflex the
+    design works to prevent everywhere else.
+    """
+
+    def _server(self):
+        from continuum.tools import MCPServerFunction
+
+        def add(a: int, b: int) -> int:
+            """Add two integers."""
+            return a + b
+
+        return MCPServerFunction("math", [add])
+
+    def test_it_takes_no_trust_config(self):
+        import inspect
+
+        from continuum.tools import MCPServerFunction
+
+        params = inspect.signature(MCPServerFunction.__init__).parameters
+        assert "trust_config" not in params
+
+    @pytest.mark.asyncio
+    async def test_listing_tools_is_never_gated(self):
+        assert [t.name for t in await self._server().list_tools()] == ["add"]
+
+    def test_its_name_can_never_be_derived(self):
+        """`name` is required positionally, so none of the derived-name failures
+        -- orphaned pins, moving prefixes -- can apply."""
+        assert self._server().name_is_derived is False
