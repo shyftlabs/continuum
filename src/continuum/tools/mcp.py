@@ -182,6 +182,19 @@ class MCPServer(abc.ABC):
         return None
 
     @property
+    def review_unavailable_reason(self) -> str | None:
+        """Why ``mcp inspect`` cannot review this server, or None when it can.
+
+        "`mcp inspect` cannot reach this server" printed beside a perfectly good
+        URL is an assertion the reader has to take on faith, and the three
+        reasons point in different directions -- there is no URL, the protocol
+        is wrong, or the connection needs headers the command cannot send. Only
+        the last is a dead end; the reader cannot tell which they have without
+        being told.
+        """
+        return "it is not reachable with a bare URL"
+
+    @property
     def name_is_derived(self) -> bool:
         """True when no name= was supplied and the transport invented one.
 
@@ -881,8 +894,9 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # "read it, then approve" and the next as bare "approve" -- the read
             # step dropped for precisely the servers hardest to read, which is
             # the approve-without-reading path printed by the SDK itself.
+            reason = self.review_unavailable_reason or "it is not reachable with a bare URL"
             commands = (
-                f"  # read it first -- `mcp inspect` cannot reach this server:\n"
+                f"  # {reason}, so read it here first:\n"
                 f"  #   continuum.tools.pinning.review_server(server)\n"
                 f"  continuum mcp approve {name} --pins {pins} --all"
             )
@@ -893,9 +907,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # server object instead, so headers, env, cwd and transport are
             # right by construction rather than retyped and liable to drift.
             remedy = (
-                f"Read them, then record the approval. `continuum mcp inspect` "
-                f"passes a bare URL, which cannot reach this server, so call "
-                f"continuum.tools.pinning.review_server(server) to read the "
+                f"Read them, then record the approval. {reason[0].upper()}{reason[1:]}, "
+                f"so call continuum.tools.pinning.review_server(server) to read the "
                 f"catalogue, then:\n\n"
                 f"{commands}\n\n"
                 f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
@@ -1376,6 +1389,10 @@ class MCPServerStdio(_MCPServerWithClientSession):
     def name_is_derived(self) -> bool:
         return self._name_is_derived
 
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        return "`mcp inspect` takes a URL and this server is a subprocess"
+
 
 class MCPServerSseParams(TypedDict):
     """Mirrors the params in`mcp.client.sse.sse_client`."""
@@ -1466,6 +1483,10 @@ class MCPServerSse(_MCPServerWithClientSession):
         self.params = params
         self._name = name or f"sse: {self.params['url']}"
         self._name_is_derived = name is None
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        return "`mcp inspect` speaks streamable HTTP, not SSE"
 
     # review_url stays None -- inherited, deliberately not overridden.
     #
@@ -1622,9 +1643,23 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
         treating it as unreviewable would push people off the easy path for
         nothing.
         """
-        if self.params.get("headers") or self.params.get("httpx_client_factory"):
+        if self.review_unavailable_reason is not None:
             return None
         return self.params["url"]
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        """None when a bare URL is enough -- the ordinary case.
+
+        Split from ``review_url`` so the two cannot disagree: the refusal reads
+        this to explain itself, and a server that offered a URL while also
+        offering a reason not to use it would print both.
+        """
+        if self.params.get("headers"):
+            return "`mcp inspect` sends a bare URL and this server needs headers"
+        if self.params.get("httpx_client_factory"):
+            return "`mcp inspect` cannot use this server's custom httpx client"
+        return None
 
     def create_streams(
         self,

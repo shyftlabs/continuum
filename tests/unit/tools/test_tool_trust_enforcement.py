@@ -1228,3 +1228,64 @@ class TestLocalFunctionToolsAreOutsideTheTrustLayer:
         """`name` is required positionally, so none of the derived-name failures
         -- orphaned pins, moving prefixes -- can apply."""
         assert self._server().name_is_derived is False
+
+
+class TestTheRefusalSaysWhyTheCliCannotBeUsed:
+    """"`mcp inspect` cannot reach this server" beside a perfectly good URL
+    reads as an assertion to be taken on faith.
+
+    The SDK knows the actual reason -- no URL, wrong protocol, headers it cannot
+    send -- and each one points somewhere different: fix your transport, add a
+    flag that does not exist, or accept that this server needs the library
+    route. Withholding it leaves the reader to guess between them.
+    """
+
+    def _stdio(self):
+        from continuum.tools.mcp import MCPServerStdio
+
+        return MCPServerStdio(params={"command": "python", "args": ["s.py"]}, name="local")
+
+    def _sse(self):
+        from continuum.tools.mcp import MCPServerSse
+
+        return MCPServerSse(params={"url": "https://x.example.com/sse"}, name="events")
+
+    def _http(self, **params):
+        return MCPServerStreamableHttp(
+            params={"url": "https://x.example.com/mcp", **params}, name="remote"
+        )
+
+    def test_a_reachable_server_has_no_reason_to_give(self):
+        server = self._http()
+        assert server.review_url is not None
+        assert server.review_unavailable_reason is None
+
+    def test_stdio_says_there_is_no_url(self):
+        reason = self._stdio().review_unavailable_reason
+        assert reason and "url" in reason.lower(), reason
+
+    def test_sse_names_the_protocol_mismatch(self):
+        reason = self._sse().review_unavailable_reason
+        assert reason and "streamable" in reason.lower(), reason
+
+    def test_an_authenticated_server_names_the_headers(self):
+        reason = self._http(headers={"Authorization": "Bearer x"}).review_unavailable_reason
+        assert reason and "header" in reason.lower(), reason
+
+    def test_a_custom_client_says_so(self):
+        reason = self._http(httpx_client_factory=lambda **kw: None).review_unavailable_reason
+        assert reason and "client" in reason.lower(), reason
+
+    @pytest.mark.asyncio
+    async def test_the_reason_reaches_the_refusal(self, tmp_path):
+        pins = tmp_path / "pins.json"
+        server = self._http(headers={"Authorization": "Bearer x"})
+        server._trust_config = ToolTrustConfig(pin_path=pins, on_unreviewed="block")
+        session = AsyncMock()
+        session.list_tools = AsyncMock(return_value=MagicMock(tools=[_tool("a", "A.")]))
+        server.session = session
+
+        with pytest.raises(MCPServerUnreviewedError) as caught:
+            await server.list_tools()
+
+        assert "header" in str(caught.value).lower(), str(caught.value)
