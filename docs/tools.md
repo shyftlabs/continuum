@@ -457,6 +457,43 @@ server = MCPServerStreamableHttp(
 )
 ```
 
+**3. Connect it through a `ToolExecutor`.** A `trust_config` on a server object
+enforces nothing by itself, because nothing has fetched a catalogue yet. The
+executor is what fetches, so it is where trust is applied:
+
+```python
+from continuum.tools import ToolExecutor
+
+await server.connect()                      # before initialize(), or it raises
+
+executor = ToolExecutor({server: None})     # None = expose all of this server's tools
+await executor.initialize()                 # ← the catalogue is checked HERE
+
+agent = BaseAgent(
+    name="agent",
+    instructions="...",
+    mcp_servers=[server],
+    tool_executor=executor,
+    tools=executor.get_tool_definitions(),
+)
+```
+
+Three of those are easy to get wrong:
+
+- `connect()` must precede `initialize()`, or it raises
+  `MCPError: Server not initialized. Make sure you call connect() first.`
+- `mcp_servers` without `tool_executor` raises `AgentConfigurationError` — a
+  server the agent knows about but never fetched from contributes no tools.
+- **One** executor over every server, not one each. The registry is the routing
+  table a model's tool call is dispatched through, so it has to hold everything
+  callable — `ToolExecutor(dict.fromkeys(servers))` for a list of them. See
+  "More than one server" below.
+
+Under the default `on_unreviewed="block"`, the first run of a server you have
+not approved raises from `initialize()` — at startup, not mid-conversation — and
+the message carries that server's own `inspect`/`approve` commands. That refusal
+is the intended first experience: it is what makes step 2 non-optional.
+
 #### `ToolTrustConfig`
 
 | Field | Type | Default | Meaning |
@@ -486,6 +523,29 @@ tool is kept or dropped, not whether you are told:
 | `allow` | yes | silent |
 | `warn` | yes | WARNING |
 | `block` | **no** | WARNING (wording says "were dropped") |
+
+##### If you change them, raise both or neither
+
+Tightening only `on_drift` looks like the cautious half-step and is the worst of
+the four combinations — worse than leaving the defaults alone. Measured against
+one poisoned server that edited two descriptions **and** added a `fetch_manifest`
+tool, which the injected text tells the model to call:
+
+| `on_unreviewed` / `on_drift` | tools loaded | outcome |
+|---|---|---|
+| `block` / `warn` *(default)* | 4 of 5 | `fetch_manifest` dropped; the two edits load, logged |
+| `warn` / `block` | 3 of 5 | edits dropped — **`fetch_manifest` admitted** |
+| `block` / `block` | 2 of 5 | both dropped |
+| `warn` / `warn` | 5 of 5 | nothing dropped; two warnings |
+
+The second row drops the sentence that names the attack and keeps the capability
+it points at, while the log reads as though the gate worked. The default already
+stops the new tool — `on_unreviewed` is the row doing the security work, and
+`on_drift` decides only whether an *edit to something you approved* is fatal.
+
+So `on_drift="block"` is a tightening of the default, not a substitute for it,
+and lowering `on_unreviewed` to `"warn"` is a deliberate, temporary choice —
+useful while iterating against a server you control — not a setting to ship.
 
 Both defaults can be changed globally with the `MCP_ON_UNREVIEWED` /
 `MCP_ON_DRIFT` environment variables; an explicit `ToolTrustConfig` argument
@@ -526,6 +586,85 @@ ToolTrustConfig(
 
 `continuum mcp approve` on that host then fails with an explanation rather than
 a traceback: the approval is meant to be made where the file is authored.
+
+#### More than one server
+
+`BaseAgent.mcp_servers` is a list and `ToolExecutor`'s registry is a dict, so
+connecting several servers is not a special mode — but four things about trust
+only show up once you have two.
+
+**One pin file, keyed by server name.** Both the approval and the record are
+keyed at the top level:
+
+```json
+{
+  "version": 1,
+  "servers": {
+    "clinic":   {"lookup_patient":     {"description": "...", "inputSchema": {...},
+                                        "raw": "5f3a...", "effective": "9db4..."}},
+    "pharmacy": {"check_interactions": {"description": "...", "inputSchema": {...},
+                                        "raw": "...",     "effective": "..."}}
+  }
+}
+```
+
+So approving one server never touches another's entry, and a compromised server
+does not invalidate an unrelated one's approval — `mcp diff clinic` can report
+drift while `mcp diff pharmacy` reports none. That keying is also why an
+explicit, stable `name=` matters: it *is* the key, so a name that moves with the
+URL orphans the approval (see "When the server's *name* changes").
+
+**One refusal names every unreviewed server.** The registry build collects them
+and raises once, with each server's own commands:
+
+```
+2 MCP servers have no approved catalogue: ['clinic', 'pharmacy']. Tool
+descriptions reach the model's prompt verbatim and can instruct it.
+
+Read each server's catalogue, then accept it:
+
+  continuum mcp inspect http://localhost:8911/mcp --name clinic
+  continuum mcp approve clinic --pins .../tool-pins.json --all
+
+  # `mcp inspect` sends a bare URL and this server needs headers. Read it where
+  # you build this server, before connecting:
+  #
+  #     from continuum.tools import review_server
+  #     await review_server(server)
+  #
+  continuum mcp approve pharmacy --pins .../tool-pins.json --all
+```
+
+Raising at the first server instead would cost one approve-and-restart cycle per
+server — in production, one `CrashLoopBackOff` each. Note the two servers get
+*different* advice: whether `mcp inspect` can reach a server is a per-server
+fact. `e.context["server_names"]` carries the full list; `server_name` still
+holds the first, so existing handlers keep working. What is **not** aggregated is
+an unreachable server — that error surfaces on its own, because "read a
+catalogue" and "fix the network" are different jobs.
+
+**A shared `ToolTrustConfig` is fine.** Its fields are configuration only
+(`pin_path`, `record_path`, `on_unreviewed`, `on_drift`, `on_change`); no
+per-server state is stored on it, and nothing mutates it at runtime. Per-server
+state lives in the two files, under each server's name:
+
+```python
+trust = ToolTrustConfig(pin_path=".continuum/tool-pins.json")
+
+servers = [
+    MCPServerStreamableHttp({"url": "..."}, name="clinic", trust_config=trust),
+    MCPServerStdio({"command": "npx", "args": [...]}, name="pharmacy", trust_config=trust),
+]
+```
+
+Build one config per server only when they need different paths or different
+actions — a server you author yourself and a third-party one from a registry are
+a reasonable pair to treat differently.
+
+**Colliding tool names need the namespaced form.** Two servers may each expose
+`lookup_patient`. The model sees `clinic__lookup_patient` and
+`pharmacy__lookup_patient`, and so must every `PolicyStore` resource, tool label
+and `always_promote` entry — a bare `lookup_patient` matches both. See §6.5.
 
 #### Resolving a change
 
