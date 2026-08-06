@@ -50,7 +50,11 @@ class ShopConfig:
     agent_name: str = "shop-assistant"
     # Model name is sent as-is to the gateway — gateway routes to the provider.
     # Must be in the virtual key's allowed_models list (conf.json).
-    agent_model: str = "anthropic/claude-opus-4-8"  # "auto/mid"
+    #
+    # The `openai/` prefix is correct in both modes: the gateway needs a provider
+    # id, and with no gateway the default OpenAI provider strips it before the
+    # call. Needs OPENAI_API_KEY in the root .env.
+    agent_model: str = "openai/gpt-4o-mini"  #  "anthropic/claude-opus-4-8"; "auto/mid"
     agent_temperature: float = 0.7
     max_turns: int = 10
 
