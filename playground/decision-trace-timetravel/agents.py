@@ -71,8 +71,40 @@ _GET_THRESHOLD = (
 )
 
 
+def _bare(name: str) -> str:
+    """``trace__get_close_data`` -> ``get_close_data``; a bare name passes through."""
+    return name.rpartition("__")[2] or name
+
+
 def _tools(tools: list[dict[str, Any]], names: set[str]) -> list[dict[str, Any]]:
-    return [t for t in tools if t.get("function", {}).get("name") in names]
+    """Select this stage's tools by BARE name, whatever the server prefix is.
+
+    The names below are written bare (``get_close_data``), but the definitions
+    arriving from ``MCPUtil.get_function_tools()`` are namespaced with the MCP
+    server name (``trace__get_close_data``) whenever ``namespace_tools`` is on,
+    which is the default. Matching the full string meant every set matched
+    NOTHING, so every stage was built with ``tools=[]``: the agents could not
+    call a tool, and an LLM with no tools does not fail -- it narrates. Observed
+    live as a reconciliation agent reporting "there are no discrepancies", a
+    consolidation agent inventing ``THRESHOLD_USED=10000``, and all three
+    materiality branches returning CLEAN while ``compute_consolidation`` -- the
+    one deterministic source of the verdict -- was never called.
+
+    Comparing the suffix keeps the stage definitions readable and independent of
+    ``mcp_server_name``, so renaming the server cannot silently disarm them
+    again. Raises instead of returning a short list: a stage missing a tool is
+    the failure this function exists to prevent, and it is invisible downstream.
+    """
+    selected = [t for t in tools if _bare(t.get("function", {}).get("name", "")) in names]
+    missing = names - {_bare(t.get("function", {}).get("name", "")) for t in selected}
+    if missing:
+        available = sorted(t.get("function", {}).get("name", "") for t in tools)
+        raise ValueError(
+            f"No tool matching {sorted(missing)}. Available: {available}. "
+            f"Stage tool sets are written bare and matched on the part after "
+            f"'<server>__'; check the name against server.py."
+        )
+    return selected
 
 
 def _agent(name, instructions, tools, te, model, tool_names=None):
@@ -477,10 +509,19 @@ def build_debate(tools, te, model):
 def build_handoff(tools, te, model):
     controller = _agent(
         "ho-controller",
+        # _GET_THRESHOLD, like every other decider. This builder was the only one
+        # that skipped it and said "call compute_consolidation with THAT
+        # threshold_usd" -- an anaphoric reference that binds no number. Observed
+        # live: it fetched the policy ($5,000,000), then computed with $2,000,000
+        # (D1's own amount, visible in the close data) and reported CLEAN. The real
+        # verdict at $5M is CONTROL_ISSUE, so the run inverted the answer AND lost
+        # the demo's point -- $5M waiving a $2M misstatement is the bug you are
+        # meant to find, and the fork to <=$2M is what flips it to CLEAN.
         "You are the controller and make the FINAL close call.\n"
-        "1. Call get_materiality_policy for the threshold.\n"
-        "2. Call compute_consolidation with that threshold_usd.\n"
-        "3. Then decide. End with EXACTLY:\n" + _DECIDE_TAIL,
+        + _GET_THRESHOLD
+        + "Call compute_consolidation(threshold_usd=n) -- the policy's integer n, "
+        "never a discrepancy amount from the close data.\n"
+        "Then decide. End with EXACTLY:\n" + _DECIDE_TAIL,
         tools,
         te,
         model,
