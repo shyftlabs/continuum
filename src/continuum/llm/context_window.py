@@ -176,6 +176,19 @@ class ContextWindowManager:
     # Keys are matched by substring in insertion order, so more specific ids must
     # precede shorter ones that are a prefix of them (gpt-4o before gpt-4).
     DEFAULT_LIMITS: dict[str, int] = {
+        # Smart Gateway tier ids (`auto/<tier>`). The physical model behind a tier
+        # is chosen by the gateway per request, so no exact window is knowable
+        # here — and the gateway does not shrink the conversation to fit a model,
+        # it routes to a model large enough to hold it (candidates whose
+        # max_context_tokens is too small are dropped). Compressing first would
+        # destroy the history before that choice can be made, so the trigger is
+        # set high deliberately to keep Continuum out of the way.
+        #
+        # 128000 is the smallest context across the gateway's routable tiers
+        # (frontier 200k, mid 128k, small 128k), so premature compression stops
+        # while a real backstop remains before a request becomes unroutable.
+        # Listed first so a tier id can never be captured by a model key.
+        "auto/": 128000,
         # OpenAI — verified live via an oversized-input probe, which makes the
         # API state the limit ("Input tokens exceed the configured limit of N").
         # 272000 is confirmed for gpt-5/-mini/.1/.2/.4-mini. The gpt-5.4, 5.5 and

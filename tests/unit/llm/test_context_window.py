@@ -87,6 +87,29 @@ class TestContextWindowManager:
         cwm = ContextWindowManager()
         assert cwm.get_model_limits("totally-unknown-model-x").max_tokens == 4096
 
+    def test_gateway_tier_does_not_use_the_4096_fallback(self):
+        """Regression: a Smart Gateway tier id (`auto/<tier>`) matched nothing and
+        fell back to 4096, so compression fired above ~3k tokens — a few messages
+        — for every gateway user routing by tier.
+
+        The physical model behind a tier is chosen by the gateway, so no exact
+        number is knowable here. What matters is that Continuum gets out of the
+        way: the gateway routes to a model large enough to hold the request
+        (`capabilityFilter` drops candidates whose max_context_tokens is too
+        small), and compressing first would destroy the history before it can.
+        """
+        cwm = ContextWindowManager()
+        for model in ("auto/cheap", "auto/mid", "auto/quality", "auto/frontier"):
+            assert cwm.get_model_limits(model).max_tokens == 128000, model
+
+    def test_gateway_tier_still_has_a_backstop(self):
+        """Not unlimited: a request too large for any model must still compress
+        rather than become unroutable."""
+        cwm = ContextWindowManager()
+        limits = cwm.get_model_limits("auto/mid")
+        assert limits.max_tokens < 1_000_000
+        assert limits.effective_input_limit == 96000
+
     def test_o_series_gets_real_window_not_4096(self):
         """Regression: the o-series matched no key and fell back to 4096, which
         would compress context ~50x earlier than the model requires.
