@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import AgentConfig, AgentMemoryConfig
 from continuum.agent.types import EventType, PrepareRunResult, RunContext, RunState
-from continuum.agent.utils.validation_utils import apply_output_scanners
-from continuum.llm.types import StreamChunk
+from continuum.agent.utils.validation_utils import apply_output_scanners, last_user_prompt
+from continuum.llm.types import ChatMessage, StreamChunk
 
 EMAIL = "alice@example.com"
 REDACTED = "[REDACTED]"
@@ -63,6 +63,60 @@ class TestApplyOutputScanners:
 
         # Crashing scanner is skipped; content survives unmodified.
         assert apply_output_scanners(_agent([boom]), "p", "keepme") == "keepme"
+
+
+class TestLastUserPrompt:
+    """`last_user_prompt` must read either message shape.
+
+    Every current caller passes plain dicts, so these are not a regression test
+    for a live crash. They pin the tolerance deliberately: the read used to be
+    dict-only (`message.get(...)`), which raises AttributeError on a Pydantic
+    ChatMessage — and `apply_output_scanners`'s fail-open would NOT contain it,
+    since last_user_prompt is evaluated as that function's *argument*, before it
+    is entered. ChatMessage is the codebase's other message representation, so
+    the cheap tolerance is worth keeping.
+    """
+
+    def test_reads_dict_messages(self):
+        messages = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "latest"},
+        ]
+        assert last_user_prompt(messages) == "latest"
+
+    def test_reads_chat_message_models(self):
+        messages = [
+            ChatMessage(role="user", content="first"),
+            ChatMessage(role="assistant", content="reply"),
+            ChatMessage(role="user", content="latest"),
+        ]
+        assert last_user_prompt(messages) == "latest"
+
+    def test_reads_mixed_shapes(self):
+        messages = [
+            ChatMessage(role="user", content="from model"),
+            {"role": "assistant", "content": "reply"},
+        ]
+        assert last_user_prompt(messages) == "from model"
+
+    def test_empty_and_none_are_safe(self):
+        assert last_user_prompt(None) == ""
+        assert last_user_prompt([]) == ""
+
+    def test_no_user_message_returns_empty(self):
+        assert last_user_prompt([ChatMessage(role="assistant", content="hi")]) == ""
+
+    def test_chat_message_with_no_content(self):
+        """content is Optional on ChatMessage (tool-call turns carry none)."""
+        assert last_user_prompt([ChatMessage(role="user", content=None)]) == ""
+
+    def test_finalizer_path_does_not_raise_with_model_messages(self):
+        """The exact call the finalizer makes: scanner prompt built from
+        `response.messages`."""
+        messages = [ChatMessage(role="user", content=f"mail {EMAIL}")]
+        out = apply_output_scanners(_agent([_redactor]), last_user_prompt(messages), EMAIL)
+        assert out == REDACTED
 
 
 # ---------------------------------------------------------------------------

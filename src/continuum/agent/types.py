@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from continuum.logging import get_logger
 
 if TYPE_CHECKING:
-    from continuum.llm.types import ChatMessage, ToolCall
+    from continuum.llm.types import ToolCall
 
 _logger = get_logger(__name__)
 
@@ -551,8 +551,12 @@ class AgentResponse:
     handoff: HandoffData | None = None
     handoff_result: HandoffResult | None = None
 
-    # Conversation
-    messages: list[ChatMessage] = field(default_factory=list)
+    # Conversation. Plain dicts in OpenAI wire shape, NOT ChatMessage models:
+    # every producer feeds this from RunState.messages (list[dict]), and the
+    # consumers (RunFinalizer.finalize, SessionService.save_messages) read it
+    # with dict access. It was annotated list[ChatMessage], which is not what
+    # any path actually puts here.
+    messages: list[dict[str, Any]] = field(default_factory=list)
 
     # Metrics
     usage: TokenUsage = field(default_factory=TokenUsage)
