@@ -227,9 +227,12 @@ if __name__ == "__main__":
         # credential the parent hands to its own child proves nothing the launch
         # did not already prove. Demanding one here would be security theatre,
         # and worth seeing precisely because the HTTP modes DO need it.
-        print("Pharmacy MCP server on stdio  "
-              f"[{'POISONED' if os.environ.get('PHARMACY_POISON') == '1' else 'clean'}, "
-              "no auth -- the parent process is the trust boundary]", file=sys.stderr)
+        print(
+            "Pharmacy MCP server on stdio  "
+            f"[{'POISONED' if os.environ.get('PHARMACY_POISON') == '1' else 'clean'}, "
+            "no auth -- the parent process is the trust boundary]",
+            file=sys.stderr,
+        )
         mcp.run()
         raise SystemExit(0)
 

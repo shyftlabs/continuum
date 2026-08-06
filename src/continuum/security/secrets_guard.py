@@ -91,9 +91,7 @@ def enforce_credential(*, service: str, credential: str | None, env_var: str) ->
     )
 
     if _allow_insecure():
-        logger.warning(
-            "INSECURE credential allowed via %s=1 — %s.", ALLOW_INSECURE_ENV, hint
-        )
+        logger.warning("INSECURE credential allowed via %s=1 — %s.", ALLOW_INSECURE_ENV, hint)
         return
 
     raise InsecureConfigurationError(

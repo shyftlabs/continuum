@@ -387,9 +387,7 @@ class TestRelocatedRecord:
         save_pins(rec, {"clinic": _pins(_tool("a", "Reviewed."))})
 
         rc = cli._cmd_mcp_approve(
-            _parse(
-                ["mcp", "approve", "clinic", "--all", "--pins", str(pin), "--record", str(rec)]
-            )
+            _parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin), "--record", str(rec)])
         )
 
         assert rc == 0
@@ -442,7 +440,7 @@ class TestApproveCommand:
         assert set(load_pins(pin)["clinic"]) == {"a", "b"}
 
     def test_a_missing_record_suggests_checking_the_path(self, tmp_path, capsys):
-        """"No record" is far more often a wrong --pins than a server never run.
+        """ "No record" is far more often a wrong --pins than a server never run.
 
         The advice must not send someone to re-run an agent that has already
         run -- and must not name a literal URL placeholder, which the earlier
@@ -453,9 +451,7 @@ class TestApproveCommand:
         pin = tmp_path / "pins.json"
         save_pins(pin, {"clinic": _pins(_tool("a", "A."))})  # approved, but no record
 
-        rc = cli._cmd_mcp_approve(
-            _parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin)])
-        )
+        rc = cli._cmd_mcp_approve(_parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin)]))
 
         err = capsys.readouterr().err
         assert rc == 1
@@ -472,9 +468,7 @@ class TestApproveCommand:
 
         pin = tmp_path / "pins.json"
 
-        rc = cli._cmd_mcp_approve(
-            _parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin)])
-        )
+        rc = cli._cmd_mcp_approve(_parse(["mcp", "approve", "clinic", "--all", "--pins", str(pin)]))
 
         assert rc == 1
         assert not pin.exists()
@@ -523,7 +517,9 @@ class TestDocumentedCommandsAreReal:
                 for action in subparsers[command]._actions
                 for option in action.option_strings
             }
-            assert flag in known, f"`continuum mcp {command}` has no {flag} (known: {sorted(known)})"
+            assert flag in known, (
+                f"`continuum mcp {command}` has no {flag} (known: {sorted(known)})"
+            )
 
 
 def cfg_last_seen(pin_path, servers) -> None:

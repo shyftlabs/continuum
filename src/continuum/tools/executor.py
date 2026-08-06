@@ -61,9 +61,7 @@ def _combined_unreviewed_error(
         + "Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
         + "servers (not recommended)."
     )
-    return MCPServerUnreviewedError(
-        message, server_name=names[0], context={"server_names": names}
-    )
+    return MCPServerUnreviewedError(message, server_name=names[0], context={"server_names": names})
 
 
 # Common variable names that should be auto-captured/injected
@@ -632,9 +630,7 @@ class ToolExecutor:
             try:
                 mcp_tools = await server.list_tools(metadata=metadata)
                 self._warn_on_unmatched_context_tool_names(server, mcp_tools)
-                MCPUtil._warn_if_server_name_is_derived(
-                    server, namespaced=self._namespace_tools
-                )
+                MCPUtil._warn_if_server_name_is_derived(server, namespaced=self._namespace_tools)
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list

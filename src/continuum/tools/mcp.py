@@ -748,8 +748,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         # bare would hand argparse a truncated name plus stray positionals. Simple
         # names pass through unchanged, so the common case reads the same.
         review = (
-            f"continuum mcp diff {shlex.quote(self.name)} "
-            f"--pins {shlex.quote(str(cfg.pin_path))}"
+            f"continuum mcp diff {shlex.quote(self.name)} --pins {shlex.quote(str(cfg.pin_path))}"
         )
         if unreviewed and cfg.on_unreviewed != "allow":
             logger.warning(

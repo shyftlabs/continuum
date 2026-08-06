@@ -48,8 +48,11 @@ class TestFallbackMessageReportsCause:
             monkeypatch, reachable=False, reason="AuthenticationError: WRONGPASS invalid password"
         )
         cfg = SessionConfig(
-            enabled=True, redis_host="localhost", redis_port=6380,
-            redis_password="ut-strong-redis-pw-0123456789", fallback_mode="fail"
+            enabled=True,
+            redis_host="localhost",
+            redis_port=6380,
+            redis_password="ut-strong-redis-pw-0123456789",
+            fallback_mode="fail",
         )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
@@ -64,8 +67,11 @@ class TestFallbackMessageReportsCause:
         # Provider exposes no reason (None) -> keep the generic wording (back-compat).
         _patch_provider(monkeypatch, reachable=False, reason=None)
         cfg = SessionConfig(
-            enabled=True, redis_host="localhost", redis_port=6380,
-            redis_password="ut-strong-redis-pw-0123456789", fallback_mode="fail"
+            enabled=True,
+            redis_host="localhost",
+            redis_port=6380,
+            redis_password="ut-strong-redis-pw-0123456789",
+            fallback_mode="fail",
         )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
@@ -82,8 +88,12 @@ class TestFallbackMessageReportsCause:
             op,
             raising=True,
         )
-        cfg = SessionConfig(enabled=True, redis_host="localhost", redis_port=6380,
-                            redis_password="ut-strong-redis-pw-0123456789")
+        cfg = SessionConfig(
+            enabled=True,
+            redis_host="localhost",
+            redis_port=6380,
+            redis_password="ut-strong-redis-pw-0123456789",
+        )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
         sid = await client.get_or_create_session(user_id="alice")

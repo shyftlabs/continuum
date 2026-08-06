@@ -207,8 +207,6 @@ class TestPolicyStoreDefaultDenyFactory:
         assert store.check("agent", "tool:anything").allowed is False
 
     def test_default_deny_factory_seeds_allow_policies(self):
-        store = PolicyStore.default_deny(
-            [_allow("read_only", ["*"], ["tool:get_*"])]
-        )
+        store = PolicyStore.default_deny([_allow("read_only", ["*"], ["tool:get_*"])])
         assert store.check("agent", "tool:get_invoice").allowed is True
         assert store.check("agent", "tool:delete_invoice").allowed is False

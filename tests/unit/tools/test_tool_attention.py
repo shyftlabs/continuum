@@ -322,7 +322,9 @@ class TestToolSummaryRegistry:
 
 
 class TestToolSummaryRegistryPruning:
-    def _ready_registry(self, existing: list[str], **kwargs) -> tuple[ToolSummaryRegistry, MagicMock]:
+    def _ready_registry(
+        self, existing: list[str], **kwargs
+    ) -> tuple[ToolSummaryRegistry, MagicMock]:
         cfg = ToolAttentionConfig(**kwargs)
         registry = ToolSummaryRegistry(cfg)
         registry._ready = True

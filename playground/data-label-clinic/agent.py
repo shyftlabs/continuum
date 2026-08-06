@@ -140,8 +140,8 @@ def build_mcp_servers(*, config: ClinicConfig | None = None) -> list[MCPServer]:
     if cfg.pharmacy_transport == "stdio":
         pharmacy_class, pharmacy_params = MCPServerStdio, cfg.pharmacy_stdio_params
     else:
-        pharmacy_class = MCPServerSse if cfg.pharmacy_transport == "sse" else (
-            MCPServerStreamableHttp
+        pharmacy_class = (
+            MCPServerSse if cfg.pharmacy_transport == "sse" else (MCPServerStreamableHttp)
         )
         pharmacy_params = {
             "url": cfg.pharmacy_url,

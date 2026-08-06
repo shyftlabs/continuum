@@ -40,7 +40,9 @@ class TestFailClosedCredentialRemoteOnly:
     def test_remote_milvus_without_token_refuses(self, monkeypatch):
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
         c = VectorStoreConnector(
-            _cfg(vector_store_provider="milvus", milvus_host="m.internal.example", milvus_token=None)
+            _cfg(
+                vector_store_provider="milvus", milvus_host="m.internal.example", milvus_token=None
+            )
         )
         assert c.mode is ConnectionMode.CUSTOM
         with pytest.raises(InsecureConfigurationError, match="MILVUS_TOKEN"):
@@ -56,7 +58,11 @@ class TestFailClosedCredentialRemoteOnly:
     def test_remote_qdrant_with_key_is_allowed(self, monkeypatch):
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
         c = VectorStoreConnector(
-            _cfg(vector_store_provider="qdrant", qdrant_host="q.cloud", qdrant_api_key="strong-key-xyz")
+            _cfg(
+                vector_store_provider="qdrant",
+                qdrant_host="q.cloud",
+                qdrant_api_key="strong-key-xyz",
+            )
         )
         assert c.to_mem0_block()["config"]["api_key"] == "strong-key-xyz"
 

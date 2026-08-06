@@ -273,9 +273,9 @@ class TestDegradesRatherThanFails:
                 tools = await server.list_tools()
 
             assert [t.name for t in tools] == ["a"]
-            assert any(
-                server.trust_config.last_seen_path.name in w for w in _warnings(records)
-            ), _warnings(records)
+            assert any(server.trust_config.last_seen_path.name in w for w in _warnings(records)), (
+                _warnings(records)
+            )
         finally:
             pin.parent.chmod(0o700)
 
@@ -464,9 +464,7 @@ class TestUnreviewedError:
 
         monkeypatch.setattr(server, "list_tools", _boom)
         monkeypatch.setattr(server, "create_streams", lambda: _fake_streams())
-        monkeypatch.setattr(
-            "continuum.tools.mcp.ClientSession", lambda *a, **k: _FakeSession()
-        )
+        monkeypatch.setattr("continuum.tools.mcp.ClientSession", lambda *a, **k: _FakeSession())
 
         with pytest.raises(MCPServerUnreviewedError):
             await server.connect()
@@ -479,9 +477,7 @@ class TestUnreviewedError:
 
         monkeypatch.setattr(server, "list_tools", _boom)
         monkeypatch.setattr(server, "create_streams", lambda: _fake_streams())
-        monkeypatch.setattr(
-            "continuum.tools.mcp.ClientSession", lambda *a, **k: _FakeSession()
-        )
+        monkeypatch.setattr("continuum.tools.mcp.ClientSession", lambda *a, **k: _FakeSession())
 
         with pytest.raises(MCPConnectionError):
             await server.connect()

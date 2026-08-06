@@ -27,11 +27,17 @@ class TestModeInference:
         assert c.mode is ConnectionMode.LOCAL_DOCKER
 
     def test_ssl_is_cloud(self):
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(
+                enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW
+            )
+        )
         assert c.mode is ConnectionMode.CLOUD
 
     def test_remote_without_ssl_is_custom(self):
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="10.0.0.5", redis_ssl=False, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(enabled=True, redis_host="10.0.0.5", redis_ssl=False, redis_password=_PW)
+        )
         assert c.mode is ConnectionMode.CUSTOM
 
     def test_disabled_is_disabled(self):
@@ -53,7 +59,9 @@ class TestConfiguredAndEnabled:
 class TestBuildClient:
     def test_build_client_does_not_connect_and_is_cached(self):
         # Constructing a redis.asyncio client/pool does not open a socket.
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW)
+        )
         client = c.build_client()
         assert client is not None
         assert c.pool is not None
@@ -94,13 +102,21 @@ class TestTlsConnection:
     """
 
     def test_tls_uses_ssl_connection_class(self):
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(
+                enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW
+            )
+        )
         pool = c.build_client().connection_pool
         assert pool.connection_class is SSLConnection
 
     def test_tls_connection_object_builds_without_typeerror(self):
         # The original bug surfaced lazily when the pool first built a connection.
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(
+                enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW
+            )
+        )
         pool = c.build_client().connection_pool
         conn = pool.connection_class(**pool.connection_kwargs)  # must not raise
         assert isinstance(conn, SSLConnection)
@@ -108,7 +124,9 @@ class TestTlsConnection:
         assert "ssl" not in pool.connection_kwargs
 
     def test_non_tls_path_untouched(self):
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="10.0.0.5", redis_ssl=False, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(enabled=True, redis_host="10.0.0.5", redis_ssl=False, redis_password=_PW)
+        )
         pool = c.build_client().connection_pool
         assert pool.connection_class is Connection
         assert "ssl" not in pool.connection_kwargs
@@ -117,7 +135,11 @@ class TestTlsConnection:
     def test_cert_kwargs_omitted_when_unset(self):
         # Default (None) must NOT pass ssl_cert_reqs=None (which maps to CERT_NONE,
         # disabling verification). Omitting keeps redis-py's verifying default.
-        c = RedisConnector(SessionConfig(enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW))
+        c = RedisConnector(
+            SessionConfig(
+                enabled=True, redis_host="my.redis.cloud", redis_ssl=True, redis_password=_PW
+            )
+        )
         kwargs = c.build_client().connection_pool.connection_kwargs
         assert "ssl_cert_reqs" not in kwargs
         assert "ssl_ca_certs" not in kwargs
@@ -148,7 +170,9 @@ class TestProviderProbeReason:
         from continuum.session.providers.redis import RedisSessionProvider
 
         return RedisSessionProvider(
-            SessionConfig(enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW),
+            SessionConfig(
+                enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW
+            ),
             auto_initialize=True,
         )
 
@@ -201,9 +225,7 @@ class TestFailClosedCredential:
         monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
         # Force blank explicitly — don't rely on the default, which reads the
         # ambient SESSION_REDIS_PASSWORD env and would make this env-dependent.
-        c = RedisConnector(
-            SessionConfig(enabled=True, redis_host="localhost", redis_password="")
-        )
+        c = RedisConnector(SessionConfig(enabled=True, redis_host="localhost", redis_password=""))
         with pytest.raises(InsecureConfigurationError):
             c.build_client()
 
@@ -218,7 +240,9 @@ class TestProviderUsesConnector:
         from continuum.session.providers.redis import RedisSessionProvider
 
         provider = RedisSessionProvider(
-            SessionConfig(enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW),
+            SessionConfig(
+                enabled=True, redis_host="localhost", redis_port=6380, redis_password=_PW
+            ),
             auto_initialize=True,
         )
         assert provider.is_initialized is True

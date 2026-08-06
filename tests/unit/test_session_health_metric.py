@@ -91,8 +91,12 @@ class TestMetric:
         )
         monkeypatch.setattr(RedisSessionProvider, "aping", AsyncMock(return_value=False))
 
-        cfg = SessionConfig(enabled=True, redis_host="localhost",
-                            redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade")
+        cfg = SessionConfig(
+            enabled=True,
+            redis_host="localhost",
+            redis_password="ut-strong-redis-pw-0123456789",
+            fallback_mode="degrade",
+        )
         sc = SessionClient(session_config=cfg, auto_initialize=False)
         await sc.get_or_create_session(user_id="a")
 
@@ -108,8 +112,12 @@ class TestMetric:
             RedisSessionProvider, "get_or_create_session", AsyncMock(return_value="sess-1")
         )
 
-        cfg = SessionConfig(enabled=True, redis_host="localhost",
-                            redis_password="ut-strong-redis-pw-0123456789", fallback_mode="degrade")
+        cfg = SessionConfig(
+            enabled=True,
+            redis_host="localhost",
+            redis_password="ut-strong-redis-pw-0123456789",
+            fallback_mode="degrade",
+        )
         sc = SessionClient(session_config=cfg, auto_initialize=False)
         await sc.get_or_create_session(user_id="a")
 

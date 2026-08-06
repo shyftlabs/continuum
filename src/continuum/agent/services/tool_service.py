@@ -30,9 +30,7 @@ logger = get_logger(__name__)
 _NAMESPACE_SEPARATOR = "__"
 
 
-def resolve_tool_data_labels(
-    tool_data_labels: dict[str, set[str]], called_name: str
-) -> set[str]:
+def resolve_tool_data_labels(tool_data_labels: dict[str, set[str]], called_name: str) -> set[str]:
     """Labels declared for ``called_name``, by namespaced or raw key.
 
     ``tool_data_labels`` is keyed by tool name, but a server given a ``name=``

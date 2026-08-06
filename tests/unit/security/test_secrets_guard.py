@@ -68,9 +68,7 @@ class TestEnforceCredential:
     def test_blank_credential_raises(self, monkeypatch):
         monkeypatch.delenv(ALLOW_INSECURE_ENV, raising=False)
         with pytest.raises(InsecureConfigurationError):
-            enforce_credential(
-                service="Qdrant", credential=None, env_var="QDRANT_API_KEY"
-            )
+            enforce_credential(service="Qdrant", credential=None, env_var="QDRANT_API_KEY")
 
     def test_escape_hatch_downgrades_to_warning(self, monkeypatch):
         monkeypatch.setenv(ALLOW_INSECURE_ENV, "1")

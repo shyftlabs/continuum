@@ -92,6 +92,7 @@ def _handoff_payload_key(reason: str | None, context: str | None) -> str:
     """
     return " ".join(f"{reason or ''}\x00{context or ''}".casefold().split())
 
+
 # Extra LLM calls allowed to coax a valid structured output after the first
 # attempt fails validation. 1 = one retry (see ADR / fix plan, decision #3).
 _MAX_STRUCTURED_OUTPUT_RETRIES = 1
@@ -653,9 +654,13 @@ class Executor(IExecutor):
                                 )
                                 _streak = 0
                                 for _h in reversed(run_state.handoff_chain):
-                                    if _h.get("to_agent") == target and _handoff_payload_key(
-                                        _h.get("reason"), _h.get("context")
-                                    ) == _fp:
+                                    if (
+                                        _h.get("to_agent") == target
+                                        and _handoff_payload_key(
+                                            _h.get("reason"), _h.get("context")
+                                        )
+                                        == _fp
+                                    ):
                                         _streak += 1
                                     else:
                                         break

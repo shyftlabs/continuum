@@ -72,7 +72,10 @@ def _captured_logs():
             records.append(record)
 
     handler = _Collector()
-    loggers = [logging.getLogger("continuum.tools.mcp"), logging.getLogger("continuum.tools.pinning")]
+    loggers = [
+        logging.getLogger("continuum.tools.mcp"),
+        logging.getLogger("continuum.tools.pinning"),
+    ]
     for logger in loggers:
         logger.addHandler(handler)
     try:
@@ -445,9 +448,7 @@ class TestDrift:
     async def test_allow_keeps_it_silently(self, tmp_path):
         pin = tmp_path / "pins.json"
         _approve(pin, _tool("a", "Original."))
-        server = _server(
-            ToolTrustConfig(pin_path=pin, on_drift="allow"), [_tool("a", "Poisoned.")]
-        )
+        server = _server(ToolTrustConfig(pin_path=pin, on_drift="allow"), [_tool("a", "Poisoned.")])
 
         assert [t.name for t in await server.list_tools()] == ["a"]
 
@@ -460,7 +461,9 @@ class TestDrift:
         """
         pin = tmp_path / "pins.json"
         _approve(pin, _tool("a", "Same."))
-        drifted = _tool("a", "Same.", {"type": "object", "properties": {"notes": {"type": "string"}}})
+        drifted = _tool(
+            "a", "Same.", {"type": "object", "properties": {"notes": {"type": "string"}}}
+        )
         server = _server(ToolTrustConfig(pin_path=pin, on_drift="block"), [drifted])
 
         assert await server.list_tools() == []
@@ -606,9 +609,7 @@ class TestRenamedServerIsRecognised:
         save_pins(pin_path, {self.OLD: snapshot_tool_digests(self.OLD, list(tools))})
 
     @pytest.mark.asyncio
-    async def test_identical_catalogue_under_another_name_is_reported_as_a_rename(
-        self, tmp_path
-    ):
+    async def test_identical_catalogue_under_another_name_is_reported_as_a_rename(self, tmp_path):
         pins = tmp_path / "tool-pins.json"
         tools = [_tool("a", "Alpha."), _tool("b", "Beta.")]
         self._pin_under_old_name(pins, *tools)
@@ -796,9 +797,7 @@ class TestSuggestedCommandsSurviveAShell:
         import re
 
         found = [
-            line.strip()
-            for line in message.splitlines()
-            if line.strip().startswith("continuum ")
+            line.strip() for line in message.splitlines() if line.strip().startswith("continuum ")
         ]
         found += re.findall(r"`(continuum [^`]+)`", message)
         return found
@@ -1231,7 +1230,7 @@ class TestLocalFunctionToolsAreOutsideTheTrustLayer:
 
 
 class TestTheRefusalSaysWhyTheCliCannotBeUsed:
-    """"`mcp inspect` cannot reach this server" beside a perfectly good URL
+    """ "`mcp inspect` cannot reach this server" beside a perfectly good URL
     reads as an assertion to be taken on faith.
 
     The SDK knows the actual reason -- no URL, wrong protocol, headers it cannot
@@ -1332,7 +1331,7 @@ class TestTheReadStepIsActionable:
 
     @pytest.mark.asyncio
     async def test_it_says_where_that_code_goes(self, tmp_path):
-        """"Call review_server" is useless without "where you build this
+        """ "Call review_server" is useless without "where you build this
         server" -- the reader has an exception, not a REPL with `server` in it."""
         with pytest.raises(MCPServerUnreviewedError) as caught:
             await self._stdio(tmp_path).list_tools()

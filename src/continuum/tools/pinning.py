@@ -586,8 +586,10 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
         out.append("  policy resource:")
         namespaced = build_namespaced_tool_name(server_name, tool.name)
         out.append(f"    tool:{namespaced}   (namespace_tools=True, the default)")
-        out.append(f"    tool:{tool.name}{' ' * max(1, len(namespaced) - len(tool.name))}"
-                   f"   (namespace_tools=False)")
+        out.append(
+            f"    tool:{tool.name}{' ' * max(1, len(namespaced) - len(tool.name))}"
+            f"   (namespace_tools=False)"
+        )
         out.append("")
         out.append(f"  {description or '(no description)'}")
 
@@ -608,9 +610,7 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
         removed = sum(len(t) - len(strip_hidden_chars(t)) for t in hidden_sources)
         if removed:
             out.append("")
-            out.append(
-                f"  *** WARNING: {removed} hidden/invisible character(s) in this tool. ***"
-            )
+            out.append(f"  *** WARNING: {removed} hidden/invisible character(s) in this tool. ***")
             out.append("  These are readable by the model but not by you. Treat this server")
             out.append("  as hostile unless you can explain them.")
             for text in hidden_sources:
@@ -620,5 +620,3 @@ def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
 
     out.append(f"{'─' * 72}")
     return "\n".join(out)
-
-

@@ -25,9 +25,7 @@ from continuum.security.policy import PolicyStore
 def warnings(monkeypatch):
     """Capture messages passed to base._logger.warning."""
     captured: list[str] = []
-    monkeypatch.setattr(
-        base_mod._logger, "warning", lambda msg, *a, **k: captured.append(str(msg))
-    )
+    monkeypatch.setattr(base_mod._logger, "warning", lambda msg, *a, **k: captured.append(str(msg)))
     return captured
 
 
@@ -45,9 +43,7 @@ class TestSecurityPostureWarning:
             instructions="help",
             tools=[_tool("delete_account"), _tool("get_status")],
         )
-        assert any(
-            "delete_account" in m and "UNAUTHORIZED" in m for m in warnings
-        ), warnings
+        assert any("delete_account" in m and "UNAUTHORIZED" in m for m in warnings), warnings
 
     def test_benign_tools_do_not_warn(self, warnings):
         BaseAgent(

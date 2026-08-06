@@ -176,17 +176,21 @@ async def chat_stream(req: ChatRequest):
             # truncated event-stream and waits for a `done` that never comes.
             # Emit one so the failure reaches the chat bubble.
             logger.exception("chat_stream failed")
-            yield "data: " + json.dumps(
-                {
-                    "type": "done",
-                    "response": f"{type(e).__name__}: {e}",
-                    "failed": True,
-                    "taint": [],
-                    "model_used": None,
-                    "gate_events": [],
-                    "tools_called": [],
-                }
-            ) + "\n\n"
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "done",
+                        "response": f"{type(e).__name__}: {e}",
+                        "failed": True,
+                        "taint": [],
+                        "model_used": None,
+                        "gate_events": [],
+                        "tools_called": [],
+                    }
+                )
+                + "\n\n"
+            )
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 

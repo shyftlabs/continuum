@@ -463,7 +463,9 @@ class TestTwoServersCollide:
         matches nothing does not error, it just leaves the tool unusable."""
         config = _load("config")
         store = config.build_policy_store()
-        assert store.check([config.default_config.agent_name], "tool:lookup_patient").allowed is False
+        assert (
+            store.check([config.default_config.agent_name], "tool:lookup_patient").allowed is False
+        )
 
     def test_both_phi_sources_are_declared(self):
         """Missing either one means that server's records taint nothing, and
@@ -488,7 +490,9 @@ class TestTwoServersCollide:
         store = config.build_policy_store()
         subject = config.default_config.agent_name
         assert store.check([subject, config.PHI], "tool:pharmacy__check_interactions").allowed
-        assert store.check([subject, config.PHI], "tool:clinic__send_referral_email").allowed is False
+        assert (
+            store.check([subject, config.PHI], "tool:clinic__send_referral_email").allowed is False
+        )
 
     def test_the_agent_connects_both_servers(self):
         """A second server that nothing connects to demonstrates nothing.

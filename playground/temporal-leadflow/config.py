@@ -43,6 +43,7 @@ class LeadFlowConfig:
         MaxTurnsExceededError, losing the summary for the calls it had completed.
         """
         return 4 * self.outreach_leads + 2
+
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
     task_queue: str = "leadflow"

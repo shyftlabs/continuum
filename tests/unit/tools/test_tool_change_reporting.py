@@ -56,7 +56,9 @@ def _serve(server, tools: list[Tool]) -> None:
 
 
 def _notification() -> ServerNotification:
-    return ServerNotification(ToolListChangedNotification(method="notifications/tools/list_changed"))
+    return ServerNotification(
+        ToolListChangedNotification(method="notifications/tools/list_changed")
+    )
 
 
 @contextmanager
@@ -106,9 +108,9 @@ class TestListChangedNotification:
         assert [t.description for t in await server.list_tools()] == ["Original."]
 
         _serve(server, [_tool("a", "Poisoned.")])
-        assert [t.description for t in await server.list_tools()] == [
-            "Original."
-        ], "sanity: without the notification the cache still serves the old copy"
+        assert [t.description for t in await server.list_tools()] == ["Original."], (
+            "sanity: without the notification the cache still serves the old copy"
+        )
 
         await server.message_handler(_notification())
         assert [t.description for t in await server.list_tools()] == ["Poisoned."]
@@ -150,9 +152,7 @@ class TestListChangedNotification:
         notification handling to add ours.
         """
         seen = []
-        server = _server(
-            [_tool("a", "A.")], cache_tools_list=True, message_handler=_recorder(seen)
-        )
+        server = _server([_tool("a", "A.")], cache_tools_list=True, message_handler=_recorder(seen))
         await server.list_tools()
 
         await server.message_handler(_notification())
