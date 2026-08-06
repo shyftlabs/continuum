@@ -99,13 +99,21 @@ def build_policy_store() -> PolicyStore:
                 "memory:*",
                 "telemetry",
                 "session",
-                # The four tools server.py exposes, named individually rather
+                # Every tool the two servers expose, named individually rather
                 # than as "tool:clinic__*": a glob would re-admit whatever a
                 # compromised server adds later, which is the hole this closes.
+                #
+                # The prefix is doing real work here -- both servers expose a
+                # tool called `lookup_patient`, so a bare "tool:lookup_patient"
+                # would be ambiguous, and (since these are ALLOW rules under a
+                # default-deny base) would simply match nothing and leave the
+                # agent with no tools at all.
                 "tool:clinic__clinic_info",
                 "tool:clinic__lookup_patient",
                 "tool:clinic__send_referral_email",
                 "tool:clinic__web_lookup",
+                "tool:pharmacy__lookup_patient",
+                "tool:pharmacy__check_interactions",
             ],
             effect="allow",
         )
@@ -128,10 +136,17 @@ def build_policy_store() -> PolicyStore:
         AccessPolicy(
             name="phi-no-exfiltration-tools",
             subjects=[PHI],
-            # MCP tool resources are namespaced: "<server>__<tool>". The server
-            # is named "clinic" in agent.py. A bare "tool:send_referral_email"
-            # would match nothing here -- and since default_effect is "allow",
-            # an unmatched DENY silently stops blocking. See docs/tools.md §6.5.
+            # MCP tool resources are namespaced: "<server>__<tool>". The servers
+            # are named "clinic" and "pharmacy" in agent.py. A bare
+            # "tool:send_referral_email" would match nothing here -- and since
+            # default_effect is "allow", an unmatched DENY silently stops
+            # blocking. See docs/tools.md §6.5.
+            #
+            # Only clinic tools appear because only the clinic ships an egress
+            # path. `pharmacy__check_interactions` stays callable on a tainted
+            # run by design: it takes drug names, not a patient id, so it sends
+            # nothing out. Denying every tool on a tainted run would be easy and
+            # useless -- the point is to deny the ones that leak.
             resources=["tool:clinic__send_referral_email", "tool:clinic__web_lookup"],
             effect="deny",
             denial_message="This operation would send PHI to a third party and is not permitted.",
@@ -199,8 +214,30 @@ def mask_ssn(prompt: str, content: str) -> tuple[str, bool, str | None]:
 
 @dataclass
 class ClinicConfig:
+    # Two servers, because one cannot show what namespacing is for. They overlap
+    # on `lookup_patient` (see pharmacy_server.py), so every name-matched setting
+    # in this file has to say which server it means.
     mcp_url: str = "http://localhost:8911/mcp"
+    pharmacy_base_url: str = "http://localhost:8912"
+
+    # streamable-http (default) | sse | stdio. One variable read by config (for
+    # the connection details) and pharmacy_server.py (for what to serve), so the
+    # two ends cannot disagree -- a mismatch is a bare connection failure with
+    # nothing in it naming the protocol as the cause.
+    #
+    # Only the pharmacy. Running the pair on different transports is realistic
+    # and it is the point: every F3 mechanism lives on the shared session base,
+    # so pins, digests, drift and the gate should be indistinguishable across
+    # all three.
+    pharmacy_transport: str = os.environ.get("PHARMACY_TRANSPORT", "streamable-http")
     mcp_timeout: float = 10.0
+
+    # The pharmacy requires a bearer token; the clinic does not. That asymmetry
+    # is the point: `continuum mcp inspect` sends a bare URL, so it gets a 401
+    # from the pharmacy however correct the URL is, and reviewing it means
+    # passing the configured server object to review_server(). A fixture, not a
+    # credential -- see pharmacy_server.py.
+    pharmacy_token: str = os.environ.get("PHARMACY_TOKEN", "demo-pharmacy-token")
 
     # Where the tool-catalogue digests live. On first connect the descriptions
     # and schemas are recorded here; on every later fetch they are compared, and
@@ -209,7 +246,40 @@ class ClinicConfig:
     # that shipped poisoned text from the start: nothing changed, so there is
     # nothing to detect. Review with `continuum mcp inspect` before trusting,
     # and rely on the fail-closed policy above to bound what a tool can do.
-    tool_pin_path: str = os.path.join(os.path.dirname(__file__), "tool-pins.json")
+    # Both files live in tool-trust/ so a re-test is `rm -rf tool-trust`. The
+    # runtime's record is a sibling of this path, so pointing the approval into
+    # the directory carries the record along with it. Created on first write --
+    # save_pins() mkdirs the parent -- so a fresh clone needs no setup step.
+    tool_pin_path: str = os.path.join(os.path.dirname(__file__), "tool-trust", "tool-pins.json")
+
+    @property
+    def pharmacy_url(self) -> str:
+        """Derived, not configured: the path is a property of the transport.
+
+        Two fields that must agree is two fields that can disagree -- and the
+        failure would be a connection error naming neither. Meaningless under
+        stdio, which has no URL at all.
+        """
+        return f"{self.pharmacy_base_url}/{'sse' if self.pharmacy_transport == 'sse' else 'mcp'}"
+
+    @property
+    def pharmacy_stdio_params(self) -> dict:
+        """How to LAUNCH the pharmacy, for the transport that has no address.
+
+        The whole environment is forwarded, not a curated subset: PHARMACY_POISON
+        has to reach the child or the poison switch would appear to work and
+        change nothing. PHARMACY_TRANSPORT is pinned so the child cannot inherit
+        a stale value and start an HTTP server the parent is not talking to.
+
+        No token. A bearer credential guards a network boundary; a subprocess
+        has none, and one the parent hands its own child proves nothing the
+        launch did not already prove.
+        """
+        return {
+            "command": sys.executable,
+            "args": [os.path.join(os.path.dirname(__file__), "pharmacy_server.py")],
+            "env": {**os.environ, "PHARMACY_TRANSPORT": "stdio"},
+        }
 
     agent_name: str = "clinic-intake-assistant"
     cloud_model: str = CLOUD_MODEL
@@ -229,8 +299,23 @@ class ClinicConfig:
     enable_session: bool = True
 
     # --- provenance declarations (the 3 producer sites) ------------------- #
-    # Tool provenance: lookup_patient returns a record declared to carry PHI.
-    tool_data_labels: dict[str, set[str]] = field(default_factory=lambda: {"lookup_patient": {PHI}})
+    # Tool provenance: both lookup_patient tools return records declared to
+    # carry PHI -- the clinic's clinical record and the pharmacy's dispensing
+    # history are both protected.
+    #
+    # Written with the NAMESPACED names on purpose. The SDK accepts either
+    # spelling and a bare "lookup_patient" would resolve to both tools, which
+    # happens to be right here -- but it is right by luck, and the SDK logs a
+    # warning saying so, because the same shortcut applied to a tool you did not
+    # mean produces a label that blocks work nobody intended to block. Swap this
+    # for {"lookup_patient": {PHI}} to see that warning (TESTING_GUIDE.md
+    # Layer D).
+    tool_data_labels: dict[str, set[str]] = field(
+        default_factory=lambda: {
+            "clinic__lookup_patient": {PHI},
+            "pharmacy__lookup_patient": {PHI},
+        }
+    )
     # Memory-scope provenance (read = taint) is intentionally NOT used here. In
     # this use case PHI enters only via the lookup_patient tool, and the user's
     # long-term memory holds non-sensitive preferences that must NOT taint a run
