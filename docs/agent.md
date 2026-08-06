@@ -239,6 +239,7 @@ All importable from `continuum.agent`.
 | `max_turns` | `int` | `25` | LLM/tool turn cap |
 | `timeout` | `int` | `300` | Seconds per turn |
 | `retry_count` | `int` | `3` | LLM call retries |
+| `max_consecutive_handoffs` | `int` | `3` | How many times in a row this agent may send the **same** request (`reason` + `context`) to the **same** target before `HandoffLoopError`. Handing one target *different* requests — fan-out over N items — is never blocked at any N. Raise it only for a dispatcher that means to repeat one request; `max_turns` stays the backstop |
 | `memory` | `AgentMemoryConfig` | default | |
 | `handoff` | `HandoffConfig` | default | |
 | `context_management` | `ContextManagementConfig \| None` | `None` | Per-agent compression override |

@@ -191,6 +191,13 @@ class AgentConfig:
     timeout: int = 300  # Timeout in seconds
     retry_count: int = 3  # Number of retries on failure
 
+    # How many times in a row this agent may hand the SAME request to the SAME
+    # target before the loop guard calls it a loop. Raise it for a dispatcher that
+    # legitimately re-sends near-identical requests; the guard already ignores
+    # fan-out (a different payload each time). `max_turns` remains the hard
+    # backstop, so a higher value costs turns, never unbounded work.
+    max_consecutive_handoffs: int = 3
+
     # Memory settings
     memory: AgentMemoryConfig = field(default_factory=AgentMemoryConfig)
 

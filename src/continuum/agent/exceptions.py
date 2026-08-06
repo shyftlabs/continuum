@@ -252,10 +252,15 @@ class HandoffLoopError(HandoffError):
         **kwargs: Any,
     ):
         message = (
-            f"Handoff loop detected: '{from_agent}' handed off to '{to_agent}' "
-            f"{count} times in a row without resolving. This usually means a routing "
-            f"agent keeps re-routing. Set return_to_parent=False on the handoff so the "
-            f"target's response is returned directly, or adjust the agent's instructions."
+            f"Handoff loop detected: '{from_agent}' sent '{to_agent}' the same request "
+            f"{count} times in a row. Same target AND same reason/context each time, "
+            f"which is a routing agent re-routing rather than making progress "
+            f"(handing the same target *different* requests -- fan-out over several "
+            f"items -- does not count and is never blocked). Either set "
+            f"return_to_parent=False so the target's response is returned directly, "
+            f"adjust the agent's instructions so it acts on the answer it gets, or "
+            f"raise AgentConfig.max_consecutive_handoffs if repeating this request is "
+            f"genuinely intended."
         )
         super().__init__(message, from_agent=from_agent, to_agent=to_agent, **kwargs)
         self.count = count

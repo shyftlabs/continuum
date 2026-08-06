@@ -106,7 +106,7 @@ detects whether a tool call is actually a handoff invocation.
 
 ---
 
-## Multi-level handoffs (depth + cycles)
+## Multi-level handoffs (depth + cycles + loops)
 
 `HandoffConfig.max_handoff_depth` defaults to `10`. Beyond that:
 `HandoffDepthExceededError(current_depth, max_depth, ...)`.
@@ -115,6 +115,30 @@ Cycles (e.g. `A → B → A`) are detected before the call — they raise
 `HandoffCycleDetectedError(from_agent, to_agent, agent_stack, ...)`.
 Import path: `continuum.agent.exceptions` (not re-exported at the
 package root).
+
+**Loops** are the third case, and the one depth and cycle checks miss: under
+`return_to_parent=True` the target is popped off the stack when it returns, so an
+agent that keeps re-routing never grows the stack and never forms a cycle — it
+just burns turns. `HandoffLoopError(from_agent, to_agent, count, ...)` catches it
+at `AgentConfig.max_consecutive_handoffs` (default `3`).
+
+It fires only on the same target **and** the same request — `reason` plus
+`context`, the two parameters a handoff tool declares:
+
+| pattern | payload per handoff | result |
+|---|---|---|
+| re-routing loop | identical each time | `HandoffLoopError` |
+| fan-out over N items | differs each time | never blocked |
+
+So a voice agent handing one specialist ten different leads, or a triage agent
+sending one specialist ten different tickets, is fine at any N — that is fan-out,
+not a loop, and it is explicitly allowed. `max_turns` remains the backstop for a
+loop that varies its wording enough to slip through.
+
+Raise `max_consecutive_handoffs` only for a dispatcher that *means* to re-send one
+identical request — same caution as `max_handoff_depth`: don't crank it to silence
+a real loop, fix the routing or set `return_to_parent=False` so the target's
+answer is returned directly.
 
 ---
 

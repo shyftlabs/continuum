@@ -6,6 +6,7 @@ Extracted from AgentRunner to provide clean separation of concerns.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.exceptions import (
@@ -48,10 +49,48 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Max consecutive handoffs to the SAME target before we declare a handoff loop.
-# Catches routing agents stuck re-routing under return_to_parent=True before they
-# silently exhaust max_turns.
+# Max consecutive handoffs of the SAME request to the SAME target before we declare
+# a handoff loop. Catches routing agents stuck re-routing under return_to_parent=True
+# before they silently exhaust max_turns. Overridable per agent via
+# AgentConfig.max_consecutive_handoffs.
 _MAX_CONSECUTIVE_HANDOFFS = 3
+
+# Must match HandoffExecutor's fallback (handoff_executor.py) -- see _handoff_args.
+_HANDOFF_DEFAULT_REASON = "Handoff requested"
+
+
+def _handoff_args(tool_call: Any) -> tuple[str | None, str | None]:
+    """The ``reason``/``context`` a handoff tool call carries.
+
+    Mirrors HandoffExecutor's parsing *including its default* -- reason falls back
+    to "Handoff requested" there, so that string is what lands on the chain entry
+    when the model omits it. Reading None here instead would compare a None key
+    against a defaulted one, never match, and silently disable the guard for every
+    argument-less handoff: exactly the loop it exists to catch.
+    """
+    fn = getattr(tool_call, "function", None)
+    raw = getattr(fn, "arguments", None) if fn is not None else None
+    if raw is None and isinstance(tool_call, dict):
+        raw = tool_call.get("function", {}).get("arguments")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return raw.get("reason") or _HANDOFF_DEFAULT_REASON, raw.get("context")
+
+
+def _handoff_payload_key(reason: str | None, context: str | None) -> str:
+    """Comparison key for a handoff request: case- and whitespace-insensitive.
+
+    Not hashed: nothing is persisted, the walk is bounded to a handful of entries,
+    and a plain key keeps the guard debuggable. Deliberately excludes ``history``,
+    which grows every turn -- folding it in would make every handoff unique and
+    silently disable the guard, the same failure as resetting on any tool call.
+    """
+    return " ".join(f"{reason or ''}\x00{context or ''}".casefold().split())
 
 # Extra LLM calls allowed to coax a valid structured output after the first
 # attempt fails validation. 1 = one retry (see ADR / fix plan, decision #3).
@@ -599,13 +638,28 @@ class Executor(IExecutor):
                             # so the guard is scoped to them to avoid false positives on
                             # legitimate repeated same-target handoffs.
                             if _hc is None or _hc.return_to_parent:
+                                # Same target is not enough: fanning out over N items
+                                # hands the same specialist N *different* requests, and
+                                # counting only the target killed that on item 4. The
+                                # chain records handoffs only, so the parent's
+                                # intervening tool calls are invisible here -- what
+                                # separates a loop from fan-out is whether the REQUEST
+                                # repeats, so the streak breaks on a changed payload too.
+                                _fp = _handoff_payload_key(*_handoff_args(tc))
+                                _limit = (
+                                    agent.config.max_consecutive_handoffs
+                                    if agent.config
+                                    else _MAX_CONSECUTIVE_HANDOFFS
+                                )
                                 _streak = 0
                                 for _h in reversed(run_state.handoff_chain):
-                                    if _h.get("to_agent") == target:
+                                    if _h.get("to_agent") == target and _handoff_payload_key(
+                                        _h.get("reason"), _h.get("context")
+                                    ) == _fp:
                                         _streak += 1
                                     else:
                                         break
-                                if _streak >= _MAX_CONSECUTIVE_HANDOFFS:
+                                if _streak >= _limit:
                                     raise HandoffLoopError(
                                         from_agent=agent.name,
                                         to_agent=target,
