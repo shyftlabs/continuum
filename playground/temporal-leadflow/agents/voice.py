@@ -13,6 +13,13 @@ in handoff history when the target agent has no tools defined.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from config import default_config
+
 from continuum import AgentConfig, AgentMemoryConfig, BaseAgent
 from continuum.agent.types import Handoff
 
@@ -62,6 +69,12 @@ def make_voice_agent(model: str, tool_executor, tools: list) -> BaseAgent:
             )
         ],
         memory_config=_NO_MEMORY,
-        config=AgentConfig(log_to_session=False, session_history_turns=0, max_turns=20),
+        # Turn budget scales with the number of leads (config.voice_max_turns), so
+        # capping leads and capping turns cannot drift apart.
+        config=AgentConfig(
+            log_to_session=False,
+            session_history_turns=0,
+            max_turns=default_config.voice_max_turns,
+        ),
         tags=["voice", "outreach", "leadflow"],
     )

@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from config import default_config
 from schemas import RankedLeadList
 
 from continuum import AgentConfig, AgentMemoryConfig, BaseAgent
@@ -30,7 +31,8 @@ def make_scoring_agent(model: str) -> BaseAgent:
             "Score each unique lead 1-10 based on: "
             "contact info completeness (3pts), business maturity (3pts), "
             "outreach accessibility (2pts), description clarity (2pts). "
-            "Rank leads from highest score to lowest. "
+            "Rank leads from highest score to lowest, then return ONLY the top "
+            f"{default_config.outreach_leads}. "
             "The 'sources' field lists which scrapers found the business "
             "(google-maps-agent, linkedin-agent, web-agent). "
             "Write a one-sentence outreach_hook for each lead.\n\n"
