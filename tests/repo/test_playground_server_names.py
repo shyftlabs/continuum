@@ -12,13 +12,14 @@ build-time half: an audit found 33 of 35 playground constructions missing
 name=, so catching the next one needs a check that does not depend on anyone
 running the playground and reading the logs.
 
-Scoped to git-tracked files. playground/local/** is gitignored scratch space.
+Scoped to git-tracked files, via `git ls-files playground/...` -- so the audit's
+reach comes from that glob, not from where this file sits. playground/local/**
+is gitignored scratch space and stays invisible to it either way.
 
-Lives here rather than under tests/, which is for the SDK: this checks a
-convention across the demo projects. `pytest` from the repo root will not collect
-it (testpaths = ["tests"]); run it by path:
-
-    pytest playground/test_server_names.py
+Lives in tests/repo/ rather than tests/unit/: it is a convention check over the
+whole tree, not an SDK unit test, and CI's library gate (`pytest tests/unit`)
+should not redden for a demo. CI runs this directory as its own step; locally,
+plain `pytest` collects it (testpaths = ["tests"]).
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 MCP_SERVER_CTORS = {
     "MCPServerStreamableHttp",
@@ -103,9 +104,9 @@ def test_the_audit_actually_scans_something():
     a silently-empty sweep reads exactly like a clean one."""
     files = _tracked_playground_files()
     assert len(files) > 10, files
-    assert any(
-        _has_ctor(p) for p in files
-    ), "no MCP server constructions found at all; the AST matcher is likely broken"
+    assert any(_has_ctor(p) for p in files), (
+        "no MCP server constructions found at all; the AST matcher is likely broken"
+    )
 
 
 def _has_ctor(path: Path) -> bool:

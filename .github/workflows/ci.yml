@@ -50,3 +50,9 @@ jobs:
         # require optional extras (temporalio/deepeval) and an outdated asyncio
         # loop pattern. Tracked for rehabilitation; not part of the minimal gate.
         run: pytest tests/unit --ignore-glob='tests/unit/test_issue*.py' -q
+      - name: Repo audits
+        # Conventions spanning the tree (e.g. playgrounds naming their MCP
+        # servers). Separate from the unit gate so a demo regression is reported
+        # as a demo regression, not a library failure. Reads the git index, so
+        # the shallow checkout above is fine.
+        run: pytest tests/repo -q
