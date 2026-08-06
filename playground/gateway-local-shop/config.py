@@ -54,7 +54,7 @@ class ShopConfig:
     # The `openai/` prefix is correct in both modes: the gateway needs a provider
     # id, and with no gateway the default OpenAI provider strips it before the
     # call. Needs OPENAI_API_KEY in the root .env.
-    agent_model: str = "openai/gpt-4o-mini"  #  "anthropic/claude-opus-4-8"; "auto/mid"
+    agent_model: str = "openai/gpt-5-mini"  # "gpt-4o-mini", "anthropic/claude-opus-4-8", "auto/mid"
     agent_temperature: float = 0.7
     max_turns: int = 10
 
