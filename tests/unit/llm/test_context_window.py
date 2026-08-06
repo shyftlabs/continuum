@@ -87,6 +87,44 @@ class TestContextWindowManager:
         cwm = ContextWindowManager()
         assert cwm.get_model_limits("totally-unknown-model-x").max_tokens == 4096
 
+    def test_o_series_gets_real_window_not_4096(self):
+        """Regression: the o-series matched no key and fell back to 4096, which
+        would compress context ~50x earlier than the model requires.
+
+        200000 verified live — the API reports "maximum context length is 200000
+        tokens" for o1/o3-mini/o4-mini.
+        """
+        cwm = ContextWindowManager()
+        for model in ("o1", "o1-2024-12-17", "o3", "o3-mini", "o4-mini", "openai/o3-mini"):
+            assert cwm.get_model_limits(model).max_tokens == 200000, model
+
+    def test_gpt5_uses_input_window_not_output_limit(self):
+        """The table held 128000 for gpt-5 — that is its max *output*, not its
+        context window. Verified live: "Input tokens exceed the configured limit
+        of 272000 tokens"."""
+        cwm = ContextWindowManager()
+        assert cwm.get_model_limits("gpt-5").max_tokens == 272000
+        assert cwm.get_model_limits("gpt-5-mini").max_tokens == 272000
+
+    def test_gpt5_point_releases_use_family_window(self):
+        """Point releases and codename variants must not fall to 4096."""
+        cwm = ContextWindowManager()
+        for model in ("gpt-5.1", "gpt-5.2-chat-latest", "gpt-5.4-mini", "gpt-5.6-luna"):
+            assert cwm.get_model_limits(model).max_tokens == 272000, model
+
+    def test_unknown_openai_model_uses_family_default(self):
+        """A future gpt-* id gets the OpenAI family window rather than 4096."""
+        cwm = ContextWindowManager()
+        assert cwm.get_model_limits("gpt-9-experimental").max_tokens == 128000
+
+    def test_existing_openai_limits_unchanged(self):
+        """Regression guard: verified live against the API."""
+        cwm = ContextWindowManager()
+        assert cwm.get_model_limits("gpt-4o-mini").max_tokens == 128000
+        assert cwm.get_model_limits("gpt-4o").max_tokens == 128000
+        assert cwm.get_model_limits("gpt-4").max_tokens == 8192
+        assert cwm.get_model_limits("gpt-3.5-turbo").max_tokens == 16385
+
     def test_unknown_gemini_falls_back_to_family_when_api_unavailable(self, monkeypatch):
         """If the Gemini API lookup yields nothing, the gemini family default applies."""
         cwm = ContextWindowManager()
