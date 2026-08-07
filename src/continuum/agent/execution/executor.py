@@ -72,6 +72,38 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
     )
 
 
+def _usage_with_model(response: Any, fallback_model: str | None) -> TokenUsage:
+    """Build a single-call ``TokenUsage`` attributed to the RESOLVED model.
+
+    ``model_usage`` is keyed on ``response.model`` — the id the provider/gateway
+    actually served. Under the Smart Gateway the agent's configured model is the
+    literal placeholder ``"auto"``, so ``response.model`` is the only billable
+    identity for the call. Falls back to the agent's configured model when the
+    provider omits ``model``; when neither is known the per-model entry is
+    skipped (top-level totals still accumulate).
+    """
+    prompt = int(response.usage.prompt_tokens or 0)
+    completion = int(response.usage.completion_tokens or 0)
+    total = int(response.usage.total_tokens or 0)
+    model = getattr(response, "model", None) or fallback_model
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+        model_usage=(
+            {
+                model: {
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion,
+                    "total_tokens": total,
+                }
+            }
+            if model
+            else {}
+        ),
+    )
+
+
 class Executor(IExecutor):
     """
     Core executor for agent runs.
@@ -315,15 +347,11 @@ class Executor(IExecutor):
                     turn_span.set_error(str(e))
                     raise
 
-                # Track usage
+                # Track usage — attributed to the RESOLVED model (response.model),
+                # not the configured one, so per-model metering works under the
+                # Smart Gateway where the configured model is just "auto".
                 if response.usage:
-                    total_usage = total_usage.add(
-                        TokenUsage(
-                            prompt_tokens=response.usage.prompt_tokens or 0,
-                            completion_tokens=response.usage.completion_tokens or 0,
-                            total_tokens=response.usage.total_tokens or 0,
-                        )
-                    )
+                    total_usage = total_usage.add(_usage_with_model(response, agent.model))
                     turn_span.add_metadata(
                         "tokens",
                         {
@@ -654,6 +682,11 @@ class Executor(IExecutor):
                                         f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
                                         f"[tool] {executor_content[:500]}\n" + "=" * 30
                                     )
+                                    # Child-run usage is a full TokenUsage whose
+                                    # model_usage the child's own executor loop
+                                    # populated; add() merges the per-model map.
+                                    # No response.model exists here — this is an
+                                    # aggregated multi-turn response, not one call.
                                     total_usage = total_usage.add(handoff_result.response.usage)
                                     # Pop the target agent so the parent can hand off
                                     # to the same target again on the next turn.
@@ -699,6 +732,8 @@ class Executor(IExecutor):
                                         content=handoff_result.response.content,
                                         agent_name=handoff_result.response.agent_name,
                                         status=ResponseStatus.SUCCESS,
+                                        # add() merges the child's per-model map
+                                        # (see return_to_parent comment above).
                                         usage=total_usage.add(handoff_result.response.usage),
                                         turn_count=turn,
                                         handoff_result=handoff_result,
@@ -869,11 +904,9 @@ class Executor(IExecutor):
 
         usage = TokenUsage()
         if response.usage:
-            usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens or 0,
-                completion_tokens=response.usage.completion_tokens or 0,
-                total_tokens=response.usage.total_tokens or 0,
-            )
+            # Attribute to the resolved model (see _usage_with_model) so the
+            # reasoning pass is metered per-model like the main turn loop.
+            usage = _usage_with_model(response, agent.model)
 
         return response.content or "", usage
 
@@ -921,13 +954,8 @@ class Executor(IExecutor):
             )
 
             if response.usage:
-                total_usage = total_usage.add(
-                    TokenUsage(
-                        prompt_tokens=response.usage.prompt_tokens or 0,
-                        completion_tokens=response.usage.completion_tokens or 0,
-                        total_tokens=response.usage.total_tokens or 0,
-                    )
-                )
+                # Same per-resolved-model attribution as the main turn loop.
+                total_usage = total_usage.add(_usage_with_model(response, agent.model))
 
             content = response.content or ""
             action, action_input, final_answer = self._parse_react_action(content)
