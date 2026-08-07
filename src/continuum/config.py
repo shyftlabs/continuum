@@ -139,6 +139,22 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # -------------------------------------------------------------------------
+    # MCP tool trust (security finding F3)
+    # -------------------------------------------------------------------------
+    # Posture for third-party MCP tool catalogues. Env-configurable because the
+    # right answer differs by environment -- "warn" while developing against a
+    # server you own, "block" in production -- and that should not need a code
+    # change. ToolTrustConfig reads these as its defaults.
+    #
+    # A server with no approved catalogue defaults to blocking: first contact is
+    # once per server, at setup time, and has no false positives (every one is
+    # genuinely unreviewed). Drift on an already-approved server defaults to
+    # warning: it is frequent and usually a typo fix, and a control that breaks
+    # a working deployment on benign churn is a control that gets switched off.
+    mcp_on_unreviewed: Literal["block", "warn", "allow"] = "block"
+    mcp_on_drift: Literal["block", "warn", "allow"] = "warn"
+
+    # -------------------------------------------------------------------------
     # Smart Gateway integration
     # -------------------------------------------------------------------------
     smart_gateway_url: str | None = None  # SMART_GATEWAY_URL
@@ -174,7 +190,7 @@ class Settings(BaseSettings):
     memory_enabled: bool = True  # Enable/disable long-term memory
 
     # Vector Store Provider Selection
-    vector_store_provider: str = "milvus"  # "qdrant" | "milvus"
+    vector_store_provider: Literal["qdrant", "milvus"] = "milvus"
 
     # Qdrant Vector Store Configuration
     qdrant_host: str = "localhost"  # Qdrant host (use 'localhost' for local Docker)
@@ -318,6 +334,19 @@ class Settings(BaseSettings):
     # Headroom's cache-friendly per-turn compression. max() semantics — never
     # lowers an explicitly higher context_compression_threshold.
     headroom_context_threshold: float = 0.92
+
+    # -------------------------------------------------------------------------
+    # Untrusted tool-content hardening (security finding F2 — indirect prompt
+    # injection). When True (default), the content of every ``role == "tool"``
+    # message is, right before the provider call: (1) stripped of invisible /
+    # control characters (Unicode-tag smuggling, zero-width, bidi overrides,
+    # C0/C1 controls), and (2) wrapped in a ``<tool_result untrusted="true">``
+    # envelope, with a one-line system instruction that content inside such tags
+    # is data, never instructions. Defence-in-depth only — the hard boundary is
+    # authorization on side-effecting tools, not this. Headroom-independent.
+    # Set False for byte-identical legacy behavior.
+    # -------------------------------------------------------------------------
+    untrusted_tool_content_hardening: bool = True  # UNTRUSTED_TOOL_CONTENT_HARDENING
 
     # -------------------------------------------------------------------------
     # Temporal Configuration (Optional - requires `pip install shyftlabs-continuum[temporal]`)

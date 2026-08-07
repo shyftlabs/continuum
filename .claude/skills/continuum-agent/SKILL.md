@@ -12,9 +12,9 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md).
 ## Core API
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
-from orchestrator.agent.types import (
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.agent.config import AgentConfig, AgentMemoryConfig, RunnerConfig
+from continuum.agent.types import (
     Handoff, MemoryScope, RunContext, AgentResponse, EventType,
 )
 ```
@@ -53,9 +53,9 @@ print(resp.structured_output)           # populated if output_schema set
 | `examples` | `[]` | few-shot |
 | `instruction_modifiers` | `[]` | dynamic prompt rewriters |
 | `on_start` / `on_end` / `on_error` / `on_tool_call` / `on_handoff` | `None` | sync callables |
-| `config` | `AgentConfig()` | max_turns=25, react_mode, reasoning_mode, scanners, … |
+| `config` | `AgentConfig()` | max_turns=25, react_mode, reasoning_mode, scanners, `strict_security`, `max_consecutive_handoffs=3` (same request to the same target before `HandoffLoopError`; fan-out over N items is never blocked), … |
 | `gateway_mode` | `None` | Smart Gateway routing: `"strict"` / `"modest"` / `"quality"` |
-| `policy_store` | `None` | Security policy store for request validation |
+| `policy_store` | `None` | Access-control store. `None` = fail-open (no authorization). Use `PolicyStore.default_deny([...])` to fail closed; set `AgentConfig(strict_security=True)` to raise when side-effectful tools have no policy |
 
 ## Structured output
 
@@ -74,7 +74,7 @@ plan: Plan = resp.structured_output
 ## Streaming
 
 ```python
-from orchestrator.agent.types import EventType
+from continuum.agent.types import EventType
 
 async for ev in runner.run_stream(agent, "..."):
     if ev.type == EventType.CONTENT_DELTA:
@@ -84,7 +84,7 @@ async for ev in runner.run_stream(agent, "..."):
 ## Memory scope (the agent enum, not the dataclass!)
 
 ```python
-from orchestrator.agent.types import MemoryScope
+from continuum.agent.types import MemoryScope
 # MemoryScope.SHARED / USER / AGENT / RUN / CONVERSATION  — string enum
 ```
 
@@ -143,7 +143,7 @@ Hooks are sync. Async hooks are not awaited.
 
 - Don't pass `role=` / `content=` to `SessionClient.add_message` — pass
   a `ChatMessage` object.
-- Don't import `MemoryScope` from `orchestrator.memory` and then pass
+- Don't import `MemoryScope` from `continuum.memory` and then pass
   it to `AgentMemoryConfig` — that's the dataclass; the agent module
   re-exports the **enum** of the same name.
 - Don't make hooks async — they're sync callables.

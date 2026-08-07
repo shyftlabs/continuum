@@ -12,7 +12,9 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import sys
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -308,6 +310,72 @@ class TestToolSummaryRegistry:
 
 
 # ---------------------------------------------------------------------------
+# ToolSummaryRegistry — pruning of stale entries
+#
+# The collection is deliberately persistent across restarts, and _sync_upsert
+# only ever upserts. Renaming or removing a tool therefore leaves its embedding
+# behind forever, and search() keeps returning the dead name inside top-k --
+# burning a routing slot on a tool the router will silently discard. Flipping
+# namespace_tools to True renamed every MCP tool at once and made this visible
+# (observed: 2 of 3 routed names no longer existed).
+# ---------------------------------------------------------------------------
+
+
+class TestToolSummaryRegistryPruning:
+    def _ready_registry(
+        self, existing: list[str], **kwargs
+    ) -> tuple[ToolSummaryRegistry, MagicMock]:
+        cfg = ToolAttentionConfig(**kwargs)
+        registry = ToolSummaryRegistry(cfg)
+        registry._ready = True
+        mock_client = MagicMock()
+        mock_client.query.return_value = [{"tool_name": n} for n in existing]
+        mock_encoder = MagicMock()
+        mock_encoder.encode.return_value = MagicMock()
+        mock_encoder.encode.return_value.tolist.return_value = [[0.1] * 384]
+        registry._client = mock_client
+        registry._encoder = mock_encoder
+        return registry, mock_client
+
+    def test_upsert_deletes_tool_names_no_longer_present(self):
+        # Collection still holds the pre-namespacing names.
+        registry, client = self._ready_registry(
+            ["search_products", "get_product", "shop__search_products"]
+        )
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.delete.assert_called_once()
+        kwargs = client.delete.call_args.kwargs
+        assert sorted(kwargs["ids"]) == ["get_product", "search_products"]
+
+    def test_upsert_does_not_delete_when_nothing_is_stale(self):
+        registry, client = self._ready_registry(["shop__search_products"])
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.delete.assert_not_called()
+
+    def test_prune_failure_does_not_lose_the_upsert(self):
+        # Pruning is hygiene; a Milvus that refuses query() must not cost us the
+        # fresh embeddings, which are what the current run actually needs.
+        registry, client = self._ready_registry(["stale"])
+        client.query.side_effect = Exception("query unsupported")
+
+        registry.refresh([_make_dict_tool("shop__search_products", "Search")])
+
+        client.upsert.assert_called_once()
+
+    def test_prune_is_scoped_to_the_configured_collection(self):
+        registry, client = self._ready_registry(["stale"], collection_name="custom_tools")
+
+        registry.refresh([_make_dict_tool("live", "Live")])
+
+        assert client.query.call_args.kwargs["collection_name"] == "custom_tools"
+        assert client.delete.call_args.kwargs["collection_name"] == "custom_tools"
+
+
+# ---------------------------------------------------------------------------
 # ToolAttentionRouter.initialize()
 # ---------------------------------------------------------------------------
 
@@ -393,6 +461,32 @@ class TestExtractUserQuery:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _captured_warnings():
+    """Collect WARNING messages from the router's logger.
+
+    pytest's caplog cannot see these: the "continuum" parent logger sets
+    propagate=False and installs its own stdout handler, so records never reach
+    the root logger where caplog's handler lives. Attaching a handler to the
+    specific logger is the pattern used elsewhere in this suite (see
+    tests/unit/test_session_midsession_fallback.py).
+    """
+    messages: list[str] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.levelno >= logging.WARNING:
+                messages.append(record.getMessage())
+
+    handler = _Collector()
+    logger = logging.getLogger("continuum.tools.tool_attention.router")
+    logger.addHandler(handler)
+    try:
+        yield messages
+    finally:
+        logger.removeHandler(handler)
+
+
 def _make_router_with_mock_registry(
     search_returns: list[str],
     k: int = 5,
@@ -452,11 +546,34 @@ class TestToolAttentionRouterRoute:
         assert "think" in names
 
     def test_always_includes_handoff_tools(self):
+        """The name must be the one Handoff.to_tool_definition() actually emits.
+
+        This previously asserted "transfer_to_billing" -- a prefix nothing in the
+        SDK produces (it is the OpenAI Agents SDK convention, and AGENTS.md lists
+        it as a known-wrong reference). The test passed against a dead branch
+        while real handoff tools went unpromoted.
+        """
+        from continuum.agent.types import Handoff
+
+        real_name = Handoff(target_agent="billing", description="Billing").to_tool_definition()[
+            "function"
+        ]["name"]
+        assert real_name == "handoff_to_billing", "handoff naming changed; update the router too"
+
+        tools = self._tools(["search", real_name, "checkout", "get_cart", "delete"])
+        router = _make_router_with_mock_registry(["search"], min_tools=3)
+        result = router.route(self._messages(), tools, _make_context())
+        names = [_tool_name(t) for t in result]
+        assert real_name in names
+
+    def test_does_not_promote_the_foreign_transfer_to_prefix(self):
+        """Guard against the old name creeping back: transfer_to_* is not a
+        Continuum handoff and must not be force-promoted."""
         tools = self._tools(["search", "transfer_to_billing", "checkout", "get_cart", "delete"])
         router = _make_router_with_mock_registry(["search"], min_tools=3)
         result = router.route(self._messages(), tools, _make_context())
         names = [_tool_name(t) for t in result]
-        assert "transfer_to_billing" in names
+        assert "transfer_to_billing" not in names
 
     def test_always_promote_config_respected(self):
         tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
@@ -466,6 +583,95 @@ class TestToolAttentionRouterRoute:
         result = router.route(self._messages(), tools, _make_context())
         names = [_tool_name(t) for t in result]
         assert "get_cart" in names
+
+    def test_warns_when_always_promote_matches_no_tool(self):
+        """A misspelled or un-namespaced entry is a silent no-op otherwise.
+
+        always_promote is matched by exact string against the LLM-facing tool
+        name, which for MCP tools is namespaced ("fs__read_file"). A user who
+        writes the bare name gets no promotion, no error and no log -- they only
+        notice when a tool they believed guaranteed goes missing from a turn.
+        """
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"],
+            min_tools=3,
+            always_promote=["read_file"],  # no such tool
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert any("read_file" in m and "always_promote" in m for m in warnings), warnings
+
+    def test_the_advice_does_not_assert_namespacing_as_a_fact(self):
+        """`namespace_tools=False` makes the raw name the LLM-facing key.
+
+        The router sees only names; it cannot tell which setting is in force.
+        Stating "MCP tool names are namespaced" unconditionally sends half the
+        readers hunting for a prefix bug in a config that is already correct --
+        and the real cause (a rename, or a tool dropped by the trust gate) goes
+        unlooked-for.
+        """
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"], min_tools=3, always_promote=["read_file"]
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        (message,) = [m for m in warnings if "always_promote" in m]
+        assert "namespace_tools" in message, message
+        assert "MCP tool names are namespaced" not in message, message
+
+    def test_no_warning_when_always_promote_entries_all_match(self):
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["search"], min_tools=3, always_promote=["get_cart"]
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "always_promote" in m], warnings
+
+    def test_builtin_always_promote_names_are_never_reported_unmatched(self):
+        """think / continuum_headroom_retrieve are injected by get_tools_for_llm and
+        are legitimately absent from most tool lists -- warning about them would be
+        noise on every turn."""
+        tools = self._tools(["search", "get_cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(["search"], min_tools=3)
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "always_promote" in m], warnings
+
+    def test_warns_when_search_returns_names_that_are_not_live_tools(self):
+        """A stale embedding burns a top-k slot and then vanishes at the filter
+        step. The old log printed `routed=` before filtering, so a run where 2 of
+        3 routed names were dead looked identical to a healthy one."""
+        tools = self._tools(["shop__search", "shop__cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(
+            ["shop__search", "search", "get_product"],  # last two are pre-rename ghosts
+            min_tools=3,
+        )
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        stale = [m for m in warnings if "get_product" in m and "search" in m]
+        assert stale, warnings
+
+    def test_no_stale_warning_when_every_routed_name_is_live(self):
+        tools = self._tools(["shop__search", "shop__cart", "checkout", "delete", "update"])
+        router = _make_router_with_mock_registry(["shop__search", "shop__cart"], min_tools=3)
+
+        with _captured_warnings() as warnings:
+            router.route(self._messages(), tools, _make_context())
+
+        assert not [m for m in warnings if "stale" in m.lower()], warnings
 
     def test_stores_promoted_set_in_context_metadata(self):
         tools = self._tools(["search", "add_to_cart", "checkout", "get_cart", "delete"])
@@ -578,3 +784,76 @@ class TestApplyToolAttention:
 
         result = await apply_tool_attention(agent, self._messages(), _make_context())
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _BUILTIN_ALWAYS_PROMOTE integrity
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinAlwaysPromoteStaysUnnamespaced:
+    """_BUILTIN_ALWAYS_PROMOTE holds bare names ("think", not "srv__think").
+
+    That is correct only because both builtins are appended directly in
+    BaseAgent.get_tools_for_llm() and never pass through
+    ToolExecutor._build_registry(), which is the only place tool names get a
+    "<server>__" prefix. Nothing enforces that. If either tool were ever
+    re-homed onto an MCP server it would arrive namespaced, the hardcoded set
+    here would match nothing, and the tool would silently lose its guaranteed
+    slot -- no error, no log, exactly like the user-facing always_promote bug.
+
+    These tests exist to make that refactor fail loudly instead.
+    """
+
+    def test_think_tool_is_registered_under_its_bare_name(self, monkeypatch):
+        from continuum.agent.base import BaseAgent
+        from continuum.agent.config import AgentConfig
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "headroom_enabled", False)
+        agent = BaseAgent(
+            name="t",
+            instructions="x",
+            tools=[_make_dict_tool("search", "Search")],
+            config=AgentConfig(react_mode=True),
+        )
+
+        names = [_tool_name(t) for t in agent.get_tools_for_llm()]
+
+        assert "think" in names
+        assert not [n for n in names if n.endswith("__think")]
+
+    def test_retrieve_tool_is_registered_under_its_bare_name(self, monkeypatch):
+        from continuum.agent.base import BaseAgent
+        from continuum.config import settings
+        from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        agent = BaseAgent(name="t", instructions="x", tools=[_make_dict_tool("search", "Search")])
+
+        names = [_tool_name(t) for t in agent.get_tools_for_llm()]
+
+        assert RETRIEVE_TOOL_NAME in names
+        assert not [n for n in names if n.endswith(f"__{RETRIEVE_TOOL_NAME}")]
+
+    def test_every_builtin_entry_corresponds_to_a_real_tool_name(self, monkeypatch):
+        """Guards the other direction: a typo in the set, or a renamed builtin,
+        leaves an entry that can never match."""
+        from continuum.agent.base import BaseAgent
+        from continuum.agent.config import AgentConfig
+        from continuum.config import settings
+        from continuum.tools.tool_attention.router import _BUILTIN_ALWAYS_PROMOTE
+
+        monkeypatch.setattr(settings, "headroom_enabled", True)
+        agent = BaseAgent(
+            name="t",
+            instructions="x",
+            tools=[_make_dict_tool("search", "Search")],
+            config=AgentConfig(react_mode=True),
+        )
+
+        names = {_tool_name(t) for t in agent.get_tools_for_llm()}
+
+        assert _BUILTIN_ALWAYS_PROMOTE <= names, (
+            f"entries with no matching tool: {sorted(_BUILTIN_ALWAYS_PROMOTE - names)}"
+        )

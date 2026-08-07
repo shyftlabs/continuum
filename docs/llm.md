@@ -501,9 +501,12 @@ for prompt in big_batch:
 - **No LiteLLM imports anywhere** — searches like `from litellm import ...`
   will fail. Use `LLMClient` (or call the provider SDKs directly if you
   must).
-- **`OPENAI_API_KEY` is required at framework startup** even when using
-  Anthropic or Gemini, because mem0 instantiates an OpenAI embedder by
-  default. To avoid this, disable long-term memory: see
+- **`OPENAI_API_KEY` is required by default** even when using Anthropic or
+  Gemini, because mem0's default embedder *and* fact-extraction LLM are
+  OpenAI. To avoid it, switch `EMBEDDER_PROVIDER` to non-OpenAI for embeddings
+  and route memory's LLM through the Smart Gateway (mem0's fact-extraction call
+  shape is reliably accepted only by OpenAI-family, so a bare non-OpenAI
+  `MEMORY_LLM_MODEL` may `400`), or disable long-term memory: see
   [`memory.md`](memory.md).
 - **Anthropic + JSON mode**: Claude doesn't have a native `response_format`
   — `check_response_format_support()` returns `False` for Claude. If you

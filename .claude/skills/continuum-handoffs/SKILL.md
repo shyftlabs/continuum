@@ -18,14 +18,14 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md), §7.
 ## Imports
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner, Handoff
-from orchestrator.agent.types import HistorySummarizationMode, HandoffData, HandoffResult
-from orchestrator.agent.exceptions import (
+from continuum.agent import BaseAgent, AgentRunner, Handoff
+from continuum.agent.types import HistorySummarizationMode, HandoffData, HandoffResult
+from continuum.agent.exceptions import (
     HandoffNotAllowedError, HandoffDepthExceededError,
     HandoffTargetNotFoundError,
 )
-# HandoffCycleDetectedError is NOT re-exported from `orchestrator.agent`:
-from orchestrator.agent.exceptions import HandoffCycleDetectedError
+# HandoffCycleDetectedError is NOT re-exported from `continuum.agent`:
+from continuum.agent.exceptions import HandoffCycleDetectedError
 ```
 
 ---
@@ -83,7 +83,7 @@ print(resp.content)                  # the billing agent's reply
 | `HYBRID` *(default)* | LLM summary + last `recent_messages` raw messages |
 
 ```python
-from orchestrator.agent.types import HistorySummarizationMode
+from continuum.agent.types import HistorySummarizationMode
 
 Handoff(
     target_agent="billing",
@@ -106,15 +106,39 @@ detects whether a tool call is actually a handoff invocation.
 
 ---
 
-## Multi-level handoffs (depth + cycles)
+## Multi-level handoffs (depth + cycles + loops)
 
 `HandoffConfig.max_handoff_depth` defaults to `10`. Beyond that:
 `HandoffDepthExceededError(current_depth, max_depth, ...)`.
 
 Cycles (e.g. `A → B → A`) are detected before the call — they raise
 `HandoffCycleDetectedError(from_agent, to_agent, agent_stack, ...)`.
-Import path: `orchestrator.agent.exceptions` (not re-exported at the
+Import path: `continuum.agent.exceptions` (not re-exported at the
 package root).
+
+**Loops** are the third case, and the one depth and cycle checks miss: under
+`return_to_parent=True` the target is popped off the stack when it returns, so an
+agent that keeps re-routing never grows the stack and never forms a cycle — it
+just burns turns. `HandoffLoopError(from_agent, to_agent, count, ...)` catches it
+at `AgentConfig.max_consecutive_handoffs` (default `3`).
+
+It fires only on the same target **and** the same request — `reason` plus
+`context`, the two parameters a handoff tool declares:
+
+| pattern | payload per handoff | result |
+|---|---|---|
+| re-routing loop | identical each time | `HandoffLoopError` |
+| fan-out over N items | differs each time | never blocked |
+
+So a voice agent handing one specialist ten different leads, or a triage agent
+sending one specialist ten different tickets, is fine at any N — that is fan-out,
+not a loop, and it is explicitly allowed. `max_turns` remains the backstop for a
+loop that varies its wording enough to slip through.
+
+Raise `max_consecutive_handoffs` only for a dispatcher that *means* to re-send one
+identical request — same caution as `max_handoff_depth`: don't crank it to silence
+a real loop, fix the routing or set `return_to_parent=False` so the target's
+answer is returned directly.
 
 ---
 
@@ -136,7 +160,7 @@ Streaming exposes `EventType.HANDOFF_START` / `HANDOFF_END` /
 ## Driving handoffs manually with `HandoffManager`
 
 ```python
-from orchestrator.agent import HandoffManager
+from continuum.agent import HandoffManager
 
 mgr = HandoffManager(llm_client=runner.llm_client, tracing_manager=None, max_depth=10)
 
@@ -174,7 +198,7 @@ matches the conversation shape.
 - Don't reference the handoff tool by `transfer_to_<target>` — actual
   prefix is `handoff_to_<target>`.
 - Don't try to import `HandoffCycleDetectedError` from
-  `orchestrator.agent` — only from `orchestrator.agent.exceptions`.
+  `continuum.agent` — only from `continuum.agent.exceptions`.
 - Don't crank `max_handoff_depth` to skip cycle errors — fix the routing
   logic instead. Cycles indicate either bad descriptions or a missing
   fallback agent.

@@ -42,7 +42,7 @@ every class, field, and pattern.
 
 Codex needs these facts to write correct code on the first try:
 
-1. **Import name**: `orchestrator` (not `continuum` or `shyftlabs_continuum`)
+1. **Import name**: `continuum` (the distribution is `shyftlabs-continuum`)
 2. **Async**: all public APIs are async — entrypoints need `asyncio.run()`
 3. **Provider routing**: by model-string prefix, or via `SMART_GATEWAY_URL`
 4. **Infrastructure**: Redis on `:6380`, Milvus/Qdrant for memory
@@ -53,12 +53,12 @@ Minimal addition to any `AGENTS.md`:
 ```markdown
 ## Continuum conventions
 
-- Import: `from orchestrator.agent import BaseAgent, AgentRunner`
+- Import: `from continuum.agent import BaseAgent, AgentRunner`
 - All APIs async. Use `asyncio.run(main())` at entrypoints.
 - Model routing: prefix-based (`gpt-*` → OpenAI, `claude-*` → Anthropic, `gemini/*` → Gemini)
 - Gateway: set `SMART_GATEWAY_URL` to route all models through the Smart Gateway
 - Memory: Redis (:6380) for sessions, Milvus (:19530) or Qdrant (:6333) for long-term
-- Load dotenv: always `load_dotenv()` before importing orchestrator settings
+- Load dotenv: always `load_dotenv()` before importing continuum settings
 ```
 
 ---

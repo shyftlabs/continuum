@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from continuum.logging import get_logger
 
 if TYPE_CHECKING:
-    from continuum.llm.types import ChatMessage, ToolCall
+    from continuum.llm.types import ToolCall
 
 _logger = get_logger(__name__)
 
@@ -217,6 +217,17 @@ class TokenUsage:
 # Handoff Types
 # =============================================================================
 
+HANDOFF_TOOL_PREFIX = "handoff_to_"
+"""Prefix of the synthetic tool the LLM calls to trigger a handoff.
+
+Single source of truth. The name is built here, parsed in
+``BaseAgent.is_handoff_tool_call``, and matched in the tool-attention router --
+three files that must agree. They previously did not: the router looked for
+``transfer_to_`` (the OpenAI Agents SDK's convention, which AGENTS.md lists as a
+known-wrong reference for Continuum), so handoff tools were never force-promoted
+and could be dropped from a turn by semantic routing.
+"""
+
 
 @dataclass
 class Handoff:
@@ -241,7 +252,7 @@ class Handoff:
         return {
             "type": "function",
             "function": {
-                "name": f"handoff_to_{self.target_agent}",
+                "name": f"{HANDOFF_TOOL_PREFIX}{self.target_agent}",
                 "description": f"Hand off the conversation to {self.target_agent}. {self.description}",
                 "parameters": {
                     "type": "object",
@@ -540,8 +551,12 @@ class AgentResponse:
     handoff: HandoffData | None = None
     handoff_result: HandoffResult | None = None
 
-    # Conversation
-    messages: list[ChatMessage] = field(default_factory=list)
+    # Conversation. Plain dicts in OpenAI wire shape, NOT ChatMessage models:
+    # every producer feeds this from RunState.messages (list[dict]), and the
+    # consumers (RunFinalizer.finalize, SessionService.save_messages) read it
+    # with dict access. It was annotated list[ChatMessage], which is not what
+    # any path actually puts here.
+    messages: list[dict[str, Any]] = field(default_factory=list)
 
     # Metrics
     usage: TokenUsage = field(default_factory=TokenUsage)

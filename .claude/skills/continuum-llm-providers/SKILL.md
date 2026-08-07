@@ -87,7 +87,7 @@ LLM_ROUTE_FORCE_COMPLETION_MODEL=...      # bypass classifier, always use this
 ## LLMClient (direct usage)
 
 ```python
-from orchestrator.llm import LLMClient, LLMConfig, ChatMessage
+from continuum.llm import LLMClient, LLMConfig, ChatMessage
 
 client = LLMClient()                          # default config
 
@@ -174,7 +174,7 @@ parsed: Result = resp.structured_output
 ## Capability checks
 
 ```python
-from orchestrator.llm.utils import (
+from continuum.llm.utils import (
     check_response_format_support, check_json_schema_support,
     supports_tools_with_json_mode,
 )
@@ -192,7 +192,7 @@ Hardcoded limits per model (GPT-4o = 128K, Claude family = 200K, Gemini
 default.
 
 ```python
-from orchestrator.llm import (
+from continuum.llm import (
     ContextWindowManager, TruncationStrategy, get_context_window_manager,
     ContextManagementConfig, get_progressive_context_manager, CompressionStrategy,
 )

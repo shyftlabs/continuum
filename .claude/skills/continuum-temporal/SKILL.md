@@ -42,7 +42,7 @@ TEMPORAL_ENABLE_HUMAN_IN_LOOP=true
 ## Imports
 
 ```python
-from orchestrator.temporal import (
+from continuum.temporal import (
     get_temporal_client, get_worker_manager, get_agent_registry,
     WorkflowInput, WorkflowResult,
     AgentStep, ApprovalStep, ParallelStep, ConditionalStep, WaitStep,

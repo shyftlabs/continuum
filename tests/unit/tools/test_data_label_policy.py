@@ -18,7 +18,7 @@ import pytest
 
 from continuum.agent.exceptions import ToolAccessDeniedError
 from continuum.llm.types import FunctionCall, ToolCall
-from continuum.security.policy import PolicyDecision
+from continuum.security.policy import AccessPolicy, PolicyDecision, PolicyStore
 from continuum.tools.executor import ToolExecutor
 
 
@@ -83,3 +83,71 @@ class TestDataLabelToolPolicy:
                 data_labels=None,
             )
         ps.check.assert_called_once_with("agent", "tool:send_email")
+
+
+class TestNamespacedToolPolicyMatching:
+    """Tool resources are the LLM-facing name, which is namespaced by default.
+
+    A bare-name rule written before namespacing silently stops matching. That is
+    the dangerous direction: PolicyStore.default_effect is "allow", so an
+    unmatched DENY falls through to allow rather than failing closed. These tests
+    pin both the trap and the glob that avoids it.
+    """
+
+    def test_bare_name_deny_does_not_match_namespaced_tool(self):
+        store = PolicyStore(
+            [
+                AccessPolicy(
+                    name="no-exfil",
+                    subjects=["*"],
+                    resources=["tool:send_referral_email"],  # bare -- the trap
+                    effect="deny",
+                )
+            ]
+        )
+
+        decision = store.check("agent", "tool:clinic__send_referral_email")
+
+        # Not denied: no rule matched, so default_effect ("allow") wins.
+        assert decision.allowed is True
+
+    def test_leading_glob_deny_matches_both_shapes(self):
+        store = PolicyStore(
+            [
+                AccessPolicy(
+                    name="no-exfil",
+                    subjects=["*"],
+                    resources=["tool:*send_referral_email"],  # the fix
+                    effect="deny",
+                )
+            ]
+        )
+
+        assert store.check("agent", "tool:clinic__send_referral_email").allowed is False
+        assert store.check("agent", "tool:send_referral_email").allowed is False
+
+    def test_exact_namespaced_resource_matches(self):
+        store = PolicyStore(
+            [
+                AccessPolicy(
+                    name="no-exfil",
+                    subjects=["*"],
+                    resources=["tool:clinic__send_referral_email"],
+                    effect="deny",
+                )
+            ]
+        )
+
+        assert store.check("agent", "tool:clinic__send_referral_email").allowed is False
+
+    def test_per_server_glob_scopes_a_whole_server(self):
+        store = PolicyStore.default_deny(
+            [
+                AccessPolicy(
+                    name="weather-ok", subjects=["*"], resources=["tool:weather__*"], effect="allow"
+                )
+            ]
+        )
+
+        assert store.check("agent", "tool:weather__get_forecast").allowed is True
+        assert store.check("agent", "tool:crm__delete_record").allowed is False

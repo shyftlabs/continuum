@@ -29,8 +29,10 @@ from continuum import (
 from continuum.agent.types import EventType
 from continuum.core.container import Container, get_container
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
+from continuum.exceptions import InsecureConfigurationError
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
+from continuum.tools.util import NAMESPACE_SEPARATOR
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
     validate_conversation_id,
@@ -39,14 +41,30 @@ from continuum.utils.sanitization import (
 
 logger = get_logger(__name__)
 
-_CART_TOOLS = {"get_cart", "cart", "get_cart_items"}
+# Server tools that are supposed to carry a total (server.py). add_to_cart is
+# deliberately absent: it returns only a message and cart_size, so gating it
+# here would fire the "NO totals" warning on every successful add.
+_CART_TOOLS = {"view_cart", "checkout"}
 _TOTAL_KEYS = {"total", "subtotal", "total_cents", "subtotal_cents", "taxes", "tax_cents"}
+
+
+def _raw_tool_name(tool_name: str) -> str:
+    """Strip the MCP namespace prefix from an LLM-facing tool name.
+
+    _on_tool_result receives tool_call.function.name, which with
+    namespace_tools enabled is "shop__view_cart". Only the configured prefix is
+    removed, so a tool whose own name contains "__" survives intact and the
+    unnamespaced name still matches.
+    """
+    prefix = f"{default_config.mcp_server_name}{NAMESPACE_SEPARATOR}"
+    return tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
 
 
 class CartDebugToolExecutor(ToolExecutor):
     """ToolExecutor subclass that adds cart-specific debug logging after each tool call."""
 
     def _on_tool_result(self, tool_name: str, result: str, artifact: Any) -> None:
+        tool_name = _raw_tool_name(tool_name)
         sc = artifact.structured_content if artifact else None
 
         # Log totals from structuredContent for any tool that returns them
@@ -139,6 +157,7 @@ class LocalShopAgent:
 
         self._mcp_server = MCPServerStreamableHttp(
             params={"url": self.config.mcp_url},
+            name=self.config.mcp_server_name,
             client_session_timeout_seconds=self.config.mcp_timeout,
             context_config=context_config,
         )
@@ -249,6 +268,11 @@ class LocalShopAgent:
                     await self._runner._session_service.save_tool_context_state(
                         session_id, existing
                     )
+                except InsecureConfigurationError as e:
+                    # Fail closed: a weak/blank data-store secret is an operator
+                    # config error — refuse the request instead of running stateless.
+                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    return f"Error: {e}"
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 
@@ -300,6 +324,11 @@ class LocalShopAgent:
                     await self._runner._session_service.save_tool_context_state(
                         session_id, existing
                     )
+                except InsecureConfigurationError as e:
+                    # Fail closed: surface the config error to the client and stop.
+                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+                    return
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 

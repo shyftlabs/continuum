@@ -15,14 +15,14 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md), §6.
 ## Imports
 
 ```python
-from orchestrator.agent import (
+from continuum.agent import (
     create_sequential_agent, create_parallel_agent, create_loop_agent,
     create_reflection_agent, create_planner_agent, create_router_agent,
     MemoryScope, MergeStrategy, FailStrategy, TerminationType,
 )
 # Debate, Scatter, and Supervised factories live one level deeper —
-# they are NOT re-exported from `orchestrator.agent`.
-from orchestrator.agent.workflow import (
+# they are NOT re-exported from `continuum.agent`.
+from continuum.agent.workflow import (
     create_debate_agent, create_scatter_agent, create_supervised_agent,
 )
 ```

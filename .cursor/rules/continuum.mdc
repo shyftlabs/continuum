@@ -144,6 +144,12 @@ agent = BaseAgent(name="tool-agent", instructions="...", mcp_servers=[mcp])
 Always `await server.connect()` before use. `ToolExecutor({mcp: None})`
 wraps multiple servers under one executor.
 
+MCP tool names are namespaced by default: the LLM sees `<server>__<tool>`.
+Keep `namespace_tools` the same on `MCPUtil.get_*_function_tools()` and
+`ToolExecutor` (both default `True`). `PolicyStore` resources use the
+namespaced key (`tool:mcp__read_file`); `tool_filter` and per-server
+allow-lists use the raw tool name.
+
 ---
 
 ## Workflow agents (composable, all `BaseAgent` subclasses)

@@ -53,12 +53,20 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from continuum.logging import get_logger
 from continuum.memory.client import MemoryClient
 from continuum.memory.config import MemoryConfig
-from continuum.memory.types import MemoryAddResult, MemoryEntry, MemorySearchResult
+from continuum.memory.types import (
+    MemoryAddResult,
+    MemoryEntry,
+    MemoryMetadata,
+    MemorySearchResult,
+)
+
+if TYPE_CHECKING:
+    from continuum.security.policy import PolicyStore
 
 logger = get_logger(__name__)
 
@@ -126,8 +134,12 @@ class IntelligentMemoryClient(MemoryClient):
         user_id: str | None = None,
         agent_id: str | None = None,
         conversation_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: MemoryMetadata | dict[str, Any] | None = None,
         custom_prompt: str | None = None,
+        infer: bool = True,
+        policy_store: PolicyStore | None = None,
+        subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemoryAddResult:
         """
         Store memories with importance score, entity extraction, and profile update.
@@ -135,10 +147,16 @@ class IntelligentMemoryClient(MemoryClient):
         Importance score is merged into metadata before the base add() call so
         it is stored in Qdrant alongside the memory text. Entity memories and
         user profile updates are stored as separate tagged entries.
+
+        Every base-class parameter is accepted and forwarded: this class is
+        documented as a drop-in replacement, and the access-control arguments in
+        particular must reach ``MemoryClient.add`` so an explicit per-call policy
+        is honoured rather than silently dropped.
         """
         llm = self._get_llm()
         text = self._to_text(messages)
-        enriched_meta: dict[str, Any] = dict(metadata or {})
+        base_meta = metadata.to_dict() if isinstance(metadata, MemoryMetadata) else (metadata or {})
+        enriched_meta: dict[str, Any] = dict(base_meta)
         enriched_meta["stored_at"] = datetime.now(UTC).isoformat()
 
         # 1. Importance scoring
@@ -154,6 +172,10 @@ class IntelligentMemoryClient(MemoryClient):
             conversation_id=conversation_id,
             metadata=enriched_meta,
             custom_prompt=custom_prompt,
+            infer=infer,
+            policy_store=policy_store,
+            subject=subject,
+            data_labels=data_labels,
         )
 
         # 3. Entity extraction (stored as tagged memories in same collection)
@@ -179,12 +201,16 @@ class IntelligentMemoryClient(MemoryClient):
         conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
+        policy_store: PolicyStore | None = None,
+        subject: str | None = None,
     ) -> MemorySearchResult:
         """
         Search memories and re-rank by blending semantic similarity, importance,
         and time decay.
 
         final_score = (semantic × 0.6) + (importance × 0.3) + (decay × 0.1)
+
+        Access-control arguments are forwarded to the base search — see ``add``.
         """
         result = await super().search(
             query,
@@ -193,6 +219,8 @@ class IntelligentMemoryClient(MemoryClient):
             conversation_id=conversation_id,
             limit=limit,
             filters=filters,
+            policy_store=policy_store,
+            subject=subject,
         )
 
         if self._intel.enable_scoring or self._intel.enable_decay:

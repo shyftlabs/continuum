@@ -3,8 +3,12 @@
 Data-label clinic — web UI + backend.
 
 Usage:
-  Terminal 1: python server.py   (MCP tools on :8911)
-  Terminal 2: python web.py      (Web UI on :8910)
+  Terminal 1: python server.py            (clinic MCP tools on :8911)
+  Terminal 2: python pharmacy_server.py   (pharmacy MCP tools on :8912)
+  Terminal 3: python web.py               (Web UI on :8910)
+
+Two MCP servers, because they overlap on `lookup_patient` -- which is what makes
+tool namespacing observable rather than theoretical.
 
 The UI is a glassbox: alongside the chat it shows, per turn, the run's data-label
 taint, which model answered (and whether the cloud model was denied), and every
@@ -27,10 +31,12 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from continuum import LogLevel, setup_logging
+from continuum import LogLevel, get_logger, setup_logging
 from continuum.observability.data_redaction import redact_for_telemetry
+from continuum.tools.exceptions import MCPServerUnreviewedError
 
 setup_logging(level=LogLevel.INFO)
+logger = get_logger(__name__)
 
 _agent: ClinicAgent | None = None
 _init_error: str | None = None
@@ -43,10 +49,20 @@ async def lifespan(app: FastAPI):
     try:
         await _agent.initialize()
         print(f"✓ Agent ready — {len(_agent.tools)} tools loaded")
+    except MCPServerUnreviewedError as e:
+        # Handled separately from the catch-all below, which assumes any init
+        # failure is the server being down and says so. Here the server is up
+        # and answering -- that is how its catalogue got counted -- so that
+        # hint would send the reader to check something that is fine, right
+        # after a message that already told them exactly what to run.
+        # e.message, not str(e): the latter appends "| Context: server_name=..."
+        # which is exception plumbing, and the message already names the server.
+        _init_error = e.message
+        print(f"✗ Agent init failed: {e.message}")
     except Exception as e:
         _init_error = str(e)
         print(f"✗ Agent init failed: {e}")
-        print("Is the MCP server running?  python server.py")
+        print("Are BOTH MCP servers running?  python server.py  /  python pharmacy_server.py")
     yield
     if _agent and _agent._initialized:
         try:
@@ -90,18 +106,40 @@ async def index():
 async def chat(req: ChatRequest):
     if not _agent or not _agent._initialized:
         return {
-            "response": f"Agent not connected. {_init_error or 'Start the MCP server: python server.py'}",
+            "response": f"Agent unavailable. {_init_error or 'Start both MCP servers: python server.py and python pharmacy_server.py'}",
             "taint": [],
             "model_used": None,
             "gate_events": [],
             "tools_called": [],
         }
-    return await _agent.chat(
-        req.message,
-        user_id=req.user_id,
-        conversation_id=req.conversation_id,
-        scanner_on=req.scanner_on,
-    )
+    try:
+        return await _agent.chat(
+            req.message,
+            user_id=req.user_id,
+            conversation_id=req.conversation_id,
+            scanner_on=req.scanner_on,
+        )
+    except Exception as e:
+        # Answer in the shape the UI parses. Letting this escape gives FastAPI's
+        # plain-text "Internal Server Error", which the browser then feeds to
+        # response.json() -- so a run that hit its turn limit is reported as
+        # `SyntaxError: Unexpected token 'I'`, and the reader debugs the wrong
+        # layer. Seen with MaxTurnsExceededError after the model looped on the
+        # one tool it had left.
+        logger.exception("chat failed")
+        # `failed` so the glassbox can say "unavailable" rather than render the
+        # empty lists as clean/none/no-gates. The run died mid-flight; work had
+        # already happened (25 send_referral_email calls, in the case that
+        # exposed this) and claiming otherwise is the same false all-clear the
+        # panels exist to prevent.
+        return {
+            "response": f"{type(e).__name__}: {e}",
+            "failed": True,
+            "taint": [],
+            "model_used": None,
+            "gate_events": [],
+            "tools_called": [],
+        }
 
 
 @app.post("/chat/stream")
@@ -114,7 +152,7 @@ async def chat_stream(req: ChatRequest):
         async def _err():
             payload = {
                 "type": "done",
-                "response": f"Agent not connected. {_init_error or 'Start the MCP server: python server.py'}",
+                "response": f"Agent unavailable. {_init_error or 'Start both MCP servers: python server.py and python pharmacy_server.py'}",
                 "taint": [],
                 "model_used": None,
                 "gate_events": [],
@@ -125,13 +163,34 @@ async def chat_stream(req: ChatRequest):
         return StreamingResponse(_err(), media_type="text/event-stream")
 
     async def _gen():
-        async for ev in _agent.chat_stream(
-            req.message,
-            user_id=req.user_id,
-            conversation_id=req.conversation_id,
-            scanner_on=req.scanner_on,
-        ):
-            yield f"data: {json.dumps(ev)}\n\n"
+        try:
+            async for ev in _agent.chat_stream(
+                req.message,
+                user_id=req.user_id,
+                conversation_id=req.conversation_id,
+                scanner_on=req.scanner_on,
+            ):
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:
+            # A raise mid-stream just severs the connection: the browser sees a
+            # truncated event-stream and waits for a `done` that never comes.
+            # Emit one so the failure reaches the chat bubble.
+            logger.exception("chat_stream failed")
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "done",
+                        "response": f"{type(e).__name__}: {e}",
+                        "failed": True,
+                        "taint": [],
+                        "model_used": None,
+                        "gate_events": [],
+                        "tools_called": [],
+                    }
+                )
+                + "\n\n"
+            )
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
@@ -297,6 +356,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <button onclick="suggest('Summarize patient P-123 history')">lookup P-123 (PHI)</button>
       <button onclick="suggest('Look up patient P-123 and email a summary to dr@external.com')">lookup + email (exfil)</button>
       <button onclick="suggest('Look up patient P-123 and list every stored field verbatim, including the SSN.')">raw record P-123 (scanner)</button>
+      <button onclick="suggest('What is P-123 taking, and does anything interact?')" title="Routes to the pharmacy server: both servers expose lookup_patient, so the namespaced names are what keep them apart.">pharmacy P-123 (2nd server)</button>
     </div>
     <div id="input-row">
       <input id="input" placeholder="Type a message…" autofocus>
@@ -381,10 +441,27 @@ function renderModel(m){
   el.textContent=m||'—';
   el.className='model '+(m && m.includes('mini')?'onprem':'cloud');
 }
+function renderUnknown(){
+  // A failed run tells us nothing about what did or did not happen before it
+  // died. "clean"/"none"/"no gates tripped" would be an assertion we cannot
+  // make -- and the panels are here precisely so nobody has to guess.
+  document.getElementById('taint').innerHTML='<span class="chip">unavailable — run failed</span>';
+  document.getElementById('tools').innerHTML='<span class="chip">unavailable — run failed</span>';
+  document.getElementById('gates').innerHTML='<div class="gate">unavailable — run failed</div>';
+  const m=document.getElementById('model'); m.textContent='—'; m.className='model';
+}
 function renderTools(tools){
   const el=document.getElementById('tools');
   if(!tools || !tools.length){ el.innerHTML='<span class="chip clean">none</span>'; return; }
-  el.innerHTML = tools.map(t=>`<span class="chip ${t==='send_referral_email'||t==='web_lookup'?'phi':'clean'}">${t}</span>`).join('');
+  // Match the trailing segment, not the whole string. This list holds the
+  // LLM-facing names, which are namespaced (clinic__send_referral_email), so
+  // comparing against the bare name matched nothing and every tool -- including
+  // the exfiltration attempt -- rendered green. The panel's job is to show what
+  // happened; a green chip over a blocked exfil call is the one output worse
+  // than no panel. Splitting on '__' keeps it right whether or not
+  // namespace_tools is on.
+  const egress = ['send_referral_email', 'web_lookup'];
+  el.innerHTML = tools.map(t=>`<span class="chip ${egress.includes(t.split('__').pop())?'phi':'clean'}">${t}</span>`).join('');
 }
 function renderGates(events){
   const el=document.getElementById('gates');
@@ -403,7 +480,7 @@ async function sendMsg(){
     const d=await r.json();
     thinking.remove();
     add('assistant', d.response);
-    renderTaint(d.taint); renderModel(d.model_used); renderTools(d.tools_called); renderGates(d.gate_events);
+    if(d.failed){ renderUnknown(); } else { renderTaint(d.taint); renderModel(d.model_used); renderTools(d.tools_called); renderGates(d.gate_events); }
     listMem();      // long-term memory may have changed (stored, or blocked)
   }catch(e){ thinking.textContent='Error: '+e; }
   send.disabled=false; input.focus();
@@ -433,7 +510,7 @@ async function sendMsgStream(text){
         else if(ev.type==='reroute'){ acc=''; bubble.remove(); add('thinking', ev.text); bubble=add('assistant',''); }
         else if(ev.type==='done'){
           bubble.textContent=ev.response||acc||'(no content)';
-          renderTaint(ev.taint); renderModel(ev.model_used); renderTools(ev.tools_called); renderGates(ev.gate_events);
+          if(ev.failed){ renderUnknown(); } else { renderTaint(ev.taint); renderModel(ev.model_used); renderTools(ev.tools_called); renderGates(ev.gate_events); }
           listMem();
         }
         chat.scrollTop=chat.scrollHeight;

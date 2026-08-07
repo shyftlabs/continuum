@@ -1,0 +1,622 @@
+"""Human review and enforcement for MCP tool catalogues (security finding F3).
+
+The drift detection in ``list_tools()`` answers *"did this change since I last
+looked?"*. It cannot answer *"was it safe the first time"* -- pin a
+born-malicious server and you have pinned the poison. Nothing in a framework can
+close that gap: whether a third-party server is trustworthy is a judgement, and
+the MCP specification assigns it to the host application.
+
+What a framework *can* do is make the judgement practical. Before this module
+there was no way to see what a server ships -- the CLI offered only
+``up``/``down``/``status``/``logs``/``config-path``, so reviewing a catalogue
+meant hand-writing an async script. "Read the descriptions before you trust a
+server" was correct advice that nobody could act on.
+
+So:
+
+  * :func:`format_tool_catalog` renders a catalogue for a person to read;
+  * :func:`snapshot_tool_digests` captures what was reviewed;
+  * :func:`load_pins` / :func:`save_pins` persist it in a versioned file that
+    only a human command writes;
+  * :func:`diff_catalogs` and :func:`format_catalog_diff` show what changed
+    since;
+  * :func:`approve_tools` promotes reviewed entries, one tool at a time.
+
+Enforcement is not here: it belongs to the server, via
+:class:`~continuum.tools.types.ToolTrustConfig`'s ``on_unreviewed`` and
+``on_drift``. A standalone filter used to do that job, but it had to be paired
+with no pin path or the drift tripwire would rewrite the file the filter read --
+silently promoting an attacker's catalogue to "approved" one restart later.
+Folding it into the server removes the way to misconfigure it.
+
+Note the intended order: review first, pin second. A helper that produced pins
+without showing you the contents would make *pin-without-reading* the one-liner
+and *read-then-pin* the chore -- optimising the dangerous path. That is why the
+CLI command prints the catalogue and treats the pin file as a byproduct.
+"""
+
+from __future__ import annotations
+
+import json
+import shlex
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
+
+from continuum.llm.untrusted_content import strip_hidden_chars
+from continuum.logging import get_logger
+from continuum.tools.mcp import _tool_digest
+from continuum.tools.util import build_namespaced_tool_name
+
+if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
+
+    from continuum.tools.mcp import MCPServer
+
+
+logger = get_logger(__name__)
+
+_DIGEST_PREVIEW = 12
+
+PIN_FORMAT_VERSION = 1
+"""On-disk schema version for pin files.
+
+Every lockfile carries one; this one didn't, and the cost was a compatibility
+branch that had to *infer* whether a bare digest string covered the raw or the
+cleaned catalogue -- a question the file could not answer. A version field turns
+"guess the shape" into "refuse to read what you don't understand".
+"""
+
+PinEntry = dict[str, Any]
+ServerPins = dict[str, PinEntry]
+
+
+def snapshot_tool_digests(server_name: str, tools: list[MCPTool]) -> ServerPins:
+    """Map tool name to its pin entry: two digests plus the reviewed text.
+
+    Two digests because the two consumers ask different questions, and a single
+    digest silently broke one of them:
+
+    ``raw``
+        Over the bytes exactly as the server sent them. What the drift tripwire
+        in ``list_tools()`` compares, so that adding or removing invisible
+        characters cannot slip past unreported.
+
+    ``effective``
+        Over the catalogue after :func:`~continuum.tools.mcp._clean_tool` has
+        stripped invisible characters -- i.e. the text the model will actually
+        receive. What the pinning gate compares, because ``list_tools()`` cleans
+        tools *before* handing them to a ``tool_filter``.
+
+    They are identical for ordinary text; only a description carrying invisible
+    characters makes them differ. Comparing a cleaned tool against a raw pin
+    meant such a tool could never match, so the gate dropped it forever while
+    reporting that it "no longer matches" -- which was never achievable.
+
+    ``description`` and ``inputSchema`` are stored alongside because a digest
+    records *that* something changed and can never record *what*. Every
+    human-facing step -- reviewing a diff, deciding whether to approve -- needs
+    the previous text, and ``- "82f31…" + "9db49…"`` is not reviewable.
+    """
+    del server_name  # accepted for symmetry with the CLI/pin-file shape
+    from continuum.tools.mcp import _clean_tool
+
+    return {
+        tool.name: {
+            "raw": _tool_digest(tool),
+            "effective": _tool_digest(_clean_tool(tool)),
+            "description": tool.description or "",
+            "inputSchema": tool.inputSchema or {},
+        }
+        for tool in tools
+    }
+
+
+def load_pins(path: str | Path) -> dict[str, ServerPins]:
+    """Read a pin file, returning ``server name -> tool name -> entry``.
+
+    Best-effort by design: a missing, unreadable, corrupt, or
+    future-versioned file degrades to "no baseline" rather than taking an agent
+    down. Trust *bookkeeping* is advisory; the enforcement decision built on top
+    of it is where failures should be loud.
+
+    A version this code does not recognise is refused rather than parsed
+    optimistically -- a newer writer may mean something different by the same
+    keys, and quietly misreading an approval is worse than having none.
+    """
+    file = Path(path)
+    try:
+        raw = json.loads(file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning(f"Ignoring unreadable MCP tool-pin file {file}: {e}")
+        return {}
+
+    if not isinstance(raw, dict):
+        logger.warning(f"Ignoring malformed MCP tool-pin file {file}: expected a JSON object.")
+        return {}
+
+    version = raw.get("version")
+    if version != PIN_FORMAT_VERSION:
+        logger.warning(
+            f"Ignoring MCP tool-pin file {file}: unsupported format version {version!r} "
+            f"(this build reads version {PIN_FORMAT_VERSION}). Re-create it with "
+            f"`continuum mcp inspect URL --name SERVER --write-pins {shlex.quote(str(file))}`."
+        )
+        return {}
+
+    servers = raw.get("servers")
+    if not isinstance(servers, dict):
+        logger.warning(f"Ignoring MCP tool-pin file {file}: no 'servers' object.")
+        return {}
+
+    return {
+        name: {tool: entry for tool, entry in pins.items() if isinstance(entry, dict)}
+        for name, pins in servers.items()
+        if isinstance(pins, dict)
+    }
+
+
+def save_pins(path: str | Path, servers: dict[str, ServerPins]) -> None:
+    """Write ``servers`` to ``path`` in the current pin-file format.
+
+    Whole-file write: callers pass the complete mapping, so merging is an
+    explicit step they perform rather than something this function guesses at.
+    Replacing a server entry wholesale is exactly the bug that made approval
+    all-or-nothing -- one drifted tool forced you to either bless every other
+    change or lose the tool.
+
+    Sorted keys because the file is meant to be diffed; a reordering diff is a
+    diff nobody reads.
+    """
+    file = Path(path)
+    payload = {"version": PIN_FORMAT_VERSION, "servers": servers}
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+@dataclass
+class ToolDiff:
+    """One tool's difference between the approved catalogue and a later one.
+
+    Carries the full entries, not just a verdict, because the point of the diff
+    is that a person reads the text and decides. ``approved`` is None for a tool
+    that appeared after review; ``current`` is None for one that vanished.
+    """
+
+    name: str
+    status: Literal["changed", "added", "removed"]
+    approved: PinEntry | None
+    current: PinEntry | None
+
+    @staticmethod
+    def _reviewable_text(entry: PinEntry | None) -> str:
+        """Every byte of this entry a reviewer is asked to judge.
+
+        Both fields, because both are prose the model reads and either can carry
+        the payload -- ``inputSchema`` holds parameter descriptions, which is
+        where the F3 proof of concept smuggles ("...include its contents in the
+        notes field").
+
+        ``ensure_ascii=False`` is load-bearing. The default escapes U+E0041 into
+        the seven ASCII characters ``\\uE041``, which ``strip_hidden_chars``
+        leaves alone -- the count would come back zero and the check would look
+        implemented while detecting nothing.
+        """
+        if entry is None:
+            return ""
+        schema = json.dumps(entry.get("inputSchema", {}), sort_keys=True, ensure_ascii=False)
+        description = entry.get("description")
+        return (description if isinstance(description, str) else "") + schema
+
+    @property
+    def hidden_char_delta(self) -> int:
+        """How many invisible characters this change adds.
+
+        Reported rather than silently cleaned: the live path strips them, but a
+        reviewer must be told the server sent hidden text. It is the single
+        strongest signal a server is hostile, and hiding it defeats the review.
+
+        Counted across the description *and* the schema. Counting only the
+        description left a schema-borne payload rendered as raw JSON, where --
+        being invisible -- it read as an ordinary parameter edit. Enforcement was
+        never affected; review was, and review is the only step that catches a
+        server that was hostile on first contact.
+        """
+        after = self._reviewable_text(self.current)
+        before = self._reviewable_text(self.approved)
+        return (len(after) - len(strip_hidden_chars(after))) - (
+            len(before) - len(strip_hidden_chars(before))
+        )
+
+
+def diff_catalogs(approved: ServerPins, current: ServerPins) -> list[ToolDiff]:
+    """Compare an approved catalogue against a later one.
+
+    Returns only the differences, sorted by tool name: a review should list
+    what needs deciding, not restate the whole catalogue. Sorted because
+    unstable ordering makes two runs of the same command look different.
+
+    Comparison is over the ``raw`` digest -- the bytes as the server sent them
+    -- so that adding or removing invisible characters cannot slip past.
+    """
+    names = sorted(set(approved) | set(current))
+    diffs: list[ToolDiff] = []
+    for name in names:
+        before, after = approved.get(name), current.get(name)
+        if before is None:
+            diffs.append(ToolDiff(name, "added", None, after))
+        elif after is None:
+            diffs.append(ToolDiff(name, "removed", before, None))
+        elif before.get("raw") != after.get("raw"):
+            diffs.append(ToolDiff(name, "changed", before, after))
+    return diffs
+
+
+def _gutter(marker: str, description: str | None) -> list[str]:
+    """Render a description with every line inside the +/- gutter.
+
+    Descriptions are multi-line, and a payload is typically appended on a new
+    one. Marking only the first line would leave the injected text flush-left,
+    where it reads as commentary about the diff rather than as part of the
+    description being added -- which is precisely the misreading that helps an
+    attacker.
+    """
+    text = description or "(no description)"
+    return [f"  {marker} {line}" for line in text.splitlines() or [""]]
+
+
+def format_catalog_diff(
+    server_name: str, diffs: list[ToolDiff], pin_path: str | Path | None = None
+) -> str:
+    """Render differences for a person to read and act on.
+
+    ``pin_path`` is echoed into the suggested approve commands. Without it they
+    target the CLI default, so reviewing ``--pins somewhere/else.json`` would
+    print a remedy pointing at a different file than the one just read.
+    """
+    if not diffs:
+        return f"Server '{server_name}': no differences from the approved catalogue."
+
+    out: list[str] = [
+        f"Server '{server_name}' — {len(diffs)} unreviewed difference(s)",
+        "",
+    ]
+    for diff in diffs:
+        out.append("─" * 72)
+        header = f"{diff.name}   [{diff.status}]"
+        if diff.hidden_char_delta > 0:
+            header += f"   *** {diff.hidden_char_delta} hidden character(s) added ***"
+        out.append(header)
+        out.append("")
+        if diff.approved is not None:
+            out.extend(_gutter("-", diff.approved.get("description")))
+        if diff.current is not None:
+            out.extend(_gutter("+", diff.current.get("description")))
+        if diff.approved is not None and diff.current is not None:
+            before = diff.approved.get("inputSchema")
+            after = diff.current.get("inputSchema")
+            if before != after:
+                out.append("")
+                out.append(f"  - schema: {json.dumps(before, sort_keys=True)}")
+                out.append(f"  + schema: {json.dumps(after, sort_keys=True)}")
+
+    out.append("─" * 72)
+    out.append("")
+    # A report of a problem carries its own remedy: without the command, the
+    # reader knows something is wrong and not what to do about it.
+    out.append("Approve the changes you have read and accept:")
+    # Quoted: an auto-derived server name contains ": " and a pin path can sit
+    # under a directory with a space, either of which makes the line stop being
+    # a command.
+    pins = f" --pins {shlex.quote(str(pin_path))}" if pin_path is not None else ""
+    name = shlex.quote(server_name)
+    out.append(f"  continuum mcp approve {name}{pins} --tool NAME")
+    out.append(f"  continuum mcp approve {name}{pins} --all")
+    return "\n".join(out)
+
+
+def approve_tools(
+    pin_path: str | Path,
+    server_name: str,
+    current: ServerPins,
+    *,
+    tools: list[str] | None = None,
+) -> list[str]:
+    """Merge selected entries of ``current`` into the approved catalogue.
+
+    Merge, never replace. Replacing a server's whole entry is what made
+    approval all-or-nothing: with one benign typo fix and one injection, you had
+    to either bless the injection to recover the typo fix or lose the unrelated
+    tool for good. Enforcement was already per-tool; this makes approval match.
+
+    Args:
+        pin_path: the approved catalogue. Created if absent.
+        server_name: which server's entry to update; others are left alone.
+        current: the catalogue being approved *from* -- usually the runtime's
+            last-seen record, i.e. the text that was just shown in a diff.
+        tools: names to approve. ``None`` approves the whole of ``current``.
+            A name absent from ``current`` but present in the approved
+            catalogue is a removal, and approving it drops the entry.
+
+    Returns:
+        The names acted on, sorted.
+
+    Raises:
+        ValueError: on an empty selection, or a name in neither catalogue --
+            approving nothing while reporting success would let a typo'd tool
+            name read as "approved".
+    """
+    existing = load_pins(pin_path)
+    approved = dict(existing.get(server_name, {}))
+
+    if tools is None:
+        selected = sorted(set(current) | set(approved))
+    else:
+        selected = sorted(set(tools))
+        if not selected:
+            raise ValueError(
+                "approve_tools() received an empty tool selection. Pass tools=None to "
+                "approve the whole catalogue."
+            )
+        unknown = [t for t in selected if t not in current and t not in approved]
+        if unknown:
+            raise ValueError(
+                f"No such tool(s) on server {server_name!r}: {unknown}. "
+                f"Check for a typo -- approving a name that does not exist would "
+                f"report success and change nothing. "
+                f"Known: {sorted(set(current) | set(approved))}"
+            )
+
+    for name in selected:
+        if name in current:
+            approved[name] = current[name]
+        else:
+            approved.pop(name, None)
+
+    existing[server_name] = approved
+    save_pins(pin_path, existing)
+    return selected
+
+
+async def review_server(
+    server: MCPServer,
+    *,
+    write_pins: str | Path | None = None,
+) -> list[MCPTool]:
+    """Print a server's catalogue for review. Works for every server type.
+
+    ``continuum mcp inspect`` sends a URL and nothing else -- no headers, no
+    env, no command -- so it can only review unauthenticated streamable HTTP.
+    A server behind an ``Authorization`` header answers it with 401, SSE speaks
+    a protocol it does not, and stdio has no URL at all. Growing the CLI to
+    cover the rest would mean re-expressing the constructor as flags, and every
+    field retyped is a field that can drift from what the agent actually runs.
+    Reviewing the wrong server and then pinning it is worse than not reviewing:
+    the pin file now vouches for something nobody read.
+
+    Taking the server *object* removes the second specification. Whatever you
+    pass is, by construction, the configuration your agent uses.
+
+    Writes nothing unless asked. Looking must not approve -- otherwise
+    pin-without-reading is the one-liner and read-then-pin the chore, which
+    optimises the dangerous path. ``write_pins`` exists for approving before the
+    agent has ever run; the ordinary route is to read this output and then run
+    ``continuum mcp approve``, which promotes from the record the runtime wrote
+    on the fetch it refused.
+
+    Args:
+        server: any connected or unconnected MCPServer.
+        write_pins: record the catalogue as approved at this path. Merges, so
+            other servers' approvals are left alone.
+
+    Returns:
+        The tools as the server sent them, so callers can assert on them.
+    """
+    # session.list_tools(), not server.list_tools(). The wrapper strips
+    # invisible characters and applies the trust gate, so reviewing through it
+    # would hide the strongest signal a server is hostile -- and, for an
+    # unreviewed server under the default policy, would refuse the review
+    # itself. MCPServerFunction has no session; its tools are local code and
+    # ungated, so its own list_tools() is the raw catalogue.
+    session = getattr(server, "session", None)
+    opened_here = session is None and hasattr(server, "connect")
+    if opened_here:
+        await server.connect()
+        session = getattr(server, "session", None)
+    try:
+        if session is not None:
+            tools = list((await session.list_tools()).tools)
+        else:
+            tools = list(await server.list_tools())
+        print(format_tool_catalog(server.name, tools))
+        if write_pins is not None:
+            existing = load_pins(write_pins)
+            existing[server.name] = snapshot_tool_digests(server.name, tools)
+            save_pins(write_pins, existing)
+            print(f"\nPinned {len(tools)} tool(s) for '{server.name}' to {write_pins}.")
+    finally:
+        # Only what we opened. Tearing down a transport the caller is using
+        # would make reviewing a running agent's server impossible.
+        if opened_here:
+            await server.cleanup()
+    return tools
+
+
+def rename_server(pin_path: str | Path, old: str, new: str) -> int:
+    """Re-file a server's approvals under a different name. Returns the count.
+
+    A move, not an approval: entries are copied verbatim and no digest is
+    recomputed, because by construction nothing about them changed. Recomputing
+    would turn "the name moved" into "whatever the file says now is approved".
+
+    Needed because approvals are keyed by ``server.name`` and names move --
+    a server created without ``name=`` is called after its URL, so changing a
+    port orphans every approval. ``mcp approve NEW --all`` cannot recover from
+    that: it merges from the last-seen record, which is keyed by server name too
+    and is empty under a name nothing has ever run as.
+
+    Raises:
+        KeyError: ``old`` has no entry -- almost always a typo, and renaming
+            nothing while reporting success would leave the orphan in place.
+        ValueError: ``old`` and ``new`` are the same name, or ``new`` already has
+            an entry. Merging silently would bless a catalogue against an
+            approval nobody compared it to.
+    """
+    if old == new:
+        # Falling through would report a collision between a name and itself:
+        # "merging would accept X's entries without comparing them against X's",
+        # which reads as a bug in the tool rather than a typo in the command.
+        raise ValueError(f"Old and new are the same name ({old!r}); nothing to rename.")
+    pins = load_pins(pin_path)
+    if old not in pins:
+        raise KeyError(
+            f"No approved catalogue for server {old!r} in {pin_path}. Known: {sorted(pins)}"
+        )
+    if new in pins:
+        raise ValueError(
+            f"Server {new!r} already has an approved catalogue in {pin_path}. "
+            f"Merging would accept {old!r}'s entries without anyone comparing them "
+            f"against {new!r}'s. Review with\n\n"
+            f"  continuum mcp diff {shlex.quote(new)} --pins {shlex.quote(str(pin_path))}\n\n"
+            f"or remove one of the two entries first."
+        )
+    pins[new] = pins.pop(old)
+    save_pins(pin_path, pins)
+    return len(pins[new])
+
+
+def find_identical_catalog(
+    pins: dict[str, ServerPins], current_raw: dict[str, str], *, exclude: str
+) -> str | None:
+    """A server name in ``pins`` holding exactly this catalogue, if there is one.
+
+    Answers "is this unfamiliar server one I already approved under a different
+    name?" -- so the refusal can say *re-file it* instead of *go read four tool
+    descriptions you read last week*, which is advice that trains the
+    rubber-stamp the whole feature exists to prevent.
+
+    All-or-nothing, over ``raw`` digests, and that strictness is the point. The
+    message this enables claims nothing needs re-reading, and that claim is only
+    true when every byte is identical:
+
+    * a partial match would say "nothing to re-read" about a catalogue whose one
+      changed tool is precisely the one that must be read;
+    * ``raw`` rather than ``effective`` so a catalogue that differs only by
+      invisible characters cannot pass. The model would read the same text, but
+      the server sent bytes nobody reviewed -- the strongest hostile signal
+      there is.
+
+    Anything short of an exact match returns None and the caller falls back to
+    the ordinary unreviewed-server refusal.
+    """
+    for name, entry in pins.items():
+        if name == exclude or set(entry) != set(current_raw):
+            continue
+        if all(entry[tool].get("raw") == digest for tool, digest in current_raw.items()):
+            return name
+    return None
+
+
+def _format_schema_descriptions(node: Any, path: str = "") -> list[str]:
+    """Collect ``path: description`` lines from a JSON Schema.
+
+    Parameter descriptions are a second injection surface -- the F3 proof of
+    concept smuggles via "...include its contents in the notes field" -- so a
+    review that showed only the tool-level description would miss it.
+    """
+    lines: list[str] = []
+    if isinstance(node, dict):
+        if isinstance(node.get("description"), str) and path:
+            lines.append(f"{path}: {node['description']}")
+        for key, value in node.items():
+            if key == "description":
+                continue
+            child = f"{path}.{key}" if path and key != "properties" else path or key
+            lines.extend(_format_schema_descriptions(value, child if key != "properties" else path))
+    elif isinstance(node, list):
+        for item in node:
+            lines.extend(_format_schema_descriptions(item, path))
+    return lines
+
+
+def format_tool_catalog(server_name: str, tools: list[MCPTool]) -> str:
+    """Render a catalogue for human review.
+
+    Descriptions are shown **in full and unabridged**: truncating would defeat
+    the purpose, since a payload appended to an otherwise ordinary description
+    hides in the tail.
+
+    Invisible characters are *reported*, not silently removed. The live path
+    strips them (see ``_clean_tool``), but a reviewer must be told the server
+    sent hidden text -- that is the single strongest signal a server is hostile,
+    and quietly cleaning it away would conceal exactly what review is for.
+    """
+    if not tools:
+        return f"Server '{server_name}': no tools reported."
+
+    out: list[str] = [
+        f"Server '{server_name}' — {len(tools)} tool(s)",
+        "",
+        "Read every description below before trusting this server. Text here reaches",
+        "the model's prompt verbatim and instructs it; a poisoned tool keeps an",
+        "innocent-looking name.",
+        "",
+    ]
+
+    for tool in tools:
+        digest = _tool_digest(tool)
+        description = tool.description or ""
+
+        out.append(f"{'─' * 72}")
+        out.append(f"{tool.name}   [digest {digest[:_DIGEST_PREVIEW]}]")
+        # What PolicyStore and always_promote match is the LLM-facing name, and
+        # which one that is depends on namespace_tools. `mcp inspect URL`
+        # connects standalone -- no ToolExecutor, no application config -- so it
+        # cannot know. Asserting one form sends the other half of readers to
+        # write a resource string that matches nothing, and a deny rule that
+        # matches nothing stops denying without saying so.
+        #
+        # Both are printed rather than the default alone because the namespaced
+        # form is genuinely unguessable for an auto-derived server name (':',
+        # '/' and '.' are stripped and a long URL is hash-truncated), and the
+        # raw form is unguessable for nobody -- so a reader who is shown only
+        # one cannot reconstruct the other.
+        out.append("  policy resource:")
+        namespaced = build_namespaced_tool_name(server_name, tool.name)
+        out.append(f"    tool:{namespaced}   (namespace_tools=True, the default)")
+        out.append(
+            f"    tool:{tool.name}{' ' * max(1, len(namespaced) - len(tool.name))}"
+            f"   (namespace_tools=False)"
+        )
+        out.append("")
+        out.append(f"  {description or '(no description)'}")
+
+        param_lines = _format_schema_descriptions(tool.inputSchema or {})
+        if param_lines:
+            out.append("")
+            out.append("  Parameters:")
+            out.extend(f"    {line}" for line in param_lines)
+
+        # Counted over the description AND the parameter descriptions, because a
+        # payload hides in either and ToolDiff.hidden_char_delta already covers
+        # both. Checking only the description here meant `mcp diff` announced a
+        # schema-borne payload while this view printed it silently -- and this is
+        # the worse place to miss it. The diff view only runs against a catalogue
+        # someone already approved; this one is first contact, the case pinning
+        # cannot defend at all, where a person reading the output IS the defence.
+        hidden_sources = [description, *param_lines]
+        removed = sum(len(t) - len(strip_hidden_chars(t)) for t in hidden_sources)
+        if removed:
+            out.append("")
+            out.append(f"  *** WARNING: {removed} hidden/invisible character(s) in this tool. ***")
+            out.append("  These are readable by the model but not by you. Treat this server")
+            out.append("  as hostile unless you can explain them.")
+            for text in hidden_sources:
+                visible = strip_hidden_chars(text)
+                if visible != text:
+                    out.append(f"  Visible text only: {visible!r}")
+
+    out.append(f"{'─' * 72}")
+    return "\n".join(out)

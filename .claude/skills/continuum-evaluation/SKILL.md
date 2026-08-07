@@ -1,11 +1,11 @@
 ---
 name: continuum-evaluation
-description: Evaluate agent quality with the `EvaluatorAgent`, build golden datasets from Langfuse traces, and run DeepEval/RAGAS metrics over conversations. Invoke when the user asks "test agent quality", "evaluate output", "RAG metrics", "DeepEval", "RAGAS", or "regression-test my agent".
+description: Evaluate agent quality with the `EvaluatorAgent`, generate golden datasets from a corpus, and run DeepEval/RAGAS metrics over conversations. Invoke when the user asks "test agent quality", "evaluate output", "RAG metrics", "DeepEval", "RAGAS", or "regression-test my agent".
 ---
 
 # Continuum Evaluation Skill
 
-Continuum ships an evaluation framework under `orchestrator.evaluation`.
+Continuum ships an evaluation framework under `continuum.evaluation`.
 It's an **optional extra** — install with:
 
 ```bash
@@ -13,7 +13,7 @@ pip install "shyftlabs-continuum[eval]"
 # adds: deepeval >= 1.0.0, ragas >= 0.2.0
 ```
 
-Authoritative source: `src/orchestrator/evaluation/` in this
+Authoritative source: `src/continuum/evaluation/` in this
 repository. There is no dedicated user-facing doc; this skill is the
 primary reference.
 
@@ -22,12 +22,12 @@ primary reference.
 ## Imports
 
 ```python
-from orchestrator.evaluation import (
+from continuum.evaluation import (
     EvaluatorAgent,                   # specialised agent that scores other agents
     DeepEvalEvaluator,                # DeepEval criterion-based evaluation
     RagasEvaluator,                   # RAGAS metrics for RAG pipelines
-    build_golden_dataset,             # build dataset from Langfuse traces
-    generate_eval_dataset,            # synthesize evaluation cases from a domain spec
+    LangfuseDatasetClient,            # pull/push datasets from Langfuse
+    EvalCase, EvalResult, EvalStatus, CriterionScore,
 )
 ```
 
@@ -39,8 +39,8 @@ A specialised `BaseAgent` that takes another agent's output (plus
 optional reference) and produces a structured score.
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.evaluation import EvaluatorAgent
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.evaluation import EvaluatorAgent
 
 target_agent = BaseAgent(name="target", instructions="Answer concisely.")
 evaluator = EvaluatorAgent(
@@ -71,7 +71,7 @@ Use for criterion-based per-case scoring; great for unit-test-style
 agent regression suites.
 
 ```python
-from orchestrator.evaluation import DeepEvalEvaluator
+from continuum.evaluation import DeepEvalEvaluator
 from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
 
 evaluator = DeepEvalEvaluator(
@@ -97,7 +97,7 @@ For RAG-specific metrics (faithfulness, context precision/recall,
 answer correctness, etc.).
 
 ```python
-from orchestrator.evaluation import RagasEvaluator
+from continuum.evaluation import RagasEvaluator
 from ragas.metrics import faithfulness, answer_relevancy, context_precision
 
 evaluator = RagasEvaluator(
@@ -117,26 +117,27 @@ report = await evaluator.evaluate(dataset)
 
 ---
 
-## Build a golden dataset from Langfuse traces
+## Build a dataset
 
-```python
-from orchestrator.evaluation import build_golden_dataset
+These are **scripts, not library functions** — they read a corpus out of
+Postgres, call an LLM, and write `EvalCase` JSON to disk:
 
-dataset = await build_golden_dataset(
-    project="my-project",
-    tags=["production", "sampled"],
-    limit=200,
-    after="2026-01-01",
-    user_label_field="thumbs_up",       # only keep traces the user labeled positively
-)
+```bash
+python -m continuum.evaluation.build_golden_dataset \
+    --output golden_cases.json [--run-eval]
+python -m continuum.evaluation.generate_eval_dataset \
+    --samples 50 --output generated_cases.json [--run-eval]
+
+# re-score an existing file without regenerating it
+python -m continuum.evaluation.build_golden_dataset --eval-only golden_cases.json
 ```
 
-The returned object is a list of `{"input", "output", "metadata"}`
-dicts you can feed straight into DeepEval / RAGAS.
+`--run-eval` runs RAGAS and DeepEval over the cases immediately after
+generating them. Both write a JSON list of `EvalCase` (see
+`continuum.evaluation.types`), which is what `DeepEvalEvaluator` and
+`RagasEvaluator` consume.
 
-`generate_eval_dataset(domain_spec, n=50, model="gpt-4o-mini")` is the
-synthetic counterpart — useful when you don't yet have production
-traffic.
+For datasets you already keep in Langfuse, use `LangfuseDatasetClient`.
 
 ---
 
@@ -177,5 +178,5 @@ Wire this into CI to catch regressions before they ship.
   longitudinal comparisons.
 - Don't forget `pip install "shyftlabs-continuum[eval]"` (or
   `pip install -e ".[eval]"` from a checkout) before importing
-  `orchestrator.evaluation` — the eval module's third-party deps are
+  `continuum.evaluation` — the eval module's third-party deps are
   an optional extra.

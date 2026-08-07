@@ -41,7 +41,10 @@ async def main() -> int:
     tool_names = [t.function.name for t in agent.tools]
     print(f"\n[setup] {len(agent.tools)} tools discovered: {tool_names}")
     assert agent.tools, "No tools discovered from MCP server!"
-    assert "search_products" in tool_names, "search_products tool missing"
+    # MCP tools reach the LLM namespaced as "<server>__<tool>", so derive the
+    # expected name from the configured server name rather than hardcoding it.
+    expected = f"{agent.config.mcp_server_name}__search_products"
+    assert expected in tool_names, f"{expected} tool missing (got {tool_names})"
 
     transcript: list[str] = []
     try:

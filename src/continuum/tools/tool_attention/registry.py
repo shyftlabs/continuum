@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Upper bound on the primary keys scanned when looking for stale entries.
+# Tool catalogues are small (tens); this only guards against an unbounded
+# read if the collection is ever shared with something larger.
+_MAX_PRUNE_SCAN = 16384
+
 
 def _tool_summary(tool: Any) -> tuple[str, str]:
     """Return (tool_name, summary_text) for embedding."""
@@ -100,6 +105,41 @@ class ToolSummaryRegistry:
         ]
         self._client.upsert(collection_name=self._config.collection_name, data=data)
         logger.debug(f"Upserted {len(data)} tool embeddings")
+
+        self._sync_prune(set(names))
+
+    def _sync_prune(self, current: set[str]) -> None:
+        """Drop embeddings for tools that no longer exist.
+
+        The collection persists across restarts and upsert never removes
+        anything, so a renamed or deleted tool keeps its embedding forever.
+        search() then returns the dead name inside top-k and the router
+        discards it at the filter step -- a burned routing slot, no error, no
+        log. Flipping namespace_tools to True renamed every MCP tool at once
+        and made the leak plain: two of three routed names were ghosts.
+
+        Best-effort. A prune failure must not cost us the upsert above, which
+        is what the current run actually depends on.
+        """
+        col = self._config.collection_name
+        try:
+            rows = self._client.query(
+                collection_name=col,
+                filter='tool_name != ""',
+                output_fields=["tool_name"],
+                limit=_MAX_PRUNE_SCAN,
+            )
+            stale = sorted({r["tool_name"] for r in rows} - current)
+            if stale:
+                self._client.delete(collection_name=col, ids=stale)
+                logger.info(
+                    "Pruned %d stale tool embedding(s) from '%s': %s",
+                    len(stale),
+                    col,
+                    stale,
+                )
+        except Exception as e:
+            logger.warning(f"Tool embedding prune skipped for '{col}': {e}")
 
     def search(self, query: str, k: int) -> list[str]:
         """Return top-k tool names by cosine similarity. Synchronous."""

@@ -36,6 +36,11 @@ from dataclasses import dataclass, field
 @dataclass
 class WorkflowShopConfig:
     mcp_url: str = "http://localhost:8890/mcp"
+    # Prefix on every LLM-facing tool name ("shop__search"), so it is part of
+    # the identity policies, digest pins and always_promote match by exact
+    # string. Keep it short and environment-independent: the unset fallback
+    # derives from the transport and URL, baking host and port into each name.
+    mcp_server_name: str = "shop"
     mcp_timeout: float = 10.0
 
     # Placeholder model — GatewayProvider translates to auto/<tier> at runtime.

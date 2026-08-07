@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import hashlib
 import inspect
 import json
+import shlex
 import typing
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
@@ -32,18 +34,22 @@ from mcp.types import (
     ListPromptsResult,
     Resource,
     TextContent,
+    ToolListChangedNotification,
 )
 from typing_extensions import TypedDict
 
 from continuum.exceptions import ValidationError
+from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
-from continuum.tools.exceptions import MCPConnectionError, MCPError
+from continuum.tools.exceptions import MCPConnectionError, MCPError, MCPServerUnreviewedError
 from continuum.tools.types import (
     HttpClientFactory,
+    ToolChangeEvent,
     ToolContextConfig,
     ToolFilter,
     ToolFilterContext,
     ToolFilterStatic,
+    ToolTrustConfig,
 )
 
 T = TypeVar("T")
@@ -52,6 +58,80 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
 logger = get_logger(__name__)
+
+
+# --- tool-catalogue hardening (security finding F3) ---------------------------
+
+
+def _clean_schema(node: Any) -> Any:
+    """Recursively strip invisible characters from a JSON-Schema's string values.
+
+    Values only, never keys: a property name is the argument key the model sends
+    back and that we forward to the server, so rewriting it would break an
+    otherwise valid call. Property names are a far weaker smuggling channel than
+    free prose anyway -- ``description`` is where instructions fit.
+    """
+    if isinstance(node, dict):
+        return {k: _clean_schema(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_clean_schema(v) for v in node]
+    if isinstance(node, str):
+        return strip_hidden_chars(node)
+    return node
+
+
+def _tool_digest(tool: MCPTool) -> str:
+    """Identity of a tool's *instructional surface*, as the model will read it.
+
+    Covers description and inputSchema, not the name -- the name is the key these
+    digests are stored under. The schema is canonicalised (sorted keys) so
+    cosmetic reordering by the server does not read as a change.
+
+    Computed over the RAW bytes, before _clean_tool() strips invisible
+    characters: hashing the cleaned text would let an attacker add or remove
+    zero-width codepoints freely without tripping the tripwire.
+    """
+    payload = json.dumps(
+        {
+            "description": tool.description or "",
+            "inputSchema": tool.inputSchema or {},
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _clean_tool(tool: MCPTool) -> MCPTool:
+    """Return a copy of ``tool`` with invisible characters removed.
+
+    A tool's ``description`` and ``inputSchema`` are third-party text that reach
+    the model's prompt verbatim -- in the provider ``tools`` array always, and
+    inside a ``role: "system"`` message when tool-attention is enabled. Invisible
+    codepoints (Unicode Tags, zero-width, bidi overrides) carry instructions the
+    model's tokenizer reads but a human reviewer and a text classifier do not.
+
+    Stripping them removes that channel outright. Unlike filtering the *content*
+    of a description, it protects on FIRST contact rather than only on change,
+    and it cannot false-positive: descriptions are legitimately instructional
+    prose, but they are never legitimately invisible. TAB/LF/CR and all printable
+    text -- CJK, accents -- are preserved.
+
+    Copy-not-mutate: the objects belong to the ``mcp`` package and may be shared.
+
+    NOT a guarantee. A plainly-worded poisoned description passes through
+    untouched; that is what the digest pinning and human review steps address.
+    """
+    updates: dict[str, Any] = {}
+    if tool.description is not None:
+        cleaned = strip_hidden_chars(tool.description)
+        if cleaned != tool.description:
+            updates["description"] = cleaned
+    if tool.inputSchema:
+        cleaned_schema = _clean_schema(tool.inputSchema)
+        if cleaned_schema != tool.inputSchema:
+            updates["inputSchema"] = cleaned_schema
+    return tool.model_copy(update=updates) if updates else tool
 
 
 class MCPServer(abc.ABC):
@@ -89,6 +169,43 @@ class MCPServer(abc.ABC):
     def name(self) -> str:
         """A readable name for the server."""
         pass
+
+    @property
+    def review_url(self) -> str | None:
+        """URL ``continuum mcp inspect`` could review this server at, if any.
+
+        None when the CLI cannot reach it -- ``mcp inspect`` speaks streamable
+        HTTP only, so pointing a stdio user at it would send them to debug a
+        tool that was never going to connect. Transports it can review override
+        this so error messages carry a command that runs as written.
+        """
+        return None
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        """Why ``mcp inspect`` cannot review this server, or None when it can.
+
+        "`mcp inspect` cannot reach this server" printed beside a perfectly good
+        URL is an assertion the reader has to take on faith, and the three
+        reasons point in different directions -- there is no URL, the protocol
+        is wrong, or the connection needs headers the command cannot send. Only
+        the last is a dead end; the reader cannot tell which they have without
+        being told.
+        """
+        return "it is not reachable with a bare URL"
+
+    @property
+    def name_is_derived(self) -> bool:
+        """True when no name= was supplied and the transport invented one.
+
+        The invented names ("streamable_http: http://host:port/mcp") were meant
+        as display labels for error messages. Under namespace_tools they became
+        the prefix on every LLM-facing tool name, i.e. part of the identity that
+        policies, digest pins, always_promote and capture/inject match by exact
+        string -- so an invented one couples tool identity to the host and port.
+        Subclasses that can be constructed without a name override this.
+        """
+        return False
 
     @abc.abstractmethod
     async def cleanup(self):
@@ -158,6 +275,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """
         Args:
@@ -185,6 +303,16 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast on
                 misconfiguration. Default False so slow servers are not penalized.
+            trust_config: How much to trust this server's tool catalogue -- where the
+                approved catalogue lives and what to do when a tool is unreviewed or
+                has changed (security finding F3). See
+                :class:`~continuum.tools.types.ToolTrustConfig`.
+
+                Defaults to memory-only: digests are kept for the life of the process,
+                which still catches drift across a reconnect and avoids a library
+                creating files nobody asked for. Give it a ``pin_path`` to detect a
+                description that changes between *process runs* ("approved today,
+                poisoned next week").
         """
         super().__init__(
             use_structured_content=use_structured_content,
@@ -207,10 +335,17 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         self.server_initialize_result: InitializeResult | None = None
         self.validate_on_connect = validate_on_connect
 
+        # Tool-digest baseline (F3 rug-pull detection). None path => memory only.
+        self._trust_config: ToolTrustConfig = trust_config or ToolTrustConfig()
+        self._tool_digests: dict[str, str] | None = None
+        self._previous_entries: dict[str, Any] = {}
+        self._warned_inert_policy: bool = False
+
         self.client_session_timeout_seconds = client_session_timeout_seconds
         self.max_retry_attempts = max_retry_attempts
         self.retry_backoff_seconds_base = retry_backoff_seconds_base
-        self.message_handler = message_handler
+        self._caller_message_handler = message_handler
+        self.message_handler = self._handle_session_message
 
         # The cache is always dirty at startup, so that we fetch tools at least once
         self._cache_dirty = True
@@ -293,6 +428,558 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
         return filtered_tools
 
+    # --- tool-digest drift detection (F3) ------------------------------------
+
+    async def _handle_session_message(self, message: Any) -> None:
+        """Watch for ``notifications/tools/list_changed``, then defer to the caller.
+
+        Closes the ``cache_tools_list=True`` blind spot. The digest check runs
+        only on the fetch branch of ``list_tools()``, so with caching on the
+        catalogue is read once at connect and a mid-session swap is served from
+        that copy for the life of the process. MCP has a notification for
+        exactly this; nothing was listening to it.
+
+        Ours runs *first* and unconditionally: a caller's handler raising must
+        not silently disable cache invalidation, or a server could keep its
+        swap hidden by provoking an exception in someone else's code.
+        """
+        try:
+            notification = getattr(message, "root", None)
+            if isinstance(notification, ToolListChangedNotification):
+                logger.info(
+                    f"MCP server '{self.name}' announced a tool-list change; "
+                    f"the catalogue will be re-fetched and re-checked."
+                )
+                self._cache_dirty = True
+        except Exception as e:  # noqa: BLE001 - never let bookkeeping break the session
+            logger.warning(f"Could not inspect MCP session message from '{self.name}': {e}")
+
+        if self._caller_message_handler is not None:
+            await self._caller_message_handler(message)
+
+    @property
+    def trust_config(self) -> ToolTrustConfig:
+        """This server's tool-catalogue trust settings (never None)."""
+        return self._trust_config
+
+    def _load_approved(self) -> dict[str, dict[str, Any]]:
+        """This server's *approved* catalogue -- what a human read and accepted.
+
+        Read-only from the runtime's point of view. Nothing on this code path
+        ever writes it: that is the whole point of the split. When the tripwire
+        and the gate shared one file, a fetch that observed a poisoned catalogue
+        rewrote the approval, so the gate matched the poison on the next start
+        and reported nothing.
+        """
+        from continuum.tools.pinning import load_pins
+
+        path = self._trust_config.pin_path
+        if path is None:
+            return {}
+        return load_pins(path).get(self.name, {})
+
+    def _load_tool_digests(self) -> dict[str, str]:
+        """Baseline RAW digests for the drift tripwire, keyed by tool name.
+
+        Compares ``raw`` -- the bytes as sent -- so that toggling invisible
+        characters cannot slip past unreported. The pinning gate compares
+        ``effective`` instead, because that is the text the model receives.
+
+        Prefers the last-seen record and falls back to the approved catalogue
+        when there is none. A freshly deployed machine has an approval but no
+        last-seen file, and treating that as "no baseline" would make the first
+        run after every deploy silent about drift -- the run most likely to meet
+        a server that changed while nobody was watching.
+
+        Best-effort throughout: a missing, corrupt or unreadable file degrades
+        to "no baseline" rather than taking the agent down.
+        """
+        if self._tool_digests is not None:
+            return self._tool_digests
+
+        from continuum.tools.pinning import load_pins
+
+        entries: dict[str, Any] = {}
+        last_seen = self._trust_config.last_seen_path
+        if last_seen is not None:
+            entries = load_pins(last_seen).get(self.name, {})
+        if not entries:
+            entries = self._load_approved()
+
+        # Kept whole, not just as digests: rename detection needs the previous
+        # inputSchema to recognise that a removed tool and an added one are the
+        # same tool under a new name.
+        self._previous_entries = entries
+        self._tool_digests = {
+            name: entry["raw"]
+            for name, entry in entries.items()
+            if isinstance(entry, dict) and isinstance(entry.get("raw"), str)
+        }
+        return self._tool_digests
+
+    def _save_tool_digests(self, digests: dict[str, str], tools: list[MCPTool]) -> None:
+        """Record what the server just served, into the last-seen file only.
+
+        Never touches the approved catalogue -- see :meth:`_load_approved`.
+
+        Failure to write is a log line, never an exception. A read-only
+        production filesystem should lose the drift *diagnostic* and keep the
+        *gate*, which reads the approved file and is unaffected.
+        """
+        from continuum.tools.pinning import load_pins, save_pins, snapshot_tool_digests
+
+        self._tool_digests = digests
+        recorded = {
+            name: entry
+            for name, entry in snapshot_tool_digests(self.name, tools).items()
+            if name in digests
+        }
+        # In-memory too, so rename detection works across fetches within one
+        # process even when no pin path is configured.
+        self._previous_entries = recorded
+
+        path = self._trust_config.last_seen_path
+        if path is None:
+            return
+        try:
+            existing = load_pins(path)
+            existing[self.name] = recorded
+            save_pins(path, existing)
+        except OSError as e:
+            logger.warning(
+                f"Could not write MCP tool-record file {path}: {e}. Drift across process "
+                f"restarts will not be reported; enforcement is unaffected."
+            )
+
+    def _detect_renames(
+        self, added: list[str], removed: list[str], tools: list[MCPTool]
+    ) -> list[tuple[str, str]]:
+        """Pair each removed tool with an added one of identical schema shape.
+
+        Comparison elsewhere is keyed by tool name, so delete-and-re-add routes
+        around the drift alarm completely: editing ``send_referral_email`` in
+        place is a WARNING, while replacing it with a poisoned ``send_email``
+        is two INFO lines that read like a developer tidying up. Same outcome
+        for an attacker, no alarm.
+
+        Evidence that two tools are the same one renamed, either of:
+
+        * an identical **non-trivial** schema -- unrelated tools rarely share an
+          exact parameter set. Trivial schemas do not count: a great many tools
+          take no arguments, so "both have no parameters" would make every
+          no-argument tool removed plus any no-argument tool added look like a
+          rename, and a warning that fires on ordinary churn is one nobody
+          reads;
+        * the new description beginning with the whole of the old one, i.e.
+          text was appended. That is the shape of the attack -- keep the
+          plausible description, add the instruction -- and it covers the
+          no-argument tools the schema rule deliberately skips.
+
+        Matching on description *equality* would be useless here: changing the
+        description is the entire point of the manoeuvre.
+        """
+        if not (added and removed):
+            return []
+        previous = self._previous_entries
+        by_name = {tool.name: tool for tool in tools}
+
+        def _shape(schema: Any) -> str:
+            return json.dumps(schema or {}, sort_keys=True)
+
+        def _has_properties(schema: Any) -> bool:
+            return bool(isinstance(schema, dict) and schema.get("properties"))
+
+        unclaimed = list(added)
+        pairs: list[tuple[str, str]] = []
+        for gone in removed:
+            entry = previous.get(gone)
+            if not isinstance(entry, dict):
+                continue
+            old_schema = entry.get("inputSchema")
+            old_description = entry.get("description") or ""
+
+            for candidate in unclaimed:
+                tool = by_name.get(candidate)
+                if tool is None:
+                    continue
+                same_real_schema = _shape(tool.inputSchema) == _shape(old_schema) and (
+                    _has_properties(old_schema)
+                )
+                appended = bool(old_description) and (tool.description or "").startswith(
+                    old_description
+                )
+                if same_real_schema or appended:
+                    unclaimed.remove(candidate)
+                    pairs.append((gone, candidate))
+                    break
+        return pairs
+
+    def _check_tool_digests(self, tools: list[MCPTool]) -> ToolChangeEvent:
+        """Report tools whose instructional surface changed since last seen.
+
+        Tripwire semantics -- warn on *change*, then re-record. Comparing
+        forever against the original would re-warn on every fetch once a
+        description is legitimately updated, and a warning that always fires is
+        a warning nobody reads. Persistent reporting of an *unresolved* state is
+        the trust policy's job, against the approved catalogue.
+
+        Added and removed tools are logged at INFO, not WARNING: a catalogue
+        growing or shrinking is ordinary. A tool that stayed but changed its
+        description is the rug-pull signal -- and so is a rename, which is why
+        add+remove of the same schema shape is escalated.
+        """
+        previous = self._load_tool_digests()
+        current = {tool.name: _tool_digest(tool) for tool in tools}
+        event = ToolChangeEvent(server_name=self.name)
+
+        if not previous:
+            self._save_tool_digests(current, tools)
+            return event
+
+        event.changed = sorted(
+            name for name, d in current.items() if name in previous and previous[name] != d
+        )
+        event.added = sorted(set(current) - set(previous))
+        event.removed = sorted(set(previous) - set(current))
+        renames = self._detect_renames(event.added, event.removed, tools)
+
+        if event.changed:
+            logger.warning(
+                f"MCP server '{self.name}' changed the description or schema of "
+                f"{event.changed} since they were last seen. If you did not update "
+                f"this server, treat it as untrusted: a tool description reaches the "
+                f"model's prompt verbatim and can instruct it. Re-recording the new "
+                f"values (drift from what was last served, NOT a verification)."
+            )
+        if renames:
+            logger.warning(
+                f"MCP server '{self.name}' appears to have RENAMED "
+                f"{[f'{old} -> {new}' for old, new in renames]}: each pair has an "
+                f"identical schema but a different name, so the description change "
+                f"rides in as an add plus a remove rather than as an edit. Treat it "
+                f"as untrusted unless you renamed these yourself."
+            )
+        if event.added or event.removed:
+            logger.info(
+                f"MCP server '{self.name}' tool catalogue changed shape: "
+                f"added={event.added} removed={event.removed}"
+            )
+
+        self._save_tool_digests(current, tools)
+        return event
+
+    def _apply_trust_policy(
+        self,
+        tools: list[MCPTool],
+        event: ToolChangeEvent | None = None,
+        *,
+        raw_tools: list[MCPTool] | None = None,
+    ) -> list[MCPTool]:
+        """Enforce ``on_unreviewed`` / ``on_drift`` against the approved catalogue.
+
+        Runs on already-cleaned tools and compares the ``effective`` digest --
+        the text the model will actually read. A description whose only change
+        is invisible characters therefore passes here: those never reach the
+        prompt, and reporting them is the raw-byte tripwire's job.
+
+        Enforcement needs somewhere for an approval to live. With no
+        ``pin_path`` there is no approved catalogue by construction, so nothing
+        is enforceable and this degrades to the memory-only tripwire -- without
+        that carve-out the default config (``pin_path=None``,
+        ``on_unreviewed="block"``) would refuse every server on first use.
+
+        ``raw_tools`` is the same catalogue before ``_clean_tool``. Only the
+        rename check reads it, and only raw bytes can answer the question it
+        asks -- "are these the bytes a human already approved?" -- since the
+        cleaned form is identical whether or not the server hid characters in it.
+        """
+        cfg = self._trust_config
+        if cfg.pin_path is None:
+            if (
+                cfg.on_unreviewed == "block"
+                and cfg.requested_enforcement
+                and not self._warned_inert_policy
+            ):
+                # Only when the caller *asked* for blocking. Reaching the same
+                # combination by inheriting both defaults just means pinning is
+                # not in use, and warning about that would scold every user who
+                # never opted in, about something they did not choose.
+                self._warned_inert_policy = True
+                logger.warning(
+                    f"MCP server '{self.name}' has on_unreviewed='block' but no "
+                    f"pin_path, so there is nowhere to record an approval and nothing "
+                    f"is enforced. Set ToolTrustConfig(pin_path=...) and approve the "
+                    f"catalogue with `continuum mcp inspect`."
+                )
+            return tools
+
+        approved = self._load_approved()
+        if not approved:
+            return self._handle_unreviewed_server(tools, cfg.on_unreviewed, raw_tools)
+
+        kept: list[MCPTool] = []
+        unreviewed: list[str] = []
+        drifted: list[str] = []
+        for tool in tools:
+            entry = approved.get(tool.name)
+            if entry is None:
+                unreviewed.append(tool.name)
+                if cfg.on_unreviewed != "block":
+                    kept.append(tool)
+            elif _tool_digest(tool) != entry.get("effective"):
+                drifted.append(tool.name)
+                if cfg.on_drift != "block":
+                    kept.append(tool)
+            else:
+                kept.append(tool)
+
+        # Reported on every fetch, not once: this is a *state* -- it stays true
+        # until a human runs `mcp approve`, and only that clears it. The old
+        # tripwire warned once and then overwrote its own baseline, so the
+        # system fell silent while the difference was still unresolved.
+        if event is not None:
+            event.unreviewed = sorted(unreviewed)
+        # --pins spelled out: the CLI defaults to ./tool-pins.json, which is
+        # rarely where an application keeps it, so a bare `mcp diff NAME`
+        # answers "No catalogue for server ..." and the warning dead-ends.
+        #
+        # shlex.quote because a server without name= is called
+        # "streamable_http: http://host:8890/mcp" -- a string with a space, which
+        # bare would hand argparse a truncated name plus stray positionals. Simple
+        # names pass through unchanged, so the common case reads the same.
+        review = (
+            f"continuum mcp diff {shlex.quote(self.name)} --pins {shlex.quote(str(cfg.pin_path))}"
+        )
+        if unreviewed and cfg.on_unreviewed != "allow":
+            logger.warning(
+                f"MCP server '{self.name}': {sorted(unreviewed)} "
+                f"{'were dropped -- they are' if cfg.on_unreviewed == 'block' else 'are'} "
+                f"not in the approved catalogue. Review with `{review}`."
+            )
+        if drifted and cfg.on_drift != "allow":
+            logger.warning(
+                f"MCP server '{self.name}': {sorted(drifted)} no longer match the "
+                f"approved description or schema"
+                f"{' and were dropped' if cfg.on_drift == 'block' else ''}. A tool "
+                f"description reaches the model's prompt verbatim and can instruct "
+                f"it; if you did not change this server, treat it as untrusted. "
+                f"Review with `{review}`."
+            )
+        return kept
+
+    def _report_tool_change(self, event: ToolChangeEvent) -> None:
+        """Publish a catalogue change as a metric and an in-process event.
+
+        Logging alone means the only possible reaction is a human watching a
+        terminal at the moment the line scrolls past -- you cannot page oncall,
+        render a banner, or fail a CI run on it. Metrics go through the existing
+        collector rather than a bespoke channel, so drift is already scrapeable
+        by whatever the deployment exports to.
+        """
+        if not event:
+            return
+
+        try:
+            from continuum.observability.metrics import get_metrics_collector
+
+            metrics = get_metrics_collector()
+            for field_name in ("changed", "added", "removed", "unreviewed"):
+                count = len(getattr(event, field_name))
+                if count:
+                    metrics.increment(f"mcp.tool_catalog.{field_name}", count)
+        except Exception as e:  # noqa: BLE001 - reporting must not break a fetch
+            logger.debug(f"Could not record MCP tool-catalogue metrics: {e}")
+
+        callback = self._trust_config.on_change
+        if callback is None:
+            return
+        try:
+            callback(event)
+        except Exception as e:  # noqa: BLE001 - an application's hook is not ours to trust
+            logger.warning(
+                f"on_change callback for MCP server '{self.name}' raised {e!r}. The "
+                f"catalogue change was still applied; fix the callback."
+            )
+
+    def _find_prior_approval(self, raw_tools: list[MCPTool] | None) -> str | None:
+        """The name this exact catalogue is already approved under, if any."""
+        if not raw_tools or self._trust_config.pin_path is None:
+            return None
+        from continuum.tools.pinning import find_identical_catalog, load_pins
+
+        return find_identical_catalog(
+            load_pins(self._trust_config.pin_path),
+            {tool.name: _tool_digest(tool) for tool in raw_tools},
+            exclude=self.name,
+        )
+
+    def _handle_unreviewed_server(
+        self,
+        tools: list[MCPTool],
+        action: str,
+        raw_tools: list[MCPTool] | None = None,
+    ) -> list[MCPTool]:
+        """React to a server with no approved catalogue at all.
+
+        Blocking is the default here, unlike drift, because this case has no
+        false positives -- every occurrence really is unreviewed -- and because
+        it is the one case pinning cannot defend on its own. Pin a server that
+        was hostile from first contact and you have pinned the poison; a person
+        reading the descriptions is the only thing that catches it, so making
+        that step optional would leave the weakest case undefended.
+
+        Two situations reach here and they need opposite advice. A genuinely new
+        server must be read. A server whose *name* moved -- the transports derive
+        one from the URL when ``name=`` is omitted, so a port change renames it --
+        was read already, and telling its owner to re-read four unchanged
+        descriptions teaches them that this refusal is noise to be cleared with
+        ``--all``. That is the rubber-stamp the feature exists to prevent, so the
+        two are distinguished before anything is printed.
+        """
+        if action == "allow":
+            return tools
+
+        prior = self._find_prior_approval(raw_tools)
+        if prior is not None:
+            return self._handle_renamed_server(tools, action, prior)
+
+        # Substitute the real URL rather than a placeholder: the server knows
+        # it, so making the reader supply it is a chore, and a literal "URL"
+        # sitting beside an already-substituted pin path reads like a
+        # formatting bug and invites pasting the line unedited. When the CLI
+        # cannot reach this transport, say what to do instead of naming a
+        # command that was never going to connect.
+        # Two commands, not one. `mcp inspect --write-pins` prints the
+        # catalogue and writes the approval in a single keystroke, so accepting
+        # a server costs exactly as much as glancing at it. Nothing can make
+        # anyone read -- SSH shows a host-key fingerprint nobody compares --
+        # but splitting the steps makes acceptance a deliberate act rather than
+        # a byproduct of looking, which is the shape drift already uses
+        # (`mcp diff` then `mcp approve`). The shortcut still exists for
+        # approving before ever running the agent; it is just not what a
+        # refusal should recommend.
+        # --pins is spelled out because the CLI defaults to ./tool-pins.json,
+        # which is rarely where an application keeps it. A bare
+        # `mcp approve NAME --all` then reports "no record" while the record
+        # sits in the configured directory -- the same half-substituted advice
+        # as the literal `URL` placeholder this message carried once.
+        #
+        # It goes BEFORE --all so the part most likely to be edited is last.
+        # Swapping --all for --tool NAME is the usual next move after reading a
+        # catalogue, and behind an absolute path it means retyping past the
+        # path to reach it; trailing, it is one edit from shell history.
+        pins = shlex.quote(str(self._trust_config.pin_path))
+        name = shlex.quote(self.name)
+        url = self.review_url
+        # `commands` is the part that is specific to THIS server. It is carried
+        # on the exception so a caller holding several of them -- ToolExecutor
+        # building a registry over multiple servers -- can compose one refusal
+        # listing every server's own commands, instead of repeating the shared
+        # preamble and the `--all` footnote once per server.
+        if url is not None:
+            commands = (
+                f"  continuum mcp inspect {shlex.quote(url)} --name {name}\n"
+                f"  continuum mcp approve {name} --pins {pins} --all"
+            )
+            remedy = (
+                f"Read them, then accept them:\n\n"
+                f"{commands}\n\n"
+                f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
+            )
+        else:
+            # The read step is inside `commands`, as a shell comment, because
+            # `commands` is what a multi-server refusal composes from. Leaving it
+            # in the surrounding prose meant the aggregate listed one server as
+            # "read it, then approve" and the next as bare "approve" -- the read
+            # step dropped for precisely the servers hardest to read, which is
+            # the approve-without-reading path printed by the SDK itself.
+            reason = self.review_unavailable_reason or "it is not reachable with a bare URL"
+            # Real code, not a dotted path. `continuum.tools.pinning.review_server`
+            # sat directly above a pasteable `mcp approve` line, so it read as a
+            # command and was not one: nothing to run, no import, and no statement
+            # of where `server` comes from -- the reader has an exception, not a
+            # REPL holding the object. A read step nobody can act on is a read
+            # step nobody performs, and then the approve line below is the only
+            # thing left that works.
+            #
+            # A runnable one-liner is not available: the SDK does not know the
+            # caller's module layout, and guessing one would be the same mistake
+            # as printing `mcp inspect` for a server it cannot reach.
+            commands = (
+                f"  # {reason}. Read it where you build this server, before connecting:\n"
+                f"  #\n"
+                f"  #     from continuum.tools import review_server\n"
+                f"  #     await review_server(server)\n"
+                f"  #\n"
+                f"  continuum mcp approve {name} --pins {pins} --all"
+            )
+            # Names the library call, not the CLI. `mcp inspect` passes a bare
+            # URL, which reaches unauthenticated streamable HTTP and nothing
+            # else -- not stdio (no URL), not SSE (wrong protocol), not a server
+            # behind an Authorization header (401). review_server() takes the
+            # server object instead, so headers, env, cwd and transport are
+            # right by construction rather than retyped and liable to drift.
+            remedy = (
+                f"Read them, then record the approval.\n\n"
+                f"{commands}\n\n"
+                f"Swap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
+            )
+        message = (
+            f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
+            f"catalogue. Tool descriptions reach the model's prompt verbatim and can "
+            f"instruct it. {remedy}\n"
+            f"Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
+            f"servers (not recommended)."
+        )
+        if action == "warn":
+            logger.warning(message)
+            return tools
+        raise MCPServerUnreviewedError(message, server_name=self.name, commands=commands)
+
+    def _handle_renamed_server(
+        self, tools: list[MCPTool], action: str, prior: str
+    ) -> list[MCPTool]:
+        """Refuse a server whose approval is filed under its former name.
+
+        Says re-file, not re-approve, and deliberately never prints ``--all``.
+        ``mcp approve`` merges from the last-seen record, which is keyed by
+        server name too and is empty under a name nothing has run as -- so the
+        command would dead-end on "no record", the same half-substituted advice
+        that has already had to be fixed three times. ``mcp rename`` moves the
+        entry instead, which needs no re-reading because the digests are, by the
+        test that got us here, identical.
+
+        The refusal stands rather than auto-migrating. "Only a human command
+        writes tool-pins.json" is what made the two-file split work; a runtime
+        that rewrites approvals whenever it recognises them is the same shape as
+        the original bug, where the tripwire promoted a poisoned catalogue to
+        "approved".
+        """
+        pins = shlex.quote(str(self._trust_config.pin_path))
+        commands = (
+            f"  continuum mcp rename {shlex.quote(prior)} {shlex.quote(self.name)} --pins {pins}"
+        )
+        message = (
+            f"MCP server '{self.name}' has {len(tools)} tool(s) and no approved "
+            f"catalogue under that name.\n\n"
+            f"All {len(tools)} are byte-identical to the catalogue approved under "
+            f"'{prior}', so this server was renamed or moved rather than newly "
+            f"added. Nothing here needs re-reading.\n\n"
+            f"Re-file the approval you already made:\n\n"
+            f"{commands}\n\n"
+            + (
+                "Then pass name='<short-stable-name>' to the server constructor: "
+                "without it the name is derived from the URL, so this recurs on "
+                "every move.\n"
+                if self.name_is_derived
+                else ""
+            )
+        )
+        if action == "warn":
+            logger.warning(message)
+            return tools
+        raise MCPServerUnreviewedError(message, server_name=self.name, commands=commands)
+
     @abc.abstractmethod
     def create_streams(
         self,
@@ -326,6 +1013,12 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
     async def connect(self):
         """Connect to the server."""
+        # A reconnect may reach a different server process, so any catalogue
+        # captured before it is stale by definition. Without this, a tool
+        # description swapped across a reconnect is invisible when
+        # cache_tools_list=True -- no fetch happens, so nothing re-reads the
+        # descriptions (security finding F3, MCP rug-pull).
+        self._cache_dirty = True
         try:
             transport = await self.exit_stack.enter_async_context(self.create_streams())
             # streamablehttp_client returns (read, write, get_session_id)
@@ -349,6 +1042,14 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
             if self.validate_on_connect:
                 await self.list_tools()
+        except MCPServerUnreviewedError:
+            # Deliberately ahead of the catch-all below. Nothing is wrong with
+            # the connection: the catalogue has not been reviewed, and the
+            # message names the command that fixes it. Rewrapping as
+            # MCPConnectionError would bury that in `original_error` and send
+            # the reader to debug the network instead.
+            await self.cleanup()
+            raise
         except (Exception, asyncio.CancelledError) as e:
             logger.error(f"Error initializing MCP server: {e}")
             await self.cleanup()
@@ -377,8 +1078,23 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         else:
             # Fetch the tools from the server
             result = await self._run_with_retries(lambda: session.list_tools())
-            self._tools_list = result.tools
+            # Harden the catalogue here -- after the wire read, before the
+            # tool_filter. tool_filter defaults to None, so anything implemented
+            # inside it would protect almost nobody; this is the single point
+            # every caller passes through. Cleaning at fetch time (not on every
+            # call) means the cache holds already-clean objects.
+            #
+            # Digest BEFORE cleaning: hashing the stripped text would let an
+            # attacker add or remove invisible characters without tripping it.
+            event = self._check_tool_digests(result.tools)
+            # Enforcement after cleaning, so the gate compares the text the
+            # model will read, and before the cache, so a dropped tool is not
+            # served from it on later calls.
+            self._tools_list = self._apply_trust_policy(
+                [_clean_tool(t) for t in result.tools], event, raw_tools=result.tools
+            )
             self._cache_dirty = False
+            self._report_tool_change(event)
             tools = self._tools_list
 
         # Filter tools based on tool_filter
@@ -602,6 +1318,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the stdio transport.
 
@@ -634,6 +1351,8 @@ class MCPServerStdio(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            trust_config: Tool-catalogue trust settings; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -645,6 +1364,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            trust_config=trust_config,
         )
 
         self.params = StdioServerParameters(
@@ -657,6 +1377,7 @@ class MCPServerStdio(_MCPServerWithClientSession):
         )
 
         self._name = name or f"stdio: {self.params.command}"
+        self._name_is_derived = name is None
 
     def create_streams(
         self,
@@ -674,6 +1395,14 @@ class MCPServerStdio(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        return "`mcp inspect` takes a URL and this server is a subprocess"
 
 
 class MCPServerSseParams(TypedDict):
@@ -711,6 +1440,7 @@ class MCPServerSse(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the HTTP with SSE transport.
 
@@ -745,6 +1475,8 @@ class MCPServerSse(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls.
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            trust_config: Tool-catalogue trust settings; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -756,10 +1488,31 @@ class MCPServerSse(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            trust_config=trust_config,
         )
 
         self.params = params
         self._name = name or f"sse: {self.params['url']}"
+        self._name_is_derived = name is None
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        return "`mcp inspect` speaks streamable HTTP, not SSE"
+
+    # review_url stays None -- inherited, deliberately not overridden.
+    #
+    # This server HAS a URL, but that is not the question review_url answers.
+    # `continuum mcp inspect` builds an MCPServerStreamableHttp unconditionally
+    # (cli.py), so handing it an SSE endpoint produces a command that parses,
+    # connects with the wrong protocol, and fails in a way that reads like a
+    # broken server or a broken network. An SSE user gets the same offline route
+    # as stdio, which works.
+    #
+    # This override existed and returned params["url"], which is the fourth time
+    # this feature printed a remedy that cannot run: the literal `URL`
+    # placeholder, the `--approve` flag that never existed, `mcp approve` without
+    # `--pins`, and this. The shell-quoting test cannot catch it -- the command
+    # is perfectly well-formed, it just talks a protocol the CLI does not speak.
 
     def create_streams(
         self,
@@ -782,6 +1535,10 @@ class MCPServerSse(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
 
 
 class MCPServerStreamableHttpParams(TypedDict):
@@ -825,6 +1582,7 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
         message_handler: MessageHandlerFnT | None = None,
         context_config: ToolContextConfig | None = None,
         validate_on_connect: bool = False,
+        trust_config: ToolTrustConfig | None = None,
     ):
         """Create a new MCP server based on the Streamable HTTP transport.
 
@@ -860,6 +1618,8 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             context_config: Configuration for automatic context variable capture and injection.
                 Enables session management across tool calls (e.g., capturing session_id).
             validate_on_connect: If True, call list_tools() once after connect to fail fast.
+            trust_config: Tool-catalogue trust settings; see
+                _MCPServerWithClientSession. Defaults to in-memory only.
         """
         super().__init__(
             cache_tools_list,
@@ -871,10 +1631,46 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
             message_handler=message_handler,
             context_config=context_config,
             validate_on_connect=validate_on_connect,
+            trust_config=trust_config,
         )
 
         self.params = params
         self._name = name or f"streamable_http: {self.params['url']}"
+        self._name_is_derived = name is None
+
+    @property
+    def review_url(self) -> str | None:
+        """The URL, but only when ``mcp inspect`` could actually connect with it.
+
+        That command passes a bare URL and nothing else, so a server behind an
+        ``Authorization`` header answers it with 401, and one using a custom
+        httpx client is unreachable for whatever reason the factory exists.
+        Naming it anyway is the same failure as pointing an SSE user at it: a
+        remedy that cannot run, failing in a way that reads as a broken network
+        rather than as an unusable command.
+
+        Only those two, deliberately. A custom ``timeout`` changes neither
+        whether the CLI can connect nor the descriptions being reviewed, so
+        treating it as unreviewable would push people off the easy path for
+        nothing.
+        """
+        if self.review_unavailable_reason is not None:
+            return None
+        return self.params["url"]
+
+    @property
+    def review_unavailable_reason(self) -> str | None:
+        """None when a bare URL is enough -- the ordinary case.
+
+        Split from ``review_url`` so the two cannot disagree: the refusal reads
+        this to explain itself, and a server that offered a URL while also
+        offering a reason not to use it would print both.
+        """
+        if self.params.get("headers"):
+            return "`mcp inspect` sends a bare URL and this server needs headers"
+        if self.params.get("httpx_client_factory"):
+            return "`mcp inspect` cannot use this server's custom httpx client"
+        return None
 
     def create_streams(
         self,
@@ -909,6 +1705,10 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
     def name(self) -> str:
         """A readable name for the server."""
         return self._name
+
+    @property
+    def name_is_derived(self) -> bool:
+        return self._name_is_derived
 
 
 # =============================================================================

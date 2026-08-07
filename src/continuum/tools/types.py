@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, Protocol
 
 import httpx
@@ -372,6 +373,157 @@ class ToolContextConfig:
         if var_config:
             return var_config.scope
         return "session"  # Default to session scope
+
+
+TrustAction = Literal["block", "warn", "allow"]
+"""What to do about a tool catalogue that was never approved, or that changed."""
+
+_FROM_SETTINGS: Any = object()
+"""Sentinel: this field was not passed, so resolve it from global Settings.
+
+Distinguishing "the user asked for this" from "this is what the default
+happened to be" matters for exactly one warning -- requesting ``block`` while
+leaving ``pin_path`` unset is a mistake worth reporting, but the same
+combination reached by inheriting both defaults is just "pinning not in use",
+and scolding every user who never opted in would be noise they cannot act on.
+"""
+
+
+@dataclass
+class ToolChangeEvent:
+    """A change to a server's tool catalogue, as observed on one fetch.
+
+    Exists so an application can *react* -- page oncall, surface a banner, fail
+    a CI run. Before this the only report was a ``logger.warning``, which means
+    the sole possible response was a human watching a terminal at the moment the
+    line scrolled past.
+    """
+
+    server_name: str
+    changed: list[str] = field(default_factory=list)
+    """Tools that kept their name but altered their description or schema. The
+    rug-pull signal."""
+
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    unreviewed: list[str] = field(default_factory=list)
+    """Tools with no entry in the approved catalogue."""
+
+    def __bool__(self) -> bool:
+        return bool(self.changed or self.added or self.removed or self.unreviewed)
+
+
+@dataclass
+class ToolTrustConfig:
+    """How much to trust an MCP server's tool catalogue (security finding F3).
+
+    Grouped into a dataclass rather than added as constructor keywords because
+    ``_MCPServerWithClientSession.__init__`` already takes ten, and because
+    these four options are only meaningful together.
+
+    Example:
+        ```python
+        server = MCPServerStreamableHttp(
+            params={...},
+            name="clinic",
+            trust_config=ToolTrustConfig(pin_path="tool-pins.json"),
+        )
+        ```
+    """
+
+    pin_path: str | Path | None = None
+    """JSON file holding the *approved* catalogue -- what a human read and
+    accepted, written only by ``continuum mcp approve``.
+
+    Defaults to None: digests are kept in memory, which still catches drift
+    across a reconnect within one process and avoids a library creating files
+    nobody asked for.
+
+    The runtime never writes this file. It writes :attr:`last_seen_path`
+    instead. Sharing one file between the two is what let a tripwire rewrite
+    promote an attacker's catalogue to "approved" and silently disarm the gate
+    on the next restart.
+    """
+
+    on_unreviewed: TrustAction = _FROM_SETTINGS  # type: ignore[assignment]
+    """What to do about a server, or a tool, with no approved entry.
+
+    Defaults to ``"block"`` (see ``Settings.mcp_on_unreviewed``): pinning cannot
+    detect a catalogue that was poisoned before you ever saw it, so human review
+    is the only defence that case has, and an optional defence is no defence.
+
+    Only applies when :attr:`pin_path` is set -- without one there is nowhere
+    for an approval to live, so there is nothing to enforce.
+    """
+
+    on_drift: TrustAction = _FROM_SETTINGS  # type: ignore[assignment]
+    """What to do about an approved tool whose description or schema changed.
+
+    Defaults to ``"warn"``: benign drift (a typo fix, a clarified parameter)
+    vastly outnumbers attacks, and blocking by default means most users first
+    meet this feature as "my agent broke and I changed nothing" -- after which
+    they disable it, losing the protection for the rare real case too.
+    """
+
+    record_path: str | Path | None = None
+    """Where the runtime records what the server last served.
+
+    Defaults to a hidden sibling of :attr:`pin_path`, which is right for
+    development: one path to configure, and the pairing is not something anyone
+    should have to keep consistent by hand.
+
+    Set it when the two files need different storage. A hardened deployment
+    wants the approval read-only -- it is a security decision, and leaving it
+    writable makes it softer than the code it protects -- while the record must
+    be writable, since the runtime rewrites it on every fetch. Deriving one from
+    the other forces both into a single directory, so mounting the approval
+    read-only would silently cost the record, and with it ``mcp diff`` and
+    ``mcp approve``::
+
+        ToolTrustConfig(
+            pin_path="/etc/myapp/approved.json",        # read-only mount
+            record_path="/var/lib/myapp/record.json",   # writable volume
+        )
+    """
+
+    on_change: "Callable[[ToolChangeEvent], None] | None" = None
+    """Optional in-process hook, called whenever a fetch observes a change."""
+
+    def __post_init__(self) -> None:
+        self.requested_enforcement = self.on_unreviewed is not _FROM_SETTINGS
+        """True if the caller passed on_unreviewed explicitly, rather than
+        inheriting it. Lets the server tell a misconfiguration from a default."""
+        if self.on_unreviewed is _FROM_SETTINGS:
+            self.on_unreviewed = _settings().mcp_on_unreviewed
+        if self.on_drift is _FROM_SETTINGS:
+            self.on_drift = _settings().mcp_on_drift
+
+    @property
+    def last_seen_path(self) -> Path | None:
+        """Where the record lives: :attr:`record_path`, or a derived sibling.
+
+        The derived name is hidden and distinctly suffixed so it is obvious
+        which file is the approval and which is scratch -- the runtime rewrites
+        this one constantly, and it is the one to leave out of version control.
+        """
+        if self.record_path is not None:
+            return Path(self.record_path)
+        if self.pin_path is None:
+            return None
+        path = Path(self.pin_path)
+        return path.with_name(f".{path.stem}-last-seen{path.suffix}")
+
+
+def _settings() -> Any:
+    """Read global settings lazily.
+
+    Imported inside the function so this module stays importable without
+    pulling in pydantic settings resolution at import time, and so tests can
+    clear the settings cache between cases.
+    """
+    from continuum.config import get_settings
+
+    return get_settings()
 
 
 @dataclass

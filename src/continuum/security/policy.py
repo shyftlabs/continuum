@@ -4,7 +4,9 @@ Inspired by Orla's serving/access/evaluator.go:
   - Subjects are agent names or data labels (glob patterns).
   - Resources are tool names, memory scopes, or data labels (glob patterns).
   - Deny always overrides allow (explicit deny wins).
-  - If no policy matches, access is open (default allow).
+  - If no policy matches, the result is PolicyStore.default_effect
+    ("allow" by default — historical open default; set "deny", or use
+    PolicyStore.default_deny(), to fail closed).
 """
 
 from __future__ import annotations
@@ -51,10 +53,40 @@ class PolicyStore:
     Evaluation order (mirrors Orla's evaluator.go CheckAccess):
       1. Any matching explicit deny → DENY.
       2. Any matching explicit allow → ALLOW.
-      3. No match → ALLOW (open default).
+      3. No match → ``default_effect`` (``"allow"`` by default, historical
+         open-default behavior; set ``"deny"`` for a secure default-deny
+         posture where anything not explicitly allowed is blocked).
+
+    Example (secure default-deny):
+        store = PolicyStore.default_deny([
+            AccessPolicy(name="read", subjects=["*"],
+                         resources=["tool:get_*"], effect="allow"),
+        ])
+
+    Tool resources are the LLM-facing tool name. **MCP** tools are namespaced by
+    default, so theirs is ``tool:<server>__<name>`` -- scope a whole server with
+    ``tool:weather__*``, or span both shapes with ``tool:*get_*``. Local function
+    tools keep bare names. This matters most for ``deny`` rules: with the default
+    ``default_effect="allow"``, a rule that matches nothing stops blocking rather
+    than failing closed. See docs/tools.md section 6.5.
     """
 
     _policies: list[AccessPolicy] = field(default_factory=list)
+    # Result when no policy matches. "allow" preserves the original open
+    # default; "deny" fails closed so a forgotten rule blocks instead of opens.
+    default_effect: str = "allow"
+
+    @classmethod
+    def default_deny(cls, policies: list[AccessPolicy] | None = None) -> PolicyStore:
+        """Build a fail-closed store: anything not explicitly allowed is denied.
+
+        This is the recommended secure-defaults constructor for the quick-start
+        path — seed it with the explicit allow policies your agent needs.
+        """
+        store = cls(default_effect="deny")
+        for policy in policies or []:
+            store.add_policy(policy)
+        return store
 
     def add_policy(self, policy: AccessPolicy) -> None:
         """Add a policy to the store. Replaces any existing policy with the same name."""
@@ -114,6 +146,12 @@ class PolicyStore:
                 allowed=True,
                 policy_name=allow_match.name,
                 reason=f"explicit allow by policy '{allow_match.name}'",
+            )
+        if self.default_effect == "deny":
+            return PolicyDecision(
+                allowed=False,
+                reason="no matching policy (closed default — default-deny)",
+                denial_message="No policy explicitly allows this access (default-deny).",
             )
         return PolicyDecision(allowed=True, reason="no matching policy (open default)")
 

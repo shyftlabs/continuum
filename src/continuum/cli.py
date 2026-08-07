@@ -18,6 +18,7 @@ Usage::
     continuum status
     continuum logs [SERVICE] [-f]
     continuum config-path
+    continuum mcp inspect URL [--write-pins PATH]
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -40,6 +42,10 @@ PROJECT_NAME = "continuum"
 # profiled services from these unless their profile is active, so we activate
 # every profile to avoid orphaning minimal/standard containers.
 _LIFECYCLE_ALL_PROFILES = {"down", "ps", "logs"}
+
+# Conventional name for the approved MCP tool catalogue, so `mcp diff` and
+# `mcp approve` need no flag in the common case.
+DEFAULT_PIN_FILE = "tool-pins.json"
 
 MANAGED_BEGIN = "# >>> continuum managed >>>"
 MANAGED_END = "# <<< continuum managed <<<"
@@ -195,6 +201,77 @@ def apply_managed_env(env_path: Path, profile: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# MinIO secret bootstrap
+# ---------------------------------------------------------------------------
+
+# Placeholder/weak MinIO passwords the auto-generator should replace.
+_WEAK_MINIO_SECRETS = frozenset({"", "miniosecret"})
+
+
+def _is_weak_minio_secret(value: str | None) -> bool:
+    """True if *value* is missing, blank, or a known-weak MinIO placeholder."""
+    if value is None:
+        return True
+    lowered = value.strip().lower()
+    return lowered in _WEAK_MINIO_SECRETS or "changeme" in lowered
+
+
+def ensure_minio_secret(env_path: Path) -> list[str]:
+    """Ensure a strong ``MINIO_ROOT_PASSWORD`` exists before compose interpolates it.
+
+    The bundled Langfuse stack makes ``MINIO_ROOT_PASSWORD`` a hard requirement,
+    single-sourced across MinIO and Langfuse (D3). To keep the quick-start
+    frictionless while never shipping a weak default, generate a strong value
+    when the operator hasn't set one — persisted OUTSIDE the managed block so it
+    survives, is user-editable, and is never clobbered by ``continuum up``.
+
+    An explicit strong value (shell export or ``.env``) always wins and is left
+    untouched. Returns human-readable messages to print (empty when nothing to do).
+    """
+    # A strong value exported in the shell wins and can't be improved via .env.
+    shell = os.environ.get("MINIO_ROOT_PASSWORD")
+    if shell is not None and not _is_weak_minio_secret(shell):
+        return []
+    if shell is not None:  # set but weak — compose uses the shell value over .env
+        return [
+            "warning: MINIO_ROOT_PASSWORD is set to a weak value in your shell "
+            "environment; unset it and re-run — Docker Compose uses the shell "
+            "value over .env, so it cannot be secured here."
+        ]
+
+    text = env_path.read_text() if env_path.exists() else ""
+    outside = _MANAGED_BLOCK_RE.sub("", text)
+    existing = _user_value(outside, "MINIO_ROOT_PASSWORD")
+    if existing is not None and not _is_weak_minio_secret(existing):
+        return []  # user already set a strong one — respect it.
+
+    generated = secrets.token_hex(32)
+    if existing is not None:
+        # Replace the weak line in place (preserves position outside the block).
+        new_text = re.sub(
+            r"^\s*MINIO_ROOT_PASSWORD=.*$",
+            f"MINIO_ROOT_PASSWORD={generated}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        sep = "" if (text == "" or text.endswith("\n")) else "\n"
+        new_text = (
+            f"{text}{sep}"
+            "# Auto-generated strong MinIO root password (used by MinIO and\n"
+            "# Langfuse's S3 client — single source of truth). Edit to rotate,\n"
+            "# then recreate the MinIO container (continuum down && continuum up).\n"
+            f"MINIO_ROOT_PASSWORD={generated}\n"
+        )
+    env_path.write_text(new_text)
+    return [
+        "Generated a strong MINIO_ROOT_PASSWORD and saved it to .env "
+        "(no secure MinIO secret was set)."
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
 
@@ -235,6 +312,9 @@ def _cmd_up(args: argparse.Namespace) -> int:
         return 1
 
     env_path = Path.cwd() / ".env"
+    for msg in ensure_minio_secret(env_path):
+        stream = sys.stderr if msg.startswith("warning:") else sys.stdout
+        print(msg, file=stream)
     warnings = apply_managed_env(env_path, args.profile)
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
@@ -259,6 +339,230 @@ def _cmd_logs(args: argparse.Namespace) -> int:
 
 def _cmd_config_path(_: argparse.Namespace) -> int:
     print(compose_file_path())
+    return 0
+
+
+def _cmd_mcp_inspect(args: argparse.Namespace) -> int:
+    """Print a remote MCP server's tool catalogue for human review.
+
+    Exists because "read the descriptions before you trust a server" was advice
+    nobody could act on: there was no way to see what a server ships without
+    hand-writing an async script (security finding F3).
+
+    The pin file is a *byproduct* of reviewing, written only when asked. A command
+    that emitted pins without showing the contents would make pin-without-reading
+    the easy path.
+    """
+    import asyncio
+
+    from continuum.tools.mcp import MCPServerStreamableHttp
+    from continuum.tools.pinning import (
+        format_tool_catalog,
+        load_pins,
+        save_pins,
+        snapshot_tool_digests,
+    )
+
+    async def _run() -> int:
+        server = MCPServerStreamableHttp(
+            params={"url": args.url},
+            name=args.name or args.url,
+            cache_tools_list=False,
+        )
+        try:
+            await server.connect()
+            # Bypass list_tools() so the catalogue is shown exactly as sent --
+            # unfiltered and, crucially, with invisible characters intact so they
+            # can be reported rather than silently cleaned.
+            assert server.session is not None
+            result = await server.session.list_tools()
+            tools = result.tools
+        except Exception as e:  # noqa: BLE001 - surface any connection failure plainly
+            print(f"Could not inspect {args.url}: {e}", file=sys.stderr)
+            return 1
+        finally:
+            await server.cleanup()
+
+        print(format_tool_catalog(server.name, tools))
+
+        if args.write_pins:
+            path = Path(args.write_pins)
+            # Merge, never replace the whole file: other servers' approvals are
+            # not ours to discard. save_pins/load_pins are shared with the
+            # runtime so the file this writes is the file the agent reads --
+            # a format disagreement would mean review produces a pin nothing
+            # honours, and the reviewer would never know.
+            existing = load_pins(path)
+            existing[server.name] = snapshot_tool_digests(server.name, tools)
+            save_pins(path, existing)
+            print(f"\nPinned {len(tools)} tool(s) for '{server.name}' to {path}.")
+            print(
+                "Pass trust_config=ToolTrustConfig(pin_path=...) to the MCPServer "
+                "to have drift reported at runtime."
+            )
+
+        return 0
+
+    return asyncio.run(_run())
+
+
+# --- offline review of a recorded catalogue --------------------------------
+#
+# Both commands below work from files alone, never a live server. The runtime
+# already recorded what it was served; asking the server again would mean
+# reviewing whatever it happens to say now rather than the text the diff
+# showed, and would make review impossible from a machine that cannot reach it.
+
+
+def _read_catalogues(args: argparse.Namespace) -> tuple[Path, dict, dict]:
+    """Return (pin path, approved entries, last-seen entries) for one server."""
+    from continuum.tools.pinning import load_pins
+    from continuum.tools.types import ToolTrustConfig
+
+    pin_path = Path(args.pins)
+    # --record mirrors ToolTrustConfig(record_path=...): a deployment that
+    # mounts the approval read-only has to put the record elsewhere, and
+    # without this the CLI would derive a path nothing writes and report "not
+    # observed yet" for a server that has been running for weeks.
+    last_seen_path = ToolTrustConfig(
+        pin_path=pin_path, record_path=getattr(args, "record", None)
+    ).last_seen_path
+    assert last_seen_path is not None  # pin_path is not None, so neither is this
+    return (
+        pin_path,
+        load_pins(pin_path).get(args.server, {}),
+        load_pins(last_seen_path).get(args.server, {}),
+    )
+
+
+def _cmd_mcp_diff(args: argparse.Namespace) -> int:
+    """Show what changed since the catalogue was approved.
+
+    Exits non-zero when differences remain, so it works as a CI gate the same
+    way `npm ci` fails on a stale lockfile.
+    """
+    from continuum.tools.pinning import diff_catalogs, format_catalog_diff
+
+    pin_path, approved, last_seen = _read_catalogues(args)
+
+    if not approved and not last_seen:
+        # Neither file has anything for this server. Far more often a wrong
+        # --pins path than a genuinely untouched setup, and reporting it as
+        # "not observed yet" with exit 0 turns a misconfiguration into a clean
+        # bill of health -- in CI, a gate that passes because it was pointed at
+        # nothing. Exit 2 so it is neither "clean" nor "drifted".
+        print(
+            f"No catalogue for server '{args.server}' at {pin_path} (or its record).\n"
+            f"Check --pins points where the application's ToolTrustConfig(pin_path=...) "
+            f"does, and --record if it sets record_path."
+        )
+        return 2
+
+    if not last_seen:
+        # Distinct from "no differences": nothing has run against this server
+        # yet, so there is nothing to compare. Reporting it as clean would be a
+        # false all-clear.
+        print(
+            f"Server '{args.server}' has not been observed yet — run the agent once, "
+            f"then re-run this command to see what it served."
+        )
+        return 0
+
+    diffs = diff_catalogs(approved, last_seen)
+    print(format_catalog_diff(args.server, diffs, pin_path=pin_path))
+    return 1 if diffs else 0
+
+
+def _cmd_mcp_approve(args: argparse.Namespace) -> int:
+    """Promote reviewed entries from the last-seen record into the approved file."""
+    from continuum.tools.pinning import approve_tools
+    from continuum.tools.types import ToolTrustConfig
+
+    if not args.tool and not args.all:
+        # Defaulting to --all would make the dangerous option the one you get
+        # by not thinking about it.
+        print(
+            "Specify what to approve: --tool NAME (repeatable) or --all. "
+            "Run `continuum mcp diff` first to see the differences.",
+            file=sys.stderr,
+        )
+        return 2
+
+    pin_path, _, last_seen = _read_catalogues(args)
+    if not last_seen:
+        # Approving from an absent record would write an empty catalogue, which
+        # under on_unreviewed="block" silently blocks every tool on the server
+        # and reads as "the server is broken".
+        # Almost always a wrong path rather than a server nobody has run: the
+        # runtime writes the record on every fetch, including the fetch it then
+        # refuses. Telling someone to "run the agent once" when they just did
+        # sends them in a circle -- and the old wording also named a literal
+        # `URL` nobody can paste.
+        record_path = ToolTrustConfig(
+            pin_path=pin_path, record_path=getattr(args, "record", None)
+        ).last_seen_path
+        print(
+            f"No record of server '{args.server}' at {record_path} — nothing to approve.\n"
+            f"Check --pins points where the application's ToolTrustConfig(pin_path=...) "
+            f"does (and --record if it sets record_path). If the agent has genuinely "
+            f"never run against this server, run it once so its catalogue is observed.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        approved = approve_tools(
+            pin_path, args.server, last_seen, tools=args.tool if args.tool else None
+        )
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except OSError as e:
+        # Expected wherever the approval is deliberately immutable -- a
+        # read-only mount is the recommended production shape, so someone will
+        # run this there. A traceback would read as "the tool is broken"; what
+        # is true is that this copy cannot be the place the decision is made.
+        print(
+            f"Could not write {pin_path}: {e}.\n"
+            f"If this deployment mounts the approved catalogue read-only, that is "
+            f"working as intended -- approve where the file is authored (and "
+            f"reviewed), then redeploy it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Approved {len(approved)} tool(s) for '{args.server}' in {pin_path}: {approved}")
+    return 0
+
+
+def _cmd_mcp_rename(args: argparse.Namespace) -> int:
+    """Move a server's approvals to a new name, without re-approving them."""
+    from continuum.tools.pinning import rename_server
+
+    pin_path = Path(args.pins)
+    try:
+        moved = rename_server(pin_path, args.old, args.new)
+    except KeyError as e:
+        # KeyError stringifies with its own quotes; the message is already one.
+        print(e.args[0], file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(
+            f"Could not write {pin_path}: {e}.\n"
+            f"If this deployment mounts the approved catalogue read-only, that is "
+            f"working as intended -- rename where the file is authored, then redeploy it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Moved {moved} approved tool(s) from '{args.old}' to '{args.new}' in {pin_path}.")
+    print(
+        "The runtime's last-seen record is keyed by server name too, and is not "
+        "moved: it is rewritten on the next fetch."
+    )
     return 0
 
 
@@ -297,6 +601,118 @@ def build_parser() -> argparse.ArgumentParser:
         "config-path", help="Print the path to the bundled docker-compose.yml."
     )
     config_path.set_defaults(func=_cmd_config_path)
+
+    mcp = sub.add_parser("mcp", help="Inspect MCP servers before trusting them.")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+    inspect_cmd = mcp_sub.add_parser(
+        "inspect",
+        help="Print a server's tool descriptions and schemas for review.",
+        description=(
+            "Print every tool description and parameter description a remote MCP "
+            "server reports. This text reaches the model's prompt verbatim and "
+            "instructs it, so read it before connecting an agent to the server. "
+            "Hidden/invisible characters are flagged rather than removed."
+        ),
+    )
+    inspect_cmd.add_argument("url", help="Streamable-HTTP MCP endpoint, e.g. http://host:8931/mcp")
+    inspect_cmd.add_argument("--name", help="Name to record for this server (defaults to the URL).")
+    inspect_cmd.add_argument(
+        "--write-pins",
+        metavar="PATH",
+        help=(
+            "After printing, record the reviewed catalogue to PATH. Pass the same path "
+            "as ToolTrustConfig(pin_path=...) to the MCPServer to have later changes "
+            "reported."
+        ),
+    )
+    inspect_cmd.set_defaults(func=_cmd_mcp_inspect)
+
+    diff_cmd = mcp_sub.add_parser(
+        "diff",
+        help="Show how a server's tools changed since you approved them.",
+        description=(
+            "Compare the approved catalogue against what the server last served. "
+            "Works from files alone -- no connection needed -- so what you review is "
+            "the text the agent actually saw. Exits non-zero while differences remain, "
+            "so it can gate CI."
+        ),
+    )
+    diff_cmd.add_argument("server", help="Server name, as passed to MCPServer(name=...).")
+    diff_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    diff_cmd.add_argument(
+        "--record",
+        metavar="PATH",
+        help=(
+            "Where the runtime records what the server served. Defaults to a hidden "
+            "sibling of --pins; set it only if the application set "
+            "ToolTrustConfig(record_path=...)."
+        ),
+    )
+    diff_cmd.set_defaults(func=_cmd_mcp_diff)
+
+    approve_cmd = mcp_sub.add_parser(
+        "approve",
+        help="Accept reviewed changes into the approved catalogue.",
+        description=(
+            "Promote entries from the server's last-seen record into the approved "
+            "catalogue. Per tool, so one benign change can be accepted without also "
+            "approving an unrelated one you have not accepted. Run `mcp diff` first."
+        ),
+    )
+    approve_cmd.add_argument("server", help="Server name, as passed to MCPServer(name=...).")
+    approve_cmd.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Approve this tool. Repeatable.",
+    )
+    approve_cmd.add_argument(
+        "--all", action="store_true", help="Approve every difference for this server."
+    )
+    approve_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    approve_cmd.add_argument(
+        "--record",
+        metavar="PATH",
+        help=(
+            "Where the runtime records what the server served. Defaults to a hidden "
+            "sibling of --pins; set it only if the application set "
+            "ToolTrustConfig(record_path=...)."
+        ),
+    )
+    approve_cmd.set_defaults(func=_cmd_mcp_approve)
+
+    rename_cmd = mcp_sub.add_parser(
+        "rename",
+        help="Re-file a server's approvals under a different name.",
+        description=(
+            "Move an approved catalogue from one server name to another. Approvals "
+            "are keyed by the name passed to MCPServer(name=...) -- and a server "
+            "created without one is named after its URL, so moving it orphans every "
+            "approval and the agent then refuses it as unreviewed. This is a move, "
+            "not an approval: entries are copied verbatim, so nothing needs "
+            "re-reading. Use `mcp approve` when the tools themselves changed."
+        ),
+    )
+    rename_cmd.add_argument("old", help="Name the approvals are currently filed under.")
+    rename_cmd.add_argument("new", help="Name the server reports now.")
+    rename_cmd.add_argument(
+        "--pins",
+        default=DEFAULT_PIN_FILE,
+        metavar="PATH",
+        help=f"Approved catalogue (default: {DEFAULT_PIN_FILE}).",
+    )
+    rename_cmd.set_defaults(func=_cmd_mcp_rename)
 
     return parser
 

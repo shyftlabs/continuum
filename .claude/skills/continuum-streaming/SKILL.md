@@ -6,15 +6,15 @@ description: Stream tokens, tool calls, handoffs, and memory events out of a Con
 # Continuum Streaming Skill
 
 Authoritative sources: [`docs/agent.md`](../../../docs/agent.md) §3 and
-the `EventType` enum in `orchestrator/agent/types.py`.
+the `EventType` enum in `continuum/agent/types.py`.
 
 ---
 
 ## Imports
 
 ```python
-from orchestrator.agent import AgentRunner
-from orchestrator.agent.types import EventType, AgentEvent
+from continuum.agent import AgentRunner
+from continuum.agent.types import EventType, AgentEvent
 ```
 
 ---

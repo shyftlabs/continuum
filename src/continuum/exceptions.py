@@ -257,6 +257,25 @@ class ConfigurationError(OrchestratorError):
         super().__init__(message, context=context, **kwargs)
 
 
+class InsecureConfigurationError(ConfigurationError):
+    """
+    Raised when a data-store credential is missing or a known-weak default.
+
+    Fail-closed guard for security findings F8 / D2 / D4: rather than silently
+    connecting to Redis or a vector store with a blank/placeholder secret (e.g.
+    ``miniosecret``, ``CHANGEME...``), the connector refuses to build its client
+    so an insecure deployment fails loudly instead of running unprotected.
+
+    Override for local/testing ONLY with ``CONTINUUM_ALLOW_INSECURE=1``, which
+    downgrades the refusal to a warning.
+    """
+
+    default_message = "Insecure credential configuration"
+    default_error_code = "INSECURE_CONFIG"
+    default_category = ErrorCategory.AUTHENTICATION
+    default_severity = ErrorSeverity.CRITICAL
+
+
 class ValidationError(OrchestratorError):
     """
     Raised when input validation fails.

@@ -228,6 +228,7 @@ def main():
         "MCPServerStreamableHttp → http://localhost:8888/mcp",
         MCPServerStreamableHttp(
             params={"url": "http://localhost:8888/mcp"},
+            name="shop",
             client_session_timeout_seconds=5,
             validate_on_connect=True,
         ),
@@ -239,6 +240,7 @@ def main():
         "MCPServerSse → http://localhost:8889/sse",
         MCPServerSse(
             params={"url": "http://localhost:8889/sse", "timeout": 5},
+            name="shop",
             client_session_timeout_seconds=5,
             validate_on_connect=True,
         ),
@@ -253,6 +255,7 @@ def main():
                 "command": sys.executable,
                 "args": [STDIO_SERVER_PATH],
             },
+            name="shop",
             client_session_timeout_seconds=10,
             validate_on_connect=True,
         ),

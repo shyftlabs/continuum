@@ -122,11 +122,63 @@ class ToolAttentionRouter:
         # Semantic search
         routed = set(self._registry.search(query, k))
 
-        # Always-promote: builtins + config + handoff tools (transfer_to_*)
+        # Always-promote: builtins + config + handoff tools. A handoff is control
+        # flow, not a task tool -- if semantic routing drops it, the agent loses the
+        # ability to reach a specialist on that turn. Uses the shared constant
+        # because this check previously hardcoded "transfer_to_", which nothing in
+        # the SDK emits, so it never matched.
+        from continuum.agent.types import HANDOFF_TOOL_PREFIX
+
         always: set[str] = _BUILTIN_ALWAYS_PROMOTE | set(self._config.always_promote)
+        available: set[str] = set()
         for name in (_tool_name(t) for t in all_tools):
-            if name.startswith("transfer_to_"):
+            available.add(name)
+            if name.startswith(HANDOFF_TOOL_PREFIX):
                 always.add(name)
+
+        # Semantic search hits are primary keys in a collection that outlives the
+        # process. A tool that was renamed or removed keeps its embedding, so it
+        # can still win a top-k slot and then vanish at the filter step below --
+        # costing the turn a real candidate. The registry prunes on upsert; this
+        # catches a collection that has not been re-initialised yet, or one shared
+        # by another agent with a different tool set.
+        stale_routed = routed - available
+        if stale_routed:
+            logger.warning(
+                "tool-attention: %d of %d routed name(s) match no live tool and were "
+                "dropped: %s. Stale embeddings in collection %r are consuming routing "
+                "slots -- they are pruned on the next registry upsert.",
+                len(stale_routed),
+                len(routed),
+                sorted(stale_routed),
+                self._config.collection_name,
+            )
+
+        # always_promote is matched by exact string against the LLM-facing name,
+        # which for MCP tools is namespaced ("fs__read_file"). An entry that hits
+        # nothing is otherwise a pure no-op: the tool keeps competing on relevance
+        # and can vanish from a turn, with no error and no log. Report it rather
+        # than guess -- matching bare names loosely would promote every server's
+        # copy when two expose the same tool. Only user-supplied entries are
+        # checked; the builtins are injected by get_tools_for_llm() and are
+        # legitimately absent from most tool lists.
+        unmatched = set(self._config.always_promote) - available
+        if unmatched:
+            # The hint used to assert that MCP tool names *are* namespaced. They
+            # are only when namespace_tools is on, and the router sees names, not
+            # settings -- so half the readers went hunting for a prefix bug in a
+            # config that was already correct, while the real causes (a rename, or
+            # a tool the trust gate dropped before it ever reached this list) went
+            # unlooked-for. State the rule conditionally and let Available decide it.
+            logger.warning(
+                "tool-attention: always_promote entries matched no tool: %s. "
+                "Available: %s. Entries match the LLM-facing name exactly: for MCP "
+                "tools that is <server>__<tool> when namespace_tools is on (the "
+                "default) and the bare name when it is off. A name that looks right "
+                "may also have been dropped by the tool-trust gate before reaching here.",
+                sorted(unmatched),
+                sorted(available),
+            )
 
         promoted = routed | always
 

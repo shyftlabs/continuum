@@ -104,8 +104,9 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 
 | Feature                 | Description                                                                              |
 | ----------------------- | ---------------------------------------------------------------------------------------- |
-| PolicyStore             | Deny-overrides ACL engine; glob pattern matching on subject × resource                   |
-| AccessPolicy            | Resource families: `llm:<model>`, `tool:<name>`, `memory:<scope>`, `telemetry`, `session` (glob or exact) |
+| PolicyStore             | Deny-overrides ACL engine; glob pattern matching on subject × resource. `default_effect` controls no-match behavior (`"allow"` default; `"deny"` fails closed). Use `PolicyStore.default_deny([...])` for a secure default-deny store |
+| AccessPolicy            | Resource families: `llm:<model>`, `tool:<name>`, `memory:<scope>`, `telemetry`, `session` (glob or exact). **MCP** tools are namespaced by default, so their resource is `tool:<server>__<name>` — write `tool:*__delete_*`, or `tool:*delete_*` to cover local function tools too. Local function tools keep bare names. See [tools.md §6.5](tools.md) |
+| strict_security         | `AgentConfig(strict_security=True)` raises at construction if an agent has side-effectful tools but no `policy_store` (otherwise a warning is logged). Makes the fail-open default visible |
 | ToolAccessDeniedError   | Policy denial surfaced to the LLM with a configurable message                            |
 | Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate forward through a run and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` for the label as subject; with no policy store configured they have no effect. Enforced **end-to-end** across six sinks: model routing (`llm:<model>`), tool calls (`tool:<name>`), long-term memory (`memory:<scope>`), telemetry, session persistence, and the decision trace. Labels come only from declared producers (`tool_data_labels`, memory `scope_data_labels`, run-level `data_labels`, or `ctx.taint()`) — the SDK ships no PII detector. |
 | Input sanitization      | Injection detection at the system boundary                                               |

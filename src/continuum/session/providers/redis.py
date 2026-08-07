@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from continuum.connectors.redis import RedisConnector
+from continuum.exceptions import InsecureConfigurationError
 from continuum.logging import get_logger
 from continuum.observability.decorators import observe
 from continuum.session.base import BaseSessionProvider
@@ -166,6 +167,11 @@ class RedisSessionProvider(BaseSessionProvider):
                 logger.error("redis package not installed. Run: pip install redis")
                 self._initialized = True
                 return False
+            except InsecureConfigurationError:
+                # A weak/blank secret is an operator misconfiguration, not a
+                # transient outage — never swallow it into a silent in-memory
+                # degrade. Propagate so the session client fails closed.
+                raise
             except Exception as e:
                 error_msg = str(e)
                 logger.error(f"Failed to initialize Redis Session Provider: {error_msg}")
@@ -191,6 +197,10 @@ class RedisSessionProvider(BaseSessionProvider):
             await self._redis.ping()
             self._last_probe_error = None  # success clears any prior reason
             return True
+        except InsecureConfigurationError:
+            # Fail closed: a security misconfiguration must not degrade to a
+            # silent in-memory fallback via the probe's never-raise contract.
+            raise
         except Exception as e:  # contract preserved: probe never raises
             self._last_probe_error = f"{type(e).__name__}: {e}"
             logger.debug("Redis session probe failed: %s", self._last_probe_error)

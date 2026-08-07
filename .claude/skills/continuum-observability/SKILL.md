@@ -34,7 +34,7 @@ To disable: `LANGFUSE_ENABLED=false`.
 ## Trace your own functions
 
 ```python
-from orchestrator.observability import observe, SpanLevel
+from continuum.observability import observe, SpanLevel
 
 @observe(name="my-pipeline", capture_input=True, capture_output=True,
          metadata={"version": "v2"}, level=SpanLevel.DEFAULT)
@@ -45,7 +45,7 @@ async def run_pipeline(data):
 Specialized variants:
 
 ```python
-from orchestrator.observability import trace_tool, trace_agent
+from continuum.observability import trace_tool, trace_agent
 
 @trace_tool(name="search_db", tool_type="database")
 def search_db(query): ...
@@ -59,7 +59,7 @@ async def my_custom_agent_runner(...): ...
 ## Manual spans
 
 ```python
-from orchestrator.core.container import get_container
+from continuum.core.container import get_container
 
 mgr = get_container().tracing_manager
 
@@ -86,7 +86,7 @@ with mgr.span(name="step") as span:
 ## Async-safe trace context
 
 ```python
-from orchestrator.observability import (
+from continuum.observability import (
     set_trace_context, restore_trace_context,
     get_current_trace_id, get_current_session_id, get_current_user_id,
 )
@@ -103,7 +103,7 @@ finally:
 ## Metrics
 
 ```python
-from orchestrator.observability import (
+from continuum.observability import (
     get_metrics_collector, get_metrics_summary, reset_metrics,
 )
 
@@ -125,7 +125,7 @@ summary = get_metrics_summary()      # {latency: {...}, tokens: {...}, errors: {
 ## Error reporting
 
 ```python
-from orchestrator.observability import (
+from continuum.observability import (
     report_error, report_exception, flush_errors,
     enable_error_reporting, disable_error_reporting,
 )
@@ -157,7 +157,7 @@ indispensable for debugging memory / RAG / handoff flows.
 ## ObservabilityConfig (when wiring providers manually)
 
 ```python
-from orchestrator.observability import ObservabilityConfig, initialize_observability
+from continuum.observability import ObservabilityConfig, initialize_observability
 
 cfg = ObservabilityConfig(
     providers=["langfuse"],
@@ -177,7 +177,7 @@ The lifecycle manager normally calls this for you.
 ## Custom provider
 
 ```python
-from orchestrator.observability import (
+from continuum.observability import (
     ObservabilityProvider, ProviderCapabilities, register_provider,
 )
 

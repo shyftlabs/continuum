@@ -2,7 +2,11 @@
 Utilities for MCP tool integration.
 """
 
+import hashlib
 import json
+import re
+import weakref
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from continuum.llm.types import ToolDefinition
@@ -18,6 +22,73 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Servers already reported for an auto-derived namespace prefix. Weak so a
+# discarded server does not keep itself alive, and kept out of the server object
+# so we never write attributes onto a user-supplied instance.
+_WARNED_DERIVED_NAME_SERVERS: "weakref.WeakSet[Any]" = weakref.WeakSet()
+
+# OpenAI and Anthropic both constrain function names to ^[a-zA-Z0-9_-]{1,64}$.
+# Server names are auto-derived from the transport when not supplied explicitly
+# (e.g. "sse: https://api.example.com/mcp", see MCPServerSse.__init__), so a
+# naive f"{server.name}__{tool.name}" prefix produces an invalid name and the
+# provider rejects the whole request. Everything below exists to guarantee the
+# LLM-facing key satisfies that constraint.
+MAX_TOOL_NAME_LENGTH = 64
+NAMESPACE_SEPARATOR = "__"
+_INVALID_NAME_CHARS_RE = re.compile(r"[^a-zA-Z0-9_-]+")
+# Length of the disambiguating hash appended when a prefix must be truncated.
+_TRUNCATION_HASH_LENGTH = 6
+
+
+def sanitize_name_component(name: str) -> str:
+    """Collapse runs of provider-invalid characters into a single underscore.
+
+    Collapsing (rather than replacing per-character) also shortens the result --
+    ``": https://"`` becomes ``"_"`` -- which keeps most auto-derived server
+    names inside the length budget without truncation.
+    """
+    return _INVALID_NAME_CHARS_RE.sub("_", name).strip("_")
+
+
+def build_namespaced_tool_name(server_name: str, tool_name: str) -> str:
+    """Build a provider-valid ``<server>__<tool>`` name.
+
+    The tool name is preserved verbatim -- it carries the semantics the model
+    reasons about -- so the server prefix absorbs the length budget. When the
+    prefix must be truncated, a short digest of the *full* server name is
+    appended: two long URLs differing only in a late path segment (``/v2/`` vs
+    ``/v3/``) would otherwise truncate to the same prefix and silently collide,
+    reintroducing the very shadowing this namespacing exists to prevent.
+
+    Args:
+        server_name: The MCP server's name (may contain arbitrary characters).
+        tool_name: The tool's name as reported by the server.
+
+    Returns:
+        A name matching ``^[a-zA-Z0-9_-]{1,64}$`` whenever ``tool_name`` itself
+        already fits; an over-long ``tool_name`` is returned prefixed but
+        unshortened, since truncating it would break dispatch.
+    """
+    prefix = sanitize_name_component(server_name)
+    budget = MAX_TOOL_NAME_LENGTH - len(tool_name) - len(NAMESPACE_SEPARATOR)
+
+    if budget <= 0:
+        # The tool name alone exhausts the budget. Truncating it would change
+        # what the model calls, so emit the prefixed name and let the provider
+        # complain -- a loud 400 beats a silently mangled tool name.
+        logger.warning(
+            f"Tool name '{tool_name}' leaves no room for a server namespace "
+            f"within {MAX_TOOL_NAME_LENGTH} characters; the provider may reject it."
+        )
+        return f"{prefix}{NAMESPACE_SEPARATOR}{tool_name}"
+
+    if len(prefix) > budget:
+        digest = hashlib.sha256(server_name.encode()).hexdigest()[:_TRUNCATION_HASH_LENGTH]
+        keep = budget - _TRUNCATION_HASH_LENGTH - 1  # room for the "_" before the digest
+        prefix = prefix[:keep].rstrip("_") + "_" + digest
+
+    return f"{prefix}{NAMESPACE_SEPARATOR}{tool_name}"
+
 
 class MCPUtil:
     """Set of utilities for interop between MCP and Orchestrator SDK tools."""
@@ -29,7 +100,7 @@ class MCPUtil:
         normalize_schemas: bool = True,
         strict_mode: bool = False,
         metadata: dict[str, Any] | None = None,
-        namespace_tools: bool = False,
+        namespace_tools: bool = True,
     ) -> list[ToolDefinition]:
         """Get all function tools from a list of MCP servers.
 
@@ -41,9 +112,13 @@ class MCPUtil:
             strict_mode: Whether to apply strict mode (all properties required,
                 no additional properties). Only applies if normalize_schemas=True.
             metadata: Optional metadata for tool filtering context.
-            namespace_tools: When True, prefix each tool name with its server name
-                (e.g. "my-server__search") to avoid collisions across servers.
-                Must match the namespace_tools setting used in ToolExecutor.
+            namespace_tools: When True (the default), prefix each tool name with its
+                server name (e.g. "my-server__search") so tools from different servers
+                cannot collide. This matches the MCP specification's guidance for
+                clients that aggregate multiple servers, and the behaviour of Claude
+                Code and Cursor. Set False for bare tool names -- then duplicate names
+                across servers raise MCPError. Must match the namespace_tools setting
+                used in ToolExecutor.
 
         Returns:
             List of ToolDefinition objects that can be used with LLMClient.
@@ -55,12 +130,21 @@ class MCPUtil:
         tools = []
         tool_names: set[str] = set()
         for server in servers:
+            # Before delegating, not after: the inner call now warns for a pinned
+            # server even with namespace_tools=False, and the once-per-server guard
+            # would let that suppress this site's message -- which is the accurate
+            # one, because this is where the prefix is actually applied.
+            cls._warn_if_server_name_is_derived(server, namespaced=namespace_tools)
+            # Fetch unprefixed and apply the namespace here, so the prefix is added
+            # exactly once regardless of get_function_tools' own default.
             server_tools = await cls.get_function_tools(
-                server, normalize_schemas, strict_mode, metadata
+                server, normalize_schemas, strict_mode, metadata, namespace_tools=False
             )
             if namespace_tools:
                 for tool_def in server_tools:
-                    tool_def.function.name = f"{server.name}__{tool_def.function.name}"
+                    tool_def.function.name = build_namespaced_tool_name(
+                        server.name, tool_def.function.name
+                    )
             else:
                 server_tool_names = {tool.function.name for tool in server_tools}
                 if len(server_tool_names & tool_names) > 0:
@@ -74,6 +158,69 @@ class MCPUtil:
 
         return tools
 
+    @staticmethod
+    def _warn_if_server_name_is_derived(server: "MCPServer", *, namespaced: bool) -> None:
+        """Report a server identified by a label the transport invented.
+
+        Without name=, the transports fall back to a display label built from the
+        URL or command ("streamable_http: http://localhost:8890/mcp"). Harmless
+        while it only appeared in error messages. It stops being harmless as soon
+        as something keys off it, and two things do:
+
+        *Namespacing* makes it the prefix on every LLM-facing tool name, so tool
+        identity carries the host and port -- moving the server renames every
+        tool and breaks policy resources, always_promote and capture/inject, all
+        exact-string matches that fail by doing nothing. The prefix also eats ~39
+        of the 64 characters providers allow, hash-truncating longer names.
+
+        *Pinning* files the approved catalogue under it (``_load_approved``), so
+        moving the server orphans every approval and the agent refuses it as
+        unreviewed -- with a message that reads "new server, go read its tools"
+        rather than "you renamed one".
+
+        These are independent: pins are keyed by the raw name whether or not
+        tools are namespaced. Gating this warning on namespacing alone therefore
+        left the pin case silent, which is the case with the louder failure.
+
+        Warned once per server: registry rebuilds re-enter this path and the
+        advice does not change.
+        """
+        if not getattr(server, "name_is_derived", False):
+            return
+        # isinstance, not truthiness: pin_path is str | Path | None, and a test
+        # double's attribute access answers with a truthy mock for anything.
+        pin_path = getattr(getattr(server, "trust_config", None), "pin_path", None)
+        pinned = isinstance(pin_path, (str, Path))
+        if not (namespaced or pinned):
+            return
+        if server in _WARNED_DERIVED_NAME_SERVERS:
+            return
+        try:
+            _WARNED_DERIVED_NAME_SERVERS.add(server)
+        except TypeError:  # pragma: no cover - server not weak-referenceable
+            pass
+
+        consequences = []
+        if namespaced:
+            consequences.append(
+                f"Its tools are namespaced with the prefix "
+                f"{sanitize_name_component(server.name)!r}, so tool names change when the "
+                f"server moves and are truncated to fit the 64-character provider limit."
+            )
+        if pinned:
+            consequences.append(
+                f"Its approved tool catalogue is filed under that name in {pin_path}, so "
+                f"moving the server orphans every approval and the agent then refuses it "
+                f"as unreviewed."
+            )
+        logger.warning(
+            "MCP server was created without name=, so it is identified by the "
+            "auto-derived label %r, which encodes the transport and URL. %s Pass "
+            "name='<short-stable-name>' to the server constructor.",
+            server.name,
+            " ".join(consequences),
+        )
+
     @classmethod
     async def get_function_tools(
         cls,
@@ -81,6 +228,7 @@ class MCPUtil:
         normalize_schemas: bool = True,
         strict_mode: bool = False,
         metadata: dict[str, Any] | None = None,
+        namespace_tools: bool = True,
     ) -> list[ToolDefinition]:
         """Get all function tools from a single MCP server.
 
@@ -91,6 +239,10 @@ class MCPUtil:
             strict_mode: Whether to apply strict mode (all properties required,
                 no additional properties). Only applies if normalize_schemas=True.
             metadata: Optional metadata for tool filtering context.
+            namespace_tools: When True (the default), prefix each tool name with the
+                server name. Defaults to True so this matches ToolExecutor -- pairing
+                a non-namespaced tool list with a namespacing executor would leave the
+                model calling names the registry cannot resolve.
 
         Returns:
             List of ToolDefinition objects.
@@ -119,6 +271,12 @@ class MCPUtil:
                 cls.to_function_tool(tool, server, normalize_schemas, strict_mode)
                 for tool in mcp_tools
             ]
+            cls._warn_if_server_name_is_derived(server, namespaced=namespace_tools)
+            if namespace_tools:
+                for tool_def in tool_definitions:
+                    tool_def.function.name = build_namespaced_tool_name(
+                        server.name, tool_def.function.name
+                    )
 
             if span:
                 # End span with output

@@ -60,8 +60,15 @@ starter examples; this repo is the source of truth.
 ## Setup invariants (do not violate)
 
 - **Python 3.13** is required. `python3.13 -m venv .venv && source .venv/bin/activate`.
-- `OPENAI_API_KEY` is required even if you don't use OpenAI models, because
-  mem0 (long-term memory) initializes its OpenAI embedder at startup.
+- `OPENAI_API_KEY` is required *by default*, because mem0 (long-term memory)
+  uses OpenAI for both its default embedder (`text-embedding-3-small`) and its
+  fact-extraction LLM. It is avoidable, but the two halves differ: set
+  `EMBEDDER_PROVIDER` to a non-OpenAI provider (e.g. `ollama`, keyless) for the
+  embedder; route the fact-extraction LLM through the **Smart Gateway** (it
+  authenticates with the gateway key, not `OPENAI_API_KEY`). A bare non-OpenAI
+  `MEMORY_LLM_MODEL` without the gateway is fragile — mem0's fact-extraction
+  call (`json_schema` + forced `tool_choice` + `temperature` + `top_p`) is
+  reliably accepted only by OpenAI-family models. Or set `MEMORY_ENABLED=false`.
 - Redis runs on host port **6380** (mapped to container 6379).
 - Qdrant runs on **6333** (REST) and **6334** (gRPC).
 - Always `load_dotenv()` at the top of any example script.
@@ -176,6 +183,13 @@ agent = BaseAgent(name="tool-agent", instructions="...", mcp_servers=[local, rem
 # or: agent.tools=tools + agent.tool_executor=ToolExecutor({local: None, remote: None})
 ```
 
+MCP tool names are **namespaced by default** — the LLM sees
+`<server>__<tool>`, so two servers may expose the same tool name. Keep
+`namespace_tools` consistent between `MCPUtil.get_*_function_tools()` and
+`ToolExecutor` (both default `True`). `PolicyStore` resources match the
+namespaced key (`tool:myserver__read_file`); `tool_filter` and per-server
+allow-lists match the raw name. See `docs/tools.md` §6.5.
+
 ### Handoffs
 
 ```python
@@ -231,11 +245,15 @@ All workflow agents are themselves `BaseAgent` subclasses, so they nest.
 
 ## Common gotchas
 
-- **`OPENAI_API_KEY` is mandatory** at framework startup, even if you only
-  use Anthropic for the LLM, because mem0 instantiates an OpenAI embedder
-  by default. To opt out of long-term memory entirely, set
-  `MEMORY_ENABLED=false` in `.env` (and `enable_memory=False` in the
-  `ContainerConfig` if constructing manually).
+- **`OPENAI_API_KEY` is needed by default** at framework startup — mem0's
+  default embedder *and* fact-extraction LLM are OpenAI — but it is *not*
+  hard-wired. To run without OpenAI: set `EMBEDDER_PROVIDER` to a non-OpenAI
+  provider (e.g. `ollama`) for embeddings, and route the fact-extraction LLM
+  through the **Smart Gateway** (a bare non-OpenAI `MEMORY_LLM_MODEL` may `400`
+  — mem0's fact-extraction call shape is reliably accepted only by OpenAI-family
+  models). To opt out of long-term memory entirely, set `MEMORY_ENABLED=false`
+  in `.env` (and `enable_memory=False` in the `ContainerConfig` if constructing
+  manually).
 - `Container.memory_client` is **lazy** — it only initializes on first
   access. Don't be surprised if logs show the mem0 init firing midway
   through your script.

@@ -1,8 +1,27 @@
 # Make sure to update the credential placeholders with your own secrets.
 # We mark them with # CHANGEME in the file below.
-# In addition, we recommend to restrict inbound traffic on the host to langfuse-web (port 3000) and minio (port 9090) only.
-# All other components are bound to localhost (127.0.0.1) to only accept connections from the local machine.
-# External connections from other machines will not be able to reach these services directly.
+#
+# Network exposure: only langfuse-web (port 3000, an authenticated UI) accepts
+# external connections by default. All data stores — redis-sdk, qdrant, milvus,
+# minio, clickhouse — are bound to localhost (127.0.0.1) and are NOT reachable
+# from other machines.
+#
+# Before exposing ANY of these beyond localhost, first replace every # CHANGEME
+# secret with a strong unique value AND enable that service's own authentication
+# (Redis requirepass, Qdrant/Milvus API keys, MinIO root credentials). Shipped
+# defaults are placeholders, not safe values. See SECURITY.md.
+#
+# Customizing this stack: this file ships inside the installed package, so edits
+# made here are lost on the next `pip`/`uv` upgrade. To change image versions,
+# resource limits, or add services, layer your own override file rather than
+# editing this one. `continuum up` invokes compose with an explicit `-f`, which
+# disables Compose's automatic docker-compose.override.yml merging — so run
+# compose directly and name both files yourself:
+#
+#   docker compose -f "$(continuum config-path)" -f ./my.override.yml \
+#     -p continuum --profile full up -d
+#
+# Ports and a few versions (e.g. POSTGRES_VERSION) are already overridable via .env.
 services:
   langfuse-worker:
     profiles: ["standard", "full"]
@@ -35,14 +54,16 @@ services:
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
       LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-auto}
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
-      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret} # CHANGEME
+      # Langfuse authenticates to MinIO as root — single source of truth so the
+      # server password and every client key move together (D3). Required.
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD to a strong secret (continuum up auto-generates one)}
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: ${LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT:-http://minio:9000}
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}
       LANGFUSE_S3_EVENT_UPLOAD_PREFIX: ${LANGFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}
       LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${LANGFUSE_S3_MEDIA_UPLOAD_BUCKET:-langfuse}
       LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${LANGFUSE_S3_MEDIA_UPLOAD_REGION:-auto}
       LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID:-minio}
-      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY:-miniosecret} # CHANGEME
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD to a strong secret (continuum up auto-generates one)}
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT:-http://localhost:9090}
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE:-true}
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: ${LANGFUSE_S3_MEDIA_UPLOAD_PREFIX:-media/}
@@ -53,7 +74,7 @@ services:
       LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: ${LANGFUSE_S3_BATCH_EXPORT_ENDPOINT:-http://minio:9000}
       LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: ${LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT:-http://localhost:9090}
       LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: ${LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID:-minio}
-      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY:-miniosecret} # CHANGEME
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD to a strong secret (continuum up auto-generates one)}
       LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: ${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}
       LANGFUSE_INGESTION_QUEUE_DELAY_MS: ${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}
       LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
@@ -89,7 +110,7 @@ services:
 
   clickhouse:
     profiles: ["standard", "full"]
-    image: docker.io/clickhouse/clickhouse-server
+    image: docker.io/clickhouse/clickhouse-server:26.6.2.81
     restart: always
     user: "101:101"
     environment:
@@ -118,9 +139,9 @@ services:
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret} # CHANGEME
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD to a strong secret (continuum up auto-generates one)}
     ports:
-      - ${MINIO_API_PORT:-9090}:9000
+      - 127.0.0.1:${MINIO_API_PORT:-9090}:9000
       - 127.0.0.1:${MINIO_CONSOLE_PORT:-9091}:9001
     volumes:
       - langfuse_minio_data:/data
@@ -161,7 +182,7 @@ services:
       --maxmemory 512mb
       ${SESSION_REDIS_PASSWORD:+--requirepass ${SESSION_REDIS_PASSWORD}}
     ports:
-      - "${SESSION_REDIS_PORT:-6380}:6379"
+      - "127.0.0.1:${SESSION_REDIS_PORT:-6380}:6379"
     volumes:
       - redis_sdk_data:/data
     healthcheck:
@@ -249,7 +270,7 @@ services:
 
   temporal:
     profiles: ["full"]
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.29.3
     container_name: orchestrator-temporal
     depends_on:
       postgres-temporal:
@@ -280,7 +301,7 @@ services:
 
   temporal-ui:
     profiles: ["full"]
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.52.1
     container_name: orchestrator-temporal-ui
     depends_on:
       - temporal
@@ -295,15 +316,18 @@ services:
   # Qdrant Vector Database for Long-term Memory (VECTOR_STORE_PROVIDER=qdrant)
   qdrant:
     profiles: ["minimal", "standard", "full"]
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.3
     container_name: orchestrator-qdrant
     ports:
-      - "${QDRANT_PORT:-6333}:6333"  # REST API
-      - "${QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"  # REST API
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"  # gRPC API
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
+      # Keyless by default (loopback-only dev); if you set QDRANT_API_KEY the
+      # server REQUIRES it and Continuum's client sends the same value (D4).
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY:-}
     restart: unless-stopped
     networks:
       - orchestrator-network
@@ -344,11 +368,11 @@ services:
   # Milvus Vector Database for Long-term Memory (VECTOR_STORE_PROVIDER=milvus)
   milvus:
     profiles: ["full"]
-    image: milvusdb/milvus:latest
+    image: milvusdb/milvus:v2.6.20
     container_name: orchestrator-milvus
     command: ["milvus", "run", "standalone"]
     ports:
-      - "${MILVUS_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
     volumes:
       - milvus_data:/var/lib/milvus
     environment:

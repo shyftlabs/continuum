@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, Any
 from continuum.llm.types import ChatMessage, ToolCall
 from continuum.logging import get_logger
 from continuum.observability.decorators import trace_tool
-from continuum.tools.exceptions import MCPToolError
+from continuum.tools.exceptions import MCPError, MCPServerUnreviewedError, MCPToolError
 from continuum.tools.types import (
     MCPToolArtifact,
     RunArtifacts,
     ToolContextState,
 )
-from continuum.tools.util import MCPUtil
+from continuum.tools.util import MCPUtil, build_namespaced_tool_name
 
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
@@ -33,6 +33,35 @@ if TYPE_CHECKING:
     from continuum.tools.mcp import MCPServer
 
 logger = get_logger(__name__)
+
+
+def _combined_unreviewed_error(
+    errors: list[MCPServerUnreviewedError],
+) -> MCPServerUnreviewedError:
+    """One refusal naming every unreviewed server, with each one's own commands.
+
+    Each server needs its own approve command -- a combined error that names two
+    servers but prints one command is worse than two separate errors, because
+    the reader runs it and half the problem silently remains. The shared
+    preamble and the ``--all`` footnote appear once.
+
+    ``server_name`` is kept, holding the first, so existing
+    ``except MCPServerUnreviewedError as e: log(e.context["server_name"])``
+    handlers keep working rather than reporting None for a security refusal.
+    ``server_names`` carries the full list.
+    """
+    names = [str(e.context.get("server_name")) for e in errors]
+    blocks = [e.commands or e.message for e in errors]
+    message = (
+        f"{len(errors)} MCP servers have no approved catalogue: {names}. Tool "
+        f"descriptions reach the model's prompt verbatim and can instruct it.\n\n"
+        f"Read each server's catalogue, then accept it:\n\n"
+        + "\n\n".join(blocks)
+        + "\n\nSwap `--all` for `--tool NAME` (repeatable) to accept only some.\n"
+        + "Or set ToolTrustConfig(on_unreviewed='allow') to accept unreviewed "
+        + "servers (not recommended)."
+    )
+    return MCPServerUnreviewedError(message, server_name=names[0], context={"server_names": names})
 
 
 # Common variable names that should be auto-captured/injected
@@ -187,7 +216,7 @@ class ToolExecutor:
         tool_registry: dict["MCPServer", list[str] | None] | None = None,
         config: ToolExecutorConfig | None = None,
         context_state: ToolContextState | None = None,
-        namespace_tools: bool = False,
+        namespace_tools: bool = True,
     ):
         """
         Initialize the tool executor.
@@ -200,9 +229,17 @@ class ToolExecutor:
             config: Configuration for rate limiting and concurrency control.
             context_state: Shared context state for variable capture/injection.
                 If None, a new empty state is created.
-            namespace_tools: When True, registry keys are prefixed with the server name
-                (e.g. "my-server__search"). Must match the namespace_tools setting used
-                in MCPUtil.get_all_function_tools so the LLM-facing names align.
+            namespace_tools: When True (the default), registry keys are prefixed with
+                the server name (e.g. "my-server__search") so tools from different
+                servers cannot shadow one another. Set False for bare tool names --
+                then a duplicate name across servers raises MCPError rather than
+                silently overwriting. Must match the namespace_tools setting used in
+                MCPUtil.get_all_function_tools so the LLM-facing names align.
+
+                Note the split: PolicyStore resources and tool-attention
+                ``always_promote`` match the *namespaced* key, while ``tool_filter``
+                and the per-server ``allowed_tools`` list above match the server's
+                *raw* tool name.
         """
         self.tool_registry: dict[str, tuple[MCPServer, MCPTool]] = {}
         self._tool_registry_config = tool_registry
@@ -457,13 +494,28 @@ class ToolExecutor:
         if captured:
             logger.info(f"📥 Captured context variables from {tool_name}: {', '.join(captured)}")
 
-    async def initialize(self) -> None:
+    async def initialize(self, metadata: dict[str, Any] | None = None) -> None:
         """Initialize the tool registry from MCP servers.
 
         This must be called after creating the executor if tool_registry was provided.
+
+        Args:
+            metadata: Optional filtering context forwarded to ``server.list_tools()``,
+                where it reaches a dynamic ``tool_filter`` as
+                ``ToolFilterContext.metadata``. Without it a metadata-reading filter
+                sees ``None``; ``_apply_dynamic_tool_filter`` treats the resulting
+                error as "exclude for safety", so the registry silently ends up empty.
+
+                This is **executor-lifetime** context (a tenant, an environment), not
+                per-caller context. The executor is built once and shared across every
+                run, and the registry must contain everything dispatchable
+                (``execute_tool_call`` rejects anything missing from it). For a tool
+                list that varies per caller, filter the LLM-facing list instead --
+                ``MCPUtil.get_all_function_tools(servers, metadata=...)`` per request,
+                or tool-attention -- and leave the registry complete.
         """
         if self._tool_registry_config:
-            await self._build_registry(self._tool_registry_config)
+            await self._build_registry(self._tool_registry_config, metadata=metadata)
         self._initialized = True
 
     def get_tool_definitions(
@@ -499,34 +551,125 @@ class ToolExecutor:
             definitions.append(tool_def)
         return definitions
 
+    @staticmethod
+    def _warn_on_unmatched_context_tool_names(
+        server: "MCPServer", mcp_tools: list["MCPTool"]
+    ) -> None:
+        """Report capture_from / inject_into entries that name no real tool.
+
+        These are matched by exact string, so a typo or a stale name is a pure
+        no-op: nothing is ever captured, the later injection has nothing to
+        supply, and the tool runs without the value -- no error, no log. The same
+        silent-no-match shape as the always_promote entries and the PolicyStore
+        deny rule that stopped denying.
+
+        Names are compared against the server's RAW tool names, not the
+        namespaced registry keys: a ToolContextConfig is attached to one server,
+        so writing "srv__create_session" inside a config already scoped to srv
+        would be redundant, and would break whenever namespace_tools changed.
+
+        ``None`` means "every tool" (see ``ToolContextConfig.should_capture``),
+        not an empty name list, so it is skipped rather than reported.
+        """
+        config = getattr(server, "context_config", None)
+        if config is None or not getattr(config, "variables", None):
+            return
+
+        available = {tool.name for tool in mcp_tools}
+        for variable in config.variables:
+            for field_name in ("capture_from", "inject_into"):
+                configured = getattr(variable, field_name, None)
+                if not configured:  # None => all tools; [] => nothing to check
+                    continue
+                unmatched = sorted(set(configured) - available)
+                if unmatched:
+                    logger.warning(
+                        f"ToolContextVariable '{variable.name}' on server "
+                        f"'{server.name}': {field_name} names no such tool "
+                        f"{unmatched}. Available: {sorted(available)}. Use the "
+                        f"server's own tool names, not the namespaced keys."
+                    )
+
     async def _build_registry(
         self,
         tool_registry: dict["MCPServer", list[str] | None],
         target: dict[str, tuple["MCPServer", "MCPTool"]] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Build the internal tool name to (server, tool) mapping.
 
         Args:
             tool_registry: Mapping of servers to allowed tool lists.
             target: Dict to write into. Defaults to self.tool_registry.
+            metadata: Optional filtering context forwarded to ``server.list_tools()``.
+
+        Raises:
+            MCPError: If two servers contribute the same registry key. The key is
+                the LLM-facing tool name, and a model's tool call carries only that
+                name -- so a collision makes the call unroutable. Overwriting instead
+                would let a later-registered server shadow an earlier one and inherit
+                any PolicyStore grant written against the shared name.
         """
         dest = target if target is not None else self.tool_registry
+        # Collected rather than raised on sight. Refusing at the first unreviewed
+        # server hides the rest: the operator approves it, restarts, and meets
+        # the same error for the next one -- one deploy cycle per server, each a
+        # CrashLoopBackOff in Kubernetes. Which server is "first" is also just
+        # dict insertion order, so two environments listing the same servers in
+        # a different order report different errors for identical state.
+        #
+        # Fail-fast is about *when* -- refuse before serving traffic -- not about
+        # how little to say on the way out. Compilers, Pydantic, `terraform plan`
+        # and `npm ci` all validate everything and fail once.
+        #
+        # Only this exception. A server that cannot be REACHED needs a different
+        # remedy (retry, check the network), and folding the two together
+        # produces one message telling the reader to do two unrelated things.
+        unreviewed: list[MCPServerUnreviewedError] = []
         for server, allowed_tools in tool_registry.items():
             try:
-                mcp_tools = await server.list_tools()
+                mcp_tools = await server.list_tools(metadata=metadata)
+                self._warn_on_unmatched_context_tool_names(server, mcp_tools)
+                MCPUtil._warn_if_server_name_is_derived(server, namespaced=self._namespace_tools)
                 for tool in mcp_tools:
                     # If allowed_tools is None, include all tools
                     # Otherwise, only include tools in the allowed list
+                    # Note: allowed_tools matches the server's RAW tool name, before
+                    # any namespace prefix is applied.
                     if allowed_tools is None or tool.name in allowed_tools:
                         registry_key = (
-                            f"{server.name}__{tool.name}" if self._namespace_tools else tool.name
+                            build_namespaced_tool_name(server.name, tool.name)
+                            if self._namespace_tools
+                            else tool.name
                         )
                         if registry_key in dest:
-                            logger.warning(f"Tool '{registry_key}' already registered, overwriting")
+                            existing_server, _ = dest[registry_key]
+                            raise MCPError(
+                                f"Duplicate tool name '{registry_key}': provided by both "
+                                f"'{existing_server.name}' and '{server.name}'. "
+                                f"Exclude one via the per-server allowed_tools list or a "
+                                f"tool_filter, or give the servers distinct names.",
+                                server_name=server.name,
+                            )
                         dest[registry_key] = (server, tool)
+            except MCPServerUnreviewedError as e:
+                # Before `except MCPError`, which it subclasses.
+                unreviewed.append(e)
+            except MCPError:
+                # Already carries a precise, actionable message (e.g. the duplicate
+                # tool name above). Re-raise without the generic wrapper log.
+                raise
             except Exception as e:
                 logger.error(f"Error building tool registry for server {server.name}: {e}")
                 raise
+
+        if len(unreviewed) == 1:
+            # Re-raise the original untouched. Most applications have one server,
+            # and rewording the message they already see would stale every
+            # runbook and log-matching alert quoting it.
+            raise unreviewed[0]
+        if unreviewed:
+            raise _combined_unreviewed_error(unreviewed)
 
     async def execute_tool_call(
         self,
@@ -631,8 +774,15 @@ class ToolExecutor:
 
                 # CAPTURE: Context variables from result after execution
                 # This may fail if result is not valid JSON, but that's okay - we continue
+                #
+                # Match on tool.name (the server's RAW name), not tool_name (the
+                # possibly-namespaced registry key): ToolContextConfig is attached to
+                # one specific server, so its capture_from list naturally names that
+                # server's own tools. Requiring "myserver__create_session" inside a
+                # config already scoped to "myserver" would be redundant and would
+                # silently stop matching whenever namespace_tools changes.
                 try:
-                    self._capture_context_variables(server, tool_name, result)
+                    self._capture_context_variables(server, tool.name, result)
                 except Exception as capture_error:
                     # Context capture failures should not break tool execution
                     # Log but continue - the tool result is still valid
@@ -820,15 +970,25 @@ class ToolExecutor:
         """Get list of available tool names."""
         return list(self.tool_registry.keys())
 
-    async def refresh_registry(self, tool_registry: dict["MCPServer", list[str] | None]) -> None:
+    async def refresh_registry(
+        self,
+        tool_registry: dict["MCPServer", list[str] | None],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Refresh the tool registry from MCP servers.
 
         Builds into a temporary dict first, then swaps it in so concurrent
         tool calls keep hitting the old registry until the new one is ready.
+
+        Args:
+            tool_registry: Mapping of servers to allowed tool lists.
+            metadata: Optional filtering context forwarded to ``server.list_tools()``.
+                See :meth:`initialize` for why this is executor-lifetime context
+                rather than per-caller context.
         """
         temp: dict[str, tuple[MCPServer, MCPTool]] = {}
         try:
-            await self._build_registry(tool_registry, target=temp)
+            await self._build_registry(tool_registry, target=temp, metadata=metadata)
         except Exception:
             # Build failed — old registry is untouched, tools remain available
             raise
