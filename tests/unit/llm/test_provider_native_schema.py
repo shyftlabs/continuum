@@ -34,12 +34,12 @@ import pytest
 from pydantic import BaseModel
 
 from continuum.llm.config import LLMConfig
-from continuum.llm.providers.anthropic_provider import (
-    _STRUCTURED_OUTPUT_TOOL,
-    AnthropicProvider,
-)
+from continuum.llm.providers.anthropic_provider import AnthropicProvider
 from continuum.llm.providers.gemini_provider import GeminiProvider
-from continuum.llm.structured_output import to_openai_response_format
+from continuum.llm.structured_output import (
+    STRUCTURED_OUTPUT_TOOL,
+    to_openai_response_format,
+)
 
 
 class Review(BaseModel):
@@ -83,7 +83,7 @@ class TestAnthropicForcedTool:
         kwargs = self._kwargs()
         tools = kwargs["tools"]
         assert len(tools) == 1
-        assert tools[0]["name"] == _STRUCTURED_OUTPUT_TOOL
+        assert tools[0]["name"] == STRUCTURED_OUTPUT_TOOL
         assert tools[0]["input_schema"] == Review.model_json_schema()
 
     def test_forces_the_model_to_call_it(self) -> None:
@@ -91,7 +91,7 @@ class TestAnthropicForcedTool:
         which is exactly the unreliability being fixed."""
         assert self._kwargs()["tool_choice"] == {
             "type": "tool",
-            "name": _STRUCTURED_OUTPUT_TOOL,
+            "name": STRUCTURED_OUTPUT_TOOL,
         }
 
     def test_drops_the_prompt_only_fallback_line(self) -> None:
@@ -182,21 +182,21 @@ class TestAnthropicUnwrapsTheStructuredAnswer:
     def test_tool_arguments_become_the_response_content(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        reply = _anthropic_reply([_tool_use_block(_STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
+        reply = _anthropic_reply([_tool_use_block(STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
         response = self._complete(monkeypatch, reply)
         assert json.loads(response.content) == self.PAYLOAD
 
     def test_the_synthetic_call_is_not_surfaced_as_a_tool_call(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        reply = _anthropic_reply([_tool_use_block(_STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
+        reply = _anthropic_reply([_tool_use_block(STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
         assert not self._complete(monkeypatch, reply).tool_calls
 
     def test_finish_reason_reads_as_a_completed_answer(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Left as 'tool_calls' it would look like a turn that still owes work."""
-        reply = _anthropic_reply([_tool_use_block(_STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
+        reply = _anthropic_reply([_tool_use_block(STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
         assert self._complete(monkeypatch, reply).finish_reason == "stop"
 
     def test_a_genuine_tool_call_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,7 +213,7 @@ class TestAnthropicUnwrapsTheStructuredAnswer:
 
     async def test_async_path_unwraps_identically(self, monkeypatch: pytest.MonkeyPatch) -> None:
         provider = _anthropic()
-        reply = _anthropic_reply([_tool_use_block(_STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
+        reply = _anthropic_reply([_tool_use_block(STRUCTURED_OUTPUT_TOOL, self.PAYLOAD)])
 
         async def _create(**kwargs: Any) -> SimpleNamespace:
             return reply
@@ -273,7 +273,7 @@ class TestAnthropicStructuredOutputEndToEnd:
 
         async def _create(**kwargs: Any) -> SimpleNamespace:
             seen.update(kwargs)
-            return _anthropic_reply([_tool_use_block(_STRUCTURED_OUTPUT_TOOL, payload)])
+            return _anthropic_reply([_tool_use_block(STRUCTURED_OUTPUT_TOOL, payload)])
 
         monkeypatch.setattr(provider._async_client.messages, "create", _create, raising=False)
         monkeypatch.setattr(
@@ -297,7 +297,7 @@ class TestAnthropicStructuredOutputEndToEnd:
         )
 
         # The schema went out as a forced tool, not as a vague prompt line...
-        assert seen["tool_choice"]["name"] == _STRUCTURED_OUTPUT_TOOL
+        assert seen["tool_choice"]["name"] == STRUCTURED_OUTPUT_TOOL
         # ...and came back as a validated instance rather than salvaged prose.
         assert isinstance(response.structured_output, Review)
         assert response.structured_output.model_dump() == payload

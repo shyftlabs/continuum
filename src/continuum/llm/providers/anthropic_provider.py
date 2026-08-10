@@ -24,20 +24,19 @@ from continuum.llm.exceptions import (
     LLMTimeoutError,
 )
 from continuum.llm.providers.base import BaseProvider
-from continuum.llm.structured_output import schema_from_response_format
+from continuum.llm.structured_output import (
+    STRUCTURED_OUTPUT_TOOL,
+    STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
+    forces_structured_tool,
+    schema_from_response_format,
+    unwrap_structured_tool_call,
+)
 from continuum.llm.types import LLMResponse, StreamChunk
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
 
 _PROVIDER = "anthropic"
-
-# Name of the synthetic tool used to enforce an output schema. Anthropic has no
-# response_format parameter, but a tool's `input_schema` IS a JSON schema and the
-# API makes the model's arguments conform to it — so declaring one throwaway tool
-# and forcing the model to call it turns "please emit this shape" into the only
-# move available. Nothing is executed: the arguments are the answer.
-_STRUCTURED_OUTPUT_TOOL = "emit_structured_output"
 
 
 class AnthropicProvider(BaseProvider):
@@ -225,19 +224,20 @@ class AnthropicProvider(BaseProvider):
 
     @staticmethod
     def _schema_tool_kwargs(schema: dict[str, Any]) -> dict[str, Any]:
-        """Declare the throwaway schema tool and leave the model no alternative."""
+        """Declare the throwaway schema tool and leave the model no alternative.
+
+        Anthropic's own tool spelling — `input_schema`, and a `tool_choice` of
+        `{"type": "tool", "name": …}` — rather than the OpenAI wire form.
+        """
         return {
             "tools": [
                 {
-                    "name": _STRUCTURED_OUTPUT_TOOL,
-                    "description": (
-                        "Return the final answer. Call this exactly once, with "
-                        "arguments matching the schema."
-                    ),
+                    "name": STRUCTURED_OUTPUT_TOOL,
+                    "description": STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
                     "input_schema": schema,
                 }
             ],
-            "tool_choice": {"type": "tool", "name": _STRUCTURED_OUTPUT_TOOL},
+            "tool_choice": {"type": "tool", "name": STRUCTURED_OUTPUT_TOOL},
         }
 
     def _build_kwargs(
@@ -307,34 +307,11 @@ class AnthropicProvider(BaseProvider):
         return kwargs
 
     @staticmethod
-    def _unwrap_structured_tool(response: LLMResponse) -> LLMResponse:
-        """Present a forced schema answer as ordinary content.
-
-        The answer arrives as arguments to the synthetic tool. Left as a tool
-        call, the executor would try to *execute* a tool that does not exist;
-        moving the arguments into ``content`` puts the JSON exactly where every
-        caller — coerce_and_validate, AgentResponse.content — already looks.
-
-        Matched by tool name, not by "there is a tool_use block", so a genuine
-        tool call is never swallowed.
-        """
-        for call in response.tool_calls or []:
-            if call.function.name == _STRUCTURED_OUTPUT_TOOL:
-                return response.model_copy(
-                    update={
-                        "content": call.function.arguments,
-                        "tool_calls": None,
-                        # stop_reason was "tool_use"; as far as the run is
-                        # concerned this turn produced a final answer.
-                        "finish_reason": "stop",
-                    }
-                )
-        return response
-
-    def _to_response(self, raw: Any, config: LLMConfig, kwargs: dict[str, Any]) -> LLMResponse:
+    def _to_response(raw: Any, config: LLMConfig, kwargs: dict[str, Any]) -> LLMResponse:
+        """Build the LLMResponse, undoing the forced-tool delivery if used."""
         response = LLMResponse.from_anthropic_response(raw, config.model)
-        if kwargs.get("tool_choice", {}).get("name") == _STRUCTURED_OUTPUT_TOOL:
-            return self._unwrap_structured_tool(response)
+        if forces_structured_tool(kwargs):
+            return unwrap_structured_tool_call(response)
         return response
 
     def _handle_exception(self, e: Exception, model: str) -> None:

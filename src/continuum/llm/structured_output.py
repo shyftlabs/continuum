@@ -26,9 +26,25 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
+
+if TYPE_CHECKING:
+    from continuum.llm.types import LLMResponse
+
+# The synthetic tool used to enforce a schema on providers that have no
+# response_format. A tool's parameter schema IS a JSON schema, and the API makes
+# the model's arguments conform to it — so declaring one throwaway tool and
+# forcing the model to call it turns "please emit this shape" into the only move
+# available. Nothing is executed: the arguments are the answer.
+#
+# Shared by every provider that needs the trick, so the name they declare and
+# the name they unwrap can never drift apart.
+STRUCTURED_OUTPUT_TOOL = "emit_structured_output"
+STRUCTURED_OUTPUT_TOOL_DESCRIPTION = (
+    "Return the final answer. Call this exactly once, with arguments matching the schema."
+)
 
 
 def is_pydantic_schema(schema: object) -> bool:
@@ -79,6 +95,71 @@ def to_openai_response_format(schema: type[BaseModel]) -> dict[str, Any]:
             "schema": schema.model_json_schema(),
         },
     }
+
+
+def openai_schema_tool(schema: dict[str, Any]) -> dict[str, Any]:
+    """OpenAI-wire ``tools``/``tool_choice`` pair that forces ``schema``.
+
+    The second way to ask for a shape (see STRUCTURED_OUTPUT_TOOL). Used for
+    upstreams that speak the OpenAI protocol but drop ``response_format`` on the
+    way to their real backend — the Smart Gateway's Bedrock path, which
+    translates ``tools``/``tool_choice`` into Converse ``toolConfig`` but has no
+    entry for ``response_format`` at all.
+    """
+    return {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": STRUCTURED_OUTPUT_TOOL,
+                    "description": STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
+                    "parameters": schema,
+                },
+            }
+        ],
+        "tool_choice": {"type": "function", "function": {"name": STRUCTURED_OUTPUT_TOOL}},
+    }
+
+
+def forces_structured_tool(kwargs: dict[str, Any]) -> bool:
+    """True if this request forced the synthetic schema tool.
+
+    Reads the built request rather than a flag carried alongside it, so the
+    response handling cannot drift out of step with what was actually sent.
+    Recognises both spellings: Anthropic's ``{"type": "tool", "name": …}`` and
+    the OpenAI wire's ``{"type": "function", "function": {"name": …}}``.
+    """
+    choice = kwargs.get("tool_choice")
+    if not isinstance(choice, dict):
+        return False
+    function = choice.get("function")
+    name = choice.get("name") or (function.get("name") if isinstance(function, dict) else None)
+    return bool(name == STRUCTURED_OUTPUT_TOOL)
+
+
+def unwrap_structured_tool_call(response: LLMResponse) -> LLMResponse:
+    """Present a forced schema answer as ordinary content.
+
+    The answer arrives as the synthetic tool's arguments. Left as a tool call,
+    the executor would try to *execute* a tool that does not exist; moving the
+    arguments into ``content`` puts the JSON exactly where every caller —
+    coerce_and_validate, AgentResponse.content — already looks.
+
+    Matched by tool name rather than "a tool was called", so a genuine tool call
+    is never swallowed.
+    """
+    for call in response.tool_calls or []:
+        if call.function.name == STRUCTURED_OUTPUT_TOOL:
+            return response.model_copy(
+                update={
+                    "content": call.function.arguments,
+                    "tool_calls": None,
+                    # The turn stopped to "call a tool", but no work is owed:
+                    # as far as the run is concerned this is a final answer.
+                    "finish_reason": "stop",
+                }
+            )
+    return response
 
 
 def schema_from_response_format(response_format: Any) -> dict[str, Any] | None:
