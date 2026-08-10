@@ -90,13 +90,18 @@ _HIDDEN_CHARS_RE = re.compile(
     "]"
 )
 
-# Any literal tool_result open/close tag appearing *inside* content -- an attacker
+# Any literal envelope open/close tag appearing *inside* content -- an attacker
 # could inject a real-looking </tool_result> to close the envelope early and
 # "break out". Match case-insensitively and defang by HTML-escaping the angle
 # brackets so it can never be confused with the real envelope tag. Only the
-# tool_result tag is touched, so unrelated angle brackets in content (code, HTML
-# logs) are preserved.
+# envelope's own tag name is touched, so unrelated angle brackets in content
+# (code, HTML logs) are preserved.
 _ENVELOPE_TAG_RE = re.compile(r"<\s*/?\s*tool_result\b[^>]*>", re.IGNORECASE)
+
+# The handoff path (F4) fences with its own tag names rather than reusing
+# "tool_result", so the target agent can tell a summarized transcript from a live
+# tool result. Compiled per tag and cached -- the set is small and fixed.
+_TAG_RE_CACHE: dict[str, re.Pattern[str]] = {"tool_result": _ENVELOPE_TAG_RE}
 
 
 def strip_hidden_chars(text: str) -> str:
@@ -108,24 +113,43 @@ def strip_hidden_chars(text: str) -> str:
     return _HIDDEN_CHARS_RE.sub("", text)
 
 
-def _neutralize_envelope_tags(text: str) -> str:
-    """Defang any literal ``<tool_result ...>`` / ``</tool_result>`` in content so a
-    payload cannot forge or prematurely close the envelope (breakout defense)."""
+def _tag_re(tag: str) -> re.Pattern[str]:
+    cached = _TAG_RE_CACHE.get(tag)
+    if cached is None:
+        cached = re.compile(rf"<\s*/?\s*{re.escape(tag)}\b[^>]*>", re.IGNORECASE)
+        _TAG_RE_CACHE[tag] = cached
+    return cached
+
+
+def _neutralize_envelope_tags(text: str, tag: str = "tool_result") -> str:
+    """Defang any literal ``<tag ...>`` / ``</tag>`` in content so a payload cannot
+    forge or prematurely close the envelope (breakout defense)."""
 
     def _escape(m: re.Match[str]) -> str:
         return m.group(0).replace("<", "&lt;").replace(">", "&gt;")
 
-    return _ENVELOPE_TAG_RE.sub(_escape, text)
+    return _tag_re(tag).sub(_escape, text)
 
 
-def _harden_content(content: str) -> str:
+def fence_untrusted(content: str, tag: str = "tool_result") -> str:
     """Strip hidden chars, then defang envelope tags, then wrap. Order matters:
     stripping runs FIRST so an attacker can't hide a ``</tool_result>`` breakout
     behind a zero-width character that the neutralizer would miss but the model's
-    tokenizer would still read as a closing tag."""
+    tokenizer would still read as a closing tag.
+
+    ``tag`` names the envelope. The handoff path (F4) passes ``handoff_summary`` /
+    ``handoff_context`` so a summarized transcript is distinguishable from a live
+    tool result, while sharing this one implementation of the breakout defense.
+    """
     cleaned = strip_hidden_chars(content)
-    cleaned = _neutralize_envelope_tags(cleaned)
-    return f"{_ENVELOPE_OPEN}\n{cleaned}\n{_ENVELOPE_CLOSE}"
+    cleaned = _neutralize_envelope_tags(cleaned, tag)
+    return f'<{tag} untrusted="true">\n{cleaned}\n</{tag}>'
+
+
+def _harden_content(content: str) -> str:
+    """Wrap tool content in the ``tool_result`` envelope (byte-identical to the
+    pre-``fence_untrusted`` implementation -- the prompt cache depends on it)."""
+    return fence_untrusted(content, "tool_result")
 
 
 def harden_untrusted_tool_content(

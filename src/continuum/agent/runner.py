@@ -75,6 +75,7 @@ from continuum.llm.config import LLMConfig
 from continuum.llm.structured_output import (
     coerce_and_validate,
     is_pydantic_schema,
+    looks_like_json,
     schema_prompt,
     to_openai_response_format,
 )
@@ -1554,14 +1555,12 @@ class AgentRunner:
                 # Warn if JSON mode was requested but the streamed response is not JSON.
                 _cfg = _enrich_config_for_gateway(LLMConfig.from_agent_config(agent), ctx)
                 if content and (_cfg.json_mode or _cfg.response_format):
-                    stripped = content.strip()
-                    if not (
-                        (stripped.startswith("{") and stripped.endswith("}"))
-                        or (stripped.startswith("[") and stripped.endswith("]"))
-                    ):
+                    # Fenced/prose-wrapped JSON is recovered downstream, so only
+                    # warn about what the parser genuinely cannot use.
+                    if not looks_like_json(content):
                         logger.warning(
                             "Streamed response is not JSON despite json_mode being set",
-                            extra={"model": _cfg.model, "preview": stripped[:100]},
+                            extra={"model": _cfg.model, "preview": content.strip()[:100]},
                         )
 
                 # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry.

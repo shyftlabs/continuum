@@ -25,4 +25,10 @@ jobs:
         with:
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --results=verified,unknown
+          # Lob is excluded: a Lob test key is `test_` + 35 chars, which is the
+          # shape of a long pytest function name — `test_forged_closing_tag_
+          # cannot_break_out` and 80 others in this repo match it exactly. Lob's
+          # API accepts any test-mode key, so each one is reported *verified*,
+          # which fails the build. Continuum has no Lob dependency or
+          # integration, so nothing real is given up by skipping the detector.
+          extra_args: --results=verified,unknown --exclude-detectors=Lob

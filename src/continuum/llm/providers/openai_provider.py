@@ -24,6 +24,10 @@ from continuum.llm.exceptions import (
     LLMTimeoutError,
 )
 from continuum.llm.providers.base import BaseProvider
+from continuum.llm.structured_output import (
+    forces_structured_tool,
+    unwrap_structured_tool_call,
+)
 from continuum.llm.types import FunctionCall, LLMResponse, StreamChunk, ToolCall
 from continuum.logging import get_logger
 
@@ -122,6 +126,11 @@ class OpenAIProvider(BaseProvider):
         self._client = OpenAI(**kwargs)
         self._async_client = AsyncOpenAI(**kwargs)
 
+    @staticmethod
+    def supports_native_schema() -> bool:
+        """Yes — response_format json_schema constrains decoding natively."""
+        return True
+
     def _normalize_model(self, model: str) -> str:
         return model.removeprefix("openai/").removeprefix("azure/")
 
@@ -134,12 +143,38 @@ class OpenAIProvider(BaseProvider):
             unsupported |= set(_RENAMED_PARAMS)
         return unsupported
 
+    def _schema_delivery(
+        self,
+        config: LLMConfig,
+        tools: list[dict[str, Any]] | None,
+        *,
+        enforce_schema: bool,
+    ) -> dict[str, Any] | None:
+        """Extra kwargs that carry the output schema, when response_format won't.
+
+        None (the default) means "send response_format as usual" — correct for
+        OpenAI itself, which honours it natively and constrains decoding.
+        Overridden by GatewayProvider, whose upstream may drop the parameter
+        before it reaches the real backend.
+        """
+        return None
+
     def _build_kwargs(
         self,
         config: LLMConfig,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
+        *,
+        enforce_schema: bool = False,
     ) -> dict[str, Any]:
+        """Build the request.
+
+        ``enforce_schema`` opts into an alternative way of delivering the output
+        schema (see _schema_delivery). It is off by default because the streaming
+        paths cannot use it: a forced tool streams tool-call deltas and no text,
+        so the runner would accumulate an empty answer. complete()/acomplete()
+        turn it on.
+        """
         model = self._normalize_model(config.model)
         kwargs: dict[str, Any] = {"model": model}
 
@@ -169,8 +204,13 @@ class OpenAIProvider(BaseProvider):
         if config.timeout:
             kwargs["timeout"] = config.timeout
 
-        # Response format
-        if config.response_format is not None:
+        # Response format. A provider that cannot receive it says so by
+        # returning an alternative delivery, and then response_format is left
+        # off entirely — sending both would be dead weight at best.
+        schema_delivery = self._schema_delivery(config, tools, enforce_schema=enforce_schema)
+        if schema_delivery is not None:
+            kwargs.update(schema_delivery)
+        elif config.response_format is not None:
             kwargs["response_format"] = config.response_format
         elif config.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
@@ -349,6 +389,14 @@ class OpenAIProvider(BaseProvider):
             ) from e
         raise LLMError(str(e), model=model, provider=provider, original_error=e, context=ctx) from e
 
+    @staticmethod
+    def _to_response(raw: Any, kwargs: dict[str, Any]) -> LLMResponse:
+        """Build the LLMResponse, undoing the forced-tool delivery if used."""
+        response = LLMResponse.from_openai_response(raw)
+        if forces_structured_tool(kwargs):
+            return unwrap_structured_tool_call(response)
+        return response
+
     def complete(
         self,
         messages: list[dict[str, Any]],
@@ -356,13 +404,13 @@ class OpenAIProvider(BaseProvider):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        kwargs = self._build_kwargs(config, tools, tool_choice)
+        kwargs = self._build_kwargs(config, tools, tool_choice, enforce_schema=True)
         try:
             response = self._call_adapting(
                 lambda: self._client.chat.completions.create(messages=messages, **kwargs), kwargs
             )
             self._check_response_content(kwargs["model"], response)
-            return LLMResponse.from_openai_response(response)
+            return self._to_response(response, kwargs)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
@@ -374,14 +422,14 @@ class OpenAIProvider(BaseProvider):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        kwargs = self._build_kwargs(config, tools, tool_choice)
+        kwargs = self._build_kwargs(config, tools, tool_choice, enforce_schema=True)
         try:
             response = await self._acall_adapting(
                 lambda: self._async_client.chat.completions.create(messages=messages, **kwargs),
                 kwargs,
             )
             self._check_response_content(kwargs["model"], response)
-            return LLMResponse.from_openai_response(response)
+            return self._to_response(response, kwargs)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise

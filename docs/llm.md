@@ -181,7 +181,6 @@ A Pydantic model with full provider-agnostic settings.
 
 ### Methods
 
-- `to_kwargs() -> dict` — convert to provider SDK kwargs
 - `with_overrides(**kwargs) -> LLMConfig` — copy with patches
 - `LLMConfig.from_agent_config(agent) -> LLMConfig` — derive from a `BaseAgent`, including JSON-mode setup
 
@@ -278,18 +277,41 @@ When using `BaseAgent`, `output_schema=Result` is the equivalent —
 `AgentRunner` parses the response for you and returns it on
 `response.structured_output`.
 
+### 5.4 How the schema is enforced, per provider
+
+`response_format` is OpenAI's parameter. Providers that cannot accept it are
+sent the same requirement in their own dialect, so a schema means the same
+thing everywhere:
+
+| Provider | How the schema travels |
+|---|---|
+| OpenAI | `response_format: json_schema` — constrains decoding |
+| Gemini | the same, via its OpenAI-compatible endpoint |
+| Anthropic | a forced tool call whose `input_schema` is your schema |
+| Bedrock (through the gateway) | a forced tool call — the gateway's Converse translation has no `response_format` entry, so a schema sent that way never reaches AWS |
+
+Anything else falls back to the universal floor: the shape is described in the
+prompt and parsed back out of the reply, with retries. That is weaker — retried,
+not prevented — so every call logs which of the two applies.
+
+Two cases keep the prompt floor even on a provider that could enforce:
+
+- **The agent has tools.** Forcing the synthetic tool would take the caller's
+  own tools off the table.
+- **Streaming.** A forced tool streams tool-call deltas and no text.
+
+The gateway's forced-tool path applies only to a model pinned as
+`bedrock/…`. With `auto/<tier>` the gateway picks the model *after* the request
+is built, so the target provider is unknowable in advance.
+
 ### Capability checks
 
 ```python
-from continuum.llm.utils import (
-    check_response_format_support, check_json_schema_support,
-    supports_tools_with_json_mode,
-)
+from continuum.llm.utils import supports_tools_with_json_mode
 ```
 
-- `check_response_format_support(model, custom_llm_provider=None)` — does this model accept any `response_format`?
-- `check_json_schema_support(model, custom_llm_provider=None)` — does it accept *strict* JSON schemas?
 - `supports_tools_with_json_mode(model, custom_llm_provider=None)` — `False` for Gemini and Vertex (mutually exclusive features).
+- `provider.supports_native_schema()` — whether that provider can enforce a schema at all. Ask the provider; the model-name allowlists that used to live in `llm.utils` are gone (nothing consulted them and they went stale).
 
 ---
 
@@ -508,9 +530,10 @@ for prompt in big_batch:
   shape is reliably accepted only by OpenAI-family, so a bare non-OpenAI
   `MEMORY_LLM_MODEL` may `400`), or disable long-term memory: see
   [`memory.md`](memory.md).
-- **Anthropic + JSON mode**: Claude doesn't have a native `response_format`
-  — `check_response_format_support()` returns `False` for Claude. If you
-  need JSON, instruct it via the system prompt and parse the result.
+- **Anthropic + JSON mode**: Claude has no native `response_format`, so a
+  schema is sent as a forced tool call instead (see 5.4) — you get the same
+  guarantee, and `resp.content` still holds the JSON. Bare `json_mode=True`
+  names no shape, so it stays a system-prompt instruction.
 - **Gemini + tools + JSON**: not supported simultaneously; the framework
   drops `json_mode` automatically when `tools` are present.
 - **`session_id` in `chat()`** triggers automatic Redis history loading

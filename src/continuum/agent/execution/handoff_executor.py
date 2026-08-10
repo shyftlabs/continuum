@@ -59,6 +59,70 @@ class HandoffExecutor(IHandoffExecutor):
         """Get a registered agent by name."""
         return self._agent_registry.get(name)
 
+    @staticmethod
+    def _scan_handoff_payload(
+        target_agent: BaseAgent,
+        handoff_data: Any,
+        target_messages: list[dict[str, Any]],
+    ) -> str | None:
+        """Apply the target agent's input guards to an inbound handoff payload.
+
+        Returns the blocking reason, or ``None`` if the payload is allowed.
+
+        Scans the model-authored framing (``reason`` / ``context``) and the
+        transferred history body together — that is the whole of what the target
+        did not write itself. Mirrors MessageBuilder.prepare_messages, using the
+        same config flags, so no new settings are introduced: `injection_detection`
+        still defaults False and `input_scanners` still defaults empty.
+
+        Returning a reason rather than raising InputBlockedError is deliberate: the
+        caller reports failures as HandoffResult objects, and an exception escaping
+        here would crash the run instead of failing the transfer cleanly.
+        """
+        config = getattr(target_agent, "config", None)
+        if config is None:
+            return None
+
+        # str() everything: `reason` and `context` come from json.loads() of
+        # MODEL-generated arguments, so a model emitting {"reason": 123} or a dict
+        # would otherwise crash the join. Declared str on HandoffData, but nothing
+        # validates the parse.
+        parts = [str(handoff_data.reason or ""), str(handoff_data.context or "")]
+        parts.extend(
+            str(m.get("content") or "")
+            for m in target_messages
+            if isinstance(m, dict) and m.get("role") != "system"
+        )
+        payload = "\n".join(p for p in parts if p)
+        if not payload:
+            return None
+
+        if getattr(config, "injection_detection", False):
+            from continuum.utils import detect_injection_patterns
+
+            detected = detect_injection_patterns(payload)
+            if detected:
+                # Detection-only, matching prepare_messages: the scanners below are
+                # what can actually refuse. Logged so the signal is not lost.
+                logger.warning(
+                    "Potential prompt injection detected in handoff payload to agent '%s': %s",
+                    target_agent.name,
+                    detected,
+                )
+
+        for scanner in getattr(config, "input_scanners", None) or []:
+            try:
+                _, is_safe, reason = scanner(payload)
+            except Exception as e:
+                # Fail-open on scanner errors, matching prepare_messages — a broken
+                # scanner must not take down every handoff.
+                logger.warning("Handoff input scanner failed (fail-open): %s", e)
+                continue
+            if not is_safe:
+                return reason or "blocked"
+
+        return None
+
     @observe(name="execute_handoff", capture_output=True)
     async def execute_handoff(
         self,
@@ -178,6 +242,45 @@ class HandoffExecutor(IHandoffExecutor):
                 error=f"Handoff cycle detected: {target_name} already in handoff chain ({cycle_path})",
             )
 
+        # Data-label handoff gate (security finding F4).
+        #
+        # The run's active labels are passed as additional subjects, exactly like
+        # the tool gate in tools/executor.py, so a tainted run can be denied a
+        # transfer: "phi may not be handed to external-summarizer".
+        #
+        # Uses the SOURCE agent's store, while it is still the one in scope. That
+        # matters because a handoff is a policy-domain switch -- ToolService reads
+        # `policy_store` off whichever agent is currently running, so after the
+        # transfer the target's store (possibly None) governs instead. Without a
+        # check here, denying a tool on the source is escapable by handing off to
+        # an agent that does not deny it.
+        #
+        # No policy_store configured -> no check, same posture as the tool gate.
+        source_policy_store = getattr(agent, "policy_store", None)
+        if source_policy_store is not None:
+            subjects = [agent.name, *sorted(context.data_labels)]
+            decision = source_policy_store.check(subjects, f"handoff:{target_name}")
+            if not decision.allowed:
+                denial = (
+                    decision.denial_message
+                    or f"Handoff to '{target_name}' denied by policy "
+                    f"'{decision.policy_name or 'unknown'}'"
+                )
+                logger.warning(
+                    "Handoff denied by policy — from=%s to=%s labels=%s policy=%s",
+                    agent.name,
+                    target_name,
+                    sorted(context.data_labels),
+                    decision.policy_name,
+                )
+                return HandoffResult(
+                    handoff_id=generate_handoff_id(),
+                    from_agent=agent.name,
+                    to_agent=target_name,
+                    success=False,
+                    error=denial,
+                )
+
         # Parse handoff arguments
         args_str = (
             tool_call.function.arguments
@@ -219,6 +322,32 @@ class HandoffExecutor(IHandoffExecutor):
             target_messages = self._handoff_manager.build_handoff_messages(
                 handoff_data, target_agent, session_id=context.session_id
             )
+
+            # Run the TARGET agent's own input guards over what it is about to
+            # receive (security finding F4). A handoff reaches execute_loop without
+            # passing through MessageBuilder.prepare_messages -- the only place
+            # sanitization / injection detection / input_scanners run -- so an agent
+            # configured with those controls had them bypassed on every handoff,
+            # i.e. on its least trustworthy input.
+            blocked = self._scan_handoff_payload(target_agent, handoff_data, target_messages)
+            if blocked is not None:
+                # Unwind the state pushed above so the aborted transfer leaves no
+                # trace on the stack; the source agent continues its own loop.
+                run_state.pop_agent()
+                run_state.current_agent = agent.name
+                logger.warning(
+                    "Handoff payload blocked by target's input scanner — from=%s to=%s reason=%s",
+                    agent.name,
+                    target_name,
+                    blocked,
+                )
+                return HandoffResult(
+                    handoff_id=handoff_data.handoff_id,
+                    from_agent=agent.name,
+                    to_agent=target_name,
+                    success=False,
+                    error=f"Handoff payload blocked by scanner: {blocked}",
+                )
 
             # Create new context for target
             from continuum.agent.types import RunContext

@@ -63,4 +63,5 @@ class TestReflectionCritiqueTemperature:
 
         cfg = client.chat.await_args.kwargs["config"]
         assert cfg.temperature is None
-        assert "temperature" not in cfg.to_kwargs()
+        # The omission itself is the provider's job (each _build_kwargs skips
+        # a None temperature); asserted there, not through a config-level dump.

@@ -24,6 +24,13 @@ from continuum.llm.exceptions import (
     LLMTimeoutError,
 )
 from continuum.llm.providers.base import BaseProvider
+from continuum.llm.structured_output import (
+    STRUCTURED_OUTPUT_TOOL,
+    STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
+    forces_structured_tool,
+    schema_from_response_format,
+    unwrap_structured_tool_call,
+)
 from continuum.llm.types import LLMResponse, StreamChunk
 from continuum.logging import get_logger
 
@@ -210,13 +217,46 @@ class AnthropicProvider(BaseProvider):
             return {"type": "tool", "name": tool_choice["function"]["name"]}
         return {"type": "auto"}
 
+    @staticmethod
+    def supports_native_schema() -> bool:
+        """Yes — via forced tool use (see _schema_tool_kwargs)."""
+        return True
+
+    @staticmethod
+    def _schema_tool_kwargs(schema: dict[str, Any]) -> dict[str, Any]:
+        """Declare the throwaway schema tool and leave the model no alternative.
+
+        Anthropic's own tool spelling — `input_schema`, and a `tool_choice` of
+        `{"type": "tool", "name": …}` — rather than the OpenAI wire form.
+        """
+        return {
+            "tools": [
+                {
+                    "name": STRUCTURED_OUTPUT_TOOL,
+                    "description": STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
+                    "input_schema": schema,
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": STRUCTURED_OUTPUT_TOOL},
+        }
+
     def _build_kwargs(
         self,
         messages: list[dict[str, Any]],
         config: LLMConfig,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
+        *,
+        enforce_schema: bool = False,
     ) -> dict[str, Any]:
+        """Build the Anthropic request.
+
+        ``enforce_schema`` opts into forced tool use for a requested output
+        schema. It is off by default because the streaming paths cannot use it:
+        a forced tool answers with ``input_json_delta`` and no text at all, so
+        ``text_stream`` would yield nothing and the run would go silently empty.
+        complete()/acomplete() turn it on.
+        """
         system, anthropic_messages = self._split_messages(messages)
 
         kwargs: dict[str, Any] = {
@@ -224,8 +264,24 @@ class AnthropicProvider(BaseProvider):
             "messages": anthropic_messages,
             "max_tokens": config.max_tokens or 4096,
         }
-        if config.json_mode or config.response_format:
-            system = (system + "\nRespond with valid JSON only.").strip()
+
+        # Forcing the synthetic tool would take the caller's own tools off the
+        # table, so real tool-calling turns keep the prompt-only floor. The
+        # executor only asks for a schema on tool-less calls, so in practice the
+        # enforced path is the one that runs for structured output.
+        schema = None if tools else schema_from_response_format(config.response_format)
+        if enforce_schema and schema is not None:
+            kwargs.update(self._schema_tool_kwargs(schema))
+        elif config.json_mode or config.response_format:
+            # Nothing enforceable (bare json_object, or tools are in play): the
+            # cross-provider floor is all that is left. The field names reach the
+            # model separately, via structured_output.schema_prompt.
+            #
+            # `or ""`: _split_messages returns None when the caller sent no
+            # system message, and concatenating onto that raised TypeError —
+            # JSON mode on an agent with no instructions could not run at all.
+            system = ((system or "") + "\nRespond with valid JSON only.").strip()
+
         if system:
             kwargs["system"] = system
         if (
@@ -249,6 +305,14 @@ class AnthropicProvider(BaseProvider):
                 kwargs["tool_choice"] = tc
 
         return kwargs
+
+    @staticmethod
+    def _to_response(raw: Any, config: LLMConfig, kwargs: dict[str, Any]) -> LLMResponse:
+        """Build the LLMResponse, undoing the forced-tool delivery if used."""
+        response = LLMResponse.from_anthropic_response(raw, config.model)
+        if forces_structured_tool(kwargs):
+            return unwrap_structured_tool_call(response)
+        return response
 
     def _handle_exception(self, e: Exception, model: str) -> None:
         ctx = {"model": model, "provider": _PROVIDER}
@@ -288,17 +352,17 @@ class AnthropicProvider(BaseProvider):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        kwargs = self._build_kwargs(messages, config, tools, tool_choice)
+        kwargs = self._build_kwargs(messages, config, tools, tool_choice, enforce_schema=True)
         try:
             response = self._client.messages.create(**kwargs)
-            return LLMResponse.from_anthropic_response(response, config.model)
+            return self._to_response(response, config, kwargs)
         except Exception as e:
             # Error-driven drop: if the model rejected temperature, strip it and
             # retry once. The model is cached so future calls skip it up front.
             if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
                 try:
                     response = self._client.messages.create(**kwargs)
-                    return LLMResponse.from_anthropic_response(response, config.model)
+                    return self._to_response(response, config, kwargs)
                 except Exception as e2:
                     self._handle_exception(e2, config.model)
                     raise
@@ -312,15 +376,15 @@ class AnthropicProvider(BaseProvider):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        kwargs = self._build_kwargs(messages, config, tools, tool_choice)
+        kwargs = self._build_kwargs(messages, config, tools, tool_choice, enforce_schema=True)
         try:
             response = await self._async_client.messages.create(**kwargs)
-            return LLMResponse.from_anthropic_response(response, config.model)
+            return self._to_response(response, config, kwargs)
         except Exception as e:
             if self._is_temperature_rejection(e) and self._mark_temp_unsupported(kwargs):
                 try:
                     response = await self._async_client.messages.create(**kwargs)
-                    return LLMResponse.from_anthropic_response(response, config.model)
+                    return self._to_response(response, config, kwargs)
                 except Exception as e2:
                     self._handle_exception(e2, config.model)
                     raise

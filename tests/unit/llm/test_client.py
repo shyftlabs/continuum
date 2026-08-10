@@ -1,6 +1,7 @@
 """Unit tests for LLM client."""
 
 import logging
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -231,6 +232,59 @@ class TestLLMClientJsonHelpers:
         tools = [{"type": "function", "function": {"name": "fn"}}]
         result = client._apply_json_mode_compat(config, tools)
         assert result.json_mode is True
+
+
+@contextmanager
+def _captured_client_logs():
+    """Collect records from the client's logger.
+
+    caplog cannot see these: the "continuum" parent sets propagate=False, so
+    records never reach the root logger.
+    """
+    records: list[tuple[int, str]] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append((record.levelno, record.getMessage()))
+
+    handler = _Collector()
+    log = logging.getLogger("continuum.llm.client")
+    log.addHandler(handler)
+    try:
+        yield records
+    finally:
+        log.removeHandler(handler)
+
+
+class TestJsonModeWarningIsNotFenceBlind:
+    """The JSON-mode check used to test the raw string, so a ```json block —
+    which coerce_and_validate recovers without trouble — warned on every call.
+    That noise is what the bug report saw as a "recurring warning", and it
+    buried the answers that genuinely cannot be parsed."""
+
+    def _warnings_for(self, content: str) -> list[str]:
+        from continuum.llm.client import LLMClient
+
+        client = LLMClient(enable_langfuse=False)
+        with _captured_client_logs() as records:
+            client._validate_json_response(content, LLMConfig(json_mode=True))
+        return [msg for level, msg in records if level >= logging.WARNING]
+
+    def test_fenced_json_is_silent(self):
+        assert self._warnings_for('```json\n{"key": "val"}\n```') == []
+
+    def test_prose_wrapped_json_is_silent(self):
+        assert self._warnings_for('Sure! Here you go:\n{"key": "val"}') == []
+
+    def test_bare_json_is_silent(self):
+        assert self._warnings_for('{"key": "val"}') == []
+
+    def test_genuinely_unparseable_output_still_warns(self):
+        """The signal has to survive the noise removal."""
+        assert self._warnings_for("I'm afraid I can't help with that.")
+
+    def test_broken_json_still_warns(self):
+        assert self._warnings_for('{"key": ')
 
 
 class TestLLMClientChatSync:
