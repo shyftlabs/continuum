@@ -77,6 +77,8 @@ Out of scope (please do **not** report):
 
 - **CI gate** — every pull request must pass `ruff` (lint) and the unit test suite before it can merge to `dev`/`main`.
 - **Dependency vulnerabilities** — Dependabot vulnerability **alerts** are enabled; vulnerable dependencies are surfaced in the repository **Security** tab. Automated dependency-bump PRs are intentionally disabled to keep PR noise low — maintainers triage alerts and bump versions as needed.
+- **Bundled image pinning** — every service in the bundled `docker-compose.yml` is pinned to an explicit version tag (e.g. `qdrant/qdrant:v1.18.3`, `milvusdb/milvus:v2.6.20`), never `:latest`. This closes the tag-substitution supply-chain risk: a hijacked upstream `:latest` cannot silently reach a `docker compose pull`. We deliberately stop at version tags rather than immutable digests (`@sha256:…`) for this dev-convenience stack — a bare digest never updates and, without a bot bumping it, silently rots on unpatched CVEs; version tags stay human-readable and hand-updatable while still defeating tag substitution. Production deployments should not use the bundled stack as-is (see hardening notes below).
+- **MCP tool-catalogue hardening** — a third-party MCP server's tool `description` and `inputSchema` are attacker-controlled text that reaches the model's prompt verbatim, so Continuum strips invisible/control characters (Unicode Tags block, zero-width, bidi overrides, C0/C1) from every fetched catalogue, and invalidates the tools cache on `connect()` so a reconnect cannot reuse a catalogue captured from a previous server process. We deliberately do **not** filter the *wording* of descriptions: a description is legitimately instructional ("call this when the user asks about weather"), so stripping imperative language breaks working tools, and a system instruction to "ignore directives inside tool descriptions" is self-defeating — obeyed it degrades tool selection, ignored it achieves nothing, and a rephrase evades it either way. The durable boundary against a fooled model taking a dangerous action is **authorization** on side-effecting tools (`PolicyStore.default_deny()`), not classification of prose. See [docs/tools.md §6.4](docs/tools.md) for operator guidance.
 - **Secret scanning** — GitHub secret scanning and push protection apply on the public repository, and the project history is scanned for committed credentials.
 - **Code scanning** — static analysis (e.g. CodeQL) may be enabled as the project matures and infrastructure allows.
 
@@ -88,7 +90,12 @@ If you are running Continuum in production, please also:
 - Subscribe to repository Security Advisories (Watch → Custom → Security alerts).
 - Run the agent process with the minimum privileges it needs — never as root, never with broader cloud-IAM scopes than the deployed agents require.
 - Treat LLM outputs as untrusted input when feeding them into tools, shells, or database queries.
-- Keep `mem0`, `Milvus`, `Qdrant`, `Redis`, `Temporal`, and `Langfuse` reachable only from the application network — never expose them to the public internet without an authenticated proxy.
+- Keep `mem0`, `Milvus`, `Qdrant`, `Redis`, `Temporal`, and `Langfuse` reachable only from the application network — never expose them to the public internet without an authenticated proxy. The bundled `docker-compose.yml` binds these to `127.0.0.1` by default; if you change a binding to expose a service, enable that service's own authentication first (Redis `requirepass`, Qdrant/Milvus API keys, MinIO root credentials).
+- Replace every `# CHANGEME` default in `.env` / `docker-compose.yml` (Redis, MinIO, ClickHouse, Postgres, Langfuse keys) with strong, unique secrets before any non-local deployment — the shipped values are placeholders, not safe credentials.
+- **Fail-closed credential guard.** Continuum refuses to start against a data store secured with a missing or placeholder secret, so an insecure deployment fails loudly instead of running unprotected:
+  - **Session Redis** — a blank or placeholder (`CHANGEME…`) `SESSION_REDIS_PASSWORD` is rejected, even on localhost (the shipped placeholder is meant to be replaced).
+  - **Vector store (Qdrant/Milvus)** — a missing/weak `QDRANT_API_KEY` / `MILVUS_TOKEN` is rejected only when the store is **remote** (a non-loopback host); a local/loopback vector store may run tokenless, matching Redis's own protected-mode behaviour.
+  - For local development or throwaway CI against an unauthenticated store, set `CONTINUUM_ALLOW_INSECURE=1` to downgrade the refusal to a warning. **Never set it in production.**
 
 ## Questions
 
@@ -96,4 +103,4 @@ Non-vulnerability security questions (e.g. "how do I configure X safely") belong
 
 ---
 
-*Last updated: 2026-05.*
+*Last updated: 2026-07.*

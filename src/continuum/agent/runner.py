@@ -1392,6 +1392,9 @@ class AgentRunner:
                         trace_id=ctx.trace_id,
                     )
 
+                # NOTE: no usage= is passed — streamed runs carry an EMPTY
+                # TokenUsage (zero totals, no model_usage). Callers must NOT
+                # rely on streamed responses for billing/metering.
                 response = AgentResponse(
                     content=content,
                     run_id=ctx.run_id,
@@ -1931,6 +1934,9 @@ class AgentRunner:
                         f"{structured_output_error}"
                     )
 
+            # NOTE: no usage= is passed — streamed runs carry an EMPTY TokenUsage
+            # (zero totals, no model_usage). Callers must NOT rely on streamed
+            # responses for billing/metering.
             response = AgentResponse(
                 content=content,
                 structured_output=structured_output,

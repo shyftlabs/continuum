@@ -36,6 +36,11 @@ from dataclasses import dataclass
 @dataclass
 class TimetravelConfig:
     mcp_url: str = "http://localhost:8896/mcp"
+    # Prefix on every LLM-facing tool name ("trace__search"), so it is part of
+    # the identity policies, digest pins and always_promote match by exact
+    # string. Keep it short and environment-independent: the unset fallback
+    # derives from the transport and URL, baking host and port into each name.
+    mcp_server_name: str = "trace"
     mcp_timeout: float = 15.0
     # gpt-4o follows the multi-step tool instructions reliably across topologies.
     model: str = "openai/gpt-4o"

@@ -109,6 +109,7 @@ async def _startup() -> None:
 
         state.mcp = MCPServerStreamableHttp(
             params={"url": default_config.mcp_url},
+            name=default_config.mcp_server_name,
             client_session_timeout_seconds=default_config.mcp_timeout,
         )
         await state.mcp.connect()

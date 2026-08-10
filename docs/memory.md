@@ -426,10 +426,14 @@ agent = BaseAgent(
 
 ## 10 · Gotchas
 
-- **`OPENAI_API_KEY` is required at startup** when memory is enabled,
-  because the default mem0 embedder is OpenAI. Either provide a key,
-  switch `EMBEDDER_PROVIDER` (e.g. `huggingface` for local models), or
-  set `MEMORY_ENABLED=false`.
+- **`OPENAI_API_KEY` is required by default** when memory is enabled,
+  because mem0's default embedder *and* fact-extraction LLM are OpenAI.
+  Either provide a key; or switch `EMBEDDER_PROVIDER` (e.g. `ollama` keyless,
+  or `huggingface`) for embeddings and route the fact-extraction LLM through
+  the Smart Gateway — a bare non-OpenAI `MEMORY_LLM_MODEL` is fragile, since
+  mem0's fact-extraction call (`json_schema` + forced `tool_choice` +
+  `temperature` + `top_p`) is reliably accepted only by OpenAI-family models;
+  or set `MEMORY_ENABLED=false`.
 - **`embedding_dims` must match the embedder's output**. `text-embedding-3-small` → 1536; `text-embedding-3-large` → 3072.
   Mismatch → Qdrant insert errors.
 - **Two `MemoryScope` types** exist with the same name (the agent enum

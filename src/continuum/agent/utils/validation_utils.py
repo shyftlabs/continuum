@@ -20,13 +20,27 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def last_user_prompt(messages: list[dict[str, Any]] | None) -> str:
-    """Return the content of the most recent user message (or "")."""
+def last_user_prompt(
+    messages: list[dict[str, Any]] | list[ChatMessage] | None,
+) -> str:
+    """Return the content of the most recent user message (or "").
+
+    Reads either shape. Every current caller passes plain dicts, so this is
+    hardening rather than a fix for a live failure — but the read used to be
+    dict-only (``message.get(...)``), which raises AttributeError on a Pydantic
+    ``ChatMessage``. Since ``ChatMessage`` is the other message representation in
+    this codebase and is what several nearby signatures name, handling both here
+    is cheaper than trusting five call sites to keep passing dicts forever.
+    """
     if not messages:
         return ""
     for message in reversed(messages):
-        if message.get("role") == "user":
-            return str(message.get("content", ""))
+        if isinstance(message, dict):
+            role, content = message.get("role"), message.get("content", "")
+        else:
+            role, content = getattr(message, "role", None), getattr(message, "content", "")
+        if role == "user":
+            return str(content) if content is not None else ""
     return ""
 
 

@@ -83,6 +83,11 @@ def sidecar_stats() -> dict:
 @dataclass
 class IncidentConfig:
     mcp_url: str = "http://localhost:8921/mcp"
+    # Prefix on every LLM-facing tool name ("incident__search"), so it is part of
+    # the identity policies, digest pins and always_promote match by exact
+    # string. Keep it short and environment-independent: the unset fallback
+    # derives from the transport and URL, baking host and port into each name.
+    mcp_server_name: str = "incident"
     mcp_timeout: float = 15.0
 
     agent_name: str = "incident-desk"

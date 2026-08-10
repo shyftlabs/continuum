@@ -25,3 +25,11 @@
 /CODEOWNERS                     @bhavik-shyftlabs
 /SECURITY.md                    @bhavik-shyftlabs
 /MAINTAINERS.md                 @bhavik-shyftlabs
+
+# Claude Code dev tooling — SECURITY-SENSITIVE. These files carry standing
+# Bash/MCP permissions and hook scripts that auto-run on every tool call, so a
+# change here can grant pre-authorized code execution on a contributor's
+# machine (see F9). Require explicit maintainer review on any change.
+/.claude/settings.json          @bhavik-shyftlabs @tom-shyftlabs
+/.claude/helpers/               @bhavik-shyftlabs @tom-shyftlabs
+/CLAUDE.md                      @bhavik-shyftlabs @tom-shyftlabs

@@ -11,6 +11,7 @@ Real Twilio: replace this server with a real MCP server URL in temporal/worker.p
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 from mcp.types import CallToolResult, GetPromptResult, ListPromptsResult, TextContent, Tool
@@ -76,7 +77,7 @@ class FakeTwilioMCP:
             raise RuntimeError("FakeTwilioMCP not connected")
         return self._tools
 
-    # Deterministic outcome rotation based on lead name hash
+    # Outcome rotation, keyed by lead name via _stable_index (NOT hash()).
     _OUTCOMES = [
         "meeting_booked",
         "no_answer",
@@ -95,11 +96,24 @@ class FakeTwilioMCP:
         ("Monday mornings 8am–10am", "Previously requested a callback but never followed up."),
     ]
 
+    @staticmethod
+    def _stable_index(name: str, modulo: int) -> int:
+        """A per-name index that survives a restart.
+
+        `hash()` on a str is salted per process (PYTHONHASHSEED), so it gave the
+        same lead a different outcome on every run -- the "deterministic" rotation
+        below was a dice roll. That is not just cosmetic: `no_answer`/`voicemail`
+        cost the voice agent an extra leave_voicemail turn, so the turn budget a
+        campaign needs changed run to run, and a tight max_turns failed
+        intermittently with nothing in the code changing.
+        """
+        return int(hashlib.sha256(name.encode()).hexdigest(), 16) % modulo
+
     def _outcome_for(self, name: str) -> str:
-        return self._OUTCOMES[hash(name) % len(self._OUTCOMES)]
+        return self._OUTCOMES[self._stable_index(name, len(self._OUTCOMES))]
 
     def _crm_for(self, name: str) -> tuple[str, str]:
-        return self._CRM_WINDOWS[hash(name) % len(self._CRM_WINDOWS)]
+        return self._CRM_WINDOWS[self._stable_index(name, len(self._CRM_WINDOWS))]
 
     async def call_tool(self, tool_name: str, arguments: dict | None) -> CallToolResult:
         if not self._connected:

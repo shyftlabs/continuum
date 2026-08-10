@@ -163,8 +163,8 @@
   },
   "permissions": {
     "allow": [
-      "Bash(npx @claude-flow*)",
-      "Bash(npx claude-flow*)",
+      "Bash(npx @claude-flow/cli@*)",
+      "Bash(npx claude-flow@*)",
       "Bash(node .claude/*)",
       "mcp__claude-flow__:*"
     ],

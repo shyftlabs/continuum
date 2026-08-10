@@ -30,8 +30,15 @@ class IMessageBuilder(ABC):
         input: str | list[dict[str, Any]] | list[Any],
         context: RunContext,
         tool_context_state: ToolContextState | None = None,
-    ) -> list[dict[str, Any]]:
-        """Prepare messages for agent execution."""
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Prepare messages for agent execution.
+
+        Returns ``(messages, user_message_index)``. The index marks where this
+        turn's new messages begin, and the runner unpacks both — an
+        implementation returning a bare list breaks it. The interface previously
+        declared only the list, so anyone writing to this contract would have
+        produced exactly that.
+        """
         pass
 
 

@@ -191,6 +191,13 @@ class AgentConfig:
     timeout: int = 300  # Timeout in seconds
     retry_count: int = 3  # Number of retries on failure
 
+    # How many times in a row this agent may hand the SAME request to the SAME
+    # target before the loop guard calls it a loop. Raise it for a dispatcher that
+    # legitimately re-sends near-identical requests; the guard already ignores
+    # fan-out (a different payload each time). `max_turns` remains the hard
+    # backstop, so a higher value costs turns, never unbounded work.
+    max_consecutive_handoffs: int = 3
+
     # Memory settings
     memory: AgentMemoryConfig = field(default_factory=AgentMemoryConfig)
 
@@ -209,6 +216,12 @@ class AgentConfig:
     # Input sanitization
     input_sanitization: bool = True
     injection_detection: bool = False
+
+    # When True, agent construction FAILS (raises AgentConfigurationError) if the
+    # agent has side-effectful tools but no policy_store configured. When False
+    # (default), the same condition only emits a warning — see
+    # BaseAgent._check_security_posture.
+    strict_security: bool = False
 
     # Output settings
     output_type: Literal["text", "json", "structured"] = "text"
@@ -260,15 +273,6 @@ class AgentConfig:
     # For external APIs, RunContext.priority (request-level) is used instead.
     stage_priority: int = 5
 
-    # Access control policies applied before each tool call and memory access.
-    # Evaluated with deny-overrides semantics (Orla-style): an explicit deny always
-    # wins over any allow. If no policy matches, access is open (default allow).
-    # Use the resource prefixes "tool:", "memory:", "data:" to target different layers.
-    # Example:
-    #   AccessPolicy(name="no-delete", subjects=["billing_agent"],
-    #                resources=["tool:delete_*"], effect="deny")
-    access_policies: list[Any] = field(default_factory=list)  # list[AccessPolicy]
-
     # Tracing
     trace_all_turns: bool = True  # Trace every turn
     log_to_session: bool = True  # Log messages to session
@@ -289,6 +293,7 @@ class AgentConfig:
             ),
             "input_sanitization": self.input_sanitization,
             "injection_detection": self.injection_detection,
+            "strict_security": self.strict_security,
             "output_type": self.output_type,
             "reasoning_mode": self.reasoning_mode,
             "react_mode": self.react_mode,

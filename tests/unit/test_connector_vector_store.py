@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from continuum.connectors.base import ConnectionMode
 from continuum.connectors.vector_store import VectorStoreConnector
+from continuum.exceptions import InsecureConfigurationError
 from continuum.memory.config import MemoryConfig
 
 
@@ -18,6 +21,57 @@ def _cfg(**kw) -> MemoryConfig:
     base = {"enabled": True}
     base.update(kw)
     return MemoryConfig(**base)
+
+
+class TestFailClosedCredentialRemoteOnly:
+    """to_mem0_block() refuses a REMOTE vector store with a missing/weak token
+    (F8/D4, Option B). A local/loopback store is exempt — the normal tokenless
+    posture — matching Redis protected mode. Escape hatch: CONTINUUM_ALLOW_INSECURE."""
+
+    def test_remote_qdrant_without_key_refuses(self, monkeypatch):
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="qdrant", qdrant_host="q.internal.example")
+        )
+        assert c.mode is ConnectionMode.CUSTOM
+        with pytest.raises(InsecureConfigurationError, match="QDRANT_API_KEY"):
+            c.to_mem0_block()
+
+    def test_remote_milvus_without_token_refuses(self, monkeypatch):
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(
+            _cfg(
+                vector_store_provider="milvus", milvus_host="m.internal.example", milvus_token=None
+            )
+        )
+        assert c.mode is ConnectionMode.CUSTOM
+        with pytest.raises(InsecureConfigurationError, match="MILVUS_TOKEN"):
+            c.to_mem0_block()
+
+    def test_local_qdrant_without_key_is_allowed(self, monkeypatch):
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(_cfg(vector_store_provider="qdrant", qdrant_host="localhost"))
+        assert c.mode is ConnectionMode.LOCAL_DOCKER
+        # Exempt — must not raise.
+        assert c.to_mem0_block()["provider"] == "qdrant"
+
+    def test_remote_qdrant_with_key_is_allowed(self, monkeypatch):
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(
+            _cfg(
+                vector_store_provider="qdrant",
+                qdrant_host="q.cloud",
+                qdrant_api_key="strong-key-xyz",
+            )
+        )
+        assert c.to_mem0_block()["config"]["api_key"] == "strong-key-xyz"
+
+    def test_escape_hatch_allows_remote_without_token(self, monkeypatch):
+        monkeypatch.setenv("CONTINUUM_ALLOW_INSECURE", "1")
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="qdrant", qdrant_host="q.internal.example")
+        )
+        assert c.to_mem0_block()["provider"] == "qdrant"
 
 
 class TestModeInference:

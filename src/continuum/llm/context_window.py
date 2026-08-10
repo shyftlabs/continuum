@@ -169,16 +169,43 @@ class ContextWindowManager:
         ```
     """
 
-    # Context window limits per model (tokens)
+    # Context window limits per model (tokens).
+    #
+    # This is the INPUT/context window, not the max output — the two differ
+    # sharply on reasoning models (gpt-5 accepts 272k in but emits at most 128k).
+    # Keys are matched by substring in insertion order, so more specific ids must
+    # precede shorter ones that are a prefix of them (gpt-4o before gpt-4).
     DEFAULT_LIMITS: dict[str, int] = {
-        # OpenAI
-        "gpt-5": 128000,
+        # Smart Gateway tier ids (`auto/<tier>`). The physical model behind a tier
+        # is chosen by the gateway per request, so no exact window is knowable
+        # here — and the gateway does not shrink the conversation to fit a model,
+        # it routes to a model large enough to hold it (candidates whose
+        # max_context_tokens is too small are dropped). Compressing first would
+        # destroy the history before that choice can be made, so the trigger is
+        # set high deliberately to keep Continuum out of the way.
+        #
+        # 128000 is the smallest context across the gateway's routable tiers
+        # (frontier 200k, mid 128k, small 128k), so premature compression stops
+        # while a real backstop remains before a request becomes unroutable.
+        # Listed first so a tier id can never be captured by a model key.
+        "auto/": 128000,
+        # OpenAI — verified live via an oversized-input probe, which makes the
+        # API state the limit ("Input tokens exceed the configured limit of N").
+        # 272000 is confirmed for gpt-5/-mini/.1/.2/.4-mini. The gpt-5.4, 5.5 and
+        # 5.6 lines accept more than 600k, so this is a deliberate floor for them:
+        # too low only compresses earlier than needed, too high is a hard 400.
+        "gpt-5": 272000,
         "gpt-4o": 128000,
         "gpt-4o-mini": 128000,
         "gpt-4o-turbo": 128000,
         "gpt-4-turbo": 128000,
         "gpt-4": 8192,
         "gpt-3.5-turbo": 16385,
+        # o-series reasoning models. Listed after every gpt-* key so a gpt id can
+        # never be captured by these short substrings.
+        "o1": 200000,
+        "o3": 200000,
+        "o4": 200000,
         # Anthropic
         "claude-haiku-4.5": 200000,
         "claude-sonnet-4.5": 200000,
@@ -204,6 +231,11 @@ class ContextWindowManager:
     FAMILY_DEFAULTS: dict[str, int] = {
         "claude": 200000,
         "gemini": 1000000,
+        # Every current OpenAI chat model is at least 128k, so an unrecognised
+        # gpt-* id gets that rather than the crippling 4096. Deliberately
+        # conservative: under-estimating only compresses context earlier than
+        # necessary, while over-estimating makes the API reject the request.
+        "gpt": 128000,
     }
 
     def __init__(

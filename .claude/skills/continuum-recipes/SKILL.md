@@ -13,8 +13,8 @@ Common, ready-to-paste patterns. Each is verified against framework
 ## 1. RAG-augmented agent
 
 ```python
-from orchestrator.agent import BaseAgent, AgentRunner
-from orchestrator.agent.config import AgentConfig
+from continuum.agent import BaseAgent, AgentRunner
+from continuum.agent.config import AgentConfig
 
 retrieved_docs = await my_retriever.search(query)
 rag_text = "\n\n".join(d.text for d in retrieved_docs[:5])
@@ -80,7 +80,7 @@ return exec_resp.content
 ## 3. ReAct (think-then-act)
 
 ```python
-from orchestrator.agent.config import AgentConfig
+from continuum.agent.config import AgentConfig
 
 agent = BaseAgent(
     name="react-agent",
@@ -98,7 +98,7 @@ before producing a final answer or calling another tool.
 ## 4. Self-improving via reflection
 
 ```python
-from orchestrator.agent import create_reflection_agent
+from continuum.agent import create_reflection_agent
 
 writer = BaseAgent(name="writer", instructions="Draft the email.")
 reflective_writer = create_reflection_agent(
@@ -112,7 +112,7 @@ resp = await runner.run(reflective_writer, "Email about Q4 results")
 ## 5. Multi-tenant isolation
 
 ```python
-from orchestrator.agent.types import MemoryScope
+from continuum.agent.types import MemoryScope
 
 agent = BaseAgent(
     name="tenant-aware",
@@ -130,7 +130,7 @@ await runner.run(agent, "...", user_id=current_user.id)
 For org-level isolation, register a custom scope:
 
 ```python
-from orchestrator.memory import register_scope
+from continuum.memory import register_scope
 register_scope(name="organization", required_field="org_id",
                description="Org-scoped memories")
 ```
@@ -142,8 +142,8 @@ register_scope(name="organization", required_field="org_id",
 ```python
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
-from orchestrator.core.lifecycle import OrchestratorLifecycle
-from orchestrator.core.container import get_container
+from continuum.core.lifecycle import OrchestratorLifecycle
+from continuum.core.container import get_container
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -189,7 +189,7 @@ print(resp.structured_output.label, resp.structured_output.confidence)
 ## 8. Prompt-injection scanning
 
 ```python
-from orchestrator.agent.config import AgentConfig
+from continuum.agent.config import AgentConfig
 
 def my_scanner(text: str) -> tuple[str, bool, str]:
     if "ignore previous instructions" in text.lower():
@@ -204,7 +204,7 @@ agent = BaseAgent(
                        injection_detection=True),
 )
 
-# Blocked input raises orchestrator.exceptions.InputBlockedError
+# Blocked input raises continuum.exceptions.InputBlockedError
 ```
 
 ---
@@ -212,7 +212,7 @@ agent = BaseAgent(
 ## 9. Custom container for tests
 
 ```python
-from orchestrator.core.container import Container, ContainerConfig
+from continuum.core.container import Container, ContainerConfig
 
 class MockLLM:
     is_enabled = True
@@ -236,7 +236,7 @@ resp = await runner.run(agent, "test")
 ## 10. Two-step handoff
 
 ```python
-from orchestrator.agent.types import Handoff
+from continuum.agent.types import Handoff
 
 triage = BaseAgent(
     name="triage",
@@ -263,7 +263,7 @@ print(resp.content)
 ## 11. Disable everything but the LLM (offline test)
 
 ```python
-from orchestrator.core.container import Container, ContainerConfig
+from continuum.core.container import Container, ContainerConfig
 
 container = Container(ContainerConfig(
     enable_memory=False, enable_session=False, enable_langfuse=False,
@@ -284,7 +284,7 @@ unit tests when an API key isn't available.
 ## 12. Streaming to a websocket
 
 ```python
-from orchestrator.agent.types import EventType
+from continuum.agent.types import EventType
 
 async def stream_to_ws(ws, agent, user_msg, user_id):
     runner = AgentRunner()

@@ -6,6 +6,7 @@ Extracted from AgentRunner to provide clean separation of concerns.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.exceptions import (
@@ -48,10 +49,49 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Max consecutive handoffs to the SAME target before we declare a handoff loop.
-# Catches routing agents stuck re-routing under return_to_parent=True before they
-# silently exhaust max_turns.
+# Max consecutive handoffs of the SAME request to the SAME target before we declare
+# a handoff loop. Catches routing agents stuck re-routing under return_to_parent=True
+# before they silently exhaust max_turns. Overridable per agent via
+# AgentConfig.max_consecutive_handoffs.
 _MAX_CONSECUTIVE_HANDOFFS = 3
+
+# Must match HandoffExecutor's fallback (handoff_executor.py) -- see _handoff_args.
+_HANDOFF_DEFAULT_REASON = "Handoff requested"
+
+
+def _handoff_args(tool_call: Any) -> tuple[str | None, str | None]:
+    """The ``reason``/``context`` a handoff tool call carries.
+
+    Mirrors HandoffExecutor's parsing *including its default* -- reason falls back
+    to "Handoff requested" there, so that string is what lands on the chain entry
+    when the model omits it. Reading None here instead would compare a None key
+    against a defaulted one, never match, and silently disable the guard for every
+    argument-less handoff: exactly the loop it exists to catch.
+    """
+    fn = getattr(tool_call, "function", None)
+    raw = getattr(fn, "arguments", None) if fn is not None else None
+    if raw is None and isinstance(tool_call, dict):
+        raw = tool_call.get("function", {}).get("arguments")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return raw.get("reason") or _HANDOFF_DEFAULT_REASON, raw.get("context")
+
+
+def _handoff_payload_key(reason: str | None, context: str | None) -> str:
+    """Comparison key for a handoff request: case- and whitespace-insensitive.
+
+    Not hashed: nothing is persisted, the walk is bounded to a handful of entries,
+    and a plain key keeps the guard debuggable. Deliberately excludes ``history``,
+    which grows every turn -- folding it in would make every handoff unique and
+    silently disable the guard, the same failure as resetting on any tool call.
+    """
+    return " ".join(f"{reason or ''}\x00{context or ''}".casefold().split())
+
 
 # Extra LLM calls allowed to coax a valid structured output after the first
 # attempt fails validation. 1 = one retry (see ADR / fix plan, decision #3).
@@ -69,6 +109,38 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
                 "trace_id": context.trace_id,
             }
         }
+    )
+
+
+def _usage_with_model(response: Any, fallback_model: str | None) -> TokenUsage:
+    """Build a single-call ``TokenUsage`` attributed to the RESOLVED model.
+
+    ``model_usage`` is keyed on ``response.model`` — the id the provider/gateway
+    actually served. Under the Smart Gateway the agent's configured model is the
+    literal placeholder ``"auto"``, so ``response.model`` is the only billable
+    identity for the call. Falls back to the agent's configured model when the
+    provider omits ``model``; when neither is known the per-model entry is
+    skipped (top-level totals still accumulate).
+    """
+    prompt = int(response.usage.prompt_tokens or 0)
+    completion = int(response.usage.completion_tokens or 0)
+    total = int(response.usage.total_tokens or 0)
+    model = getattr(response, "model", None) or fallback_model
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+        model_usage=(
+            {
+                model: {
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion,
+                    "total_tokens": total,
+                }
+            }
+            if model
+            else {}
+        ),
     )
 
 
@@ -315,15 +387,11 @@ class Executor(IExecutor):
                     turn_span.set_error(str(e))
                     raise
 
-                # Track usage
+                # Track usage — attributed to the RESOLVED model (response.model),
+                # not the configured one, so per-model metering works under the
+                # Smart Gateway where the configured model is just "auto".
                 if response.usage:
-                    total_usage = total_usage.add(
-                        TokenUsage(
-                            prompt_tokens=response.usage.prompt_tokens or 0,
-                            completion_tokens=response.usage.completion_tokens or 0,
-                            total_tokens=response.usage.total_tokens or 0,
-                        )
-                    )
+                    total_usage = total_usage.add(_usage_with_model(response, agent.model))
                     turn_span.add_metadata(
                         "tokens",
                         {
@@ -599,13 +667,32 @@ class Executor(IExecutor):
                             # so the guard is scoped to them to avoid false positives on
                             # legitimate repeated same-target handoffs.
                             if _hc is None or _hc.return_to_parent:
+                                # Same target is not enough: fanning out over N items
+                                # hands the same specialist N *different* requests, and
+                                # counting only the target killed that on item 4. The
+                                # chain records handoffs only, so the parent's
+                                # intervening tool calls are invisible here -- what
+                                # separates a loop from fan-out is whether the REQUEST
+                                # repeats, so the streak breaks on a changed payload too.
+                                _fp = _handoff_payload_key(*_handoff_args(tc))
+                                _limit = (
+                                    agent.config.max_consecutive_handoffs
+                                    if agent.config
+                                    else _MAX_CONSECUTIVE_HANDOFFS
+                                )
                                 _streak = 0
                                 for _h in reversed(run_state.handoff_chain):
-                                    if _h.get("to_agent") == target:
+                                    if (
+                                        _h.get("to_agent") == target
+                                        and _handoff_payload_key(
+                                            _h.get("reason"), _h.get("context")
+                                        )
+                                        == _fp
+                                    ):
                                         _streak += 1
                                     else:
                                         break
-                                if _streak >= _MAX_CONSECUTIVE_HANDOFFS:
+                                if _streak >= _limit:
                                     raise HandoffLoopError(
                                         from_agent=agent.name,
                                         to_agent=target,
@@ -654,6 +741,11 @@ class Executor(IExecutor):
                                         f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
                                         f"[tool] {executor_content[:500]}\n" + "=" * 30
                                     )
+                                    # Child-run usage is a full TokenUsage whose
+                                    # model_usage the child's own executor loop
+                                    # populated; add() merges the per-model map.
+                                    # No response.model exists here — this is an
+                                    # aggregated multi-turn response, not one call.
                                     total_usage = total_usage.add(handoff_result.response.usage)
                                     # Pop the target agent so the parent can hand off
                                     # to the same target again on the next turn.
@@ -699,6 +791,8 @@ class Executor(IExecutor):
                                         content=handoff_result.response.content,
                                         agent_name=handoff_result.response.agent_name,
                                         status=ResponseStatus.SUCCESS,
+                                        # add() merges the child's per-model map
+                                        # (see return_to_parent comment above).
                                         usage=total_usage.add(handoff_result.response.usage),
                                         turn_count=turn,
                                         handoff_result=handoff_result,
@@ -869,11 +963,9 @@ class Executor(IExecutor):
 
         usage = TokenUsage()
         if response.usage:
-            usage = TokenUsage(
-                prompt_tokens=response.usage.prompt_tokens or 0,
-                completion_tokens=response.usage.completion_tokens or 0,
-                total_tokens=response.usage.total_tokens or 0,
-            )
+            # Attribute to the resolved model (see _usage_with_model) so the
+            # reasoning pass is metered per-model like the main turn loop.
+            usage = _usage_with_model(response, agent.model)
 
         return response.content or "", usage
 
@@ -921,13 +1013,8 @@ class Executor(IExecutor):
             )
 
             if response.usage:
-                total_usage = total_usage.add(
-                    TokenUsage(
-                        prompt_tokens=response.usage.prompt_tokens or 0,
-                        completion_tokens=response.usage.completion_tokens or 0,
-                        total_tokens=response.usage.total_tokens or 0,
-                    )
-                )
+                # Same per-resolved-model attribution as the main turn loop.
+                total_usage = total_usage.add(_usage_with_model(response, agent.model))
 
             content = response.content or ""
             action, action_input, final_answer = self._parse_react_action(content)

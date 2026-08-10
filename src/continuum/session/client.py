@@ -12,6 +12,7 @@ import threading
 from typing import Any
 
 from continuum.core.background_tasks import BackgroundTaskRegistry
+from continuum.exceptions import InsecureConfigurationError
 from continuum.logging import get_logger
 from continuum.memory import MemoryClient
 from continuum.observability.decorators import observe
@@ -262,6 +263,10 @@ class SessionClient:
         # Configured: build the Redis provider lazily and probe it once.
         try:
             redis_provider = create_provider(cfg.provider, cfg)
+        except InsecureConfigurationError:
+            # Fail closed: an insecure secret is an operator error, not an
+            # outage — never degrade to in-memory, regardless of fallback_mode.
+            raise
         except Exception as e:  # provider class missing (e.g. redis not installed)
             return self._fallback_or_fail(f"Redis provider unavailable ({e})")
 
@@ -391,6 +396,10 @@ class SessionClient:
 
         except ImportError as e:
             logger.error(f"Failed to import session provider: {e}")
+        except InsecureConfigurationError:
+            # Fail closed on an insecure secret rather than silently leaving the
+            # provider unset (which surfaces later as a confusing "not available").
+            raise
         except Exception as e:
             logger.error(f"Failed to initialize session provider: {e}")
 
