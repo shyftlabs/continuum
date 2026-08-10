@@ -105,8 +105,16 @@ class VectorStoreConnector(BaseConnector[Any]):
                 "embedding_model_dims": self._config.embedding_dims,
                 "url": f"http://{self._config.milvus_host}:{self._config.milvus_port}",
             }
-            if self._config.milvus_token:
-                milvus_config["token"] = self._config.milvus_token
+            # Always emit a *string* token, never omit the key. mem0's
+            # MilvusDBConfig declares `token: str` but defaults it to None;
+            # Pydantic tolerates that default on first construction, then mem0
+            # re-creates the config from model_dump() for its telemetry store
+            # (mem0/memory/main.py) — where None is validated against `str` and
+            # raises, taking down the whole MemoryClient. An unauthenticated
+            # local/self-hosted Milvus (the default config) therefore cannot come
+            # up unless we send "". Matches connect() below, which already does
+            # `token=... or ""`.
+            milvus_config["token"] = self._config.milvus_token or ""
             return {"provider": "milvus", "config": milvus_config}
 
         qdrant_config: dict[str, Any] = {

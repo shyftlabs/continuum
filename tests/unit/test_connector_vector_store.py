@@ -146,13 +146,46 @@ class TestMem0Block:
         assert block["provider"] == "milvus"
         assert block["config"]["url"] == "http://localhost:19530"
         assert block["config"]["embedding_model_dims"] == 768
-        assert "token" not in block["config"]
+        # An unset token is sent as "" and never omitted — see
+        # TestMilvusTokenSurvivesMem0Revalidation for why.
+        assert block["config"]["token"] == ""
 
     def test_milvus_block_includes_token_when_set(self):
         c = VectorStoreConnector(
             _cfg(vector_store_provider="milvus", milvus_host="zilliz", milvus_token="zztok")
         )
         assert c.to_mem0_block()["config"]["token"] == "zztok"
+
+    def test_milvus_empty_token_is_not_dropped(self):
+        """An explicitly empty MILVUS_TOKEN must behave like an unset one, not
+        fall back to omitting the key (the old truthiness check dropped both)."""
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_host="localhost", milvus_token="")
+        )
+        assert c.to_mem0_block()["config"]["token"] == ""
+
+
+class TestMilvusTokenSurvivesMem0Revalidation:
+    """Regression: a tokenless Milvus (the default config) must not kill mem0.
+
+    mem0's MilvusDBConfig declares ``token: str`` but defaults it to None.
+    Pydantic skips validation of defaults, so the first construction succeeds —
+    then mem0 rebuilds the config from ``model_dump()`` for its telemetry store
+    (mem0/memory/main.py), where None is validated against ``str`` and raises,
+    taking down the whole MemoryClient. Sending "" keeps that round-trip valid.
+    """
+
+    def test_tokenless_block_round_trips_through_milvus_db_config(self):
+        milvus_cfg_mod = pytest.importorskip("mem0.configs.vector_stores.milvus")
+        config_cls = milvus_cfg_mod.MilvusDBConfig
+
+        block = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_host="localhost", milvus_token=None)
+        ).to_mem0_block()
+
+        validated = config_cls(**block["config"])
+        # This is the exact mem0 telemetry-init path that used to raise.
+        config_cls(**validated.model_dump())
 
 
 class TestDescribeMasksSecrets:
