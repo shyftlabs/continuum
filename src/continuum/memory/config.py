@@ -150,6 +150,14 @@ class MemoryConfig(BaseModel):
         default_factory=lambda: settings.milvus_port,
         description="Milvus port",
     )
+    milvus_uri: str | None = Field(
+        default_factory=lambda: settings.milvus_uri,
+        description=(
+            "Full Milvus/Zilliz endpoint URL. Overrides milvus_host/milvus_port when "
+            "set — required for TLS endpoints (Zilliz Cloud), which the host/port pair "
+            "cannot express."
+        ),
+    )
     milvus_token: str | None = Field(
         default_factory=lambda: settings.milvus_token,
         description="Milvus token (for Zilliz Cloud)",
@@ -245,7 +253,7 @@ class MemoryConfig(BaseModel):
         ):
             return False
         if self.vector_store_provider == "milvus":
-            return bool(self.milvus_host)
+            return bool(self.milvus_uri or self.milvus_host)
         # qdrant
         return bool(self.qdrant_host)
 

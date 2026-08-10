@@ -188,6 +188,87 @@ class TestMilvusTokenSurvivesMem0Revalidation:
         config_cls(**validated.model_dump())
 
 
+class TestMilvusUri:
+    """MILVUS_URI is the only way to express TLS / a portless endpoint (Zilliz
+    Cloud). It must drive every place a Milvus address is built, not just the
+    mem0 config block."""
+
+    ZILLIZ = "https://in03-abc.serverless.gcp-us-west1.cloud.zilliz.com"
+
+    def test_host_port_used_when_uri_unset(self):
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_host="localhost", milvus_port=19530)
+        )
+        assert c.milvus_uri() == "http://localhost:19530"
+
+    def test_uri_overrides_host_and_port(self):
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_uri=self.ZILLIZ, milvus_token="zztok")
+        )
+        assert c.milvus_uri() == self.ZILLIZ
+        assert c.to_mem0_block()["config"]["url"] == self.ZILLIZ
+
+    def test_uri_drives_health_probe_client(self, monkeypatch):
+        """connect() must use the same URI — otherwise aping() reports a healthy
+        Zilliz endpoint as down while memory works fine."""
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_uri=self.ZILLIZ, milvus_token="zztok")
+        )
+        seen: dict[str, object] = {}
+
+        class FakeMilvusClient:
+            def __init__(self, uri, token):
+                seen["uri"] = uri
+
+        fake_pymilvus = MagicMock()
+        fake_pymilvus.MilvusClient = FakeMilvusClient
+        monkeypatch.setitem(__import__("sys").modules, "pymilvus", fake_pymilvus)
+
+        import asyncio
+
+        asyncio.run(c.connect())
+        assert seen["uri"] == self.ZILLIZ
+
+    def test_scheme_in_host_is_honored_not_mangled(self):
+        """MILVUS_HOST=https://... previously produced http://https://host:19530."""
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_host=self.ZILLIZ, milvus_token="zztok")
+        )
+        assert c.milvus_uri() == self.ZILLIZ
+
+    def test_remote_uri_without_token_still_refuses(self, monkeypatch):
+        """Regression guard: mode must be derived from the URI's host, not the
+        (default 'localhost') milvus_host, or the F8/D4 fail-closed credential
+        check silently stops running for a remote endpoint."""
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_uri=self.ZILLIZ, milvus_token=None)
+        )
+        assert c.mode is ConnectionMode.CUSTOM
+        with pytest.raises(InsecureConfigurationError, match="MILVUS_TOKEN"):
+            c.to_mem0_block()
+
+    def test_local_uri_stays_exempt(self, monkeypatch):
+        monkeypatch.delenv("CONTINUUM_ALLOW_INSECURE", raising=False)
+        c = VectorStoreConnector(
+            _cfg(
+                vector_store_provider="milvus",
+                milvus_uri="http://localhost:19530",
+                milvus_token=None,
+            )
+        )
+        assert c.mode is ConnectionMode.LOCAL_DOCKER
+        assert c.to_mem0_block()["config"]["url"] == "http://localhost:19530"
+
+    def test_describe_reports_effective_uri(self):
+        c = VectorStoreConnector(
+            _cfg(vector_store_provider="milvus", milvus_uri=self.ZILLIZ, milvus_token="zztoksecret")
+        )
+        d = c.describe()
+        assert d["uri"] == self.ZILLIZ
+        assert "zztoksecret" not in str(d)
+
+
 class TestDescribeMasksSecrets:
     def test_qdrant_api_key_masked(self):
         c = VectorStoreConnector(

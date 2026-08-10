@@ -68,9 +68,9 @@ class ToolSummaryRegistry:
         from pymilvus import DataType, MilvusClient
         from sentence_transformers import SentenceTransformer
 
-        from continuum.config import settings
+        from continuum.config import resolve_milvus_uri, settings
 
-        uri = f"http://{settings.milvus_host}:{settings.milvus_port}"
+        uri = resolve_milvus_uri(settings.milvus_uri, settings.milvus_host, settings.milvus_port)
         token = settings.milvus_token or ""
         self._client = MilvusClient(uri=uri, token=token)
         self._encoder = SentenceTransformer(self._config.embedding_model)
