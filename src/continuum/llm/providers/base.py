@@ -15,6 +15,19 @@ from continuum.llm.types import LLMResponse, StreamChunk
 class BaseProvider(ABC):
     """Abstract base for all LLM provider implementations."""
 
+    @staticmethod
+    def supports_native_schema() -> bool:
+        """Can this provider make the model's answer match a JSON schema?
+
+        Answering honestly is the point: when it is False, Continuum falls back
+        to asking for the shape in the prompt and salvaging whatever comes back,
+        and callers deserve to know which of the two they are getting.
+
+        Defaults to False so a third-party provider that has not implemented
+        enforcement is never reported as enforcing one.
+        """
+        return False
+
     @abstractmethod
     def complete(
         self,

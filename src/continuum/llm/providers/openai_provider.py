@@ -122,6 +122,11 @@ class OpenAIProvider(BaseProvider):
         self._client = OpenAI(**kwargs)
         self._async_client = AsyncOpenAI(**kwargs)
 
+    @staticmethod
+    def supports_native_schema() -> bool:
+        """Yes — response_format json_schema constrains decoding natively."""
+        return True
+
     def _normalize_model(self, model: str) -> str:
         return model.removeprefix("openai/").removeprefix("azure/")
 

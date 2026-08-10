@@ -33,6 +33,7 @@ from continuum.llm.config import LLMConfig
 from continuum.llm.structured_output import (
     coerce_and_validate,
     is_pydantic_schema,
+    looks_like_json,
     schema_prompt,
     to_openai_response_format,
 )
@@ -887,15 +888,13 @@ class Executor(IExecutor):
                             },
                         )
                 elif agent.enable_json_mode and response.content:
-                    # Legacy path: JSON mode without output_schema — just verify it's JSON.
-                    import json as _json
-
-                    try:
-                        _json.loads(response.content.strip())
-                    except _json.JSONDecodeError as e:
+                    # Legacy path: JSON mode without output_schema — just verify
+                    # it's JSON. Fences and surrounding prose are recoverable, so
+                    # they are not worth a warning.
+                    if not looks_like_json(response.content):
                         logger.warning(
                             f"⚠️ JSON mode enabled but response is not valid JSON for "
-                            f"agent {agent.name}: {e}"
+                            f"agent {agent.name}"
                         )
 
                 # No tool calls, we're done

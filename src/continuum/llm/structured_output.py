@@ -81,6 +81,44 @@ def to_openai_response_format(schema: type[BaseModel]) -> dict[str, Any]:
     }
 
 
+def schema_from_response_format(response_format: Any) -> dict[str, Any] | None:
+    """Pull the bare JSON Schema out of an OpenAI-style ``response_format``.
+
+    ``response_format`` is Continuum's neutral carrier for "the answer must have
+    this shape", but its spelling is OpenAI's. Providers that enforce schemas a
+    different way (Anthropic's forced tool use, Gemini's ``responseSchema``) need
+    the schema itself, not the envelope. Returns None when the format names no
+    schema — ``{"type": "json_object"}`` asks for *some* JSON of *any* shape, so
+    there is nothing to enforce against.
+    """
+    if not isinstance(response_format, dict):
+        return None
+    if response_format.get("type") != "json_schema":
+        return None
+    block = response_format.get("json_schema")
+    if not isinstance(block, dict):
+        return None
+    schema = block.get("schema")
+    return schema if isinstance(schema, dict) else None
+
+
+def looks_like_json(content: str) -> bool:
+    """True if ``content`` parses as JSON once fences and prose are stripped.
+
+    The JSON-mode warnings used to test the raw string, so a perfectly good
+    ```json fenced block — which ``coerce_and_validate`` recovers without
+    trouble — warned on every single call. Judge what the parser will actually
+    see, not what the model happened to wrap it in.
+    """
+    if not content:
+        return False
+    try:
+        json.loads(_strip_to_json(content))
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return True
+
+
 def _strip_to_json(content: str) -> str:
     """Strip markdown fences and, if needed, extract an embedded JSON object/array."""
     s = content.strip()

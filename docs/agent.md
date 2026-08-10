@@ -57,9 +57,9 @@ default — only `name` is required.
 | `memory_config` | `AgentMemoryConfig` | `AgentMemoryConfig()` | Memory search/store behavior |
 | `config` | `AgentConfig` | `AgentConfig()` | Run-level config (max_turns, ReAct, scanners, …) |
 | `output_schema` | `type[BaseModel] \| None` | `None` | Pydantic model for validated structured output |
-| `enable_json_mode` | `bool` | `False` | Force JSON output |
-| `json_schema` | `dict \| type[BaseModel] \| None` | `None` | JSON schema for `enable_json_mode` |
-| `json_strict` | `bool` | `True` | Strict JSON validation |
+| `enable_json_mode` | `bool` | `False` | **Deprecated** — use `output_schema`. Requests JSON without validating it |
+| `json_schema` | `dict \| type[BaseModel] \| None` | `None` | **Deprecated** — use `output_schema` |
+| `json_strict` | `bool` | `True` | Strict JSON validation (applies to the deprecated `json_schema`) |
 | `input_schema` | `type[BaseModel] \| None` | `None` | Validate user input against this schema |
 | `template_vars` | `dict[str, Any]` | `{}` | Static slots resolved into `instructions` (e.g. `{company}`) |
 | `examples` | `list[dict[str, str]]` | `[]` | Few-shot pairs `[{"input": ..., "output": ...}]` |
@@ -756,6 +756,14 @@ agent = BaseAgent(name="planner", instructions="…", output_schema=Plan)
 resp = await runner.run(agent, "…")
 plan = resp.structured_output         # Plan instance
 ```
+
+How the schema is held depends on the provider: OpenAI and Gemini receive it as a
+native `response_format`, and Anthropic gets it as a forced tool call. Providers
+that can express neither fall back to asking for the shape in the prompt and
+parsing the answer back out — which is retried, not guaranteed. Each LLM call
+logs which of the two is in force, and `output_schema_strict=True` turns a
+failure to produce a valid instance into a `StructuredOutputError` instead of a
+`None` in `structured_output`.
 
 **RAG injection**
 

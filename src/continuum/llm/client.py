@@ -7,7 +7,6 @@ Includes full observability integration with Langfuse via @observe decorator.
 """
 
 import asyncio
-import json
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -20,6 +19,7 @@ from continuum.llm.config import LLMConfig
 from continuum.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
 from continuum.llm.exceptions import LLMTimeoutError
 from continuum.llm.providers import get_provider
+from continuum.llm.structured_output import looks_like_json, schema_from_response_format
 from continuum.llm.types import (
     ChatMessage,
     LLMResponse,
@@ -84,6 +84,9 @@ class LLMClient:
         self.default_config = config or LLMConfig()
         self._langfuse_enabled = enable_langfuse
         self._rate_limiter: _LLMRateLimiter | None = None
+        # (provider, model) pairs already reported by _log_schema_enforcement —
+        # the answer is fixed per pair, so saying it once per client is enough.
+        self._schema_mode_logged: set[tuple[str, str]] = set()
         # Optional priority dispatcher — routes LLM calls through a priority
         # queue so high-priority requests are served first under load.
         # PriorityDispatcher for external APIs; TwoLevelDispatcher for internal models.
@@ -160,25 +163,47 @@ class LLMClient:
         elif config.response_format is not None:
             logger.info(f"JSON mode active: schema for model {config.model}")
 
+    def _log_schema_enforcement(self, provider: Any, config: LLMConfig) -> None:
+        """Say once, per provider+model, how the requested schema is being held.
+
+        Two very different guarantees wear the same API here: the provider either
+        constrains the answer, or Continuum merely asks in the prompt and salvages
+        whatever comes back. Silence about which one is in force is how "works on
+        OpenAI, unreliable elsewhere" stays invisible until production.
+        """
+        if schema_from_response_format(config.response_format) is None:
+            return
+        key = (type(provider).__name__, config.model)
+        if key in self._schema_mode_logged:
+            return
+        self._schema_mode_logged.add(key)
+        # getattr: a provider is only *typed* as BaseProvider — a duck-typed one
+        # registered by a third party must not break the call over a log line.
+        if getattr(provider, "supports_native_schema", lambda: False)():
+            logger.info(
+                "Structured output for %s: schema enforced natively by %s",
+                config.model,
+                type(provider).__name__,
+            )
+        else:
+            logger.warning(
+                "Structured output for %s: %s cannot enforce a schema, so the "
+                "shape is only requested in the prompt and parsed back out. "
+                "Malformed answers are retried, not prevented.",
+                config.model,
+                type(provider).__name__,
+            )
+
     def _validate_json_response(self, content: str | None, config: LLMConfig) -> None:
         if not (config.json_mode or config.response_format) or not content:
             return
-        try:
-            stripped = content.strip()
-            is_json = (stripped.startswith("{") and stripped.endswith("}")) or (
-                stripped.startswith("[") and stripped.endswith("]")
-            )
-            if not is_json:
-                logger.warning(
-                    "LLM response is not JSON despite JSON mode being enabled",
-                    extra={"model": config.model, "preview": stripped[:100]},
-                )
-            else:
-                json.loads(content)
-        except json.JSONDecodeError:
+        # Judge what the parser will see. Fenced or prose-wrapped JSON is
+        # recovered downstream by coerce_and_validate, so warning about it is
+        # noise that buries the genuinely unparseable answers.
+        if not looks_like_json(content):
             logger.warning(
-                "LLM response is not valid JSON despite JSON mode",
-                extra={"model": config.model, "preview": content[:100]},
+                "LLM response is not JSON despite JSON mode being enabled",
+                extra={"model": config.model, "preview": content.strip()[:100]},
             )
 
     def _get_provider_from_model(self, model: str) -> str:
@@ -235,6 +260,7 @@ class LLMClient:
         self._log_json_mode_status(effective_config)
 
         provider = get_provider(effective_config)
+        self._log_schema_enforcement(provider, effective_config)
         logger.debug(f"Sync completion: model={effective_config.model}")
 
         response = provider.complete(messages_dict, effective_config, tools_dict, tool_choice)
@@ -259,6 +285,7 @@ class LLMClient:
         effective_config = self._apply_json_mode_compat(effective_config, tools_dict)
 
         provider = get_provider(effective_config)
+        self._log_schema_enforcement(provider, effective_config)
         logger.debug(f"Sync stream: model={effective_config.model}")
 
         yield from provider.stream(messages_dict, effective_config, tools_dict, tool_choice)
@@ -395,6 +422,7 @@ class LLMClient:
             await self._rate_limiter.acquire()
 
         provider = get_provider(effective_config)
+        self._log_schema_enforcement(provider, effective_config)
         logger.debug(f"Async completion: model={effective_config.model}")
 
         # Hard wall-clock ceiling for the whole completion (all SDK retries +
@@ -573,6 +601,7 @@ class LLMClient:
         )
 
         provider = get_provider(effective_config)
+        self._log_schema_enforcement(provider, effective_config)
         logger.debug(f"Async stream: model={effective_config.model}")
 
         async for chunk in provider.astream(
