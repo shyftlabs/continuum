@@ -25,6 +25,7 @@ from continuum.agent.types import (
     RunContext,
     generate_handoff_id,
 )
+from continuum.llm.untrusted_content import fence_untrusted
 from continuum.logging import get_logger
 
 if TYPE_CHECKING:
@@ -33,6 +34,12 @@ if TYPE_CHECKING:
     from continuum.observability import TracingManager
 
 logger = get_logger(__name__)
+
+# Envelope for the model-authored half of the handoff framing (see
+# build_handoff_messages). Distinct from `handoff_summary` so the target agent can
+# tell "what the previous agent said about this transfer" from "a summary of the
+# transcript".
+_HANDOFF_CONTEXT_TAG = "handoff_context"
 
 
 class HandoffManager:
@@ -334,23 +341,51 @@ class HandoffManager:
 
             messages.extend(filtered)
 
-        # Add handoff context as a system message
-        context_parts = [
-            f"You are receiving a handoff from {handoff_data.from_agent}.",
-            f"Reason: {handoff_data.reason}",
-        ]
-        if handoff_data.context:
-            context_parts.append(f"Context: {handoff_data.context}")
-        # Always surface the session_id so the target agent can use it for tool calls
+        # Handoff framing, split by who wrote it (security finding F4).
+        #
+        # `reason` and `context` are parsed from the handoff tool call's arguments,
+        # i.e. they are written by the SOURCE AGENT'S MODEL. Putting them in a
+        # system message gave model-authored text the trust level of developer
+        # instructions -- and on Anthropic it is worse than it looks: the provider
+        # hoists every system message, wherever it sits in the list, and joins them
+        # into the single top-level `system` parameter, so the text was
+        # concatenated straight onto the agent's own system prompt.
+        #
+        # Only SDK-authored scaffolding stays in `system`. The model-authored parts
+        # drop to `user` inside an untrusted envelope.
+        system_parts = [f"You are receiving a handoff from {handoff_data.from_agent}."]
+        # Always surface the session_id so the target agent can use it for tool
+        # calls -- it comes from RunContext, not from the model, so it stays here.
         if session_id:
-            context_parts.append(f"session_id: {session_id}")
+            system_parts.append(f"session_id: {session_id}")
+        scaffolding = "\n".join(system_parts)
 
-        messages.append(
-            {
-                "role": "system",
-                "content": "\n".join(context_parts),
-            }
-        )
+        # Fold into the leading system message (the target's instructions) rather
+        # than appending a trailing one, so the untrusted block below can still see
+        # the history's last message and merge with it. Mirrors
+        # untrusted_content._ensure_system_instruction.
+        if messages and messages[0].get("role") == "system":
+            first = messages[0]
+            messages[0] = {**first, "content": f"{first.get('content') or ''}\n\n{scaffolding}"}
+        else:
+            messages.insert(0, {"role": "system", "content": scaffolding})
+
+        untrusted_parts = [f"Reason: {handoff_data.reason}"]
+        if handoff_data.context:
+            untrusted_parts.append(f"Context: {handoff_data.context}")
+        block = fence_untrusted("\n".join(untrusted_parts), _HANDOFF_CONTEXT_TAG)
+
+        # Merge into a trailing user message rather than appending a second one.
+        # AnthropicProvider._split_messages appends user messages unconditionally
+        # with no consecutive-user merging (contrast its tool_result branch, which
+        # does merge), so two in a row would reach the provider as two user turns.
+        # Copy-not-mutate: these dicts are shared with the caller's session history.
+        if messages and messages[-1].get("role") == "user":
+            prev = messages[-1]
+            merged = f"{prev.get('content') or ''}\n\n{block}".lstrip()
+            messages[-1] = {**prev, "content": merged}
+        else:
+            messages.append({"role": "user", "content": block})
 
         return messages
 

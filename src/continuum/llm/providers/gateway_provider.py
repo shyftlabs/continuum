@@ -21,6 +21,7 @@ from typing import Any, ClassVar
 
 from continuum.llm.config import LLMConfig
 from continuum.llm.providers.openai_provider import OpenAIProvider
+from continuum.llm.structured_output import openai_schema_tool, schema_from_response_format
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +32,17 @@ _MODE_TO_TIER: dict[str, str] = {
     "modest": "mid",
     "strict": "cheap",
 }
+
+# Gateway provider ids whose request translation has no `response_format` entry,
+# so the parameter is dropped before it reaches the real backend — silently, and
+# for every model under that provider.
+#
+# Bedrock: the gateway builds its Converse request from a fixed parameter table
+# (src/providers/bedrock/chatComplete.ts). That table maps `tools` → toolConfig
+# and `tool_choice` → toolChoice, including the forced form, but contains no
+# `response_format` key — so a schema sent that way never reaches AWS. Sending
+# it as a forced tool instead uses translation the gateway already performs.
+_SCHEMA_VIA_TOOL_PROVIDERS: frozenset[str] = frozenset({"bedrock"})
 
 
 class GatewayProvider(OpenAIProvider):
@@ -59,10 +71,58 @@ class GatewayProvider(OpenAIProvider):
         config: LLMConfig,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
+        *,
+        enforce_schema: bool = False,
     ) -> dict[str, Any]:
-        kwargs = super()._build_kwargs(config, tools, tool_choice)
+        kwargs = super()._build_kwargs(config, tools, tool_choice, enforce_schema=enforce_schema)
         kwargs.pop("temperature", None)
         return kwargs
+
+    def _schema_delivery(
+        self,
+        config: LLMConfig,
+        tools: list[dict[str, Any]] | None,
+        *,
+        enforce_schema: bool,
+    ) -> dict[str, Any] | None:
+        """Send the schema as a forced tool for backends that drop response_format.
+
+        Only for a model pinned to such a provider: with ``auto/<tier>`` the
+        gateway chooses the model *after* this request is built, so the target is
+        unknowable here and guessing would degrade every tier request.
+
+        Skipped when the caller has tools of its own — forcing the synthetic tool
+        would take those off the table — and when streaming, where a forced tool
+        yields tool-call deltas and no text.
+        """
+        if not enforce_schema or tools:
+            return None
+        if self._target_provider(config.model) not in _SCHEMA_VIA_TOOL_PROVIDERS:
+            return None
+        schema = schema_from_response_format(config.response_format)
+        if schema is None:
+            # Bare json_object names no shape, so there is nothing to build a
+            # tool from. It is dropped for these providers too, but an empty
+            # tool would not help and would change the answer's form.
+            return None
+        logger.debug(
+            "Smart Gateway: sending the output schema for %s as a forced tool "
+            "(this backend's request translation drops response_format).",
+            config.model,
+        )
+        return openai_schema_tool(schema)
+
+    @staticmethod
+    def _target_provider(model: str) -> str:
+        """The gateway provider id a model is pinned to ("" when unpinned).
+
+        Mirrors _normalize_model: only a provider-qualified name names its
+        backend. ``auto/<tier>`` is deliberately excluded — "auto" is a routing
+        instruction, not a provider.
+        """
+        if "/" not in model or model.startswith("auto/"):
+            return ""
+        return model.split("/", 1)[0].lower()
 
     def _normalize_model(self, model: str) -> str:
         # Explicit tier request — the gateway's native auto-routing format.

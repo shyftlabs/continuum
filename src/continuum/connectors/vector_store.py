@@ -15,7 +15,9 @@ cannot hand mem0 a live client. Instead it:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
+from continuum.config import resolve_milvus_uri
 from continuum.connectors.base import BaseConnector, ConnectionMode
 from continuum.logging import get_logger
 from continuum.security.secrets_guard import enforce_credential
@@ -52,15 +54,33 @@ class VectorStoreConnector(BaseConnector[Any]):
 
     def is_configured(self) -> bool:
         if self.provider == "milvus":
-            return bool(self._config.milvus_host)
+            return bool(self._config.milvus_uri or self._config.milvus_host)
         return bool(self._config.qdrant_host)
+
+    def milvus_uri(self) -> str:
+        """The effective Milvus endpoint — MILVUS_URI when set, else host:port."""
+        return resolve_milvus_uri(
+            self._config.milvus_uri,
+            self._config.milvus_host,
+            self._config.milvus_port,
+        )
+
+    def _milvus_effective_host(self) -> str:
+        """Hostname of the effective Milvus endpoint.
+
+        Derived from the resolved URI, not ``milvus_host`` — otherwise a remote
+        endpoint set via ``MILVUS_URI`` would be classified by the *default*
+        ``milvus_host`` ("localhost"), read as LOCAL_DOCKER, and skip the
+        fail-closed credential check in ``_enforce_credential`` (F8/D4).
+        """
+        return urlparse(self.milvus_uri()).hostname or self._config.milvus_host
 
     @property
     def mode(self) -> ConnectionMode:
         if not self._config.enabled:
             return ConnectionMode.DISABLED
         if self.provider == "milvus":
-            host, cloud_cred = self._config.milvus_host, self._config.milvus_token
+            host, cloud_cred = self._milvus_effective_host(), self._config.milvus_token
         else:
             host, cloud_cred = self._config.qdrant_host, self._config.qdrant_api_key
         if cloud_cred:
@@ -103,10 +123,18 @@ class VectorStoreConnector(BaseConnector[Any]):
             milvus_config: dict[str, Any] = {
                 "collection_name": self._config.milvus_collection,
                 "embedding_model_dims": self._config.embedding_dims,
-                "url": f"http://{self._config.milvus_host}:{self._config.milvus_port}",
+                "url": self.milvus_uri(),
             }
-            if self._config.milvus_token:
-                milvus_config["token"] = self._config.milvus_token
+            # Always emit a *string* token, never omit the key. mem0's
+            # MilvusDBConfig declares `token: str` but defaults it to None;
+            # Pydantic tolerates that default on first construction, then mem0
+            # re-creates the config from model_dump() for its telemetry store
+            # (mem0/memory/main.py) — where None is validated against `str` and
+            # raises, taking down the whole MemoryClient. An unauthenticated
+            # local/self-hosted Milvus (the default config) therefore cannot come
+            # up unless we send "". Matches connect() below, which already does
+            # `token=... or ""`.
+            milvus_config["token"] = self._config.milvus_token or ""
             return {"provider": "milvus", "config": milvus_config}
 
         qdrant_config: dict[str, Any] = {
@@ -129,7 +157,7 @@ class VectorStoreConnector(BaseConnector[Any]):
             from pymilvus import MilvusClient
 
             return MilvusClient(
-                uri=f"http://{self._config.milvus_host}:{self._config.milvus_port}",
+                uri=self.milvus_uri(),
                 token=self._config.milvus_token or "",
             )
         from qdrant_client import QdrantClient
@@ -167,7 +195,8 @@ class VectorStoreConnector(BaseConnector[Any]):
         if self.provider == "milvus":
             token = self._config.milvus_token
             d.update(
-                host=self._config.milvus_host,
+                uri=self.milvus_uri(),
+                host=self._milvus_effective_host(),
                 port=self._config.milvus_port,
                 collection=self._config.milvus_collection,
                 token=mask_value(token) if token else None,

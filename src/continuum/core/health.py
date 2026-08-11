@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from continuum.config import settings
+from continuum.config import resolve_milvus_uri, settings
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
@@ -428,7 +428,9 @@ class HealthCheck:
         try:
             from pymilvus import MilvusClient
 
-            uri = f"http://{settings.milvus_host}:{settings.milvus_port}"
+            uri = resolve_milvus_uri(
+                settings.milvus_uri, settings.milvus_host, settings.milvus_port
+            )
 
             def _check():
                 client = MilvusClient(uri=uri, token=settings.milvus_token or "")
@@ -446,8 +448,7 @@ class HealthCheck:
                 latency_ms=latency,
                 details={
                     "enabled": True,
-                    "host": settings.milvus_host,
-                    "port": settings.milvus_port,
+                    "uri": uri,
                     "collection_count": collection_count,
                 },
             )
@@ -466,8 +467,11 @@ class HealthCheck:
                 message=f"Milvus connection failed: {str(e)}",
                 latency_ms=latency,
                 details={
-                    "host": settings.milvus_host,
-                    "port": settings.milvus_port,
+                    # Recomputed rather than reusing `uri`, which may be unbound if
+                    # the failure happened before it was assigned.
+                    "uri": resolve_milvus_uri(
+                        settings.milvus_uri, settings.milvus_host, settings.milvus_port
+                    ),
                     "error": str(e),
                 },
             )

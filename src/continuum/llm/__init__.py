@@ -58,12 +58,7 @@ from continuum.llm.types import (
     ToolDefinition,
     Usage,
 )
-from continuum.llm.utils import (
-    check_json_schema_support,
-    check_response_format_support,
-    supports_tools_with_json_mode,
-    validate_json_schema_config,
-)
+from continuum.llm.utils import supports_tools_with_json_mode
 
 __all__ = [
     # Client
@@ -118,8 +113,5 @@ __all__ = [
     "LLMStreamingError",
     "LLMContentFilterError",
     # Utils
-    "check_response_format_support",
-    "check_json_schema_support",
     "supports_tools_with_json_mode",
-    "validate_json_schema_config",
 ]

@@ -50,6 +50,11 @@ class GeminiProvider(BaseProvider):
         self._client = OpenAI(**kwargs)
         self._async_client = AsyncOpenAI(**kwargs)
 
+    @staticmethod
+    def supports_native_schema() -> bool:
+        """Yes — the OpenAI-compatible endpoint accepts a json_schema format."""
+        return True
+
     def _normalize_model(self, model: str) -> str:
         # Strip provider prefix: "gemini/gemini-2.5-flash" → "gemini-2.5-flash"
         return model.removeprefix("gemini/").removeprefix("google/")
@@ -74,8 +79,13 @@ class GeminiProvider(BaseProvider):
         if config.timeout:
             kwargs["timeout"] = config.timeout
 
-        # Gemini supports json_object mode but not Pydantic schema via compat endpoint
-        if config.json_mode:
+        # The compat endpoint speaks OpenAI's response_format, so forward the
+        # json_schema form as-is. It used to be dropped here and only json_object
+        # ("some JSON, any shape") was sent, which threw away the one thing that
+        # actually pins the answer's shape.
+        if isinstance(config.response_format, dict):
+            kwargs["response_format"] = config.response_format
+        elif config.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
         if tools:

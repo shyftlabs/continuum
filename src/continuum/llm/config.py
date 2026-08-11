@@ -4,11 +4,13 @@ LLM-specific configuration.
 Provides configuration classes for LLM client settings.
 """
 
+import warnings
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from continuum.config import settings
+from continuum.llm.structured_output import to_openai_response_format
 
 if TYPE_CHECKING:
     from continuum.agent.base import BaseAgent
@@ -39,7 +41,9 @@ class LLMConfig(BaseModel):
     enable_fallback: bool = Field(default_factory=lambda: settings.llm_enable_fallback)
 
     # Response Format
-    # Can be a dict (for json_object or json_schema), or a Pydantic model class
+    # Accepts a dict (json_object / json_schema) or a Pydantic model class; a
+    # model class is normalized to the json_schema dict on the way in (see
+    # _normalize_response_format) so providers only ever see one shape.
     response_format: dict[str, Any] | type[BaseModel] | None = None
     json_mode: bool = False
 
@@ -64,75 +68,20 @@ class LLMConfig(BaseModel):
     extra_body: dict[str, Any] | None = None  # passed as extra_body to the OpenAI SDK call
     gateway_router_mode: str | None = None  # value for x-portkey-router-mode header
 
-    def to_kwargs(self) -> dict[str, Any]:
-        """Convert config to kwargs for LLM completion call."""
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "timeout": self.timeout,
-            "num_retries": self.max_retries,
-        }
+    @field_validator("response_format", mode="before")
+    @classmethod
+    def _normalize_response_format(cls, value: Any) -> Any:
+        """Turn a Pydantic model class into the json_schema dict it describes.
 
-        # Omit temperature when None so providers that reject the parameter
-        # (e.g. some reasoning models) are not sent it.
-        if self.temperature is not None:
-            kwargs["temperature"] = self.temperature
-
-        if self.enable_fallback and self.fallback_models:
-            kwargs["fallbacks"] = self.fallback_models
-
-        # Add optional parameters
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-        if self.top_p is not None:
-            kwargs["top_p"] = self.top_p
-        if self.frequency_penalty is not None:
-            kwargs["frequency_penalty"] = self.frequency_penalty
-        if self.presence_penalty is not None:
-            kwargs["presence_penalty"] = self.presence_penalty
-        if self.stop is not None:
-            kwargs["stop"] = self.stop
-        if self.seed is not None:
-            kwargs["seed"] = self.seed
-        if self.user is not None:
-            kwargs["user"] = self.user
-
-        # Response format
-        if self.json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        elif self.response_format is not None:
-            # Handle Pydantic models
-            if isinstance(self.response_format, type) and issubclass(
-                self.response_format, BaseModel
-            ):
-                kwargs["response_format"] = self.response_format
-            elif isinstance(self.response_format, dict):
-                # Already a dict format (json_object or json_schema)
-                kwargs["response_format"] = self.response_format
-
-        # Custom provider settings
-        if self.api_base is not None:
-            kwargs["api_base"] = self.api_base
-        if self.api_key is not None:
-            kwargs["api_key"] = self.api_key
-        if self.api_version is not None:
-            kwargs["api_version"] = self.api_version
-        if self.custom_llm_provider is not None:
-            kwargs["custom_llm_provider"] = self.custom_llm_provider
-
-        # Caching
-        if self.cache:
-            kwargs["cache"] = {"type": "local"}
-            if self.cache_ttl:
-                kwargs["cache"]["ttl"] = self.cache_ttl
-
-        # Add metadata if present
-        if self.metadata:
-            kwargs["metadata"] = self.metadata
-
-        if self.extra_body is not None:
-            kwargs["extra_body"] = self.extra_body
-
-        return kwargs
+        The OpenAI SDK refuses a model class on ``chat.completions.create()``
+        ("You must use chat.completions.parse() instead"), which surfaced as an
+        LLMError on every OpenAI-wire provider — OpenAI, Gemini and the Smart
+        Gateway alike. Normalizing here means the class form stays a usable way
+        to ask for a schema, and every provider receives one predictable shape.
+        """
+        if isinstance(value, type) and issubclass(value, BaseModel):
+            return to_openai_response_format(value)
+        return value
 
     def with_overrides(self, **kwargs: Any) -> "LLMConfig":
         """Create a new config with overrides applied."""
@@ -145,10 +94,14 @@ class LLMConfig(BaseModel):
         """
         Create LLMConfig from agent configuration.
 
-        Handles JSON mode configuration:
-        - If enable_json_mode is True and json_schema is a Pydantic model: uses the model directly
-        - If enable_json_mode is True and json_schema is a dict: creates json_schema format
-        - If enable_json_mode is True and json_schema is None: uses simple json_object mode
+        Handles the legacy ``enable_json_mode`` configuration:
+        - json_schema is a Pydantic model: normalized to a json_schema response_format
+        - json_schema is a dict: wrapped as a json_schema response_format
+        - json_schema is None: simple json_object mode
+
+        ``enable_json_mode``/``json_schema`` are superseded by ``output_schema``,
+        which validates the result rather than only requesting a shape; see
+        _legacy_json_response_format.
 
         Args:
             agent: BaseAgent instance with JSON mode configuration
@@ -164,21 +117,50 @@ class LLMConfig(BaseModel):
         )
 
         if agent.enable_json_mode:
-            if agent.json_schema is not None:
-                # Check if json_schema is a Pydantic model
-                if isinstance(agent.json_schema, type) and issubclass(agent.json_schema, BaseModel):
-                    config.response_format = agent.json_schema
-                elif isinstance(agent.json_schema, dict):
-                    config.response_format = {
-                        "type": "json_schema",
-                        "json_schema": agent.json_schema,
-                        "strict": agent.json_strict,
-                    }
-                else:
-                    # Fallback to simple JSON mode
-                    config.json_mode = True
-            else:
-                # Simple JSON object mode
+            response_format = cls._legacy_json_response_format(agent)
+            if response_format is None:
                 config.json_mode = True
+            else:
+                config.response_format = response_format
 
         return config
+
+    @staticmethod
+    def _legacy_json_response_format(agent: "BaseAgent") -> dict[str, Any] | None:
+        """Build a response_format from the deprecated ``json_schema`` field.
+
+        Returns None when the agent named no schema, meaning bare json_object
+        mode is all that was asked for.
+
+        Assignment does not run field validators (LLMConfig does not enable
+        validate_assignment), so the Pydantic-class normalization is applied
+        explicitly here rather than being inherited from the field validator.
+        """
+        schema = agent.json_schema
+        if schema is None:
+            return None
+
+        warnings.warn(
+            "BaseAgent.enable_json_mode/json_schema are deprecated; use "
+            "output_schema=<PydanticModel> instead. output_schema validates the "
+            "result into AgentResponse.structured_output and retries a failed "
+            "format, whereas json_schema only requests a shape.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            return to_openai_response_format(schema)
+
+        if not isinstance(schema, dict):
+            return None
+
+        # Accept both spellings seen in the wild: a bare JSON Schema, or an
+        # already-assembled OpenAI json_schema block. Wrapping the latter again
+        # would bury the real schema one level too deep.
+        block = dict(schema) if "schema" in schema else {"schema": schema}
+        block.setdefault("name", schema.get("title", "response"))
+        # `strict` belongs INSIDE the json_schema block; at the top level OpenAI
+        # rejects the request outright.
+        block.setdefault("strict", getattr(agent, "json_strict", True))
+        return {"type": "json_schema", "json_schema": block}

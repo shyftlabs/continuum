@@ -7,6 +7,7 @@ then pydantic-settings reads them. This ensures both our SDK and
 external libraries can access the same variables.
 """
 
+import logging as _stdlib_logging
 from functools import lru_cache
 from typing import Literal
 
@@ -17,6 +18,36 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Load .env file into os.environ BEFORE creating Settings
 # This ensures all libraries can read env vars via os.getenv()
 load_dotenv()
+
+# Stdlib logger: continuum.logging imports this module, so it cannot be imported
+# here without creating a cycle.
+_logger = _stdlib_logging.getLogger(__name__)
+
+
+def resolve_milvus_uri(uri: str | None, host: str, port: int) -> str:
+    """Resolve the effective Milvus/Zilliz URI.
+
+    ``MILVUS_URI`` wins when set — it is the only way to express a scheme other
+    than ``http``, or an endpoint with no port (Zilliz Cloud serves TLS on the
+    implicit 443, so ``https://host:19530`` is also wrong). A host that already
+    carries a scheme is honored verbatim rather than producing
+    ``http://https://host:19530``.
+
+    This is the single source of truth for the URI: the mem0 config block, the
+    connector's health probe, the health check, and the tool-attention registry
+    all resolve through it, so a Zilliz endpoint configured once applies to all
+    four.
+    """
+    if uri:
+        return uri
+    if "://" in host:
+        _logger.warning(
+            "MILVUS_HOST=%r contains a URL scheme; using it as the full URI and "
+            "ignoring MILVUS_PORT. Set MILVUS_URI instead to make this explicit.",
+            host,
+        )
+        return host
+    return f"http://{host}:{port}"
 
 
 def _resolve_default_model(
@@ -201,6 +232,9 @@ class Settings(BaseSettings):
     # Milvus Vector Store Configuration
     milvus_host: str = "localhost"  # Milvus host
     milvus_port: int = 19530  # Milvus port
+    # Full endpoint URL. Overrides host/port when set — required for Zilliz Cloud
+    # and any TLS endpoint, e.g. https://in03-xxx.serverless.gcp-us-west1.cloud.zilliz.com
+    milvus_uri: str | None = None
     milvus_token: str | None = None  # Milvus token (for Zilliz Cloud)
     milvus_collection: str = "orchestrator_memories"  # Collection name for memories
 
