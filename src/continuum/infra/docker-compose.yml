@@ -241,7 +241,11 @@ services:
       TZ: UTC
       PGTZ: UTC
     ports:
-      - 127.0.0.1:${LANGFUSE_POSTGRES_PORT:-5433}:5433
+      # Container side is 5432 — the port postgres actually listens on. Nothing
+      # here sets PGPORT or overrides `command`, so the image uses its default.
+      # The 5433 on the host side is only to avoid colliding with a local
+      # postgres install, and is unrelated to the container's port.
+      - 127.0.0.1:${LANGFUSE_POSTGRES_PORT:-5433}:5432
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
 
