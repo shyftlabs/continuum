@@ -56,12 +56,41 @@ def _record_observe_exception(span: Any, span_name: str, e: BaseException) -> No
     report_error(e, context=f"observe.{span_name}", trace_id=get_current_trace_id())
 
 
+def _is_method(func: Callable[..., Any]) -> bool:
+    """Whether ``func`` was defined in a class body (so arg 0 is the receiver).
+
+    Decided from ``__qualname__`` rather than from the arguments: a method's
+    qualname is ``Owner.name``, while a nested plain function's is
+    ``...<locals>.name``. ``func`` is always the undecorated function here —
+    @observe is applied inside the class body, before any binding happens — so
+    its qualname still names the owning class.
+    """
+    parts = func.__qualname__.split(".")
+    return len(parts) > 1 and parts[-2] != "<locals>"
+
+
 def _get_function_input(func: Callable[..., Any], args: tuple, kwargs: dict) -> dict[str, Any]:
-    """Extract function input as a dictionary."""
+    """Extract function input as a dictionary.
+
+    The receiver (``self``/``cls``) is dropped. It is not input — it is a live
+    handle on the running object, and capturing it put the whole object graph
+    on the span: a ToolExecutor reached telemetry as 93 KB of tool_registry and
+    _run_artifacts, which OOMKilled the process holding it.
+
+    Both conditions are required. Position alone would strip the first argument
+    of any function; name alone would corrupt a plain function that legitimately
+    takes a parameter called ``self``.
+    """
     sig = inspect.signature(func)
     bound = sig.bind(*args, **kwargs)
     bound.apply_defaults()
-    return dict(bound.arguments)
+    arguments = dict(bound.arguments)
+
+    params = list(sig.parameters)
+    if params and params[0] in ("self", "cls") and _is_method(func):
+        arguments.pop(params[0], None)
+
+    return arguments
 
 
 def _serialize_output(output: Any) -> Any:

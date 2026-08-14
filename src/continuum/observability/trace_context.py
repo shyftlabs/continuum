@@ -553,7 +553,16 @@ def truncate_data(data: Any, max_size: int = MAX_TRACE_DATA_SIZE) -> Any:
         json_str = json.dumps(data, default=str)
 
         if len(json_str) <= max_size:
-            return data
+            # Return what was MEASURED, not the original. `default=str` renders
+            # anything json cannot encode as a short repr, so a live object
+            # measures ~50 bytes and clears the limit — while the object itself
+            # goes on to be expanded by the backend's serializer, which walks
+            # __dict__ recursively (93 KB from one ToolExecutor, then OOMKill).
+            # Round-tripping returns the flattened form the check actually
+            # validated, so nothing reaches telemetry that was never weighed.
+            # Note this normalises as JSON does: tuples become lists, non-string
+            # dict keys become strings — which is what the wire carries anyway.
+            return json.loads(json_str)
 
         # Truncate string representation
         truncated = json_str[: max_size - 50]  # Leave room for truncation message
