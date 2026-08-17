@@ -185,3 +185,12 @@ playground/**/tool-trust/
 # tree that predates the move does not suddenly show them as untracked.
 playground/**/tool-pins.json
 playground/**/.tool-pins-last-seen.json
+
+# Latency probe output (src/continuum/llm/timing_probe.py). Every record carries
+# turn_meta.question — the user's actual prompt — so this must never be
+# committed. Regenerate it instead: CONTINUUM_TIMING_LOG=1.
+#
+# No slash in the pattern, so git matches it as a basename at every depth — a
+# `**/` twin would be redundant here, unlike the anchored `playground/**/...`
+# rules above which do need it.
+continuum-timing.jsonl

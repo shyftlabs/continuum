@@ -8,6 +8,7 @@ but against a local MCP server instead of the remote one.
 import json
 import os
 import sys
+import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -28,6 +29,7 @@ from continuum import (
 )
 from continuum.agent.types import EventType
 from continuum.core.container import Container, get_container
+from continuum.llm.timing_probe import timing_turn
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
 from continuum.exceptions import InsecureConfigurationError
 from continuum.tools.tool_attention.config import ToolAttentionConfig
@@ -46,6 +48,31 @@ logger = get_logger(__name__)
 # here would fire the "NO totals" warning on every successful add.
 _CART_TOOLS = {"view_cart", "checkout"}
 _TOTAL_KEYS = {"total", "subtotal", "total_cents", "subtotal_cents", "taxes", "tax_cents"}
+
+# Per-turn latency tagging. Both helpers are cheap and unconditional — the probe
+# itself decides whether anything is written, so the agent path does not have to
+# branch on whether measurement is switched on.
+_TURN_QUESTION_MAX = 120
+
+
+def _new_turn_id() -> str:
+    """Short, unique id for one user question."""
+    return uuid.uuid4().hex[:12]
+
+
+def _turn_meta(message: str, config: ShopConfig, entrypoint: str) -> dict[str, Any]:
+    """What the rollup needs in order to be readable.
+
+    The question is truncated: it is repeated on every record belonging to the
+    turn, and a long paste would dominate the log without telling the reader more
+    than its first line does.
+    """
+    q = " ".join(message.split())
+    return {
+        "question": q[:_TURN_QUESTION_MAX] + ("…" if len(q) > _TURN_QUESTION_MAX else ""),
+        "agent_model": config.agent_model,
+        "entrypoint": entrypoint,
+    }
 
 
 def _raw_tool_name(tool_name: str) -> str:
@@ -276,13 +303,19 @@ class LocalShopAgent:
                 except Exception as e:
                     logger.warning(f"Session init failed for user {user_id}: {e}")
 
+        # One user question fans out into several gateway calls — the agent loop
+        # re-enters the model after each tool result. The probe records one line
+        # per HTTP call, so without a shared id there is no way to add them back
+        # up into "what did this question cost". Inert unless CONTINUUM_TIMING_LOG
+        # is set: the context manager only sets a contextvar.
         try:
-            response = await self._runner.run(
-                agent=self._agent,
-                input=message,
-                session_id=session_id,
-                user_id=user_id,
-            )
+            with timing_turn(_new_turn_id(), meta=_turn_meta(message, self.config, "chat")):
+                response = await self._runner.run(
+                    agent=self._agent,
+                    input=message,
+                    session_id=session_id,
+                    user_id=user_id,
+                )
             return response.content or ""
         except Exception as e:
             logger.error(f"Chat error: {e}")
@@ -334,31 +367,38 @@ class LocalShopAgent:
 
         yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'user_id': user_id})}\n\n"
 
+        # See chat(). Note the probe's streaming caveat: httpx fires its response
+        # hook when headers arrive, so client_ms on this path is time-to-headers
+        # and the gateway usually cannot stamp x-aura-timing onto a body that is
+        # already flowing. Measure with the UI's Stream toggle OFF.
         try:
-            async for event in self._runner.run_stream(
-                agent=self._agent,
-                input=message,
-                session_id=session_id,
-                user_id=user_id,
+            with timing_turn(
+                _new_turn_id(), meta=_turn_meta(message, self.config, "chat_stream")
             ):
-                if event.type == EventType.CONTENT_DELTA:
-                    content = event.data.get("content", "")
-                    if content:
-                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                async for event in self._runner.run_stream(
+                    agent=self._agent,
+                    input=message,
+                    session_id=session_id,
+                    user_id=user_id,
+                ):
+                    if event.type == EventType.CONTENT_DELTA:
+                        content = event.data.get("content", "")
+                        if content:
+                            yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
 
-                elif event.type == EventType.TOOL_CALL_START:
-                    yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'start'})}\n\n"
+                    elif event.type == EventType.TOOL_CALL_START:
+                        yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'start'})}\n\n"
 
-                elif event.type == EventType.TOOL_CALL_END:
-                    yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'end'})}\n\n"
+                    elif event.type == EventType.TOOL_CALL_END:
+                        yield f"data: {json.dumps({'type': 'tool_call', 'tool_name': event.data.get('tool_name', ''), 'status': 'end'})}\n\n"
 
-                elif event.type == EventType.RUN_ERROR:
-                    yield f"data: {json.dumps({'type': 'error', 'error': event.data.get('error', 'Unknown error')})}\n\n"
-                    break
+                    elif event.type == EventType.RUN_ERROR:
+                        yield f"data: {json.dumps({'type': 'error', 'error': event.data.get('error', 'Unknown error')})}\n\n"
+                        break
 
-                elif event.type == EventType.RUN_END:
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    break
+                    elif event.type == EventType.RUN_END:
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                        break
 
         except Exception as e:
             logger.error(f"Stream error: {e}")

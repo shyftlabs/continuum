@@ -81,6 +81,9 @@ _START_KEY = "continuum_probe_start"
 # which is still a usable per-call log.
 _turn_id: ContextVar[str | None] = ContextVar("continuum_timing_turn_id", default=None)
 _turn_seq: ContextVar[int] = ContextVar("continuum_timing_turn_seq", default=0)
+_turn_meta: ContextVar["dict[str, Any] | None"] = ContextVar(
+    "continuum_timing_turn_meta", default=None
+)
 
 # The sync client may be driven from a worker thread, so the append is locked.
 # Held only around the write itself, never around the request.
@@ -101,7 +104,7 @@ def log_path() -> str:
 
 
 @contextmanager
-def timing_turn(turn_id: str) -> Iterator[None]:
+def timing_turn(turn_id: str, meta: dict[str, Any] | None = None) -> Iterator[None]:
     """Tag every LLM call made inside this block with `turn_id`.
 
     A contextvar rather than a parameter because the call sites are several
@@ -109,20 +112,95 @@ def timing_turn(turn_id: str) -> Iterator[None]:
     exists. Also restores the previous value on exit, so nested turns (a memory
     extraction call made while handling a user turn) cannot leak their id
     outward.
+
+    `meta` is copied onto every record from this turn — the user's question, the
+    model asked for, whatever makes the rollup readable. Kept small on purpose:
+    it is repeated on each of the turn's records rather than stored once.
     """
     token_id = _turn_id.set(turn_id)
     token_seq = _turn_seq.set(0)
+    token_meta = _turn_meta.set(dict(meta) if meta else None)
     try:
         yield
     finally:
         _turn_id.reset(token_id)
         _turn_seq.reset(token_seq)
+        _turn_meta.reset(token_meta)
 
 
 def _next_seq() -> int:
     seq = _turn_seq.get() + 1
     _turn_seq.set(seq)
     return seq
+
+
+# Bodies above this are not inspected. A request carrying base64 images can be
+# tens of megabytes, and parsing it to count roles would cost more than the
+# phases being measured — the probe must not distort its own measurement.
+_MAX_BODY_BYTES_TO_INSPECT = 1_000_000
+
+
+def _content_text(content: Any) -> str:
+    """Text of a message, mirroring the gateway's own `contentToText`.
+
+    Kept deliberately close to the gateway's extraction rules: the point of this
+    field is to predict whether the gateway found a prompt to classify, so an
+    extraction that disagreed with the gateway's would answer the wrong question.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            p.get("text", "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        return "\n".join(x for x in parts if x)
+    return ""
+
+
+def _describe_request(request: httpx.Request) -> dict[str, Any] | None:
+    """Shape of the outgoing request — enough to explain a skipped phase.
+
+    The gateway classifies the LAST role:'user' message and silently skips
+    classification when that yields no text (`prompt !== null` in
+    middlewares/classifier/index.ts). From outside, that skip is invisible: no
+    classifier_ms, no x-aura-classification header, and a request routed with no
+    complexity signal. Recording the roles and whether a usable user message was
+    present makes the skip diagnosable from the log alone.
+    """
+    try:
+        raw = request.content
+        if not raw or len(raw) > _MAX_BODY_BYTES_TO_INSPECT:
+            return None
+        body = json.loads(raw)
+        if not isinstance(body, dict):
+            return None
+        messages = body.get("messages")
+        if not isinstance(messages, list):
+            return None
+
+        last_user = ""
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_user = _content_text(m.get("content"))
+                break
+
+        metadata = body.get("metadata")
+        return {
+            "model": body.get("model"),
+            "n_messages": len(messages),
+            "roles": [m.get("role") for m in messages if isinstance(m, dict)],
+            "last_user_chars": len(last_user.strip()),
+            # The gateway's own predicate, evaluated here: False predicts a
+            # skipped classification.
+            "has_user_text": bool(last_user.strip()),
+            "declared_complexity": (
+                metadata.get("complexity") if isinstance(metadata, dict) else None
+            ),
+        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _parse_timing(raw: str | None) -> dict[str, Any] | None:
@@ -165,10 +243,12 @@ def _record(response: httpx.Response) -> None:
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "turn_id": _turn_id.get(),
+                "turn_meta": _turn_meta.get(),
                 "seq": _next_seq(),
                 "host": request.url.host,
                 "path": request.url.path,
                 "status": response.status_code,
+                "request": _describe_request(request),
                 "client_ms": client_ms,
                 "timing": _parse_timing(response.headers.get(_TIMING_HEADER)),
                 "request_id": response.headers.get(_REQUEST_ID_HEADER),
