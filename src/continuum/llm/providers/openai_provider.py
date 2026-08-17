@@ -28,6 +28,7 @@ from continuum.llm.structured_output import (
     forces_structured_tool,
     unwrap_structured_tool_call,
 )
+from continuum.llm.timing_probe import build_async_http_client, build_sync_http_client
 from continuum.llm.types import FunctionCall, LLMResponse, StreamChunk, ToolCall
 from continuum.logging import get_logger
 
@@ -123,8 +124,22 @@ class OpenAIProvider(BaseProvider):
         if default_headers:
             kwargs["default_headers"] = default_headers
 
-        self._client = OpenAI(**kwargs)
-        self._async_client = AsyncOpenAI(**kwargs)
+        # Client-side latency probe. Both builders return None unless
+        # CONTINUUM_TIMING_LOG is set, in which case the two constructions below
+        # are exactly what they were before it existed.
+        #
+        # Applied per-client rather than folded into `kwargs`: the sync and async
+        # SDK clients need a sync and an async httpx client respectively, so one
+        # shared dict cannot carry both.
+        sync_kwargs = dict(kwargs)
+        async_kwargs = dict(kwargs)
+        if (sync_http := build_sync_http_client()) is not None:
+            sync_kwargs["http_client"] = sync_http
+        if (async_http := build_async_http_client()) is not None:
+            async_kwargs["http_client"] = async_http
+
+        self._client = OpenAI(**sync_kwargs)
+        self._async_client = AsyncOpenAI(**async_kwargs)
 
     @staticmethod
     def supports_native_schema() -> bool:
