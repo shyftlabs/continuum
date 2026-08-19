@@ -186,10 +186,14 @@ def main() -> None:
         print(f"ACROSS {len(turns)} TURNS")
         print("-" * 78)
         print(f"  {'':<26}{'median':>10}{'min':>10}{'max':>10}")
-        print(f"  {'gateway calls per turn':<26}{st.median(per_turn_calls):>10.1f}"
-              f"{min(per_turn_calls):>10}{max(per_turn_calls):>10}")
-        print(f"  {'client_ms per turn':<26}{st.median(per_turn_client):>10.1f}"
-              f"{min(per_turn_client):>10.1f}{max(per_turn_client):>10.1f}")
+        print(
+            f"  {'gateway calls per turn':<26}{st.median(per_turn_calls):>10.1f}"
+            f"{min(per_turn_calls):>10}{max(per_turn_calls):>10}"
+        )
+        print(
+            f"  {'client_ms per turn':<26}{st.median(per_turn_client):>10.1f}"
+            f"{min(per_turn_client):>10.1f}{max(per_turn_client):>10.1f}"
+        )
         for k in sorted(per_turn_phase, key=lambda k: -st.median(per_turn_phase[k])):
             v = per_turn_phase[k]
             print(f"  {k:<26}{st.median(v):>10.1f}{min(v):>10.1f}{max(v):>10.1f}")
@@ -197,7 +201,9 @@ def main() -> None:
         med_client = st.median(per_turn_client)
         med_cls = st.median(per_turn_phase.get("classifier_ms", [0]))
         if med_client and med_cls:
-            print(f"\n  classifier as a share of one user question: {med_cls / med_client * 100:.1f}%")
+            print(
+                f"\n  classifier as a share of one user question: {med_cls / med_client * 100:.1f}%"
+            )
     print()
 
 

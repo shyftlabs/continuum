@@ -29,9 +29,9 @@ from continuum import (
 )
 from continuum.agent.types import EventType
 from continuum.core.container import Container, get_container
-from continuum.llm.timing_probe import timing_turn
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
 from continuum.exceptions import InsecureConfigurationError
+from continuum.llm.timing_probe import timing_turn
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
 from continuum.tools.util import NAMESPACE_SEPARATOR
@@ -376,9 +376,7 @@ class LocalShopAgent:
         # and the gateway usually cannot stamp x-aura-timing onto a body that is
         # already flowing. Measure with the UI's Stream toggle OFF.
         try:
-            with timing_turn(
-                _new_turn_id(), meta=_turn_meta(message, self.config, "chat_stream")
-            ):
+            with timing_turn(_new_turn_id(), meta=_turn_meta(message, self.config, "chat_stream")):
                 async for event in self._runner.run_stream(
                     agent=self._agent,
                     input=message,

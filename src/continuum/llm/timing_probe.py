@@ -60,10 +60,11 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -104,7 +105,7 @@ _START_KEY = "continuum_probe_start"
 # which is still a usable per-call log.
 _turn_id: ContextVar[str | None] = ContextVar("continuum_timing_turn_id", default=None)
 _turn_seq: ContextVar[int] = ContextVar("continuum_timing_turn_seq", default=0)
-_turn_meta: ContextVar["dict[str, Any] | None"] = ContextVar(
+_turn_meta: ContextVar[dict[str, Any] | None] = ContextVar(
     "continuum_timing_turn_meta", default=None
 )
 
@@ -174,9 +175,7 @@ def _content_text(content: Any) -> str:
         return content
     if isinstance(content, list):
         parts = [
-            p.get("text", "")
-            for p in content
-            if isinstance(p, dict) and p.get("type") == "text"
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
         ]
         return "\n".join(x for x in parts if x)
     return ""
@@ -329,7 +328,7 @@ def _record(
 
         _write(
             {
-                "ts": datetime.now(timezone.utc).isoformat(),
+                "ts": datetime.now(UTC).isoformat(),
                 "turn_id": _turn_id.get(),
                 "turn_meta": _turn_meta.get(),
                 "seq": _next_seq(),
@@ -361,11 +360,11 @@ def _sync_request_hook(request: httpx.Request) -> None:
 
 
 def _sync_response_hook(response: httpx.Response) -> None:
-    elapsed = _elapsed_ms(response)          # before the body read, always
+    elapsed = _elapsed_ms(response)  # before the body read, always
     usage = None
     if not _is_streaming(response):
         try:
-            response.read()                  # httpx caches it; the SDK re-reads for free
+            response.read()  # httpx caches it; the SDK re-reads for free
             usage = _parse_usage(response)
         except Exception:  # noqa: BLE001
             pass
@@ -377,7 +376,7 @@ async def _async_request_hook(request: httpx.Request) -> None:
 
 
 async def _async_response_hook(response: httpx.Response) -> None:
-    elapsed = _elapsed_ms(response)          # before the body read, always
+    elapsed = _elapsed_ms(response)  # before the body read, always
     usage = None
     if not _is_streaming(response):
         try:
