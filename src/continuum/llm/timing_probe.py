@@ -29,6 +29,10 @@ One JSON object per HTTP call is appended to ``CONTINUUM_TIMING_LOG_PATH``
                   per-attempt served candidates, cache status), or None on a
                   direct-to-provider call. `router_attempts` is the only in-band
                   record of which effort alias actually ran.
+    usage         prompt/completion/reasoning token counts, parsed from the body.
+                  `reasoning_tokens` is the only in-band proof that a
+                  `reasoning_effort` sent via extra_body actually applied. None on
+                  streaming responses, whose body must not be consumed here.
     request_id    x-request-id, for joining against gateway logs and Langfuse
 
 `client_ms` is measured with ``time.perf_counter()``, not ``time.time()``, for
@@ -241,6 +245,38 @@ def _parse_timing(raw: str | None) -> dict[str, Any] | None:
     return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
 
 
+def _is_streaming(response: httpx.Response) -> bool:
+    """Whether reading this body would consume a stream the SDK still needs."""
+    return "text/event-stream" in (response.headers.get("content-type") or "")
+
+
+def _parse_usage(response: httpx.Response) -> dict[str, int] | None:
+    """Token usage, including the reasoning count. Assumes the body is read.
+
+    `reasoning_tokens` is the only in-band proof that a `reasoning_effort` sent
+    via extra_body actually took effect — the request carries the intent, and
+    nothing else in the response reflects it. Without it, an effort setting that
+    silently fails to apply is indistinguishable from one that worked, which is
+    exactly the confound this probe exists to prevent.
+    """
+    try:
+        body = json.loads(response.content)
+        u = body.get("usage") or {}
+        details = u.get("completion_tokens_details") or {}
+        out = {
+            k: v
+            for k, v in (
+                ("prompt_tokens", u.get("prompt_tokens")),
+                ("completion_tokens", u.get("completion_tokens")),
+                ("reasoning_tokens", details.get("reasoning_tokens")),
+            )
+            if isinstance(v, int)
+        }
+        return out or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _parse_routing(headers: Any) -> dict[str, str] | None:
     """The gateway's routing decision, or None when absent.
 
@@ -267,14 +303,29 @@ def _write(record: dict[str, Any]) -> None:
             fh.write(line + "\n")
 
 
-def _record(response: httpx.Response) -> None:
-    """Build and append one record. Never raises."""
+def _elapsed_ms(response: httpx.Response) -> float | None:
+    """Time since the request was stamped. Must be read BEFORE the body is."""
+    try:
+        start = response.request.extensions.get(_START_KEY)
+        return round((time.perf_counter() - start) * 1000, 3) if start is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _record(
+    response: httpx.Response,
+    client_ms: float | None = None,
+    usage: dict[str, int] | None = None,
+) -> None:
+    """Build and append one record. Never raises.
+
+    `client_ms` is passed in rather than computed here: the caller measures it
+    before reading the body, so that reading the body for `usage` cannot inflate
+    the very number this probe exists to report. It stays time-to-HEADERS, as it
+    always was.
+    """
     try:
         request = response.request
-        start = request.extensions.get(_START_KEY)
-        client_ms = (
-            round((time.perf_counter() - start) * 1000, 3) if start is not None else None
-        )
 
         _write(
             {
@@ -289,6 +340,7 @@ def _record(response: httpx.Response) -> None:
                 "client_ms": client_ms,
                 "timing": _parse_timing(response.headers.get(_TIMING_HEADER)),
                 "routing": _parse_routing(response.headers),
+                "usage": usage,
                 "request_id": response.headers.get(_REQUEST_ID_HEADER),
             }
         )
@@ -309,7 +361,15 @@ def _sync_request_hook(request: httpx.Request) -> None:
 
 
 def _sync_response_hook(response: httpx.Response) -> None:
-    _record(response)
+    elapsed = _elapsed_ms(response)          # before the body read, always
+    usage = None
+    if not _is_streaming(response):
+        try:
+            response.read()                  # httpx caches it; the SDK re-reads for free
+            usage = _parse_usage(response)
+        except Exception:  # noqa: BLE001
+            pass
+    _record(response, client_ms=elapsed, usage=usage)
 
 
 async def _async_request_hook(request: httpx.Request) -> None:
@@ -317,7 +377,15 @@ async def _async_request_hook(request: httpx.Request) -> None:
 
 
 async def _async_response_hook(response: httpx.Response) -> None:
-    _record(response)
+    elapsed = _elapsed_ms(response)          # before the body read, always
+    usage = None
+    if not _is_streaming(response):
+        try:
+            await response.aread()
+            usage = _parse_usage(response)
+        except Exception:  # noqa: BLE001
+            pass
+    _record(response, client_ms=elapsed, usage=usage)
 
 
 def build_sync_http_client() -> httpx.Client | None:

@@ -231,7 +231,10 @@ class LocalShopAgent:
             instructions=instructions,
             model=self.config.agent_model,
             temperature=self.config.agent_temperature,
-            extra_body=self.config.extra_body,
+            # getattr: this playground config is edited constantly between
+            # experiments, and a commented-out field should degrade to "no extra
+            # params" rather than crash the agent at startup.
+            extra_body=getattr(self.config, "extra_body", None),
             gateway_mode=self.config.gateway_mode,
             tools=self._tools,
             tool_executor=self._tool_executor,
