@@ -193,4 +193,7 @@ playground/**/.tool-pins-last-seen.json
 # No slash in the pattern, so git matches it as a basename at every depth — a
 # `**/` twin would be redundant here, unlike the anchored `playground/**/...`
 # rules above which do need it.
-continuum-timing.jsonl
+# Glob, not the exact name: parked/renamed variants (continuum-timing.mixed.jsonl,
+# .armA-nogap.jsonl, per-run archives) carry the same turn_meta.question payload
+# and were NOT matched by the exact-name rule this replaces.
+continuum-timing*.jsonl

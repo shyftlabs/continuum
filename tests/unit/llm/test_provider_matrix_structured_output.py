@@ -161,6 +161,7 @@ def _stream_agent():
     agent.temperature = 0.7
     agent.max_tokens = 1024
     agent.gateway_mode = None
+    agent.extra_body = None
     agent.enable_json_mode = False
     agent.json_schema = None
     agent.json_strict = False

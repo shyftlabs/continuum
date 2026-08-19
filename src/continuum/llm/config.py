@@ -114,6 +114,10 @@ class LLMConfig(BaseModel):
             temperature=agent.temperature,
             max_tokens=agent.max_tokens,
             gateway_router_mode=getattr(agent, "gateway_mode", None),
+            # getattr rather than agent.extra_body: this classmethod is called with
+            # anything BaseAgent-shaped, including test doubles and subclasses that
+            # predate the field. Missing => None => the SDK call is unchanged.
+            extra_body=getattr(agent, "extra_body", None),
         )
 
         if agent.enable_json_mode:

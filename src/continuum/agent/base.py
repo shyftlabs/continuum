@@ -117,6 +117,10 @@ class BaseAgent:
     # None omits temperature from LLM calls (for providers/models that reject it).
     temperature: float | None = 0.7
     max_tokens: int | None = None
+    # Provider-specific body params the SDK has no first-class field for —
+    # e.g. {"reasoning_effort": "high"} for the gpt-5 family. Passed through
+    # verbatim as the OpenAI SDK's `extra_body`; None omits it entirely.
+    extra_body: dict[str, Any] | None = None
     gateway_mode: str | None = (
         None  # "strict" | "modest" | "quality" — overrides SMART_GATEWAY_DEFAULT_MODE
     )
@@ -490,6 +494,7 @@ class BaseAgent:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "extra_body": copy.deepcopy(self.extra_body),
             "tools": copy.deepcopy(self.tools),
             "tool_executor": self.tool_executor,
             "mcp_servers": list(self.mcp_servers),  # shallow OK — server instances are shared
@@ -534,6 +539,7 @@ class BaseAgent:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "extra_body": copy.deepcopy(self.extra_body),
             "tools": [t if isinstance(t, dict) else str(t) for t in self.tools],
             "handoffs": [
                 {

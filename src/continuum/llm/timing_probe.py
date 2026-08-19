@@ -25,6 +25,10 @@ One JSON object per HTTP call is appended to ``CONTINUUM_TIMING_LOG_PATH``
     status        HTTP status
     client_ms     round trip as the CALLER sees it — see the note below
     timing        parsed x-aura-timing, or None when absent
+    routing       the gateway's own routing decision (mode, complexity, domain,
+                  per-attempt served candidates, cache status), or None on a
+                  direct-to-provider call. `router_attempts` is the only in-band
+                  record of which effort alias actually ran.
     request_id    x-request-id, for joining against gateway logs and Langfuse
 
 `client_ms` is measured with ``time.perf_counter()``, not ``time.time()``, for
@@ -69,6 +73,21 @@ _DEFAULT_PATH = "continuum-timing.jsonl"
 
 _TIMING_HEADER = "x-aura-timing"
 _REQUEST_ID_HEADER = "x-request-id"
+
+# The routing decision the gateway actually made. Recorded because the request
+# body only carries what was ASKED for ("auto/mid") and the response body carries
+# the BASE model id — effort aliases (`-low`/`-medium`/`-high`) are rewritten to
+# that base id plus `reasoning_effort` before dispatch, so a served id of
+# `gpt-5-nano-2025-08-07` is consistent with all three. Without these, which
+# model ran can only be inferred from a separate /v1/classify/auto dry run, which
+# answers "what would the router pick now", not "what did it pick then".
+_ROUTER_HEADERS = {
+    "router_mode": "x-aura-router-mode",
+    "router_complexity": "x-aura-router-complexity",
+    "router_domain": "x-aura-router-domain",
+    "router_attempts": "x-aura-router-attempts",
+    "cache_status": "x-aura-cache-status",
+}
 
 # Stamped onto the outgoing request by the request hook and read back by the
 # response hook. httpx carries `extensions` through to `response.request`, and
@@ -222,6 +241,24 @@ def _parse_timing(raw: str | None) -> dict[str, Any] | None:
     return {k: v for k, v in parsed.items() if isinstance(v, (int, float))}
 
 
+def _parse_routing(headers: Any) -> dict[str, str] | None:
+    """The gateway's routing decision, or None when absent.
+
+    None on any direct-to-provider call — there is no gateway to stamp these —
+    which is itself the signal that a call bypassed the gateway.
+
+    `x-aura-router-attempts` carries the served candidate per attempt
+    (`model@provider:status`), so it is the one field that distinguishes an
+    effort alias from its base id, and the only in-band record of a failover.
+    """
+    out = {
+        name: headers.get(header)
+        for name, header in _ROUTER_HEADERS.items()
+        if headers.get(header) is not None
+    }
+    return out or None
+
+
 def _write(record: dict[str, Any]) -> None:
     path = log_path()
     line = json.dumps(record, sort_keys=True)
@@ -251,6 +288,7 @@ def _record(response: httpx.Response) -> None:
                 "request": _describe_request(request),
                 "client_ms": client_ms,
                 "timing": _parse_timing(response.headers.get(_TIMING_HEADER)),
+                "routing": _parse_routing(response.headers),
                 "request_id": response.headers.get(_REQUEST_ID_HEADER),
             }
         )
