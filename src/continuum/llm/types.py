@@ -6,7 +6,7 @@ Provides Pydantic models for structured data handling with LLM responses.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Type alias for tool call input (can be ToolCall object or dict)
 # Used throughout the SDK for flexible tool call handling
@@ -18,15 +18,44 @@ ToolCallDict = dict[str, Any]
 # deserialize nested models when loading from dict/JSON.
 
 
+def provider_extras(function: Any) -> dict[str, Any]:
+    """Provider-specific fields an upstream attached to a tool call's function.
+
+    Tool calls are not always pure data: some providers attach state that must
+    come back unchanged on the next turn. Gemini 3.x signs each function call
+    with a ``thought_signature`` and rejects the whole request (400) if the
+    replayed call lacks it — which only bites from turn 2 onward.
+
+    Reads the extras the SDK already parsed rather than naming fields, so a
+    provider adding one costs no change here. Accepts SDK models (Pydantic,
+    ``extra="allow"``) and plain dicts alike.
+    """
+    if isinstance(function, dict):
+        return {k: v for k, v in function.items() if k not in ("name", "arguments")}
+    extras = getattr(function, "model_extra", None)
+    return dict(extras) if isinstance(extras, dict) else {}
+
+
 class FunctionCall(BaseModel):
-    """Represents a function call in a message."""
+    """Represents a function call in a message.
+
+    Accepts unknown fields so provider-specific state (Gemini's
+    ``thought_signature``, and whatever comes next) survives the round trip
+    instead of being silently dropped between the response and the replay.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     name: str
     arguments: str  # JSON string of arguments
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary format."""
-        return {"name": self.name, "arguments": self.arguments}
+        """Convert to dictionary format, including any provider extras.
+
+        Extras are emitted only when present, so a provider that sends none
+        still receives exactly the OpenAI shape it expects.
+        """
+        return {"name": self.name, "arguments": self.arguments, **(self.model_extra or {})}
 
 
 class ToolCall(BaseModel):
@@ -140,6 +169,7 @@ class LLMResponse(BaseModel):
                     function=FunctionCall(
                         name=tc.function.name,
                         arguments=tc.function.arguments,
+                        **provider_extras(tc.function),
                     ),
                 )
                 for tc in message.tool_calls
@@ -252,6 +282,7 @@ class StreamChunk(BaseModel):
                     function=FunctionCall(
                         name=tc.function.name or "",
                         arguments=tc.function.arguments or "",
+                        **provider_extras(tc.function),
                     ),
                 )
                 for tc in delta.tool_calls

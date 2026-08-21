@@ -28,7 +28,14 @@ from continuum.llm.structured_output import (
     forces_structured_tool,
     unwrap_structured_tool_call,
 )
-from continuum.llm.types import FunctionCall, LLMResponse, StreamChunk, ToolCall
+from continuum.llm.timing_probe import build_async_http_client, build_sync_http_client
+from continuum.llm.types import (
+    FunctionCall,
+    LLMResponse,
+    StreamChunk,
+    ToolCall,
+    provider_extras,
+)
 from continuum.logging import get_logger
 
 logger = get_logger(__name__)
@@ -123,8 +130,22 @@ class OpenAIProvider(BaseProvider):
         if default_headers:
             kwargs["default_headers"] = default_headers
 
-        self._client = OpenAI(**kwargs)
-        self._async_client = AsyncOpenAI(**kwargs)
+        # Client-side latency probe. Both builders return None unless
+        # CONTINUUM_TIMING_LOG is set, in which case the two constructions below
+        # are exactly what they were before it existed.
+        #
+        # Applied per-client rather than folded into `kwargs`: the sync and async
+        # SDK clients need a sync and an async httpx client respectively, so one
+        # shared dict cannot carry both.
+        sync_kwargs = dict(kwargs)
+        async_kwargs = dict(kwargs)
+        if (sync_http := build_sync_http_client()) is not None:
+            sync_kwargs["http_client"] = sync_http
+        if (async_http := build_async_http_client()) is not None:
+            async_kwargs["http_client"] = async_http
+
+        self._client = OpenAI(**sync_kwargs)
+        self._async_client = AsyncOpenAI(**async_kwargs)
 
     @staticmethod
     def supports_native_schema() -> bool:
@@ -435,11 +456,11 @@ class OpenAIProvider(BaseProvider):
             raise
 
     @staticmethod
-    def _accumulate_tool_call(acc: dict[int, dict[str, str]], raw_tc: Any) -> None:
+    def _accumulate_tool_call(acc: dict[int, dict[str, Any]], raw_tc: Any) -> None:
         """Merge one raw OpenAI tool-call delta into the accumulator dict."""
         idx = raw_tc.index
         if idx not in acc:
-            acc[idx] = {"id": "", "name": "", "arguments": ""}
+            acc[idx] = {"id": "", "name": "", "arguments": "", "extras": {}}
         if raw_tc.id:
             acc[idx]["id"] = raw_tc.id
         if raw_tc.function:
@@ -447,14 +468,22 @@ class OpenAIProvider(BaseProvider):
                 acc[idx]["name"] += raw_tc.function.name
             if raw_tc.function.arguments:
                 acc[idx]["arguments"] += raw_tc.function.arguments
+            # Provider state (e.g. Gemini's thought_signature) rides on whichever
+            # delta carries it — usually the first — while later deltas stream
+            # only argument text. Merge rather than overwrite so it isn't lost.
+            acc[idx]["extras"].update(provider_extras(raw_tc.function))
 
     @staticmethod
-    def _build_tool_calls_from_acc(acc: dict[int, dict[str, str]]) -> list[ToolCall]:
+    def _build_tool_calls_from_acc(acc: dict[int, dict[str, Any]]) -> list[ToolCall]:
         return [
             ToolCall(
                 id=acc[i]["id"],
                 type="function",
-                function=FunctionCall(name=acc[i]["name"], arguments=acc[i]["arguments"]),
+                function=FunctionCall(
+                    name=acc[i]["name"],
+                    arguments=acc[i]["arguments"],
+                    **acc[i].get("extras", {}),
+                ),
             )
             for i in sorted(acc)
         ]

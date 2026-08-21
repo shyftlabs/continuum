@@ -232,6 +232,7 @@ def _make_stream_agent(tool_attention=None, num_tools: int = 5):
     agent.temperature = 0.7
     agent.max_tokens = 1024
     agent.gateway_mode = None
+    agent.extra_body = None
     agent.enable_json_mode = False
     agent.json_schema = None
     agent.json_strict = False

@@ -55,6 +55,12 @@ class ShopConfig:
     # id, and with no gateway the default OpenAI provider strips it before the
     # call. Needs OPENAI_API_KEY in the root .env.
     agent_model: str = "openai/gpt-5-mini"  # "gpt-4o-mini", "anthropic/claude-opus-4-8", "auto/mid"
+    # Provider-specific body params, e.g. {"reasoning_effort": "high"}.
+    # Leave None when agent_model is an `auto/*` tier: the gateway routes to an
+    # effort ALIAS (auto/mid -> gpt-5-nano-high) which sets reasoning_effort
+    # itself, and a caller control that conflicts with an alias is rejected
+    # rather than silently overriding the pin.
+    extra_body: dict | None = None
     agent_temperature: float = 0.7
     max_turns: int = 10
 
