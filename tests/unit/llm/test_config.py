@@ -19,6 +19,7 @@ def _legacy_json_agent(json_schema):
     agent.temperature = 0.7
     agent.max_tokens = 4096
     agent.gateway_mode = None
+    agent.extra_body = None
     agent.enable_json_mode = True
     agent.json_schema = json_schema
     return agent
@@ -116,6 +117,7 @@ class TestLLMConfig:
         agent.temperature = 0.3
         agent.max_tokens = 200
         agent.gateway_mode = None
+        agent.extra_body = None
         agent.enable_json_mode = False
         agent.json_schema = None
         c = LLMConfig.from_agent_config(agent)
@@ -133,6 +135,7 @@ class TestLLMConfig:
         agent.temperature = 0.7
         agent.max_tokens = 4096
         agent.gateway_mode = None
+        agent.extra_body = None
         agent.enable_json_mode = True
         agent.json_schema = None
         c = LLMConfig.from_agent_config(agent)

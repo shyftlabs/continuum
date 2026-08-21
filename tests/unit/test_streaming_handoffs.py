@@ -72,11 +72,14 @@ def _make_agent(name: str = "source-agent", handoff_target: str = "target-agent"
 
     # Real values for everything LLMConfig.from_agent_config() feeds into pydantic
     # on the streaming-handoff path. The mock predates the Smart-Gateway
-    # `gateway_mode` field, so these must be concrete (not auto-MagicMock).
+    # `gateway_mode` and `extra_body` fields, so these must be concrete: a bare
+    # MagicMock auto-creates the attribute, so from_agent_config's getattr
+    # default never fires and pydantic rejects the mock as not a str/dict.
     agent.model = "gpt-4o-mini"
     agent.temperature = 0.7
     agent.max_tokens = 1024
     agent.gateway_mode = None
+    agent.extra_body = None
     agent.enable_json_mode = False
     agent.json_schema = None
     agent.json_strict = False
