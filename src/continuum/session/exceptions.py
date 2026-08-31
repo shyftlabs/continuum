@@ -63,6 +63,18 @@ class SessionNotCreatedError(SessionError):
     pass
 
 
+class SessionOwnershipError(SessionError):
+    """Raised when a caller tries to use a session owned by another scope.
+
+    A session ID is not authorization on its own. When a stored session is
+    bound to a user or conversation, ``AgentRunner`` requires the caller's
+    validated identifiers to match before it loads history, restores tool
+    context, or writes anything back.
+    """
+
+    pass
+
+
 class SessionMessageLimitError(SessionError):
     """Raised when session message limit is exceeded."""
 

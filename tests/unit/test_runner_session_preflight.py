@@ -11,8 +11,9 @@ Contract:
     it) → WARN by default; RAISE SessionNotCreatedError when strict mode is on
     (require_session=True, or SessionConfig.strict_sessions=True). Per-call
     require_session overrides the config.
-  - session exists but its user_id differs from the run's user_id → WARN
-    (memory write/search scope mismatch).
+  - a session bound to a user or conversation only accepts an exact caller
+    identifier match; mismatches raise SessionOwnershipError before history,
+    tool state, or persistence are touched.
   - Persistence degraded (Redis down in 'degrade' mode) → the "missing" signal
     is inconclusive, so never warn/raise about a missing session.
 
@@ -33,7 +34,7 @@ import pytest
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import RunnerConfig
 from continuum.agent.runner import AgentRunner
-from continuum.session.exceptions import SessionNotCreatedError
+from continuum.session.exceptions import SessionNotCreatedError, SessionOwnershipError
 from continuum.session.types import SessionMetadata
 
 
@@ -52,9 +53,18 @@ def _make_agent(name: str = "test-agent") -> BaseAgent:
     return BaseAgent(name=name, instructions="You are a test agent.", model="gpt-4o-mini")
 
 
-def _make_metadata(user_id: str | None) -> SessionMetadata:
+def _make_metadata(
+    user_id: str | None,
+    conversation_id: str | None = None,
+) -> SessionMetadata:
     now = datetime.now(UTC)
-    return SessionMetadata(session_id="abc", user_id=user_id, created_at=now, last_accessed_at=now)
+    return SessionMetadata(
+        session_id="abc",
+        user_id=user_id,
+        conversation_id=conversation_id,
+        created_at=now,
+        last_accessed_at=now,
+    )
 
 
 def _make_session_client(
@@ -160,30 +170,57 @@ class TestSessionNotCreated:
 
 
 # ---------------------------------------------------------------------------
-# 3. Existing session — user_id write/search alignment
+# 3. Existing session — ownership binding
 # ---------------------------------------------------------------------------
 
 
-class TestUserIdMismatch:
+class TestSessionOwnership:
     @pytest.mark.asyncio
-    async def test_mismatch_warns(self):
+    async def test_user_mismatch_raises_before_loading_session_state(self):
         sc = _make_session_client(metadata=_make_metadata("alice"))
-        with _patched_logger() as log:
-            result = await _make_runner(sc)._prepare_run(
-                _make_agent(), "hello", session_id="abc", user_id="bob"
-            )
-        assert result.success is True
-        assert "user_id mismatch" in _warning_text(log)
+        runner = _make_runner(sc)
+        runner._message_builder.prepare_messages = AsyncMock()
+        with pytest.raises(SessionOwnershipError):
+            await runner._prepare_run(_make_agent(), "hello", session_id="abc", user_id="bob")
+        runner._message_builder.prepare_messages.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_matching_user_id_no_warn(self):
+    async def test_owned_session_requires_a_user_id(self):
         sc = _make_session_client(metadata=_make_metadata("alice"))
-        with _patched_logger() as log:
-            result = await _make_runner(sc)._prepare_run(
+        with pytest.raises(SessionOwnershipError):
+            await _make_runner(sc)._prepare_run(_make_agent(), "hello", session_id="abc")
+
+    @pytest.mark.asyncio
+    async def test_conversation_mismatch_raises(self):
+        sc = _make_session_client(metadata=_make_metadata("alice", "conversation-a"))
+        with pytest.raises(SessionOwnershipError):
+            await _make_runner(sc)._prepare_run(
+                _make_agent(),
+                "hello",
+                session_id="abc",
+                user_id="alice",
+                conversation_id="conversation-b",
+            )
+
+    @pytest.mark.asyncio
+    async def test_owned_conversation_requires_a_conversation_id(self):
+        sc = _make_session_client(metadata=_make_metadata("alice", "conversation-a"))
+        with pytest.raises(SessionOwnershipError):
+            await _make_runner(sc)._prepare_run(
                 _make_agent(), "hello", session_id="abc", user_id="alice"
             )
+
+    @pytest.mark.asyncio
+    async def test_matching_identifiers_are_allowed(self):
+        sc = _make_session_client(metadata=_make_metadata("alice", "conversation-a"))
+        result = await _make_runner(sc)._prepare_run(
+            _make_agent(),
+            "hello",
+            session_id="abc",
+            user_id="alice",
+            conversation_id="conversation-a",
+        )
         assert result.success is True
-        assert "user_id mismatch" not in _warning_text(log)
 
     @pytest.mark.asyncio
     async def test_existing_session_no_created_warning(self):
