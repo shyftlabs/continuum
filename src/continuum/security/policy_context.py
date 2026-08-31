@@ -71,7 +71,7 @@ def resolve_active_policy(
 
     Explicit arguments win; when no ``policy_store`` is passed, fall back to the
     ambient policy published for the current run (and its live labels). Used by
-    every label gate (LLM routing, memory write) so a single ambient publish
+    every label gate (LLM routing, memory access) so a single ambient publish
     covers call sites that don't thread policy params themselves.
     """
     if policy_store is None:

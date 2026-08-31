@@ -312,6 +312,7 @@ class MemoryClient:
         filters: dict[str, Any] | None = None,
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemorySearchResult:
         """
         Search memories using semantic similarity.
@@ -323,9 +324,10 @@ class MemoryClient:
             conversation_id: Conversation identifier for scoping
             limit: Maximum results to return
             filters: Additional metadata filters (provider-specific)
-            policy_store: Optional access control policy store. When provided,
-                a "memory:read" resource check is performed before reading.
+            policy_store: Optional access control policy override. The active
+                run policy is used when this is omitted.
             subject: Caller identity for policy evaluation (typically agent name).
+            data_labels: Active data labels included in policy evaluation.
 
         Returns:
             MemorySearchResult with matching memories.
@@ -347,12 +349,17 @@ class MemoryClient:
             )
             query = query[:max_query_chars]
 
-        # Access control check
-        if policy_store is not None and subject is not None:
+        from continuum.security.policy_context import resolve_active_policy
+
+        eff_store, eff_subject, eff_labels = resolve_active_policy(
+            policy_store, subject, data_labels
+        )
+        if eff_store is not None and eff_subject is not None:
             from continuum.agent.exceptions import MemoryAccessDeniedError
 
             scope_label = agent_id or user_id or "unknown"
-            decision = policy_store.check(subject, f"memory:{scope_label}")
+            subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
+            decision = eff_store.check(subjects, f"memory:{scope_label}")
             if not decision.allowed:
                 raise MemoryAccessDeniedError(
                     operation="read",
@@ -566,6 +573,9 @@ class MemoryClient:
         conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemorySearchResult:
         """Synchronous version of search()."""
         return self._run_sync(
@@ -576,6 +586,9 @@ class MemoryClient:
                 conversation_id=conversation_id,
                 limit=limit,
                 filters=filters,
+                policy_store=policy_store,
+                subject=subject,
+                data_labels=data_labels,
             )
         )
 
