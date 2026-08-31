@@ -119,8 +119,15 @@ class TestPolicyArgumentsAreForwarded:
 
         client._intel = IntelligenceConfig(enable_scoring=False, enable_decay=False)
 
-        sentinel_store = object()
-        await client.search("q", user_id="u1", policy_store=sentinel_store, subject="agent-x")
+        sentinel_store, labels = object(), {"pii"}
+        await client.search(
+            "q",
+            user_id="u1",
+            policy_store=sentinel_store,
+            subject="agent-x",
+            data_labels=labels,
+        )
 
         assert captured["policy_store"] is sentinel_store
         assert captured["subject"] == "agent-x"
+        assert captured["data_labels"] == labels
