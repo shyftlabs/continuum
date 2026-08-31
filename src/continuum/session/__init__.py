@@ -32,6 +32,7 @@ from continuum.session.exceptions import (
     SessionNotCreatedError,
     SessionNotEnabledError,
     SessionNotFoundError,
+    SessionOwnershipError,
 )
 from continuum.session.providers import (
     create_provider,
@@ -72,5 +73,6 @@ __all__ = [
     "SessionConnectionError",
     "SessionNotFoundError",
     "SessionNotCreatedError",
+    "SessionOwnershipError",
     "SessionMessageLimitError",
 ]

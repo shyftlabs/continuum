@@ -399,6 +399,7 @@ class AgentRunner:
             from continuum.session.exceptions import (
                 SessionError,
                 SessionNotCreatedError,
+                SessionOwnershipError,
             )
 
             try:
@@ -443,21 +444,30 @@ class AgentRunner:
                         raise SessionNotCreatedError(msg, session_id=context.session_id)
                     logger.warning(msg)
                 else:
-                    # Session exists: check the write/search user_id alignment.
-                    # Memory WRITES scope by the session's user_id; memory SEARCHES
-                    # scope by the run's context.user_id. If they differ, stored
-                    # facts won't be retrievable — a silent, confusing mismatch.
-                    if (
-                        session_metadata.user_id
-                        and context.user_id
-                        and session_metadata.user_id != context.user_id
-                    ):
-                        logger.warning(
-                            f"user_id mismatch: session {context.session_id!r} was created with "
-                            f"user_id={session_metadata.user_id!r} but run() received "
-                            f"user_id={context.user_id!r}. Long-term memory is WRITTEN under the "
-                            f"session's user_id but SEARCHED under run()'s — stored facts won't be "
-                            f"found. Pass the same user_id to run() as the session was created with."
+                    # A session id identifies storage, not the caller. Require an
+                    # exact match for every scope identifier the stored session
+                    # carries before reading history, restoring MCP state, or
+                    # writing a new turn. Warning and continuing here turns a
+                    # leaked session id into cross-user history access.
+                    ownership_fields = (
+                        ("user_id", session_metadata.user_id, context.user_id),
+                        (
+                            "conversation_id",
+                            session_metadata.conversation_id,
+                            context.conversation_id,
+                        ),
+                    )
+                    mismatches = [
+                        field
+                        for field, stored, supplied in ownership_fields
+                        if stored is not None and stored != supplied
+                    ]
+                    if mismatches:
+                        fields = ", ".join(mismatches)
+                        raise SessionOwnershipError(
+                            f"session_id={context.session_id!r} does not belong to the supplied "
+                            f"{fields}. Refusing to load or modify another session.",
+                            session_id=context.session_id,
                         )
 
             tool_context_state = await self._session_service.load_tool_context_state(
@@ -668,6 +678,8 @@ class AgentRunner:
                 resp = await runner.run(agent, msg, session_id=sid, user_id="user-123")
 
             Omit ``session_id`` for a stateless run (no history, no persistence).
+            When a session is supplied, its stored user and conversation identifiers
+            must exactly match the caller's identifiers.
 
         Args:
             require_session: Override for the session guardrail. When True, raise

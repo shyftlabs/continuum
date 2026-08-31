@@ -10,7 +10,7 @@ Contract verified:
   - session_id passed but never created → WARN by default (run proceeds,
     nothing persisted); RAISE SessionNotCreatedError under strict mode.
   - create-then-run (same id + user_id) → no warning, messages persisted.
-  - user_id mismatch on an existing session → WARN.
+  - a user_id mismatch on an existing session → SessionOwnershipError.
   - stateless run (no session_id) → no guardrail warning at all.
 
 Requires Redis on port 6380 (skipped otherwise).
@@ -29,7 +29,11 @@ from continuum.agent.runner import AgentRunner
 from continuum.llm.types import LLMResponse
 from continuum.session.client import SessionClient
 from continuum.session.config import SessionConfig
-from continuum.session.exceptions import SessionNotCreatedError, SessionNotFoundError
+from continuum.session.exceptions import (
+    SessionNotCreatedError,
+    SessionNotFoundError,
+    SessionOwnershipError,
+)
 from continuum.session.providers.redis import RedisSessionProvider
 
 pytestmark = [pytest.mark.integration, pytest.mark.redis]
@@ -168,21 +172,19 @@ class TestSessionPreflightRedis:
 
         assert resp.status.value == "success"
         assert not cap.has("get_or_create_session")
-        assert not cap.has("user_id mismatch")
+        assert not cap.has("does not belong")
 
         history = await sc.get_conversation_history(sid)
         roles = [m.role for m in history]
         assert "user" in roles and "assistant" in roles
 
-    async def test_user_id_mismatch_warns(self, redis_provider, test_id):
+    async def test_user_id_mismatch_is_rejected(self, redis_provider, test_id):
         sc = _session_client(redis_provider)
         runner = _make_runner(sc)
         sid = await sc.get_or_create_session(session_id=f"mismatch-{test_id}", user_id="u1")
 
-        with _WarnCapture() as cap:
+        with pytest.raises(SessionOwnershipError):
             await runner.run(_make_agent(), "hi", session_id=sid, user_id="u2")
-
-        assert cap.has("user_id mismatch")
 
     async def test_stateless_run_no_guardrail_warning(self, redis_provider):
         # No session_id → stateless. Even with strict mode on, no guardrail fires.
@@ -194,4 +196,4 @@ class TestSessionPreflightRedis:
 
         assert resp.status.value == "success"
         assert not cap.has("get_or_create_session")
-        assert not cap.has("user_id mismatch")
+        assert not cap.has("does not belong")
