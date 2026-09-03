@@ -112,19 +112,6 @@ class MessageBuilder(IMessageBuilder):
         """
         messages = []
 
-        # Log agent memory config at start
-        if hasattr(agent, "memory_config") and agent.memory_config:
-            logger.info(
-                f"🔍 AGENT MEMORY CONFIG: "
-                f"search_memories={agent.memory_config.search_memories}, "
-                f"store_memories={agent.memory_config.store_memories}, "
-                f"search_scope={agent.memory_config.search_scope}, "
-                f"store_scope={agent.memory_config.store_scope}, "
-                f"search_limit={agent.memory_config.search_limit}"
-            )
-        else:
-            logger.warning("⚠️ Agent has no memory_config!")
-
         # Add system prompt
         if agent.system_prompt:
             messages.append({"role": "system", "content": agent.system_prompt})
@@ -160,7 +147,9 @@ class MessageBuilder(IMessageBuilder):
                             )
             except Exception as e:
                 logger.warning(
-                    f"Failed to validate/inject tool context state: {e}. Continuing without it."
+                    "Failed to validate/inject tool context state; agent=%s error_type=%s",
+                    agent.name,
+                    type(e).__name__,
                 )
 
         # Inject memory facts early (user profile/background — stable context like instructions)
@@ -174,12 +163,19 @@ class MessageBuilder(IMessageBuilder):
                     for m in memories:
                         memory_content += f"- {m.get('memory', str(m))}\n"
 
-                    logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
-                    logger.debug(f"💾 Memory context content:\n{memory_content}")
+                    logger.info(
+                        "Injecting memories into LLM context: agent=%s memory_count=%d",
+                        agent.name,
+                        len(memories),
+                    )
 
                     messages.append({"role": "system", "content": memory_content})
             except Exception as e:
-                logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
+                logger.warning(
+                    "Failed to retrieve memories: agent=%s error_type=%s",
+                    agent.name,
+                    type(e).__name__,
+                )
 
         # Inject pipeline context from sequential/supervised/planner workflows
         # so sub-agents can see prior steps' outputs without loading Redis.
@@ -205,7 +201,9 @@ class MessageBuilder(IMessageBuilder):
                     )
                     if history:
                         logger.debug(
-                            f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}"
+                            "Retrieved session history: agent=%s message_count=%d",
+                            agent.name,
+                            len(history),
                         )
                     messages.extend(history)
             except Exception as e:
@@ -213,12 +211,15 @@ class MessageBuilder(IMessageBuilder):
 
                 if isinstance(e, SessionNotFoundError):
                     logger.warning(
-                        f"No history loaded: session {context.session_id!r} does not exist "
-                        f"(it was never created via get_or_create_session). Run continues "
-                        f"without prior context."
+                        "No history loaded because session does not exist: agent=%s",
+                        agent.name,
                     )
                 else:
-                    logger.warning(f"Failed to load session history: {e}")
+                    logger.warning(
+                        "Failed to load session history: agent=%s error_type=%s",
+                        agent.name,
+                        type(e).__name__,
+                    )
 
         # Inject RAG context last (closest to current question for maximum recency effect)
         rag_context = agent.config.rag_context if agent.config else None
@@ -245,8 +246,9 @@ class MessageBuilder(IMessageBuilder):
                 detected = detect_injection_patterns(input)
                 if detected:
                     logger.warning(
-                        f"Potential prompt injection detected in input to agent "
-                        f"'{agent.name}': {detected}"
+                        "Potential prompt injection detected: agent=%s match_count=%d",
+                        agent.name,
+                        len(detected),
                     )
 
         # Run product input scanners (e.g. an LLM Guard PromptInjection/Gibberish scanner).
@@ -262,7 +264,7 @@ class MessageBuilder(IMessageBuilder):
                         logger.warning(
                             "Input scanner blocked request — agent=%s scanner=%s",
                             agent.name,
-                            reason,
+                            getattr(scanner, "__name__", type(scanner).__name__),
                         )
                         raise InputBlockedError(
                             f"Input blocked by scanner: {reason}",
@@ -272,9 +274,10 @@ class MessageBuilder(IMessageBuilder):
                     raise
                 except Exception as e:
                     logger.warning(
-                        "Input scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)),
-                        e,
+                        "Input scanner failed (fail-open): agent=%s scanner=%s error_type=%s",
+                        agent.name,
+                        getattr(scanner, "__name__", type(scanner).__name__),
+                        type(e).__name__,
                     )
 
         # Record the index where user input begins — used by save_messages to know
@@ -330,7 +333,9 @@ class MessageBuilder(IMessageBuilder):
                         user_message_index -= 1
         except Exception as e:
             logger.warning(
-                f"Context management failed for agent {agent.name}, continuing without compression: {e}"
+                "Context management failed; continuing without compression: agent=%s error_type=%s",
+                agent.name,
+                type(e).__name__,
             )
 
         # Run tool-attention routing: filters tools and produces Phase 1 summary.
@@ -342,12 +347,8 @@ class MessageBuilder(IMessageBuilder):
         if context.metadata is not None:
             context.metadata["_filtered_tools"] = filtered_tools
 
-        import os
-
-        _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
-        _limit = None if _full else 2000
-
-        # Build display messages: insert Phase 1 inline so it appears in FINAL PROMPT log.
+        # Include the Phase 1 tool summary's role in request-shape diagnostics without
+        # logging its generated prompt content.
         _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
         if _phase1:
             _insert_at = 0
@@ -360,24 +361,24 @@ class MessageBuilder(IMessageBuilder):
         else:
             display_messages = messages
 
-        formatted = "\n".join(
-            f"[{m.get('role', '?')}] {str(m.get('content', ''))[:_limit]}" for m in display_messages
-        )
+        known_roles = {"system", "developer", "user", "assistant", "tool", "function"}
+        role_sequence = [
+            role if (role := message.get("role")) in known_roles else "unknown"
+            for message in display_messages
+        ]
+        tool_names = [
+            tool.get("function", {}).get("name", "unknown")
+            if isinstance(tool, dict)
+            else getattr(getattr(tool, "function", None), "name", "unknown")
+            for tool in filtered_tools
+        ]
         logger.info(
-            "===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted
+            "Prepared LLM request: agent=%s message_count=%d role_sequence=%s tool_names=%s",
+            agent.name,
+            len(display_messages),
+            role_sequence,
+            tool_names,
         )
-
-        if filtered_tools:
-            _tool_limit = None if _full else 200
-            _tools_formatted = "\n".join(
-                f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
-                if isinstance(t, dict)
-                else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
-                for t in filtered_tools
-            )
-            logger.info(
-                "===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted
-            )
 
         return messages, user_message_index
 

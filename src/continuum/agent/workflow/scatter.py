@@ -50,6 +50,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._error_context import workflow_error_context
 from continuum.agent.workflow._forkable import (
     branch_outputs_from_trace,
     branch_recorder_context,
@@ -284,11 +285,14 @@ class ScatterAgent(BaseAgent):
             for task in pending:
                 task.cancel()
         except Exception as e:
-            raise ParallelWorkflowError(
-                f"Scatter execution failed: {e}",
-                run_id=context.run_id,
-                original_error=e,
-            ) from e
+            workflow_error = ParallelWorkflowError(
+                f"Scatter execution failed ({type(e).__name__})",
+                context=workflow_error_context(context.run_id, e),
+            )
+            # Preserve correlation for programmatic callers without placing the
+            # UUID in OrchestratorError.context, which is rendered by __str__.
+            workflow_error.run_id = context.run_id
+            raise workflow_error from e
 
         successful: dict[str, AgentResponse] = {}
         failed: dict[str, str] = {}
@@ -469,7 +473,6 @@ class ScatterAgent(BaseAgent):
             )
 
             content = (response.content or "").strip()
-            logger.info(f"ScatterAgent: raw split response: {content[:500]}")
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -481,15 +484,21 @@ class ScatterAgent(BaseAgent):
             if not isinstance(slices, list) or len(slices) != len(self.agents):
                 raise ValueError(f"Expected {len(self.agents)} slices, got {len(slices)}")
 
-            logger.info(f"ScatterAgent: LLM split into {len(slices)} slices")
-            for i, (agent, s) in enumerate(zip(self.agents, slices, strict=False)):
-                logger.debug(f"  branch {i + 1} ({agent.name}): {s[:100]}")
+            logger.info(
+                "Prepared scatter branches: agent=%s branch_count=%d agents=%s",
+                self.name,
+                len(slices),
+                agent_names,
+            )
 
             return slices
 
         except Exception as e:
             logger.warning(
-                f"ScatterAgent: LLM splitting failed ({type(e).__name__}: {e}) — using same input for all branches"
+                "Scatter splitting failed; using same input for all branches: "
+                "agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
             )
             return [input_text] * len(self.agents)
 
@@ -504,7 +513,11 @@ class ScatterAgent(BaseAgent):
         try:
             return await runner.run(agent=agent, input=input_text, context=context)
         except Exception as e:
-            logger.error(f"Scatter branch '{agent.name}' failed: {e}")
+            logger.error(
+                "Scatter branch failed: agent=%s error_type=%s",
+                agent.name,
+                type(e).__name__,
+            )
             raise
 
     async def _merge_results(
@@ -549,9 +562,9 @@ class ScatterAgent(BaseAgent):
             )
 
         logger.info(
-            "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
+            "Prepared merge LLM request: agent=%s message_count=1 "
+            "role_sequence=['user'] tool_names=[]",
             self.name,
-            prompt,
         )
 
         from continuum.llm.config import LLMConfig
@@ -567,7 +580,11 @@ class ScatterAgent(BaseAgent):
             )
             return response.content or ""
         except Exception as e:
-            logger.warning(f"ScatterAgent: LLM merge failed ({e}) — concatenating")
+            logger.warning(
+                "Scatter merge failed; concatenating: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
             return "\n\n".join(f"## {name}\n{resp.content}" for name, resp in results.items())
 
     def _get_llm(self) -> Any | None:
