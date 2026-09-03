@@ -371,33 +371,29 @@ class HandoffExecutor(IHandoffExecutor):
                 disable_memory_writes=context.disable_memory_writes,
             )
 
-            # Log target agent details (mirrors message_builder output for top-level runs)
-            mem_cfg = getattr(target_agent, "memory_config", None)
-            if mem_cfg:
-                logger.info(
-                    f"🔍 HANDOFF TARGET MEMORY CONFIG [{target_agent.name}]: "
-                    f"search_memories={mem_cfg.search_memories}, store_memories={mem_cfg.store_memories}, "
-                    f"search_scope={getattr(mem_cfg, 'search_scope', 'N/A')}, "
-                    f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
-                )
-            logger.info(
-                f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
-                + "\n".join(
-                    f"[{m.get('role', '?')}] {str(m.get('content', ''))[:300]}"
-                    for m in target_messages
-                )
-                + "\n"
-                + "=" * 30
-            )
+            # Log request structure only. Handoff messages can contain user input,
+            # retrieved knowledge, and tool results, so their contents must never
+            # be copied into production logs.
             _tools = target_agent.get_tools_for_llm()
-            if _tools:
-                _tools_formatted = "\n".join(
-                    f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:200]}"
-                    for t in _tools
-                )
-                logger.info(
-                    f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
-                )
+            known_roles = {"system", "developer", "user", "assistant", "tool", "function"}
+            role_sequence = [
+                role if (role := message.get("role")) in known_roles else "unknown"
+                for message in target_messages
+            ]
+            tool_names = [
+                tool.get("function", {}).get("name", "unknown")
+                if isinstance(tool, dict)
+                else getattr(getattr(tool, "function", None), "name", "unknown")
+                for tool in _tools
+            ]
+            logger.info(
+                "Prepared handoff LLM request: agent=%s message_count=%d "
+                "role_sequence=%s tool_names=%s",
+                target_agent.name,
+                len(target_messages),
+                role_sequence,
+                tool_names,
+            )
 
             # Execute target agent (executor guaranteed to be set by early validation).
             # The recipient agent runs one level below the top-level runner, so its
@@ -419,7 +415,11 @@ class HandoffExecutor(IHandoffExecutor):
                     run_state=run_state,
                 )
             except Exception as e:
-                logger.error(f"Failed to execute target agent '{target_name}': {e}", exc_info=True)
+                logger.error(
+                    "Failed to execute target agent: agent=%s error_type=%s",
+                    target_name,
+                    type(e).__name__,
+                )
                 if target_agent.on_error:
                     target_agent.on_error(target_agent, e, {"context": target_context})
                 result = HandoffResult(
@@ -454,8 +454,10 @@ class HandoffExecutor(IHandoffExecutor):
 
         except Exception as e:
             logger.error(
-                f"Handoff from '{agent.name}' to '{target_name}' failed: {e}",
-                exc_info=True,
+                "Handoff failed: from_agent=%s to_agent=%s error_type=%s",
+                agent.name,
+                target_name,
+                type(e).__name__,
             )
             return HandoffResult(
                 handoff_id=generate_handoff_id(),
