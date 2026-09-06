@@ -1,0 +1,11 @@
+Operation,Backend,Corpus size,Concurrency,p50 (ms),p95 (ms),p99 (ms),Throughput (QPS),Recall@k,Precision@k,MRR,Notes
+add,mock,100,5,0.013,0.018,0.034,36545.7,0.84,0.168,0.5203,"Samples: 100, Timestamp: 2026-09-06T09:05:22Z"
+search,mock,100,5,0.186,0.251,0.437,5129.52,0.84,0.168,0.5203,"Samples: 50, Timestamp: 2026-09-06T09:05:22Z"
+update,mock,100,5,0.006,0.059,0.059,75018.75,0.84,0.168,0.5203,"Samples: 10, Timestamp: 2026-09-06T09:05:22Z"
+delete,mock,100,5,0.003,0.01,0.01,225733.64,0.84,0.168,0.5203,"Samples: 10, Timestamp: 2026-09-06T09:05:22Z"
+concurrent_search,mock,100,5,0.183,0.357,0.414,4297.3,0.84,0.168,0.5203,"Samples: 50, Timestamp: 2026-09-06T09:05:22Z"
+add,mock,1000,5,0.014,0.032,0.053,34306.73,0.3,0.06,0.137,"Samples: 1000, Timestamp: 2026-09-06T09:05:22Z"
+search,mock,1000,5,0.572,0.889,0.922,1765.88,0.3,0.06,0.137,"Samples: 50, Timestamp: 2026-09-06T09:05:22Z"
+update,mock,1000,5,0.005,0.008,0.015,172860.85,0.3,0.06,0.137,"Samples: 100, Timestamp: 2026-09-06T09:05:22Z"
+delete,mock,1000,5,0.003,0.005,0.006,312109.86,0.3,0.06,0.137,"Samples: 100, Timestamp: 2026-09-06T09:05:22Z"
+concurrent_search,mock,1000,5,0.461,0.77,1.053,1902.44,0.3,0.06,0.137,"Samples: 50, Timestamp: 2026-09-06T09:05:22Z"
