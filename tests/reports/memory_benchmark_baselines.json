@@ -1,0 +1,146 @@
+[
+  {
+    "backend": "mock",
+    "corpus_size": 100,
+    "concurrency": 5,
+    "timestamp_utc": "2026-09-06T09:05:22Z",
+    "add_latency": {
+      "count": 100,
+      "p50_ms": 0.013,
+      "p95_ms": 0.018,
+      "p99_ms": 0.034,
+      "min_ms": 0.011,
+      "max_ms": 1.415,
+      "mean_ms": 0.027,
+      "stddev_ms": 0.14,
+      "throughput_qps": 36545.7
+    },
+    "search_latency": {
+      "count": 50,
+      "p50_ms": 0.186,
+      "p95_ms": 0.251,
+      "p99_ms": 0.437,
+      "min_ms": 0.16,
+      "max_ms": 0.437,
+      "mean_ms": 0.194,
+      "stddev_ms": 0.04,
+      "throughput_qps": 5129.52
+    },
+    "update_latency": {
+      "count": 10,
+      "p50_ms": 0.006,
+      "p95_ms": 0.059,
+      "p99_ms": 0.059,
+      "min_ms": 0.004,
+      "max_ms": 0.059,
+      "mean_ms": 0.013,
+      "stddev_ms": 0.016,
+      "throughput_qps": 75018.75
+    },
+    "delete_latency": {
+      "count": 10,
+      "p50_ms": 0.003,
+      "p95_ms": 0.01,
+      "p99_ms": 0.01,
+      "min_ms": 0.002,
+      "max_ms": 0.01,
+      "mean_ms": 0.004,
+      "stddev_ms": 0.002,
+      "throughput_qps": 225733.64
+    },
+    "concurrent_search_qps": {
+      "count": 50,
+      "p50_ms": 0.183,
+      "p95_ms": 0.357,
+      "p99_ms": 0.414,
+      "min_ms": 0.142,
+      "max_ms": 0.414,
+      "mean_ms": 0.205,
+      "stddev_ms": 0.062,
+      "throughput_qps": 4297.3
+    },
+    "retrieval_quality": {
+      "precision_at_k": 0.168,
+      "recall_at_k": 0.84,
+      "mrr": 0.5203,
+      "k": 5,
+      "total_queries": 50
+    },
+    "metadata": {
+      "python_version": "3.13.15",
+      "os": "nt"
+    }
+  },
+  {
+    "backend": "mock",
+    "corpus_size": 1000,
+    "concurrency": 5,
+    "timestamp_utc": "2026-09-06T09:05:22Z",
+    "add_latency": {
+      "count": 1000,
+      "p50_ms": 0.014,
+      "p95_ms": 0.032,
+      "p99_ms": 0.053,
+      "min_ms": 0.011,
+      "max_ms": 9.724,
+      "mean_ms": 0.029,
+      "stddev_ms": 0.31,
+      "throughput_qps": 34306.73
+    },
+    "search_latency": {
+      "count": 50,
+      "p50_ms": 0.572,
+      "p95_ms": 0.889,
+      "p99_ms": 0.922,
+      "min_ms": 0.331,
+      "max_ms": 0.922,
+      "mean_ms": 0.565,
+      "stddev_ms": 0.167,
+      "throughput_qps": 1765.88
+    },
+    "update_latency": {
+      "count": 100,
+      "p50_ms": 0.005,
+      "p95_ms": 0.008,
+      "p99_ms": 0.015,
+      "min_ms": 0.004,
+      "max_ms": 0.023,
+      "mean_ms": 0.005,
+      "stddev_ms": 0.002,
+      "throughput_qps": 172860.85
+    },
+    "delete_latency": {
+      "count": 100,
+      "p50_ms": 0.003,
+      "p95_ms": 0.005,
+      "p99_ms": 0.006,
+      "min_ms": 0.002,
+      "max_ms": 0.011,
+      "mean_ms": 0.003,
+      "stddev_ms": 0.001,
+      "throughput_qps": 312109.86
+    },
+    "concurrent_search_qps": {
+      "count": 50,
+      "p50_ms": 0.461,
+      "p95_ms": 0.77,
+      "p99_ms": 1.053,
+      "min_ms": 0.262,
+      "max_ms": 1.053,
+      "mean_ms": 0.495,
+      "stddev_ms": 0.157,
+      "throughput_qps": 1902.44
+    },
+    "retrieval_quality": {
+      "precision_at_k": 0.06,
+      "recall_at_k": 0.3,
+      "mrr": 0.137,
+      "k": 5,
+      "total_queries": 50
+    },
+    "metadata": {
+      "python_version": "3.13.15",
+      "os": "nt"
+    }
+  }
+]
