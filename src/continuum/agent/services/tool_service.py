@@ -190,8 +190,10 @@ class ToolService(IToolService):
             )
         except json.JSONDecodeError as e:
             logger.warning(
-                f"Malformed JSON in tool arguments for '{tool_name}': {e}. "
-                f"Raw args: {str(tool_args_str)[:200]}. Proceeding with empty args.",
+                "Malformed tool arguments: agent=%s tool=%s error_type=%s; using empty arguments",
+                agent.name,
+                tool_name,
+                type(e).__name__,
             )
             tool_args = {}
 
@@ -253,16 +255,13 @@ class ToolService(IToolService):
                 ),
             },
         ) as span:
-            # Log tool call for debugging
+            # Log structural execution metadata only. Arguments and call IDs may
+            # contain user or system data and must not enter production logs.
             logger.info(
-                f"🔧 TOOL CALL: {tool_name}",
-                extra={
-                    "tool_name": tool_name,
-                    "tool_args": tool_args,
-                    "tool_call_id": tool_call_id,
-                },
+                "Tool call started: agent=%s tool=%s",
+                agent.name,
+                tool_name,
             )
-            logger.debug(f"  Arguments: {json.dumps(tool_args, indent=2)}")
 
             # Run tool hook
             if agent.on_tool_call:
@@ -314,9 +313,14 @@ class ToolService(IToolService):
                                 context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
-                        # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        logger.info(
+                            "Tool call completed: agent=%s tool=%s status=success "
+                            "latency_ms=%.2f result_type=%s",
+                            agent.name,
+                            tool_name,
+                            latency_ms,
+                            type(result.get("content")).__name__,
+                        )
 
                         # Update span with result
                         span.set_output(truncate_data(result))
@@ -336,7 +340,12 @@ class ToolService(IToolService):
 
                         return result, exec_metadata
                 except Exception as e:
-                    logger.warning(f"❌ TOOL ERROR: {tool_name} failed: {e}")
+                    logger.warning(
+                        "Tool call failed: agent=%s tool=%s status=error error_type=%s",
+                        agent.name,
+                        tool_name,
+                        type(e).__name__,
+                    )
                     span.set_error(str(e))
                     metrics.track_error(f"tool_{tool_name}", e, metadata={"agent_name": agent.name})
                     exec_metadata["error"] = str(e)[:100]
@@ -377,9 +386,14 @@ class ToolService(IToolService):
                                 context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
-                        # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        logger.info(
+                            "Tool call completed: agent=%s tool=%s status=success "
+                            "latency_ms=%.2f result_type=%s",
+                            agent.name,
+                            tool_name,
+                            latency_ms,
+                            type(result.get("content")).__name__,
+                        )
 
                         # Update span with result
                         span.set_output(truncate_data(result))
@@ -401,7 +415,12 @@ class ToolService(IToolService):
                 except Exception as e:
                     span.set_error(str(e))
                     span.add_metadata("success", False)
-                    logger.error(f"❌ TOOL ERROR: {tool_name} failed: {e}")
+                    logger.error(
+                        "Tool call failed: agent=%s tool=%s status=error error_type=%s",
+                        agent.name,
+                        tool_name,
+                        type(e).__name__,
+                    )
                     metrics.track_error(f"tool_{tool_name}", e, metadata={"agent_name": agent.name})
                     exec_metadata["latency_ms"] = (time.time() - start_time) * 1000
                     exec_metadata["error"] = str(e)[:100]
@@ -570,7 +589,12 @@ class ToolService(IToolService):
                         if hasattr(tc, "function")
                         else tc.get("function", {}).get("name", "unknown")
                     )
-                    logger.warning(f"Tool '{tool_name}' failed in parallel batch: {e}")
+                    logger.warning(
+                        "Parallel tool call failed: agent=%s tool=%s status=error error_type=%s",
+                        agent.name,
+                        tool_name,
+                        type(e).__name__,
+                    )
                     return (
                         {
                             "role": "tool",
@@ -588,7 +612,10 @@ class ToolService(IToolService):
 
         # Execute all tools in parallel (limited by semaphore)
         logger.debug(
-            f"Executing {len(tool_calls)} tools in parallel (max {max_parallel} concurrent)"
+            "Executing parallel tool batch: agent=%s tool_count=%d max_concurrency=%d",
+            agent.name,
+            len(tool_calls),
+            max_parallel,
         )
 
         results_with_meta = await asyncio.gather(

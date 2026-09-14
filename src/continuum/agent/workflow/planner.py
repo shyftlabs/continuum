@@ -28,6 +28,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._error_context import workflow_error_context
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
@@ -251,9 +252,9 @@ class PlannerAgent(BaseAgent):
                             run_id=context.run_id,
                         )
                     logger.warning(
-                        f"PlannerAgent: step {step_id} references unknown agent "
-                        f"'{agent_name}' — skipping. "
-                        f"Add it to the agents list to fix this."
+                        "Planner step skipped: agent=%s step_index=%d status=unknown_agent",
+                        self.name,
+                        i + 1,
                     )
                     i += 1
                     continue
@@ -281,7 +282,12 @@ class PlannerAgent(BaseAgent):
                     f"{instruction}\n\nInput:\n{current_input}" if instruction else current_input
                 )
 
-            logger.info(f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}")
+            logger.info(
+                "Planner step started: agent=%s step_index=%d delegate=%s",
+                self.name,
+                i + 1,
+                agent_name,
+            )
 
             async with SpanScope(
                 f"workflow.planner.step.{step_id}",
@@ -348,16 +354,28 @@ class PlannerAgent(BaseAgent):
                         if new_remaining is not None:
                             plan_steps = plan_steps[: i + 1] + new_remaining
                             logger.info(
-                                f"PlannerAgent: replanned after step {step_id} — "
-                                f"{len(new_remaining)} remaining steps"
+                                "Planner replan completed: agent=%s step_index=%d "
+                                "remaining_step_count=%d",
+                                self.name,
+                                i + 1,
+                                len(new_remaining),
                             )
 
                     i += 1
                     executed += 1
 
                 except Exception as e:
-                    logger.error(f"PlannerAgent step {step_id} ({agent_name}) failed: {e}")
-                    step_span.set_error(str(e))
+                    failure_message = (
+                        f"Planner step failed (step_index={i + 1}, error_type={type(e).__name__})"
+                    )
+                    logger.error(
+                        "Planner step failed: agent=%s step_index=%d delegate=%s error_type=%s",
+                        self.name,
+                        i + 1,
+                        agent_name,
+                        type(e).__name__,
+                    )
+                    step_span.set_error(failure_message)
                     completed.append(
                         {
                             "step": step,
@@ -380,19 +398,27 @@ class PlannerAgent(BaseAgent):
                         if new_plan is not None:
                             plan_steps = plan_steps[:i] + new_plan
                             logger.info(
-                                f"PlannerAgent: replanned after failure at step {step_id} — "
-                                f"{len(new_plan)} new steps"
+                                "Planner failure replan completed: agent=%s step_index=%d "
+                                "new_step_count=%d",
+                                self.name,
+                                i + 1,
+                                len(new_plan),
                             )
                             continue
 
                     if self.planning_config.fail_strategy == FailStrategy.FAIL_FAST:
-                        workflow_span.set_error(f"Step {step_id} failed: {e}")
-                        raise PlannerWorkflowError(
-                            f"Step {step_id} ({agent_name}) failed: {e}",
-                            failed_agent=agent_name,
+                        workflow_span.set_error(failure_message)
+                        workflow_error = PlannerWorkflowError(
+                            failure_message,
                             step=i + 1,
-                            run_id=context.run_id,
-                        ) from e
+                            context=workflow_error_context(context.run_id, e),
+                        )
+                        # Keep correlation attributes available to callers while
+                        # excluding their potentially sensitive values from the
+                        # exception context rendered by OrchestratorError.__str__.
+                        workflow_error.failed_agent = agent_name
+                        workflow_error.run_id = context.run_id
+                        raise workflow_error from e
 
                     i += 1
                     executed += 1
@@ -618,11 +644,19 @@ class PlannerAgent(BaseAgent):
                 auto_session=False,
             )
             usage = self._extract_usage(response)
-            logger.debug(f"PlannerAgent raw plan response: {repr(response.content)}")
+            logger.debug(
+                "Planner plan response received: agent=%s response_type=%s",
+                self.name,
+                type(response.content).__name__,
+            )
             steps = self._parse_steps(response.content or "")
             return steps, usage
         except Exception as e:
-            logger.error(f"PlannerAgent plan generation failed: {e}")
+            logger.error(
+                "Planner plan generation failed: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
             return [], TokenUsage()
 
     # -------------------------------------------------------------------------
@@ -685,7 +719,11 @@ class PlannerAgent(BaseAgent):
             steps = self._parse_steps(content)
             return (steps if steps else None), usage
         except Exception as e:
-            logger.warning(f"PlannerAgent replan check failed: {e}")
+            logger.warning(
+                "Planner replan check failed: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
             return None, TokenUsage()
 
     async def _replan_on_failure(
@@ -746,7 +784,11 @@ class PlannerAgent(BaseAgent):
             steps = self._parse_steps(response.content or "")
             return (steps if steps else None), usage
         except Exception as e:
-            logger.warning(f"PlannerAgent replan-on-failure failed: {e}")
+            logger.warning(
+                "Planner failure replan failed: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
             return None, TokenUsage()
 
     # -------------------------------------------------------------------------
@@ -779,7 +821,11 @@ class PlannerAgent(BaseAgent):
             data = json.loads(content)
             return data.get("steps", [])
         except Exception as e:
-            logger.warning(f"PlannerAgent failed to parse steps: {e}")
+            logger.warning(
+                "Planner failed to parse steps: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
             return []
 
     def _extract_usage(self, response: Any) -> TokenUsage:

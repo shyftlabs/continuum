@@ -24,6 +24,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._error_context import workflow_error_context
 from continuum.agent.workflow._forkable import (
     branch_outputs_from_trace,
     branch_recorder_context,
@@ -161,12 +162,19 @@ class ParallelAgent(BaseAgent):
                     results[agent.name] = TimeoutError("Task timed out")
 
         except Exception as e:
-            logger.error(f"Parallel execution failed: {e}")
-            raise ParallelWorkflowError(
-                f"Parallel execution failed: {e}",
-                run_id=context.run_id,
-                original_error=e,
-            ) from e
+            logger.error(
+                "Parallel execution failed: agent=%s error_type=%s",
+                self.name,
+                type(e).__name__,
+            )
+            workflow_error = ParallelWorkflowError(
+                f"Parallel execution failed ({type(e).__name__})",
+                context=workflow_error_context(context.run_id, e),
+            )
+            # Preserve correlation for programmatic callers without placing the
+            # UUID in OrchestratorError.context, which is rendered by __str__.
+            workflow_error.run_id = context.run_id
+            raise workflow_error from e
 
         # Process results
         successful: dict[str, AgentResponse] = {}
@@ -355,7 +363,11 @@ class ParallelAgent(BaseAgent):
                 context=context,
             )
         except Exception as e:
-            logger.error(f"Agent {agent.name} failed: {e}")
+            logger.error(
+                "Parallel branch failed: agent=%s error_type=%s",
+                agent.name,
+                type(e).__name__,
+            )
             raise
 
     async def _merge_results(
@@ -404,9 +416,9 @@ Here are their responses:
 Please synthesize these responses into a single coherent answer that captures the key information from all sources."""
 
             logger.info(
-                "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
+                "Prepared merge LLM request: agent=%s message_count=1 "
+                "role_sequence=['user'] tool_names=[]",
                 self.name,
-                prompt,
             )
             try:
                 from continuum.llm.config import LLMConfig
@@ -420,7 +432,11 @@ Please synthesize these responses into a single coherent answer that captures th
                 )
                 return response.content
             except Exception as e:
-                logger.warning(f"LLM merge failed: {e}, falling back to concatenation")
+                logger.warning(
+                    "LLM merge failed; falling back to concatenation: agent=%s error_type=%s",
+                    self.name,
+                    type(e).__name__,
+                )
                 return self._concatenate_results(results)
 
         # Default: concatenate

@@ -460,9 +460,12 @@ class Executor(IExecutor):
                     logger.info("🎯 Gateway selected model: %s", response.model)
                 if not response.tool_calls:
                     logger.debug(
-                        f"💬 LLM response (no tool calls) on turn {turn}: "
-                        f"content_preview={(response.content or '')[:150]}, "
-                        f"messages_in_context={len(messages)}"
+                        "LLM response received: agent=%s turn=%d status=no_tool_calls "
+                        "message_count=%d response_type=%s",
+                        agent.name,
+                        turn,
+                        len(messages),
+                        type(response.content).__name__,
                     )
                 else:
                     tool_names = [
@@ -539,7 +542,11 @@ class Executor(IExecutor):
                             thought = _json.loads(args_str).get("thought", "")
                         except Exception:
                             thought = str(args_str)
-                        logger.info(f"💭 Agent thought: {thought}")
+                        logger.info(
+                            "Reasoning tool requested: agent=%s turn=%d tool=think",
+                            agent.name,
+                            turn,
+                        )
                         if recorder is not None:
                             recorder.record_reasoning(
                                 agent.name,
@@ -739,8 +746,11 @@ class Executor(IExecutor):
                                         }
                                     )
                                     logger.info(
-                                        f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
-                                        f"[tool] {executor_content[:500]}\n" + "=" * 30
+                                        "Return-to-parent handoff completed: agent=%s "
+                                        "target_agent=%s status=success result_type=%s",
+                                        agent.name,
+                                        target,
+                                        type(executor_content).__name__,
                                     )
                                     # Child-run usage is a full TokenUsage whose
                                     # model_usage the child's own executor loop
@@ -762,14 +772,34 @@ class Executor(IExecutor):
                                             "return_to_parent": True,
                                         }
                                     )
+                                    _known_roles = {
+                                        "system",
+                                        "developer",
+                                        "user",
+                                        "assistant",
+                                        "tool",
+                                        "function",
+                                    }
+                                    _return_roles = [
+                                        role
+                                        if (role := message.get("role")) in _known_roles
+                                        else "unknown"
+                                        for message in messages
+                                    ]
+                                    _return_tool_names = [
+                                        call.function.name
+                                        if hasattr(call, "function")
+                                        else call.get("function", {}).get("name", "unknown")
+                                        for message in messages
+                                        for call in (message.get("tool_calls") or [])
+                                    ]
                                     logger.info(
-                                        f"===== RETURN TURN PROMPT [{agent.name}] =====\n"
-                                        + "\n".join(
-                                            f"[{m.get('role', '?')}] {str(m.get('content', '') or '')[:300]}"
-                                            for m in messages
-                                        )
-                                        + "\n"
-                                        + "=" * 30
+                                        "Prepared return-to-parent LLM request: agent=%s "
+                                        "message_count=%d role_sequence=%s tool_names=%s",
+                                        agent.name,
+                                        len(messages),
+                                        _return_roles,
+                                        _return_tool_names,
                                     )
                                     continue
                                 else:
@@ -879,13 +909,8 @@ class Executor(IExecutor):
                     else:
                         # Soft failure: visible (warning + error field), not silent.
                         logger.warning(
-                            f"⚠️ structured_output unavailable for agent {agent.name}: "
-                            f"{structured_output_error}",
-                            extra={
-                                "agent_name": agent.name,
-                                "output_schema": agent.output_schema.__name__,
-                                "error": structured_output_error,
-                            },
+                            "Structured output unavailable: agent=%s status=invalid",
+                            agent.name,
                         )
                 elif agent.enable_json_mode and response.content:
                     # Legacy path: JSON mode without output_schema — just verify
@@ -893,8 +918,8 @@ class Executor(IExecutor):
                     # they are not worth a warning.
                     if not looks_like_json(response.content):
                         logger.warning(
-                            f"⚠️ JSON mode enabled but response is not valid JSON for "
-                            f"agent {agent.name}"
+                            "JSON mode response invalid: agent=%s status=invalid",
+                            agent.name,
                         )
 
                 # No tool calls, we're done
@@ -1063,7 +1088,13 @@ class Executor(IExecutor):
                 context=context,
             )
 
-            logger.info(f"✅ ReAct observation for '{action}': {observation[:200]}")
+            logger.info(
+                "ReAct tool completed: agent=%s turn=%d tool=%s status=success result_type=%s",
+                agent.name,
+                turn,
+                action,
+                type(observation).__name__,
+            )
 
             # Inject the real observation so the LLM sees it on the next turn
             messages.append({"role": "user", "content": f"Observation: {observation}"})
@@ -1156,7 +1187,12 @@ class Executor(IExecutor):
                 if results:
                     return str(results[0].get("content", "No result"))
             except Exception as e:
-                logger.warning(f"ReAct tool '{tool_name}' failed: {e}")
+                logger.warning(
+                    "ReAct tool failed: agent=%s tool=%s status=error error_type=%s",
+                    agent.name,
+                    tool_name,
+                    type(e).__name__,
+                )
                 return f"Error executing '{tool_name}': {e}"
 
         return f"Tool '{tool_name}' is not available"
@@ -1198,7 +1234,9 @@ class Executor(IExecutor):
                 )
             except Exception as e:  # provider rejected the request, etc.
                 logger.warning(
-                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                    "Structured-output formatting call failed: agent=%s error_type=%s",
+                    agent.name,
+                    type(e).__name__,
                 )
                 last_err = f"formatting call failed: {e}"
                 break
