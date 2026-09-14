@@ -10,6 +10,7 @@ This means we can reuse the openai SDK — no google-generativeai package needed
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 from typing import Any
 
 import openai
@@ -98,6 +99,11 @@ class GeminiProvider(BaseProvider):
             kwargs["tools"] = tools
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
+        # Preserve explicit provider options just as the OpenAI wire provider
+        # does. None leaves all existing requests unchanged. Keep this in the
+        # SDK, not a service startup shim, so stateless calls have equal wiring.
+        if config.extra_body is not None:
+            kwargs["extra_body"] = deepcopy(config.extra_body)
 
         return kwargs
 
