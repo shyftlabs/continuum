@@ -179,6 +179,7 @@ markers = [
     "redis: Tests that require a live Redis instance",
     "milvus: Tests that require a live Milvus instance",
     "temporal: Tests that require a live Temporal cluster",
+    "benchmark: Memory and performance benchmarks (excluded from default CI runs)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",
