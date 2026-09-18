@@ -239,7 +239,9 @@ class TestACrashingScannerBlocksTheHandoff:
         try:
             reason = _scan(agent)
         except Exception as e:  # noqa: BLE001 - the assertion is that this cannot happen
-            pytest.fail(f"_scan_handoff_payload raised {type(e).__name__} instead of returning: {e}")
+            pytest.fail(
+                f"_scan_handoff_payload raised {type(e).__name__} instead of returning: {e}"
+            )
         assert isinstance(reason, str)
 
     async def test_the_reason_identifies_the_failed_scanner(self):

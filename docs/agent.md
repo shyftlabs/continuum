@@ -244,7 +244,7 @@ All importable from `continuum.agent`.
 | `handoff` | `HandoffConfig` | default | |
 | `context_management` | `ContextManagementConfig \| None` | `None` | Per-agent compression override |
 | `input_sanitization` | `bool` | `True` | Strip control chars from input |
-| `injection_detection` | `bool` | `False` | Log suspected prompt-injection patterns |
+| `injection_detection` | `bool` | `False` | **Advisory only** — logs suspected prompt-injection patterns and nothing acts on the result. Six literal patterns that paraphrase defeats; treat it as telemetry, not a control. `input_scanners` is what refuses |
 | `strict_security` | `bool` | `False` | If `True`, agent construction raises `AgentConfigurationError` when it has side-effectful tools but no `policy_store`. If `False`, the same case logs a warning. See [Security](#security-posture) |
 | `output_type` | `Literal["text","json","structured"]` | `"text"` | |
 | `reasoning_mode` | `bool` | `False` | Silent think-first pass before main loop |
@@ -254,7 +254,7 @@ All importable from `continuum.agent`.
 | `retrieval_top_k` | `int \| None` | `None` | RAG hook |
 | `rerank_enabled` | `bool \| None` | `None` | RAG hook |
 | `rag_context` | `str \| None` | `None` | Inject as a "PROVIDED CONTEXT" system message |
-| `input_scanners` | `list[Callable]` | `[]` | `(text) -> (text, is_safe, reason)` |
+| `input_scanners` | `list[Callable]` | `[]` | `(text) -> (text, is_safe, reason)`. The only input control that can refuse. `is_safe=False` raises `InputBlockedError`; **a scanner that raises also blocks** (fail-closed — a crashed scanner has not approved anything). To accept that risk, catch inside your scanner and return `(text, True, None)` |
 | `output_scanners` | `list[Callable]` | `[]` | Same shape, applied to model output |
 | `trace_all_turns` | `bool` | `True` | |
 | `log_to_session` | `bool` | `True` | Persist tool summaries into session metadata |

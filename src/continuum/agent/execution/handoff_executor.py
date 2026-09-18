@@ -114,10 +114,21 @@ class HandoffExecutor(IHandoffExecutor):
             try:
                 _, is_safe, reason = scanner(payload)
             except Exception as e:
-                # Fail-open on scanner errors, matching prepare_messages — a broken
-                # scanner must not take down every handoff.
-                logger.warning("Handoff input scanner failed (fail-open): %s", e)
-                continue
+                # Fail CLOSED on scanner errors, matching prepare_messages (F11): a
+                # scanner that crashed did not approve this payload, and letting it
+                # through would make "crash the scanner" a complete bypass of the
+                # only control here that can refuse.
+                #
+                # Returned rather than raised, per this function's contract above —
+                # the caller turns a reason into a failed HandoffResult, where an
+                # escaping exception would crash the run instead of this transfer.
+                from continuum.agent.utils.validation_utils import scanner_failure_reason
+
+                failure = scanner_failure_reason(scanner, e)
+                logger.error(
+                    "Handoff input scanner failed — agent=%s: %s", target_agent.name, failure
+                )
+                return failure
             if not is_safe:
                 return reason or "blocked"
 

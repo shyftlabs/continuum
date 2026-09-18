@@ -339,7 +339,13 @@ class MessageBuilder(IMessageBuilder):
         # Run product input scanners (e.g. an LLM Guard PromptInjection/Gibberish scanner).
         # Any scanner that returns is_safe=False raises InputBlockedError — the calling router
         # catches this and returns a blocked response without invoking the LLM.
+        #
+        # A scanner that RAISES blocks too (security finding F11). These are the only
+        # control on this path that can refuse, so swallowing their exceptions made the
+        # control's failure mode "no control" — and a scanner is usually a model or a
+        # remote call, which makes crashing it cheaper than evading it.
         if isinstance(input, str) and agent.config and agent.config.input_scanners:
+            from continuum.agent.utils.validation_utils import scanner_failure_reason
             from continuum.exceptions import InputBlockedError
 
             for scanner in agent.config.input_scanners:
@@ -358,11 +364,15 @@ class MessageBuilder(IMessageBuilder):
                 except InputBlockedError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        "Input scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)),
-                        e,
-                    )
+                    # Includes a scanner returning the wrong shape — the tuple unpack
+                    # above raises here too, and a scanner that cannot answer has not
+                    # approved anything.
+                    failure = scanner_failure_reason(scanner, e)
+                    logger.error("Input scanner failed — agent=%s: %s", agent.name, failure)
+                    raise InputBlockedError(
+                        failure,
+                        scanner=getattr(scanner, "__name__", ""),
+                    ) from e
 
         # Record the index where user input begins — used by save_messages to know
         # exactly which messages are new (avoids fragile initial_count - 1 arithmetic).

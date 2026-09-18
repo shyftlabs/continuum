@@ -44,6 +44,27 @@ def last_user_prompt(
     return ""
 
 
+def scanner_failure_reason(scanner: Any, exc: Exception) -> str:
+    """Explain a crashed input scanner, and name the way back.
+
+    A scanner that raised used to be logged and skipped, which turned the only
+    input control that can refuse into no control at all (security finding F11).
+    Both input call sites now fail closed, and share this wording so the two
+    cannot drift apart.
+
+    The escape hatch is in the message on purpose. Failing closed is defensible
+    only if the way back is discoverable at the moment it bites — the person
+    reading this is mid-incident, and a bare "scanner failed" tells them nothing
+    they can act on.
+    """
+    name = getattr(scanner, "__name__", None) or repr(scanner)
+    return (
+        f"Input scanner {name} failed ({type(exc).__name__}: {exc}). The input was "
+        f"blocked rather than passed unscanned. To accept that risk, handle the "
+        f"exception inside your scanner and return (text, True, None)."
+    )
+
+
 def apply_output_scanners(agent: BaseAgent, prompt: str, content: str) -> str:
     """
     Run an agent's ``output_scanners`` over ``content`` and return the sanitized

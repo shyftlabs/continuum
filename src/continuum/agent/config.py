@@ -263,6 +263,12 @@ class AgentConfig:
 
     # Input sanitization
     input_sanitization: bool = True
+    # ADVISORY ONLY — this logs a warning and nothing acts on the result. It is a
+    # telemetry signal ("someone tried the obvious thing here"), not a control:
+    # six literal patterns that paraphrase defeats. `input_scanners` below is what
+    # can actually refuse an input. Left off by default because `system:` and
+    # `### instruction` fire on any pasted log or README, and constant warnings
+    # train operators to ignore the channel.
     injection_detection: bool = False
 
     # When True, agent construction FAILS (raises AgentConfigurationError) if the
@@ -297,6 +303,9 @@ class AgentConfig:
     # Scanner hooks — products plug domain-specific scanners here instead of hardcoding in routers.
     # Input scanner signature:  (text: str) -> tuple[str, bool, str | None]
     #   returns (sanitized_text, is_safe, reason); is_safe=False → InputBlockedError raised
+    #   A scanner that RAISES also blocks (fail-closed, F11): these are the only input
+    #   control that can refuse, so a crashed one must not read as approval. To accept
+    #   that risk instead, catch inside your own scanner and return (text, True, None).
     # Output scanner signature: (prompt: str, output: str) -> tuple[str, bool, str | None]
     #   returns (sanitized_output, is_safe, reason); output with PII redacted in-place
     input_scanners: list[Callable[[str], tuple[str, bool, str | None]]] = field(
