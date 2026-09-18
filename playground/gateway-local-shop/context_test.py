@@ -33,6 +33,7 @@ from continuum import (
     LogLevel,
     setup_logging,
 )
+from continuum.session import bind_principal
 
 setup_logging(level=LogLevel.INFO)
 
@@ -125,9 +126,13 @@ async def chat(req: ChatRequest):
     if not _agent or not _agent._initialized:
         msg = f"Agent not connected. {_init_error or 'Start the MCP server: python server.py'}"
         return {"response": msg}
-    response = await _agent.chat(
-        req.message, user_id=req.user_id, conversation_id=req.conversation_id
-    )
+    # NOTE: `req.user_id` is a value the browser sent — not a verified identity.
+    # Binding it is only defensible in a local demo with no login; a served
+    # application must bind an id derived from a credential it checked.
+    with bind_principal(req.user_id):
+        response = await _agent.chat(
+            req.message, user_id=req.user_id, conversation_id=req.conversation_id
+        )
     return {"response": response}
 
 

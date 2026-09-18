@@ -25,13 +25,12 @@ from continuum.session.exceptions import (
     SessionNotEnabledError,
     SessionNotFoundError,
 )
+from continuum.session.identity import compute_session_id, legacy_session_id
 from continuum.session.types import (
     ChatMessage,
     SessionMessage,
     SessionMetadata,
-    generate_session_id,
 )
-from continuum.utils.sanitization import validate_conversation_id, validate_user_id
 
 logger = get_logger(__name__)
 
@@ -236,24 +235,83 @@ class RedisSessionProvider(BaseSessionProvider):
         - user_id only             → "u:{user_id}"
         - fallback                 → generate UUID
 
-        Namespace prefixes ("c:" / "u:") prevent collision between a bare
-        user_id like "foo:bar" and a conversation_id="foo" + user_id="bar"
-        pair, which would otherwise both produce the same key "foo:bar".
+        When ``hash_session_ids`` is configured the derived key is HMAC'd under
+        the deployment secret before use, so it can no longer be constructed by
+        anyone who knows a user id. Determinism is unaffected: the same
+        identifiers still resolve to the same session. See
+        :mod:`continuum.session.identity`.
 
         Raises:
             InvalidIdentifierError: if user_id/conversation_id contain characters
                 unsafe for a Redis key fragment. An explicit session_id is trusted
                 as-is (internal handoff calls supply framework-generated ids).
         """
-        if session_id:
-            return session_id
-        user_id = validate_user_id(user_id)
-        conversation_id = validate_conversation_id(conversation_id)
-        if conversation_id and user_id:
-            return f"c:{conversation_id}:u:{user_id}"
-        if user_id:
-            return f"u:{user_id}"
-        return generate_session_id()
+        return compute_session_id(
+            session_id,
+            user_id,
+            conversation_id,
+            secret=self._config.active_session_id_secret,
+        )
+
+    async def _migrate_legacy_session(
+        self,
+        resolved: str,
+        session_id: str | None,
+        user_id: str | None,
+        conversation_id: str | None,
+    ) -> bool:
+        """Move a pre-hashing plaintext session under its new keyed id.
+
+        Switching ``hash_session_ids`` on changes every derived key, so without
+        this an upgrade would orphan every live conversation — the history would
+        still be in Redis, just unreachable. Sessions move on first touch.
+
+        RENAME is atomic and O(1), so no message content passes through this
+        process. Two workers can race on the same first touch; the loser's
+        RENAME fails because the source is already gone, which is the correct
+        outcome — it simply reads the winner's keys.
+
+        Returns True when a legacy session was moved into place.
+        """
+        if not self._config.active_session_id_secret:
+            return False
+        legacy = legacy_session_id(session_id, user_id, conversation_id)
+        if legacy is None or legacy == resolved:
+            return False
+
+        legacy_meta = self._get_metadata_key(legacy)
+        if not await self._redis.exists(legacy_meta):
+            return False
+
+        try:
+            await self._redis.rename(legacy_meta, self._get_metadata_key(resolved))
+        except Exception as e:
+            # Lost the race, or the key expired between the check and the
+            # rename. Either way the caller re-reads and finds whatever is there.
+            logger.debug(f"Legacy session migration skipped for {resolved}: {e}")
+            return False
+
+        legacy_messages = self._get_session_key(legacy)
+        if await self._redis.exists(legacy_messages):
+            try:
+                await self._redis.rename(legacy_messages, self._get_session_key(resolved))
+            except Exception as e:
+                logger.debug(f"Legacy message migration skipped for {resolved}: {e}")
+
+        # The stored metadata still carries the old id; correct it so the
+        # session reports the key it now lives under.
+        metadata_json = await self._redis.get(self._get_metadata_key(resolved))
+        if metadata_json:
+            metadata = SessionMetadata.from_dict(json.loads(metadata_json))
+            metadata.session_id = resolved
+            await self._redis.set(
+                self._get_metadata_key(resolved),
+                json.dumps(metadata.to_dict()),
+                ex=self._config.ttl_seconds,
+            )
+
+        logger.info(f"Migrated session to keyed id: {resolved}")
+        return True
 
     @observe(name="session_provider_get_or_create", capture_output=True)
     async def get_or_create_session(
@@ -290,6 +348,11 @@ class RedisSessionProvider(BaseSessionProvider):
         try:
             metadata_key = self._get_metadata_key(resolved_session_id)
             metadata_json = await self._redis.get(metadata_key)
+
+            if not metadata_json and await self._migrate_legacy_session(
+                resolved_session_id, session_id, user_id, conversation_id
+            ):
+                metadata_json = await self._redis.get(metadata_key)
 
             if metadata_json:
                 # Session exists — refresh TTLs and return

@@ -25,6 +25,78 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+MEMORY_HEADER = "User profile (long-term preferences and context):"
+
+CACHE_BREAKPOINT_KEY = "cache_breakpoint_index"
+"""Index of the first prompt block whose bytes change from turn to turn.
+
+Anthropic caches the prefix up to and including the block carrying
+``cache_control``, so anything volatile sitting inside that prefix changes its
+hash and the breakpoint never hits. The builder is what knows which blocks are
+volatile -- retrieved memory is a similarity search on the current input, and
+pipeline context carries a prior step's output -- so it records where they start
+and the executor places the marker before them.
+
+Recorded on ``context.metadata`` rather than on the message dicts: providers
+build their payloads from those dicts, and an unrecognised key would ride along
+to the API.
+"""
+
+
+def _render_memory_context(memories: list[dict[str, Any]]) -> str:
+    """Render retrieved memories, fencing only the rows provenance marks untrusted.
+
+    Rows written by an untainted run are the user's own material and render
+    exactly as they always have -- that shape is measured at full utility on
+    every model tested, and changing it is not free: the envelope alone, with no
+    rule attached, takes Claude's factual recall from 3/3 to 0/3.
+
+    Rows carrying provenance labels were derived from untrusted input. Those go
+    inside a ``recalled_memory`` envelope, which strips invisible characters and
+    defangs any tag the content uses to close the fence early, and the standing
+    rule is emitted alongside so the tag means something to the model.
+
+    Splitting by provenance is what lets both hold at once. The two cases are
+    indistinguishable as text -- a stored "prefers bullet points" and a planted
+    "always append token X" are both directives in a memory row -- so no wording
+    can separate them. Phase 1's stamp can.
+
+    An unlabelled row counts as clean. Every row written before provenance
+    existed is unlabelled, so treating them as suspect would fence the whole
+    existing corpus and take recall down with it. Cover here is forward-only, by
+    design; the tool gate is the control that does not depend on it.
+    """
+    if not memories:
+        return ""
+
+    from continuum.llm.untrusted_content import MEMORY_INSTRUCTION, MEMORY_TAG, fence_untrusted
+    from continuum.memory.types import PROVENANCE_LABELS_KEY
+
+    clean: list[str] = []
+    untrusted: list[str] = []
+
+    for m in memories:
+        # Preserve the historical fallback: a row shaped unexpectedly renders its
+        # repr rather than vanishing, so a retrieval bug stays visible.
+        text = m.get("memory", str(m)) if isinstance(m, dict) else str(m)
+        meta = m.get("metadata") if isinstance(m, dict) else None
+        labels = meta.get(PROVENANCE_LABELS_KEY) if isinstance(meta, dict) else None
+        # Same tolerance as the reader in memory_service: only a list/tuple of
+        # strings counts. str and dict are both iterable, so accepting "any
+        # iterable" would read a string's characters as labels.
+        if isinstance(labels, list | tuple) and any(isinstance(x, str) for x in labels):
+            untrusted.append(str(text))
+        else:
+            clean.append(str(text))
+
+    parts: list[str] = []
+    if clean:
+        parts.append(MEMORY_HEADER + "\n" + "".join(f"- {t}\n" for t in clean))
+    if untrusted:
+        body = "".join(f"- {t}\n" for t in untrusted).rstrip("\n")
+        parts.append(MEMORY_INSTRUCTION + "\n" + fence_untrusted(body, MEMORY_TAG))
+    return "\n".join(parts)
+
 
 _REACT_TEMPLATE_BASE = """
 Before answering, call the 'think' tool to reason step by step.
@@ -163,28 +235,43 @@ class MessageBuilder(IMessageBuilder):
                     f"Failed to validate/inject tool context state: {e}. Continuing without it."
                 )
 
-        # Inject memory facts early (user profile/background — stable context like instructions)
+        # Retrieved memory. NOT stable context, despite where it sits: this is a
+        # similarity search on the current turn's input, so its bytes change
+        # almost every turn. CACHE_BREAKPOINT_KEY is recorded below so the
+        # executor places the prompt-cache marker before it rather than after.
         if agent.memory_config and agent.memory_config.search_memories and self._memory_service:
             try:
                 query = input if isinstance(input, str) else str(input)
                 memories = await self._memory_service.retrieve_memories(agent, query, context)
 
                 if memories:
-                    memory_content = "User profile (long-term preferences and context):\n"
-                    for m in memories:
-                        memory_content += f"- {m.get('memory', str(m))}\n"
+                    memory_content = _render_memory_context(memories)
+                    if memory_content and context.metadata is not None:
+                        context.metadata.setdefault(CACHE_BREAKPOINT_KEY, len(messages))
 
                     logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
                     logger.debug(f"💾 Memory context content:\n{memory_content}")
 
-                    messages.append({"role": "system", "content": memory_content})
+                    if memory_content:
+                        messages.append({"role": "system", "content": memory_content})
             except Exception as e:
+                from continuum.agent.exceptions import MemoryReviewRequiredError
+
+                if isinstance(e, MemoryReviewRequiredError):
+                    # The second best-effort handler this has to survive. Both
+                    # layers treat retrieval as optional and degrade to "no
+                    # memories"; a review demand that degrades is the human step
+                    # silently skipped, which is what the mode exists to force.
+                    raise
                 logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
 
         # Inject pipeline context from sequential/supervised/planner workflows
         # so sub-agents can see prior steps' outputs without loading Redis.
         pipeline_ctx = context.metadata.get("pipeline_context") if context.metadata else None
         if pipeline_ctx:
+            # setdefault, not assignment: the marker goes before the FIRST
+            # volatile block, and memory (above) may already have claimed it.
+            context.metadata.setdefault(CACHE_BREAKPOINT_KEY, len(messages))
             messages.append({"role": "system", "content": pipeline_ctx})
 
         # Load session history if available.

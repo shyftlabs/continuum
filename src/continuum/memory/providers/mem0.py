@@ -54,8 +54,9 @@ class Mem0Provider(BaseMemoryProvider):
     Memory provider using mem0.
 
     This provider leverages mem0's native functionality:
-    - AsyncMemory for non-blocking async operations
-    - Memory for synchronous operations
+    - Memory (the SYNCHRONOUS class) run through asyncio.to_thread. Not
+      AsyncMemory: the pre_store_filter gate is mixed into the sync class only,
+      so switching would silently remove it (see filtered_memory).
     - Native Qdrant metadata filtering
     - Custom fact extraction prompts
     - Custom memory update prompts
@@ -127,7 +128,13 @@ class Mem0Provider(BaseMemoryProvider):
             logger.debug(f"Initializing mem0 with config: {self._mem0_config}")
 
             # Initialize sync client - mem0's Memory.from_config() is synchronous
-            self._sync_memory = Memory.from_config(self._mem0_config)
+            # A Memory subclass with the pre_store_filter gate mixed in. Gating
+            # inside mem0 is what makes the filter a veto instead of a delete
+            # after the fact; see filtered_memory for why that distinction is not
+            # cosmetic.
+            from continuum.memory.providers.filtered_memory import build_filtered_memory_class
+
+            self._sync_memory = build_filtered_memory_class().from_config(self._mem0_config)
 
             self._initialized = True
             self._patch_milvus_strong_consistency()
@@ -259,6 +266,7 @@ class Mem0Provider(BaseMemoryProvider):
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
         infer: bool = True,
+        pre_store_filter: Any | None = None,
     ) -> MemoryAddResult:
         """
         Add memories using mem0's Memory.add() via asyncio.to_thread().
@@ -295,10 +303,27 @@ class Mem0Provider(BaseMemoryProvider):
                 f"mem0.add() with: user_id={user_id}, agent_id={agent_id}, conversation_id={conversation_id}"
             )
 
-            # Run sync memory.add() in thread pool
-            response = await asyncio.to_thread(self._sync_memory.add, **kwargs)
+            # Run sync memory.add() in thread pool.
+            #
+            # The filter is scoped onto the Memory instance rather than passed
+            # in: mem0 has no parameter for one, and the gate lives inside
+            # _create_memory several frames down -- past a ThreadPoolExecutor of
+            # mem0's own, which a ContextVar does not survive. The instance does
+            # cross that boundary; see filtered_memory for the measurement.
+            from continuum.memory.providers.filtered_memory import use_pre_store_filter
+
+            def _add_with_gate() -> tuple[Any, list[str]]:
+                with use_pre_store_filter(self._sync_memory, pre_store_filter) as sup:
+                    return self._sync_memory.add(**kwargs), list(sup)
+
+            response, suppressed = await asyncio.to_thread(_add_with_gate)
 
             result = MemoryAddResult.from_mem0_response(response)
+            result.suppressed = list(suppressed)
+            if suppressed:
+                logger.info(
+                    "🚫 pre_store_filter suppressed %d fact(s) before the write", len(suppressed)
+                )
             logger.debug(f"mem0.add() result: {result.message}, {len(result.results)} memories")
             return result
 
@@ -465,9 +490,17 @@ class Mem0Provider(BaseMemoryProvider):
         data: str,
         *,
         custom_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MemoryEntry:
         """
         Update a memory using mem0's Memory.update() via asyncio.to_thread().
+
+        ``metadata`` REPLACES the row's payload rather than merging into it.
+        mem0's docstring says the opposite -- "existing metadata fields not
+        specified here will be preserved" -- but ``_update_memory`` rebuilds the
+        payload from what it is given and re-preserves only user_id, agent_id,
+        run_id, actor_id and role. Verified against a live Milvus. Callers should
+        read the row and pass its full metadata back with their edit applied.
 
         See: https://docs.mem0.ai/open-source/features/custom-update-memory-prompt
         """
@@ -477,6 +510,9 @@ class Mem0Provider(BaseMemoryProvider):
             "memory_id": memory_id,
             "data": data,
         }
+
+        if metadata is not None:
+            kwargs["metadata"] = metadata
 
         # Custom update prompt
         if custom_prompt:

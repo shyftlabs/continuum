@@ -316,6 +316,47 @@ class ToolAccessDeniedError(AgentToolError, PolicyDeniedError):
             self.context["denial_message"] = denial_message
 
 
+class ToolApprovalDeniedError(AgentToolError, PolicyDeniedError):
+    """Raised when a person declined a tool call, or nobody answered in time.
+
+    A PolicyDeniedError like its neighbour above, so the existing handling
+    treats it as a governance outcome rather than a fault: logged at INFO
+    without a traceback, and turned into a tool result the model can relay.
+    A refusal is the gate working.
+
+    Distinct from ToolAccessDeniedError because the two answer different
+    questions. Policy asks *may this run use this tool* and decides by rule;
+    this asks *should this particular call, with these arguments, happen* and
+    the answer came from a human. Collapsing them would lose that in the audit
+    trail, where it is the part that matters.
+    """
+
+    def __init__(
+        self,
+        tool_name: str,
+        reviewer: str | None = None,
+        reason: str | None = None,
+        deferred: bool = False,
+        **kwargs: Any,
+    ):
+        verb = "is awaiting approval" if deferred else "was not approved"
+        message = f"Approval denied: tool '{tool_name}' {verb}"
+        if reviewer:
+            message += f" by {reviewer}"
+        if reason:
+            message += f" ({reason})"
+        super().__init__(message, tool_name=tool_name, **kwargs)
+        if reviewer:
+            self.context["reviewer"] = reviewer
+        if reason:
+            self.context["reason"] = reason
+        if deferred:
+            # Read by the executor to say PENDING rather than DENIED. Kept on
+            # the same exception because the control flow is identical -- the
+            # call does not run either way -- and only the wording differs.
+            self.context["deferred"] = True
+
+
 class MemoryAccessDeniedError(AgentError, PolicyDeniedError):
     """Raised when an access policy denies a memory read or write. Expected
     governance outcome (see :class:`PolicyDeniedError`), not a failure."""
@@ -336,6 +377,51 @@ class MemoryAccessDeniedError(AgentError, PolicyDeniedError):
             self.context["scope"] = scope
         if policy_name:
             self.context["policy_name"] = policy_name
+
+
+class MemoryReviewRequiredError(AgentError, PolicyDeniedError):
+    """Raised when recall returns rows whose provenance a person has not cleared.
+
+    Only under ``on_labeled_recall="block"``. Recall is unlike the other taint
+    producers: a tool result is something the model chose to fetch this turn, a
+    run-level seed is something the operator decided up front, but a memory row
+    arrives unbidden during prompt assembly and was written in an earlier
+    session. By the time the label is known, untrusted text would already be in
+    the prompt.
+
+    Blocking is the forced human step, the same one F3 requires before an
+    unreviewed tool catalogue can reach a model, and for the same reason: this is
+    the case with no reliable automated defence. Fencing asks the model not to
+    obey and only two of four models tested reliably decline.
+
+    Carries the offending row ids because a block without a review path is an
+    outage rather than a workflow -- the caller needs them to link a reviewer
+    straight to the rows, who then approves or deletes each one.
+
+    A ``PolicyDeniedError``, so it is reported as a governance outcome rather
+    than a crash. Unlike its siblings it must NOT be swallowed by the
+    best-effort retrieval handlers: degrading to "no memories" would silently
+    skip the human step it exists to force.
+    """
+
+    def __init__(
+        self,
+        memory_ids: list[str] | None = None,
+        labels: list[str] | None = None,
+        **kwargs: Any,
+    ):
+        ids = list(memory_ids or [])
+        labs = sorted(set(labels or []))
+        message = (
+            f"{len(ids)} recalled memory row(s) carry unreviewed provenance "
+            f"{labs or '[]'} and this agent is configured to stop rather than use them. "
+            f"Review them (approve or delete) to continue."
+        )
+        super().__init__(message, **kwargs)
+        self.memory_ids = ids
+        self.labels = labs
+        self.context["memory_ids"] = ids
+        self.context["labels"] = labs
 
 
 class ModelAccessDeniedError(AgentError, PolicyDeniedError):

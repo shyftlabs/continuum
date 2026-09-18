@@ -8,6 +8,7 @@ Supports: agent, approval, parallel, conditional, wait step types.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -37,6 +38,24 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
+_logger = logging.getLogger(__name__)
+
+
+def _current_workflow_id() -> str:
+    """This workflow's id, or "" outside a workflow event loop.
+
+    ``workflow.info()`` raises when there is no loop, which is the case in a
+    unit test driving the signal handler directly. The id is only carried so a
+    reviewer UI can render it consistently with a planned approval step, so an
+    empty string is a cosmetic loss rather than a functional one -- better than
+    making the handler untestable without a running Temporal server.
+    """
+    try:
+        return str(workflow.info().workflow_id)
+    except Exception:
+        return ""
+
+
 @workflow.defn(sandboxed=False)
 class AgentWorkflow:
     """Generic workflow that interprets a declarative step list.
@@ -51,6 +70,10 @@ class AgentWorkflow:
         self._step_results: list[AgentActivityResult] = []
         self._approval_decisions: list[ApprovalDecision] = []
         self._pending_approvals: list[dict[str, Any]] = []
+        # Ad-hoc approvals raised from inside a tool call, by request_id. Kept
+        # separately from _pending_approvals because that list is what reviewers
+        # READ, while this is where the decision is recorded and read back.
+        self._tool_approvals: dict[str, dict[str, Any]] = {}
         self._cancelled = False
         self._pending_decision: ApprovalDecision | None = None
         self._injected_input: dict[str, Any] | None = None
@@ -62,9 +85,119 @@ class AgentWorkflow:
     # ------------------------------------------------------------------
 
     @workflow.signal
-    async def submit_approval(self, decision: ApprovalDecision) -> None:
-        """Human submits approval/rejection."""
+    async def submit_approval(self, decision: ApprovalDecision | None = None) -> None:
+        """Human submits approval/rejection.
+
+        Serves both approval paths. A decision whose ``request_id`` names an
+        ad-hoc TOOL approval (registered by ``request_tool_approval``) is
+        resolved here and never reaches ``_pending_decision``; anything else is
+        left for ``_run_approval_step``, which is waiting on exactly that. One
+        signal, one reviewer UI, two kinds of thing being approved.
+
+        ``decision`` is optional ONLY so an unusable payload can be dropped
+        instead of raising. A signal handler that raises fails the workflow
+        ACTIVATION, and Temporal retries an activation forever -- so one empty
+        Send-a-Signal form, from anyone who can reach the UI, parks the run
+        permanently and the reviewer's real answer can never land afterwards.
+        Found live, as::
+
+            TypeError: AgentWorkflow.submit_approval() missing 1 required
+            positional argument: 'decision'
+
+        Nothing else is softened. A decision that deserializes but names an
+        unknown request still falls through to ``_pending_decision``, and an
+        unauthorized one is still refused and leaves the prompt open.
+        """
+        if not isinstance(decision, ApprovalDecision):
+            # Module logger, not workflow.logger: see _resolve_tool_approval.
+            _logger.warning(
+                "Ignoring a submit_approval signal carrying %s instead of an "
+                "ApprovalDecision. The Data field was probably empty — send "
+                '{"request_id": ..., "decision": "approved"|"rejected", '
+                '"decided_by": ...}. Any pending approval is still answerable.',
+                type(decision).__name__,
+            )
+            return
+        if self._resolve_tool_approval(decision):
+            return
         self._pending_decision = decision
+
+    def _resolve_tool_approval(self, decision: ApprovalDecision) -> bool:
+        """Match a decision to a pending TOOL approval. True if it was ours.
+
+        Not a signal handler itself -- called from ``submit_approval`` so there
+        is one entry point for a reviewer, and so the authorization rule cannot
+        be bypassed by signalling a different handler.
+        """
+        entry = self._tool_approvals.get(decision.request_id)
+        if entry is None:
+            return False
+
+        # Same allow-list rule as a planned approval step, via the same
+        # function. A tool approval must not be a weaker door into the same
+        # workflow. Unauthorized attempts are discarded and the prompt stays
+        # open, so a bad signal can neither resolve it nor consume its wait.
+        step = ApprovalStep(description=entry["description"], approvers=entry["approvers"])
+        if not is_authorized(step, decision):
+            # The module logger, not workflow.logger: this method is called from
+            # a signal handler that has to remain callable without a workflow
+            # event loop, which workflow.logger requires. Determinism is
+            # unaffected -- logging is not part of replayed state.
+            _logger.warning(
+                f"Unauthorized tool-approval attempt by '{decision.decided_by}' for "
+                f"request '{decision.request_id}': not in approvers {entry['approvers']}. "
+                "Discarded; the request stays pending."
+            )
+            return True  # handled: it was ours, and it was refused
+
+        entry["status"] = decision.decision
+        entry["decided_by"] = decision.decided_by
+        entry["reason"] = decision.reason
+        self._approval_decisions.append(decision)
+        # Leave the pending list, or a reviewer keeps seeing a prompt they have
+        # already answered.
+        self._pending_approvals = [
+            a for a in self._pending_approvals if a["request_id"] != decision.request_id
+        ]
+        return True
+
+    @workflow.signal
+    async def request_tool_approval(self, info: dict[str, Any]) -> None:
+        """Register an approval request raised from inside a tool call (F7).
+
+        The gate fires in ``ToolExecutor``, which under Temporal runs inside an
+        activity -- and an activity cannot touch workflow state directly. This
+        is how it asks. The request joins ``_pending_approvals``, the same list
+        a planned approval step uses, so the reviewer UI, HumanInLoopManager and
+        ``get_pending_approvals`` all see it without change.
+
+        Idempotent on ``request_id``: a retried signal must not leave a reviewer
+        looking at two prompts for one call.
+        """
+        request_id = str(info.get("request_id") or "")
+        if not request_id or request_id in self._tool_approvals:
+            return
+
+        entry = {
+            "request_id": request_id,
+            "workflow_id": _current_workflow_id(),
+            "description": str(info.get("description") or ""),
+            # The tool's ARGUMENTS. The reason this gate exists at all: neither
+            # the policy gate nor MCP tool-trust can see them, so neither could
+            # tell a routine call from a consequential one.
+            "context": str(info.get("context") or ""),
+            "approvers": list(info.get("approvers") or []),
+            "status": "pending",
+            "decided_by": None,
+            "reason": None,
+        }
+        self._tool_approvals[request_id] = entry
+        self._pending_approvals.append(
+            {
+                k: entry[k]
+                for k in ("request_id", "workflow_id", "description", "context", "approvers")
+            }
+        )
 
     @workflow.signal
     async def cancel_workflow(self) -> None:
@@ -90,6 +223,25 @@ class AgentWorkflow:
             "completed_steps": len(self._step_results),
             "cancelled": self._cancelled,
             "unauthorized_attempts": list(self._unauthorized_attempts),
+        }
+
+    @workflow.query
+    def get_approval_decision(self, request_id: str) -> dict[str, Any]:
+        """What was decided for one ad-hoc tool approval.
+
+        ``unknown`` for an id this workflow never registered -- distinct from
+        ``pending`` on purpose, so a caller polling for an id that got lost
+        cannot read the silence as permission.
+        """
+        entry = self._tool_approvals.get(request_id)
+        if entry is None:
+            return {"status": "unknown"}
+        if entry["status"] == "pending":
+            return {"status": "pending"}
+        return {
+            "status": entry["status"],
+            "decided_by": entry["decided_by"],
+            "reason": entry["reason"],
         }
 
     @workflow.query

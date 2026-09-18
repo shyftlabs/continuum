@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 from agent import create_shop_agent
 
 from continuum import LogLevel, setup_logging
+from continuum.session import bind_principal
 
 
 def print_help():
@@ -149,9 +150,15 @@ async def main():
                     continue
 
                 print("\nThinking...")
-                response = await agent.chat(
-                    user_input, user_id=user_id, conversation_id=conversation_id
-                )
+                # Sessions record an owner and will not load or save without a
+                # bound caller identity. A CLI has no login, so the id typed at
+                # startup is all there is — fine for a single-user demo, but a
+                # served application must bind an id it derived from a verified
+                # credential rather than one the caller supplied.
+                with bind_principal(user_id):
+                    response = await agent.chat(
+                        user_input, user_id=user_id, conversation_id=conversation_id
+                    )
                 print(f"\nAssistant: {response}\n")
 
             except KeyboardInterrupt:

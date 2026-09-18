@@ -258,6 +258,9 @@ All importable from `continuum.agent`.
 | `output_scanners` | `list[Callable]` | `[]` | Same shape, applied to model output |
 | `trace_all_turns` | `bool` | `True` | |
 | `log_to_session` | `bool` | `True` | Persist tool summaries into session metadata |
+| `tool_approval` | `set[str]` | `set()` | fnmatch patterns naming tools that need a **person** before they run. Empty = the gate never fires. See [Tool approval](tools.md#66--tool-approval-human-in-the-loop) |
+| `approval_handler` | `ToolApprovalHandler \| None` | `None` | `async (ToolApprovalRequest) -> ToolApprovalDecision`. A tool named in `tool_approval` with no handler here is **denied**, not silently allowed |
+| `approval_timeout` | `float` | `30.0` | Seconds to wait for the handler. On expiry the call is denied. The default is browser/proxy-safe because a blocking handler holds the caller's connection open; a wait measured in hours needs Temporal or a refuse-and-resume handler |
 
 ### `HandoffConfig`
 

@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 from agent import LocalShopAgent  # noqa: E402
 
 from continuum import LogLevel, setup_logging  # noqa: E402
+from continuum.session import bind_principal  # noqa: E402
 
 USER = "e2e-user"
 CONV = "e2e-conv-1"
@@ -48,12 +49,15 @@ async def main() -> int:
 
     transcript: list[str] = []
     try:
-        for i, msg in enumerate(TURNS, 1):
-            print(f"\n--- Turn {i} ---\nUser: {msg}")
-            resp = await agent.chat(msg, user_id=USER, conversation_id=CONV)
-            print(f"Assistant: {resp}")
-            assert resp and not resp.startswith("Error:"), f"Turn {i} failed: {resp}"
-            transcript.append(resp.lower())
+        # One shopper for the whole flow. Sessions record an owner, and the
+        # framework will not load or save one unless the caller says who it is.
+        with bind_principal(USER):
+            for i, msg in enumerate(TURNS, 1):
+                print(f"\n--- Turn {i} ---\nUser: {msg}")
+                resp = await agent.chat(msg, user_id=USER, conversation_id=CONV)
+                print(f"Assistant: {resp}")
+                assert resp and not resp.startswith("Error:"), f"Turn {i} failed: {resp}"
+                transcript.append(resp.lower())
     finally:
         await agent.close()
 

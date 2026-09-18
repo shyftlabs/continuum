@@ -140,6 +140,7 @@ class IntelligentMemoryClient(MemoryClient):
         policy_store: PolicyStore | None = None,
         subject: str | None = None,
         data_labels: set[str] | None = None,
+        pre_store_filter: Any | None = None,
     ) -> MemoryAddResult:
         """
         Store memories with importance score, entity extraction, and profile update.
@@ -176,6 +177,11 @@ class IntelligentMemoryClient(MemoryClient):
             policy_store=policy_store,
             subject=subject,
             data_labels=data_labels,
+            # Forwarded, not applied here: the gate lives inside the provider so
+            # a rejected fact is never written. Dropping it at this layer would
+            # silently downgrade every intelligent-memory write to
+            # delete-after-write.
+            pre_store_filter=pre_store_filter,
         )
 
         # 3. Entity extraction (stored as tagged memories in same collection)
@@ -203,6 +209,7 @@ class IntelligentMemoryClient(MemoryClient):
         filters: dict[str, Any] | None = None,
         policy_store: PolicyStore | None = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemorySearchResult:
         """
         Search memories and re-rank by blending semantic similarity, importance,
@@ -221,6 +228,7 @@ class IntelligentMemoryClient(MemoryClient):
             filters=filters,
             policy_store=policy_store,
             subject=subject,
+            data_labels=data_labels,
         )
 
         if self._intel.enable_scoring or self._intel.enable_decay:

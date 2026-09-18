@@ -59,6 +59,10 @@ from continuum.temporal.types import (
 # --------------------------------------------------------------------------- #
 try:
     from continuum.temporal.activities import run_agent_activity, send_notification_activity
+    from continuum.temporal.approval_adapter import (
+        temporal_approval_handler,
+        temporal_tool_approval,
+    )
     from continuum.temporal.client import (
         TemporalClient,
         get_temporal_client,
@@ -90,6 +94,13 @@ __all__ = [
     # Human-in-the-loop
     "HumanInLoopManager",
     "ApprovalNotificationConfig",
+    # Tool-call approval (F7). Deliberately in the GUARDED block even though
+    # approval_adapter imports no temporalio at module level: without the extra
+    # these build a handler that defers every approval forever, because there is
+    # no activity to read a workflow id from. A missing name and an ImportError
+    # naming the extra is better than a control that silently does nothing.
+    "temporal_tool_approval",
+    "temporal_approval_handler",
     # Types
     "StepType",
     "AgentStep",

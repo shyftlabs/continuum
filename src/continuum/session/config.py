@@ -6,9 +6,14 @@ Provides configuration classes for session management settings.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from continuum.config import settings
+from continuum.security.secrets_guard import (
+    MIN_OFFLINE_SECRET_LENGTH,
+    enforce_credential,
+)
+from continuum.session.exceptions import SessionConfigurationError
 
 # Safe minimum pool size — a configured value below this is raised to it so the
 # pool can never be accidentally under-provisioned.
@@ -183,6 +188,122 @@ class SessionConfig(BaseModel):
             "the check. A per-call require_session= argument overrides this."
         ),
     )
+
+    # -------------------------------------------------------------------------
+    # Session ownership — a session id is a name, not an authorization
+    # -------------------------------------------------------------------------
+    session_ownership: Literal["open", "audit", "enforce"] = Field(
+        default_factory=lambda: settings.session_ownership,
+        description=(
+            "How to react when a caller touches a session owned by a different "
+            "principal (bound via continuum.session.bind_principal). 'enforce' "
+            "(default) raises SessionOwnershipError — secure by default, since "
+            "a session id names storage and is not authorization on its own. "
+            "'audit' reports the problem loudly with a metric and allows the "
+            "call, which is how a deployment measures impact before enforcing. "
+            "'open' reports it quietly and allows it (the pre-ownership "
+            "behaviour). Sessions with no stored owner (anonymous / single-user "
+            "deployments) are never affected by any mode."
+        ),
+    )
+    require_principal: bool = Field(
+        default_factory=lambda: settings.session_require_principal,
+        description=(
+            "Treat 'no principal bound' as an ownership problem. OFF by default, "
+            "for compatibility rather than for safety: every application written "
+            "before bind_principal() existed names no principal, so requiring one "
+            "would refuse each of them on upgrade. The consequence is that holding "
+            "the session id is accepted as sufficient, and with hash_session_ids "
+            "also off the id is derived in plaintext from the user id it scopes — "
+            "so anyone who knows a user id can construct it and present it while "
+            "naming nobody. session_ownership='enforce' does not cover that path: "
+            "it refuses a caller who gives the WRONG identity, not one who gives "
+            "none. Either escape closes it, and a multi-tenant deployment needs "
+            "one: set this True, or set hash_session_ids True so the id can no "
+            "longer be derived. Sessions with no stored owner are unaffected."
+        ),
+    )
+    hash_session_ids: bool = Field(
+        default_factory=lambda: settings.session_hash_ids,
+        description=(
+            "Derive session ids as an HMAC of the identifiers instead of storing "
+            "them in plaintext. Without this, 'u:{user_id}' can be constructed "
+            "by anyone who knows a user id, so no leak is needed to reach "
+            "another user's session. Determinism is preserved (a returning user "
+            "still resolves to the same session) and legacy plaintext keys are "
+            "migrated on first touch. Requires session_id_secret."
+        ),
+    )
+    session_id_secret: str | None = Field(
+        default_factory=lambda: settings.session_id_secret,
+        description=(
+            "HMAC key for hash_session_ids. Must be identical in every process "
+            "and stable across restarts — it is a derivation parameter, not a "
+            "per-process random. A secret generated at boot would give each "
+            "worker its own key space (a user's history appearing and "
+            "disappearing depending on which worker answered) and would orphan "
+            "every stored session on redeploy. Rotating it changes every id and "
+            "is the same kind of event as the plaintext migration."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_session_id_secret(self) -> "SessionConfig":
+        """Refuse to start with hashing enabled but no secret.
+
+        The alternative — warn and fall back to plaintext derivation — would
+        leave the configuration claiming a protection that is not in force. A
+        security control reporting 'enabled' while doing nothing is the exact
+        failure this whole change exists to remove, so it fails closed instead.
+        """
+        if not self.hash_session_ids:
+            # The value is unused, so it cannot be a vulnerability. Refusing to
+            # start over a weak-but-inert secret would be a false alarm.
+            return self
+
+        if not (self.session_id_secret or "").strip():
+            raise SessionConfigurationError(
+                "hash_session_ids=True requires session_id_secret (SESSION_ID_SECRET). "
+                "A plain hash of a guessable input is still guessable, so the secret "
+                "is what makes the id unguessable — without it, hashing would only "
+                "change how keys look. Set the same value in every process and keep "
+                "it stable across restarts; changing it re-derives every session id."
+            )
+
+        # Present but weak. Handed to the same guard that protects the Redis and
+        # vector-store credentials, so this secret fails the way the others do —
+        # including the CONTINUUM_ALLOW_INSECURE escape hatch for local work.
+        #
+        # A length floor applies here and not to those: a Redis password is
+        # guessed through the network, where the server slows the attacker down.
+        # This one is guessed offline, because every user of the system holds a
+        # matched pair (their own user id -> their own session id) and can grind
+        # candidates locally with no rate limit and no logs. Recovering it yields
+        # every user's session id, so anything memorable is fatal rather than
+        # merely unwise.
+        #
+        # Note the escape hatch deliberately does NOT reach the check above: a
+        # weak secret is a downgrade an operator may knowingly accept, while an
+        # absent one leaves nothing to key the HMAC with.
+        enforce_credential(
+            service="Session id hashing",
+            credential=self.session_id_secret,
+            env_var="SESSION_ID_SECRET",
+            min_length=MIN_OFFLINE_SECRET_LENGTH,
+        )
+        return self
+
+    @property
+    def active_session_id_secret(self) -> str | None:
+        """The secret in force, or None when ids are derived in plaintext.
+
+        Providers read this rather than the raw field so that "hashing is off"
+        has exactly one meaning at the call site.
+        """
+        if not self.hash_session_ids:
+            return None
+        secret = (self.session_id_secret or "").strip()
+        return secret or None
 
     def is_configured(self) -> bool:
         """Check if session is properly configured."""

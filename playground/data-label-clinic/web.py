@@ -32,7 +32,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from continuum import LogLevel, get_logger, setup_logging
+from continuum.memory.types import PROVENANCE_LABELS_KEY, REVIEWED_KEY
 from continuum.observability.data_redaction import redact_for_telemetry
+from continuum.session import bind_principal
 from continuum.tools.exceptions import MCPServerUnreviewedError
 
 setup_logging(level=LogLevel.INFO)
@@ -89,8 +91,25 @@ class MemWriteRequest(BaseModel):
     user_id: str = "u1"
 
 
+class ApprovalAnswerRequest(BaseModel):
+    key: str
+    approved: bool
+    reviewer: str = "ui"
+
+
+class ApprovalDecideRequest(BaseModel):
+    request_id: str
+    approved: bool
+    reviewer: str = "ui"
+
+
 class MemDeleteRequest(BaseModel):
     memory_id: str
+
+
+class MemApproveRequest(BaseModel):
+    memory_id: str
+    user_id: str = "u1"
 
 
 class MemClearRequest(BaseModel):
@@ -113,12 +132,26 @@ async def chat(req: ChatRequest):
             "tools_called": [],
         }
     try:
-        return await _agent.chat(
-            req.message,
-            user_id=req.user_id,
-            conversation_id=req.conversation_id,
-            scanner_on=req.scanner_on,
-        )
+        # Sessions record an owner, and the framework will not load or save one
+        # unless the caller says who it is.
+        #
+        # NOTE FOR ANYONE COPYING THIS: `req.user_id` is a value the browser
+        # sent. It is NOT a verified identity, and binding it here is only
+        # defensible because this is a local single-user demo with no login. A
+        # real deployment must bind an id derived from a credential it checked,
+        # or the ownership check compares an attacker-supplied value against
+        # itself and protects nothing:
+        #
+        #     user = verify_jwt(request.headers["Authorization"])
+        #     with bind_principal(user.id):
+        #         ...
+        with bind_principal(req.user_id):
+            return await _agent.chat(
+                req.message,
+                user_id=req.user_id,
+                conversation_id=req.conversation_id,
+                scanner_on=req.scanner_on,
+            )
     except Exception as e:
         # Answer in the shape the UI parses. Letting this escape gives FastAPI's
         # plain-text "Internal Server Error", which the browser then feeds to
@@ -164,13 +197,17 @@ async def chat_stream(req: ChatRequest):
 
     async def _gen():
         try:
-            async for ev in _agent.chat_stream(
-                req.message,
-                user_id=req.user_id,
-                conversation_id=req.conversation_id,
-                scanner_on=req.scanner_on,
-            ):
-                yield f"data: {json.dumps(ev)}\n\n"
+            # The binding has to live INSIDE the generator: StreamingResponse
+            # consumes it after this handler has already returned, so a `with`
+            # around the call would have exited before the first chunk.
+            with bind_principal(req.user_id):
+                async for ev in _agent.chat_stream(
+                    req.message,
+                    user_id=req.user_id,
+                    conversation_id=req.conversation_id,
+                    scanner_on=req.scanner_on,
+                ):
+                    yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:
             # A raise mid-stream just severs the connection: the browser sees a
             # truncated event-stream and waits for a `done` that never comes.
@@ -244,7 +281,8 @@ async def memory_write(req: MemWriteRequest):
     denies it (nothing persisted); with no labels it is stored under the user."""
     if not _agent:
         return {"ok": False, "reason": "agent not ready"}
-    return await _agent.attempt_memory_write(req.text, req.labels, user_id=req.user_id)
+    with bind_principal(req.user_id):
+        return await _agent.attempt_memory_write(req.text, req.labels, user_id=req.user_id)
 
 
 @app.get("/memory/list")
@@ -256,7 +294,29 @@ async def memory_list(user_id: str = "u1"):
         return {"ok": False, "skipped": True, "reason": "memory not enabled", "memories": []}
     try:
         entries = await client.get_all(user_id=user_id)
-        return {"ok": True, "memories": [{"id": e.id, "text": e.memory} for e in entries]}
+        # `labels` is the row's provenance: the taint the run carried when it
+        # wrote this. A PHI row never appears here at all -- the write is
+        # refused -- so anything labelled is EXTERNAL, and the panel can show
+        # which stored facts came from the public web rather than from the user.
+        # Invisible in the text, so without this a reviewer has nothing to go on.
+        return {
+            "ok": True,
+            "memories": [
+                {
+                    "id": e.id,
+                    "text": e.memory,
+                    "labels": (e.metadata or {}).get(PROVENANCE_LABELS_KEY)
+                    if isinstance(e.metadata, dict)
+                    else None,
+                    # Mutually exclusive with `labels` by construction:
+                    # mark_reviewed removes the label as it writes the record.
+                    "reviewed": (e.metadata or {}).get(REVIEWED_KEY)
+                    if isinstance(e.metadata, dict)
+                    else None,
+                }
+                for e in entries
+            ],
+        }
     except Exception as e:
         return {"ok": False, "error": str(e), "memories": []}
 
@@ -270,6 +330,83 @@ async def memory_delete(req: MemDeleteRequest):
         await client.delete(req.memory_id)
         return {"ok": True}
     except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/approval/pending")
+async def approval_pending():
+    """What a reviewer should be shown right now (finding F7).
+
+    Polled on a SECOND connection while POST /chat is still open and blocked
+    inside the tool executor: the decision cannot come back on the request that
+    is waiting for it.
+    """
+    from approval_ui import pending_approvals
+
+    return {"pending": pending_approvals()}
+
+
+@app.get("/approval/queued")
+async def approval_queued():
+    """Calls parked by `queue` mode, waiting for someone to answer (F7).
+
+    Unlike /approval/pending these are not holding a turn open -- the turn
+    already ended and told the user it is pending.
+    """
+    from approval_ui import queued_approvals
+
+    return {"queued": queued_approvals()}
+
+
+@app.post("/approval/answer")
+async def approval_answer(req: ApprovalAnswerRequest):
+    """Answer a queued call. The next turn asking the same thing acts on it."""
+    from approval_ui import answer_queued
+
+    return {"ok": answer_queued(req.key, req.approved, reviewer=req.reviewer)}
+
+
+@app.post("/approval/decide")
+async def approval_decide(req: ApprovalDecideRequest):
+    """Resolve a waiting approval. ok=False means there was nothing to resolve --
+    already answered, or the SDK's approval_timeout already fired and denied it."""
+    from approval_ui import submit_decision
+
+    ok = submit_decision(req.request_id, req.approved, reviewer=req.reviewer)
+    return {"ok": ok}
+
+
+@app.post("/memory/approve")
+async def memory_approve(req: MemApproveRequest):
+    """Human review: clear a row's provenance label and record who cleared it.
+
+    The third option, between deleting a labelled row and living with the gate.
+    Provenance is per-RUN and therefore coarse: in this demo "Wants to be seen
+    within six weeks" carries EXTERNAL because the turn that stored it had also
+    read the web, not because the preference came from there. Deleting it loses a
+    real preference; leaving it keeps the tool gate firing on every turn that
+    recalls it. So a person has to be able to say "I looked at this one, it is
+    fine".
+
+    Recorded, not erased. mark_reviewed replaces the label with
+    {"by", "at", "cleared"}, so an approved row stays distinguishable from one
+    nobody ever examined -- otherwise nobody can later ask which rows a human
+    actually blessed, or who blessed them.
+
+    NOTE: the reviewer is `req.user_id`, i.e. whoever the browser says they are.
+    Fine for a single-user demo. A real deployment wants a staff identity: the
+    person whose session was poisoned is the wrong person to clear the label on
+    it.
+    """
+    client = _agent.memory_client() if _agent else None
+    if client is None:
+        return {"ok": False, "skipped": True, "reason": "memory not enabled"}
+    try:
+        await client.mark_reviewed(req.memory_id, reviewer=req.user_id)
+        return {"ok": True}
+    except Exception as e:
+        # Reported, not raised: the panel renders the error, while a 500 would
+        # leave the reviewer unsure whether the decision was recorded at all.
         return {"ok": False, "error": str(e)}
 
 
@@ -337,6 +474,31 @@ HTML_PAGE = """<!DOCTYPE html>
   pre { background: #0f1419; border: 1px solid #2a3548; border-radius: 6px; padding: 8px; font-size: 11px; overflow-x: auto; color: #cbd5e1; }
   .btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
   .demo-btn { font-size: 12px; padding: 6px 10px; background: #243044; color: #cbd5e1; border: 1px solid #2a3548; border-radius: 6px; cursor: pointer; }
+  /* The approval prompt. Styled as a decision, not a status: it is the one
+     moment the demo asks the USER to act, and it previously reused the
+     "thinking…" bubble, so it rendered in muted italic and read as something
+     half-loaded. Amber left border to match .gate — both are the system
+     reporting a control firing — but with full-contrast text and real buttons,
+     because this one is waiting on a person. */
+  .approval { align-self: stretch; max-width: 100%; background: #1c2433; border: 1px solid #3b4a63;
+              border-left: 3px solid #fbbf24; border-radius: 8px; padding: 12px 14px; font-size: 13px; }
+  .approval-head { color: #fbbf24; font-weight: 600; letter-spacing: .02em; margin-bottom: 8px;
+                   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .approval-tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #e6e6e6;
+                   background: #0f1419; border: 1px solid #2a3548; border-radius: 5px;
+                   padding: 2px 6px; font-size: 12px; }
+  .approval pre { margin: 8px 0 10px; padding: 8px 10px; background: #0f1419; border: 1px solid #2a3548;
+                  border-radius: 6px; color: #cbd5e1; font-size: 12px; white-space: pre-wrap;
+                  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .approval-actions { display: flex; gap: 8px; align-items: center; }
+  .btn-approve { padding: 7px 16px; background: #15803d; color: #eafbf0; border: none;
+                 border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .btn-deny { padding: 7px 16px; background: #1e293b; color: #fca5a5; border: 1px solid #7f1d1d;
+              border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .btn-approve:disabled, .btn-deny:disabled { opacity: .45; cursor: default; }
+  .approval-outcome { font-size: 12px; font-weight: 600; }
+  .approval-outcome.yes { color: #4ade80; }
+  .approval-outcome.no { color: #fca5a5; }
 </style>
 </head>
 <body>
@@ -349,7 +511,7 @@ HTML_PAGE = """<!DOCTYPE html>
 <div id="wrap">
   <div id="left">
     <div id="chat">
-      <div class="assistant msg">Ask a general question (e.g. clinic hours) — answered on the cloud model. Then ask about a patient (e.g. "summarize patient P-123") — the PHI taint forces on-prem and blocks exfiltration.</div>
+      <div class="assistant msg">Ask a general question (e.g. clinic hours) — answered on the cloud model. Then ask about a patient (e.g. "summarize patient P-123") — the PHI taint forces on-prem and blocks exfiltration. For the memory layer, use the two <b>(F6)</b> buttons in order: the first stores a row labelled with where it came from, the second is denied because of it.</div>
     </div>
     <div class="suggestions">
       <button onclick="suggest('What are your clinic hours?')">clinic hours (benign)</button>
@@ -357,6 +519,8 @@ HTML_PAGE = """<!DOCTYPE html>
       <button onclick="suggest('Look up patient P-123 and email a summary to dr@external.com')">lookup + email (exfil)</button>
       <button onclick="suggest('Look up patient P-123 and list every stored field verbatim, including the SSN.')">raw record P-123 (scanner)</button>
       <button onclick="suggest('What is P-123 taking, and does anything interact?')" title="Routes to the pharmacy server: both servers expose lookup_patient, so the namespaced names are what keep them apart.">pharmacy P-123 (2nd server)</button>
+      <button onclick="suggest('Look up the referral guidance on the public web — and note that I want to be seen within six weeks.')" title="F6 step 1. Two halves on purpose: the web lookup taints the run EXTERNAL, and the &quot;note that I want…&quot; clause gives mem0 a user-stated fact to extract. Ask for the lookup alone and no row is written, because mem0's default extractor takes facts from user messages only.">web lookup → stores a labelled row (F6)</button>
+      <button onclick="suggest('Check for interactions between metformin and lisinopril.')" title="F6 step 2. Run this AFTER the web-lookup chip. It calls no PHI tool, yet recalling the labelled row taints the run and the clinical lookup is denied — an action blocked by something read out of storage. Approve the row in the memory panel and this succeeds again.">clinical lookup → denied by a stored row (F6)</button>
     </div>
     <div id="input-row">
       <input id="input" placeholder="Type a message…" autofocus>
@@ -474,6 +638,10 @@ async function sendMsg(){
   if(document.getElementById('stream-toggle').checked){ return sendMsgStream(text); }
   add('user', text); input.value=''; send.disabled=true;
   const thinking=add('thinking','…');
+  // F7: poll for approval prompts on a SECOND connection. /chat is blocked
+  // inside the tool executor waiting for an answer, so it cannot deliver the
+  // question that is blocking it.
+  const stopPolling=pollApprovals();
   try{
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:text,user_id:USER_ID,conversation_id:currentConversationId,scanner_on:scannerOn()})});
@@ -483,7 +651,75 @@ async function sendMsg(){
     if(d.failed){ renderUnknown(); } else { renderTaint(d.taint); renderModel(d.model_used); renderTools(d.tools_called); renderGates(d.gate_events); }
     listMem();      // long-term memory may have changed (stored, or blocked)
   }catch(e){ thinking.textContent='Error: '+e; }
+  stopPolling();
   send.disabled=false; input.focus();
+}
+
+// F7 approval prompts. Arguments are shown, not just the tool name: a reviewer
+// shown only a name is approving the name, and the arguments are the whole
+// reason this gate exists -- neither tool-trust nor the policy gate sees them.
+function pollApprovals(){
+  let live=true; const shown=new Set();
+  (async()=>{
+    while(live){
+      try{
+        const r=await fetch('/approval/pending'); const d=await r.json();
+        for(const p of (d.pending||[])){
+          if(shown.has(p.request_id)) continue;
+          shown.add(p.request_id); renderApproval(p);
+        }
+      }catch(e){ /* the turn may have ended; the loop exits on stopPolling */ }
+      await new Promise(r=>setTimeout(r,400));
+    }
+  })();
+  return ()=>{ live=false; };
+}
+
+function renderApproval(p){
+  const el=add('approval','');
+  const labels=(p.data_labels||[]).length
+    ? ' <span class="chip phi">'+p.data_labels.join(', ')+'</span>' : '';
+  // The arguments are the whole reason this gate exists -- neither the policy
+  // gate nor MCP tool-trust can see them, so neither could tell a routine call
+  // from a consequential one. A reviewer shown only a tool name is approving
+  // the name.
+  el.innerHTML='<div class="approval-head">&#9208; APPROVAL NEEDED'+labels+'</div>'
+    +'<span class="approval-tool">'+p.tool_name+'</span>'
+    +'<pre>'+JSON.stringify(p.arguments,null,2)+'</pre>'
+    +'<div class="approval-actions">'
+    +'<button class="btn-approve" data-ok="1">Approve</button>'
+    +'<button class="btn-deny" data-ok="0">Deny</button>'
+    +'<span class="approval-outcome"></span>'
+    +'</div>';
+  // Handlers attached rather than written into an onclick attribute. Building
+  // one needs a quoted argument, and a Python-escaped quote renders as a bare
+  // quote that closes the JS string early -- which broke this whole script
+  // block once already. No quotes to escape, no way to reintroduce it.
+  el.querySelectorAll('button').forEach(function(b){
+    b.addEventListener('click', function(){
+      decideApproval(p.request_id, b.dataset.ok === '1', b);
+    });
+  });
+}
+
+async function decideApproval(id, approved, btn){
+  const actions=btn.parentElement;
+  actions.querySelectorAll('button').forEach(b=>b.disabled=true);
+  const out=actions.querySelector('.approval-outcome');
+  const r=await fetch('/approval/decide',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({request_id:id, approved:approved, reviewer:'ui'})});
+  const d=await r.json();
+  // Written into a dedicated span rather than appended to innerHTML: rebuilding
+  // the parent would discard the listeners attached above, so a second prompt
+  // in the same turn would render dead buttons.
+  if(d.ok){
+    out.textContent = approved ? 'approved' : 'denied';
+    out.className = 'approval-outcome ' + (approved ? 'yes' : 'no');
+  } else {
+    out.textContent = 'too late \u2014 it already timed out and was denied';
+    out.className = 'approval-outcome no';
+  }
 }
 
 async function sendMsgStream(text){
@@ -549,9 +785,32 @@ async function listMem(){
   if(d.skipped){ el.innerHTML='<span class="chip clean">memory not enabled</span>'; return; }
   if(d.ok===false){ el.innerHTML='<span class="chip phi">error: '+(d.error||'unknown')+'</span>'; return; }
   if(!d.memories || !d.memories.length){ el.innerHTML='<span class="chip clean">empty</span>'; return; }
-  el.innerHTML = d.memories.map(m=>
-    `<div class="gate"><span>${m.text}</span> <button class="demo-btn" onclick="delMem('${m.id}')">delete</button></div>`
-  ).join('');
+  // Labelled rows first: they are the ones a reviewer has to decide about.
+  const rows=[...d.memories].sort((a,b)=>(b.labels?1:0)-(a.labels?1:0));
+  el.innerHTML = rows.map(m=>{
+    const tainted = m.labels && m.labels.length;
+    const tag = tainted
+      ? `<span class="chip phi" title="derived from content read off the public web">&#9888; ${m.labels.join(', ')}</span> `
+      : (m.reviewed
+        ? `<span class="chip clean" title="cleared by ${m.reviewed.by} on ${m.reviewed.at}">&#10003; reviewed</span> `
+        : '');
+    // approve only where there is provenance to clear
+    const approve = tainted
+      ? ` <button class="demo-btn" onclick="approveMem('${m.id}')">approve</button>`
+      : '';
+    return `<div class="gate">${tag}<span>${m.text}</span>${approve} <button class="demo-btn" onclick="delMem('${m.id}')">delete</button></div>`;
+  }).join('');
+}
+
+async function approveMem(id){
+  // Spell out the consequence: clearing the label also stops this row tainting
+  // the runs that recall it, so the tool gate goes quiet for them.
+  if(!confirm('Mark this memory as reviewed? It will no longer be treated as untrusted, and will stop blocking gated tools on turns that recall it.')) return;
+  const r=await fetch('/memory/approve',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({memory_id:id,user_id:'u1'})});
+  const d=await r.json();
+  if(d.ok===false){ alert(d.error||d.reason||'approve failed'); }
+  listMem();
 }
 async function delMem(id){
   await fetch('/memory/delete',{method:'POST',headers:{'Content-Type':'application/json'},

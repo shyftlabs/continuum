@@ -29,6 +29,7 @@ from continuum import AgentRunner, BaseAgent, LogLevel, RunnerConfig, get_logger
 from continuum.config import settings
 from continuum.core.container import get_container
 from continuum.core.lifecycle import get_lifecycle_manager
+from continuum.session import bind_principal
 
 logger = get_logger(__name__)
 
@@ -65,12 +66,16 @@ async def run_test(
     print(f"  message     : {message}")
     print("=" * 60)
 
-    response = await runner.run(
-        agent=agent,
-        input=message,
-        session_id=session_id,
-        user_id=user_id,
-    )
+    # Sessions record an owner and are not loaded or saved without a bound
+    # caller identity. run_test already carries the user_id, so this is the
+    # natural place for a script to bind it.
+    with bind_principal(user_id):
+        response = await runner.run(
+            agent=agent,
+            input=message,
+            session_id=session_id,
+            user_id=user_id,
+        )
 
     print(f"\nResponse: {response.content}")
     print(f"Status  : {response.status}")
@@ -133,10 +138,11 @@ async def main() -> None:
     session_id = None
     session_client = container.session_client if container else None
     if session_client and session_client.is_enabled:
-        session_id = await session_client.get_or_create_session(
-            user_id="test-user",
-            conversation_id="gateway-test-conv",
-        )
+        with bind_principal("test-user"):
+            session_id = await session_client.get_or_create_session(
+                user_id="test-user",
+                conversation_id="gateway-test-conv",
+            )
         logger.info(f"Created Redis session: {session_id}")
 
     runner.register_agent(stateless_agent)

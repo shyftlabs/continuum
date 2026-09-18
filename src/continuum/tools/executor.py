@@ -28,6 +28,7 @@ from continuum.tools.util import MCPUtil, build_namespaced_tool_name
 if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
+    from continuum.agent.approval import ToolApprovalSettings
     from continuum.llm.types import ToolDefinition
     from continuum.security.policy import PolicyStore
     from continuum.tools.mcp import MCPServer
@@ -680,6 +681,7 @@ class ToolExecutor:
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
         data_labels: set[str] | None = None,
+        approval: "ToolApprovalSettings | None" = None,
     ) -> ChatMessage:
         """
         Execute a single tool call and return the result as a ChatMessage.
@@ -741,6 +743,58 @@ class ToolExecutor:
             )
         except (json.JSONDecodeError, TypeError):
             arguments = {}
+
+        # Human-in-the-loop gate (security finding F7). After the policy check
+        # because the two ask different questions in that order -- policy: may
+        # this run use this tool at all; approval: should THIS call, with these
+        # arguments, happen. Asking a person about a call policy would refuse
+        # anyway wastes their attention.
+        #
+        # Deliberately before injection and outside the asyncio.wait_for below.
+        # That timeout bounds a hung MCP server; a reviewer thinking for twenty
+        # seconds is not a hung server, and one shared budget would make every
+        # slow approval look like a tool failure.
+        if approval is not None and approval.covers(tool_name):
+            from continuum.agent.approval import (
+                ToolApprovalDecision,
+                ToolApprovalRequest,
+                request_approval,
+            )
+            from continuum.agent.exceptions import ToolApprovalDeniedError
+
+            if approval.handler is None:
+                # Fail closed. Declared for approval with nobody to ask is the
+                # configuration most easily mistaken for protection, so it
+                # refuses rather than quietly proceeding.
+                decision = ToolApprovalDecision(
+                    approved=False,
+                    reason="No approval handler is configured for this agent.",
+                )
+            else:
+                decision = await request_approval(
+                    ToolApprovalRequest(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        agent_name=approval.agent_name,
+                        run_id=(metadata or {}).get("run_id"),
+                        data_labels=frozenset(data_labels or ()),
+                    ),
+                    approval.handler,
+                    timeout=approval.timeout,
+                )
+
+            if not decision.approved:
+                raise ToolApprovalDeniedError(
+                    tool_name=tool_name,
+                    reviewer=decision.reviewer,
+                    reason=decision.reason,
+                    deferred=decision.deferred,
+                )
+            logger.info(
+                "Tool '%s' approved%s",
+                tool_name,
+                f" by {decision.reviewer}" if decision.reviewer else "",
+            )
 
         # INJECT: Context variables into arguments before execution
         arguments = self._inject_context_variables(server, tool, arguments)
@@ -893,6 +947,7 @@ class ToolExecutor:
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
         data_labels: set[str] | None = None,
+        approval: "ToolApprovalSettings | None" = None,
     ) -> list[ChatMessage]:
         """
         Execute multiple tool calls and return results as ChatMessages.
@@ -921,19 +976,60 @@ class ToolExecutor:
                 policy_store=policy_store,
                 subject=subject,
                 data_labels=data_labels,
+                approval=approval,
             )
             for tc in tool_calls
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Convert exceptions to error ChatMessages so they can be reported to LLM
-        from continuum.agent.exceptions import ToolAccessDeniedError
+        return self._process_tool_results(results, tool_calls)
+
+    def _process_tool_results(
+        self, results: list[Any], tool_calls: list[ToolCall]
+    ) -> list[ChatMessage]:
+        """Turn exceptions into tool results the model can act on.
+
+        A governance refusal -- policy or approval -- is a designed outcome, not
+        a fault: it is logged at INFO without a traceback and handed back as
+        content so the model tells the user, instead of the whole run failing
+        over something the system decided on purpose.
+
+        Extracted from execute_tool_calls so the wording a refusal produces can
+        be asserted directly. It is the only part of a denial a user ever sees.
+        """
+        from continuum.agent.exceptions import ToolAccessDeniedError, ToolApprovalDeniedError
 
         processed: list[ChatMessage] = []
         for i, result in enumerate(results):
             if isinstance(result, BaseException):
                 tc = tool_calls[i]
-                if isinstance(result, ToolAccessDeniedError):
+                if isinstance(result, ToolApprovalDeniedError):
+                    # A person said no, nobody answered, or it was handed to
+                    # someone who will answer later. All expected.
+                    logger.info(f"Tool '{tc.function.name}' was not approved: {result}")
+                    reason = result.context.get("reason", "")
+                    reviewer = result.context.get("reviewer", "")
+                    if result.context.get("deferred"):
+                        # PENDING, not DENIED. A user told their request was
+                        # refused does not go looking for an approver, and this
+                        # one is waiting on exactly that.
+                        content = (
+                            f"APPROVAL PENDING: '{tc.function.name}' has been sent for approval"
+                        )
+                        content += f". {reason}" if reason else "."
+                        content += (
+                            " It has NOT been performed. Tell the user it is awaiting approval "
+                            "and that they should ask again once it has been reviewed."
+                        )
+                    else:
+                        content = f"APPROVAL DENIED: '{tc.function.name}' was not approved"
+                        if reviewer:
+                            content += f" by {reviewer}"
+                        content += f". {reason}" if reason else "."
+                        content += (
+                            " Inform the user this action needs approval and was not performed."
+                        )
+                elif isinstance(result, ToolAccessDeniedError):
                     # Policy denial is expected — log at INFO without traceback
                     logger.info(f"Tool '{tc.function.name}' denied by policy: {result}")
                     denial_message = result.context.get("denial_message", "")

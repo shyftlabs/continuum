@@ -11,6 +11,7 @@ NOT trigger a degrade.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,9 +19,10 @@ import pytest
 from continuum.session.client import SessionClient
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import SessionConnectionError, SessionNotFoundError
+from continuum.session.principal import bind_principal
 from continuum.session.providers.memory import MemorySessionProvider
 from continuum.session.providers.redis import RedisSessionProvider
-from continuum.session.types import ChatMessage
+from continuum.session.types import ChatMessage, SessionMetadata
 
 
 def _msg(role: str, content: str) -> ChatMessage:
@@ -93,9 +95,10 @@ class TestMidSessionDegrade:
             auto_initialize=False,
         )
 
-        sid = await sc.get_or_create_session(user_id="shopper-2")  # triggers degrade
-        await sc.add_message(sid, _msg("user", "hello"))
-        history = await sc.get_conversation_history(sid)
+        with bind_principal("shopper-2"):
+            sid = await sc.get_or_create_session(user_id="shopper-2")  # triggers degrade
+            await sc.add_message(sid, _msg("user", "hello"))
+            history = await sc.get_conversation_history(sid)
 
         assert [m.content for m in history] == ["hello"]
         assert isinstance(sc._provider, MemorySessionProvider)
@@ -110,6 +113,23 @@ class TestLogicalErrorsDoNotDegrade:
             "get_messages",
             AsyncMock(side_effect=SessionNotFoundError("no such session", session_id="x")),
         )
+        # The ownership gate reads metadata before the history load, so give it a
+        # real answer — otherwise the (unreachable) Redis makes ownership
+        # unverifiable and the gate refuses first, masking the error this test is
+        # actually about.
+        now = datetime.now(UTC)
+        monkeypatch.setattr(
+            RedisSessionProvider,
+            "get_session_metadata",
+            AsyncMock(
+                return_value=SessionMetadata(
+                    session_id="x",
+                    user_id="shopper-3",
+                    created_at=now,
+                    last_accessed_at=now,
+                )
+            ),
+        )
         _spies(monkeypatch)
 
         sc = SessionClient(
@@ -122,8 +142,9 @@ class TestLogicalErrorsDoNotDegrade:
             auto_initialize=False,
         )
 
-        with pytest.raises(SessionNotFoundError):
-            await sc.get_conversation_history("x")
+        with bind_principal("shopper-3"):
+            with pytest.raises(SessionNotFoundError):
+                await sc.get_conversation_history("x")
 
         # Still on Redis — a missing session is not a reason to drop persistence.
         assert isinstance(sc._provider, RedisSessionProvider)

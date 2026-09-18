@@ -14,6 +14,7 @@ from continuum.agent.exceptions import (
     MaxTurnsExceededError,
     StructuredOutputError,
 )
+from continuum.agent.execution.message_builder import CACHE_BREAKPOINT_KEY
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     record_llm_turn,
@@ -49,6 +50,42 @@ if TYPE_CHECKING:
     from continuum.llm import LLMClient
 
 logger = get_logger(__name__)
+
+
+def _catalogue_insert_index(messages: list[dict[str, Any]], breakpoint_index: Any) -> int:
+    """Where to insert the cache-marked tool catalogue.
+
+    The catalogue carries ``cache_control``, and Anthropic caches the prefix up
+    to and including it. Placing it after the whole leading run of system
+    messages put the retrieved-memory block -- whose bytes change almost every
+    turn, being a similarity search on the current input -- inside that prefix,
+    so the hash differed each turn and the breakpoint never hit. The agent's own
+    system prompt was re-billed every turn as a result.
+
+    So honour the index the builder recorded for the first volatile block, and
+    insert before it. Content *after* a breakpoint does not invalidate what
+    precedes it, so the stable prefix starts hitting while the volatile tail is
+    reprocessed as it always was. Nothing the model sees changes: same blocks,
+    same order relative to the question.
+
+    Falls back to the old end-of-system-run placement when no index was recorded
+    -- either nothing volatile exists this turn, or the caller predates the
+    marker. A malformed index falls back too rather than raising: this sits on
+    the hot path of every turn, and a bad cache position is a cost, while an
+    exception here is an outage.
+    """
+    if isinstance(breakpoint_index, int) and not isinstance(breakpoint_index, bool):
+        if 0 <= breakpoint_index <= len(messages):
+            return breakpoint_index
+
+    insert_at = 0
+    for i, msg in enumerate(messages):
+        if isinstance(msg, dict) and msg.get("role") == "system":
+            insert_at = i + 1
+        else:
+            break
+    return insert_at
+
 
 # Max consecutive handoffs of the SAME request to the SAME target before we declare
 # a handoff loop. Catches routing agents stuck re-routing under return_to_parent=True
@@ -282,12 +319,8 @@ class Executor(IExecutor):
                 # Ephemeral — not added to `messages` (session history).
                 _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
                 if _phase1:
-                    _insert_at = 0
-                    for _i, _msg in enumerate(messages):
-                        if _msg.get("role") == "system":
-                            _insert_at = _i + 1
-                        else:
-                            break
+                    _bp = context.metadata.get(CACHE_BREAKPOINT_KEY) if context.metadata else None
+                    _insert_at = _catalogue_insert_index(messages, _bp)
                     llm_messages = messages[:_insert_at] + [_phase1] + messages[_insert_at:]
                 else:
                     llm_messages = messages

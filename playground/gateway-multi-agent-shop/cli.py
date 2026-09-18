@@ -19,6 +19,7 @@ from config import default_config
 from workflows import MODES, create_workflow
 
 from continuum import LogLevel, setup_logging
+from continuum.session import bind_principal
 
 
 def print_help(mode: str) -> None:
@@ -121,7 +122,13 @@ async def main() -> None:
                     continue
 
                 print("\nThinking...\n")
-                response = await workflow.chat(user_input, user_id, conversation_id)
+                # Sessions record an owner and will not load or save without a
+                # bound caller identity. A CLI has no login, so the id chosen at
+                # startup is all there is — fine for a single-user demo, but a
+                # served application must bind an id it derived from a verified
+                # credential rather than one the caller supplied.
+                with bind_principal(user_id):
+                    response = await workflow.chat(user_input, user_id, conversation_id)
                 print(f"Assistant: {response}\n")
 
             except KeyboardInterrupt:

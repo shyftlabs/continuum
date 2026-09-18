@@ -1031,6 +1031,95 @@ To keep the old behaviour, pass `namespace_tools=False` everywhere.
 
 ---
 
+## 6.6 · Tool approval (human-in-the-loop)
+
+`6.4` verifies the **catalogue** a server serves; `PolicyStore` decides whether a
+run may touch a **resource**. Neither sees a call's **arguments**, so neither can
+tell a routine call from a consequential one:
+
+```
+policy gate: tool:transfer_funds                  -> allow
+approval:    transfer_funds {"amount": 5000000}   -> ask a person
+```
+
+`AgentConfig.tool_approval` names tools that need a person; `approval_handler`
+is who answers.
+
+```python
+from continuum.agent.approval import ToolApprovalDecision, ToolApprovalRequest
+
+async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+    ok = await ask_somewhere(request.tool_name, request.arguments)
+    return ToolApprovalDecision(approved=ok, reviewer="alice")
+
+AgentConfig(
+    tool_approval={"send_*", "*transfer_funds"},   # fnmatch, namespaced names
+    approval_handler=approve,
+    approval_timeout=30.0,
+)
+```
+
+### Where the gate sits
+
+Inside `ToolExecutor.execute_tool_call`, **after** the policy check and
+**before** argument injection:
+
+```
+policy check          -> a denied call never reaches a reviewer
+approval gate         -> asks about the call the model actually proposed
+argument injection    -> ToolContextVariable values are added AFTER approval
+run the tool
+```
+
+That ordering is deliberate in both directions. A call the policy gate refuses is
+never put to a person, so nobody is asked to rubber-stamp something already
+forbidden. And the reviewer sees the model's own arguments, not arguments the
+runtime has since edited.
+
+Patterns match the **namespaced** name (`pharmacy__check_interactions`), the same
+form `PolicyStore` resources use — see §6.5.
+
+### Three outcomes
+
+| | `approved` | `deferred` | The model is told |
+|---|---|---|---|
+| approved | `True` | `False` | *(nothing — the tool runs)* |
+| denied | `False` | `False` | `APPROVAL DENIED` |
+| deferred | `False` | `True` | `APPROVAL PENDING` — not performed, ask again once reviewed |
+
+`deferred` is for a call handed to someone who will answer later: the turn ends
+now and a later run asking the same thing proceeds. Without it a deferral and a
+refusal are the same value, and a user told they were *refused* does not go
+looking for an approver.
+
+**Only a handler may defer.** Every SDK failure path denies.
+
+A refusal becomes a **tool result**, not a raised exception — the model reads it
+and tells the user, and the turn ends normally.
+
+### It fails closed
+
+| Path | Result |
+|---|---|
+| handler does not answer within `approval_timeout` | denied |
+| handler raises | denied |
+| handler returns a bare `True`, `None`, anything else | denied |
+| tool declared with no handler wired | denied |
+
+Approvals are **serialised** — concurrent tool calls are put to the reviewer one
+at a time, so two prompts never race for one terminal.
+
+Approvals are **not remembered**: a retried run asks again. `run_id` and
+`arguments` are on the request so your app can build the idempotency key it
+needs; the SDK does not pick one, because half-built idempotency looks like
+protection while quietly authorising repeats.
+
+### A reviewer who answers in an hour
+
+A blocking handler holds the caller's connection open. For a reviewer who is not
+watching, use the Temporal handler — see
+[Human-in-the-loop](temporal/human-in-loop.md#9--ad-hoc-tool-approvals).
+
 ## 7 · `MCPUtil`
 
 `from continuum.tools import MCPUtil`

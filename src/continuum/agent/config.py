@@ -6,7 +6,7 @@ Defines configuration classes for agents and agent execution.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -20,9 +20,12 @@ from continuum.config import settings
 
 # Type aliases for memory hooks
 MemoryPreStoreFilter = Callable[[list[str]], list[str]]
+ToolApprovalHandler = Callable[["ToolApprovalRequest"], Awaitable["ToolApprovalDecision"]]
+MemoryRecallAction = Literal["fence", "drop", "block"]
 MemoryOnStoredCallback = Callable[[list[str]], None]
 
 if TYPE_CHECKING:
+    from continuum.agent.approval import ToolApprovalDecision, ToolApprovalRequest
     from continuum.llm.context_management import ContextManagementConfig
     from continuum.tools.tool_attention.config import ToolAttentionConfig
 
@@ -55,8 +58,40 @@ class AgentMemoryConfig:
     # Memory policy hooks — product-level customization (domain-agnostic in SDK)
     # extraction_prompt: custom fact extraction prompt; if None, mem0 default is used
     extraction_prompt: str | None = None
-    # pre_store_filter: called with extracted fact texts after storage;
-    # facts not returned by the filter are deleted from the vector store (best-effort)
+    # pre_store_filter: given each fact mem0 extracted, returns the ones allowed
+    # to remain. A rejected fact is never written.
+    #
+    # It earns the name now, but it did not always. mem0 fuses extraction and
+    # storage inside a single add() call and exposes no extract-without-store
+    # path (checked in 1.0.11 and 2.0.19), so this used to run on rows that
+    # already existed and rejection meant deleting them. Against Milvus that
+    # delete lost a race it could not win -- mem0's delete() reads the row back
+    # first, Milvus hides recent writes behind Bounded consistency, and measured
+    # live the delete issued milliseconds after the write failed outright while
+    # the rejected fact stayed searchable for minutes.
+    #
+    # The gate now sits inside mem0's own _create_memory (see
+    # memory/providers/filtered_memory.py), so nothing is inserted to undo.
+    #
+    # Facts are offered ONE AT A TIME -- the batch is not known until mem0 has
+    # finished extracting -- so a filter written as list[str] -> list[str] is
+    # called as filter([fact]). Membership decides: returning a *rewritten*
+    # string counts as a rejection, because a filter is a gate and not a
+    # transformer.
+    #
+    # It fails closed. A filter that raises has said nothing about the fact, so
+    # the fact is not written; a broken filter therefore rejects everything,
+    # including the harmless facts in the same turn. That is the trade, and the
+    # alternative -- keeping everything when the detector breaks -- loses the
+    # guarantee the filter was added to provide.
+    #
+    # Two limits worth knowing. A memory provider that does not declare
+    # pre_store_filter cannot gate, so the write falls back to
+    # delete-after-write with its race; that degradation is logged once rather
+    # than passed over in silence. And this filters facts, not inputs: for
+    # content that must never reach extraction at all, sanitise the message with
+    # an input scanner, or set infer=False so what you pass is exactly what is
+    # stored.
     pre_store_filter: MemoryPreStoreFilter | None = field(
         default=None, repr=False, compare=False, hash=False
     )
@@ -64,6 +99,19 @@ class AgentMemoryConfig:
     on_stored: MemoryOnStoredCallback | None = field(
         default=None, repr=False, compare=False, hash=False
     )
+
+    # What to do when recall returns rows carrying provenance labels (F6).
+    #   "fence" — return them, fenced in the prompt and tainting the run (default,
+    #             and what every existing deployment already does)
+    #   "drop"  — omit them; they never reach the prompt and do not taint
+    #   "block" — refuse the turn until a person approves or deletes them
+    # A Literal rather than an enum, matching ToolTrustConfig.on_unreviewed.
+    # Left as an operator choice rather than a hardcoded refusal because which
+    # is right depends on who reviews and how quickly: blocking is the strongest
+    # (untrusted text never reaches the model at all, so it does not rely on the
+    # model honouring a fence) and is also the one that turns a single planted
+    # row into an outage if nobody is watching the queue.
+    on_labeled_recall: MemoryRecallAction = "fence"
 
     # Memory-scope provenance — declare which memory scopes hold sensitive data.
     # Maps scope value ("user"/"agent"/"conversation"/custom) -> labels. When a
@@ -265,6 +313,36 @@ class AgentConfig:
     # integrator declares provenance; the runtime only propagates it.
     #   e.g. {"fetch_patient_record": {"phi"}}
     tool_data_labels: dict[str, set[str]] = field(default_factory=dict)
+
+    # Human-in-the-loop approval — declare which tools a person must approve
+    # before they run (security finding F7). fnmatch patterns, written the same
+    # way as policy `resources` so there is one syntax to learn:
+    #   e.g. {"send_referral_email", "pharmacy__*", "*transfer*"}
+    #
+    # This is the only gate that sees the tool ARGUMENTS. Tool-trust vets the
+    # catalogue once per server; the policy gate checks `tool:{name}` and decides
+    # by rule. Neither can tell transfer(amount=5) from transfer(amount=5_000_000).
+    #
+    # No default list. `delete_*`/`send_*`/`pay_*` looks like a sensible default
+    # and is not one: it blocks a harmless send_receipt while missing wire_funds,
+    # and a gate nobody configured reads as more coverage than it gives.
+    tool_approval: set[str] = field(default_factory=set)
+
+    # Who decides. Separate from the list above so one handler serves every
+    # agent, and a deployment can swap a CLI prompt for Slack without touching
+    # any tool declaration. Declaring tools without a handler is reported once:
+    # a gate wired to nobody fails by doing nothing.
+    #   async def handler(req: ToolApprovalRequest) -> ToolApprovalDecision
+    approval_handler: ToolApprovalHandler | None = field(
+        default=None, repr=False, compare=False, hash=False
+    )
+
+    # How long to wait for a person. Default 30s because a blocked run holds an
+    # HTTP request open, and browsers, proxies and serverless platforms give up
+    # long before a reviewer does -- so the default has to sit inside ordinary
+    # limits and fail closed. A wait measured in hours needs Temporal, or a
+    # refuse-and-resume UI rather than a blocking one.
+    approval_timeout: float = 30.0
 
     # Dispatch priority for this agent's LLM calls (1=lowest, 10=highest, 5=default).
     # Used as the stage-level weight in TwoLevelDispatcher for internal models:

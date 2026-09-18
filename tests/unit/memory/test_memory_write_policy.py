@@ -4,7 +4,8 @@ Phase 3 — data-label MEMORY-WRITE gate.
 A run tainted with a label (e.g. "pii") can be denied persistence to a memory
 scope via policy: `deny(subjects=["pii"], resources=["memory:*"])`. The gate
 lives in MemoryClient.add(): labels are folded into the policy subjects, the
-scope is the resource (`memory:<scope>`), and a deny raises
+scope is the resource (`memory:write:<scope>`, plus the legacy
+`memory:<scope>` for policies predating the read/write split), and a deny raises
 MemoryAccessDeniedError before the provider writes.
 
 Crucially, the write path doesn't thread RunContext, so the gate reads the
@@ -14,6 +15,7 @@ gate) — no session-save plumbing required.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +27,10 @@ from continuum.security.policy import PolicyDecision
 
 def _client_with_provider() -> MemoryClient:
     mc = MemoryClient.__new__(MemoryClient)
+    # __init__ is bypassed to isolate the policy gate, so the few attributes
+    # add() reads outside that gate have to be supplied by hand.
+    mc._config = SimpleNamespace(memory_isolation="user")
+    mc._warned_shared_write = False
     mc._provider = MagicMock()
     mc._provider.add = AsyncMock(return_value=MagicMock())
     mc._ensure_enabled = lambda: None  # type: ignore[method-assign]
@@ -90,7 +96,9 @@ class TestMemoryWritePolicy:
                 data_labels={"pii"},
             )
         mc._provider.add.assert_not_called()
-        ps.check.assert_called_once_with(["agent", "pii"], "memory:u1")
+        # The precise resource is checked first; a deny there short-circuits,
+        # so the legacy form is never reached.
+        ps.check.assert_called_once_with(["agent", "pii"], "memory:write:u1")
 
     async def test_allowed_label_proceeds_to_write(self):
         ps = MagicMock()
@@ -105,7 +113,12 @@ class TestMemoryWritePolicy:
             data_labels={"pii"},
         )
         mc._provider.add.assert_awaited_once()
-        ps.check.assert_called_once_with(["agent", "pii"], "memory:u1")
+        # Allowed at the precise resource, so the legacy form is consulted too --
+        # policies predating the read/write split are written against it.
+        assert [c.args for c in ps.check.call_args_list] == [
+            (["agent", "pii"], "memory:write:u1"),
+            (["agent", "pii"], "memory:u1"),
+        ]
 
     async def test_uses_ambient_policy_when_not_passed(self):
         # The session-save write path doesn't pass policy params; the gate must
@@ -122,7 +135,7 @@ class TestMemoryWritePolicy:
             with pytest.raises(MemoryAccessDeniedError):
                 await mc.add("remember this", agent_id="a1")  # no policy args
         mc._provider.add.assert_not_called()
-        ps.check.assert_called_once_with(["agent", "pii"], "memory:a1")
+        ps.check.assert_called_once_with(["agent", "pii"], "memory:write:a1")
 
     async def test_no_policy_no_ambient_means_no_gate(self):
         mc = _client_with_provider()
@@ -136,4 +149,9 @@ class TestMemoryWritePolicy:
         mc = _client_with_provider()
 
         await mc.add("x", user_id="u1", policy_store=ps, subject="agent")
-        ps.check.assert_called_once_with("agent", "memory:u1")
+        # Allowed at the precise resource, so the legacy form is checked too --
+        # policies predating the read/write split are written against it.
+        assert [c.args for c in ps.check.call_args_list] == [
+            ("agent", "memory:write:u1"),
+            ("agent", "memory:u1"),
+        ]

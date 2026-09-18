@@ -44,23 +44,30 @@ BaseAgent(
 If you want session history to work (load prior turns, save new ones), you must create the session first. Without it, the agent runs statelessly — messages silently fail to save and history is not loaded.
 
 ```python
-# Step 1: create session
-session_id = await session_client.get_or_create_session(
-    session_id=session_id,
-    user_id="user-123",
-    conversation_id="conv-456",   # optional — see below
-)
+from continuum.session import bind_principal
 
-# Step 2: run
-response = await runner.run(
-    agent=agent,
-    input="Hello!",
-    session_id=session_id,
-    user_id="user-123",
-)
+# Step 0: bind the caller's verified identity, where you authenticated them.
+#         A session records an owner, and will not be read or written by a
+#         caller who has not said who they are.
+with bind_principal("user-123"):
+    # Step 1: create session
+    session_id = await session_client.get_or_create_session(
+        user_id="user-123",
+        conversation_id="conv-456",   # optional — see below
+    )
+
+    # Step 2: run
+    response = await runner.run(
+        agent=agent,
+        input="Hello!",
+        session_id=session_id,
+        user_id="user-123",
+    )
 ```
 
 > If you pass a `session_id` that was never created, the runner will not crash — but messages will silently fail to save and history will not load.
+
+> Bind an id you **verified** (from a token), not one the caller sent you — otherwise the ownership check compares an attacker-supplied value against itself. Sessions created without a `user_id` have no owner and need no principal. Full details in [Session → §11](session.md#11--session-ownership).
 
 ### How `session_id` is computed
 
@@ -73,6 +80,12 @@ response = await runner.run(
 | `conversation_id` + `user_id` | `c:{conversation_id}:u:{user_id}` |
 | `user_id` only                | `u:{user_id}`                     |
 | neither                       | random UUID                       |
+
+Note these ids are **derivable**: anyone who knows a user id can construct that
+user's session id. Set `SESSION_HASH_IDS=true` to derive them as an HMAC
+instead (`s_<hex>`), which keeps the determinism above while making the id
+impossible to compute without the deployment secret. See
+[Session → §11](session.md#11--session-ownership).
 
 
 ### What is `conversation_id`

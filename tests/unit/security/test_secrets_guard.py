@@ -94,3 +94,85 @@ class TestEnforceCredential:
                 credential="myredissecret",
                 env_var="SESSION_REDIS_PASSWORD",
             )
+
+
+class TestMinimumLength:
+    """A length floor for secrets whose attacker can brute-force offline.
+
+    ``is_weak_secret`` catches placeholders it has been told about. That is the
+    right shape for a Redis password — an attacker has to come through the
+    network to test a guess. It is not enough for a key like SESSION_ID_SECRET,
+    where any user of the system holds a matched (plaintext -> digest) pair from
+    their own session and can grind guesses locally with no rate limit and no
+    logs. There, anything short or memorable falls in milliseconds.
+
+    So ``min_length`` is opt-in per call site rather than global: the callers
+    that predate it keep their exact behaviour, and no deployment is broken by a
+    rule its credential was never held to.
+    """
+
+    STRONG = "d27d3f15bdd2236ac32c8333ddc38b0546f49a7db0276293b93ae4174d597641"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "abc",
+            "your-secret-key",  # a placeholder nobody thought to replace
+            "# required when SESSION_HASH_IDS=true",  # a mis-parsed inline comment
+            "short-but-random-x9",
+        ],
+    )
+    def test_values_under_the_floor_are_weak(self, value):
+        assert is_weak_secret(value, min_length=32) is True
+
+    def test_a_full_length_secret_passes(self):
+        assert is_weak_secret(self.STRONG, min_length=32) is False
+
+    def test_exactly_at_the_floor_passes(self):
+        assert is_weak_secret("a" * 32, min_length=32) is False
+
+    def test_one_short_of_the_floor_fails(self):
+        assert is_weak_secret("a" * 31, min_length=32) is True
+
+    def test_length_is_measured_after_stripping(self):
+        """Trailing whitespace is not entropy."""
+        assert is_weak_secret("a" * 20 + "            ", min_length=32) is True
+
+    def test_existing_callers_are_unaffected(self):
+        """No min_length argument means exactly the previous behaviour, so the
+        Redis and vector-store guards keep passing credentials they accepted
+        before this rule existed."""
+        assert is_weak_secret("S3cure!Redis#Pw") is False
+        assert is_weak_secret("S3cure!Redis#Pw", min_length=0) is False
+
+    def test_a_known_placeholder_is_still_weak_at_any_length(self):
+        """Length does not redeem a value that is already on the list."""
+        assert is_weak_secret("CHANGEME_generate_with_openssl_rand_hex_32", min_length=32) is True
+
+    def test_enforce_credential_applies_the_floor(self, monkeypatch):
+        monkeypatch.delenv(ALLOW_INSECURE_ENV, raising=False)
+        with pytest.raises(InsecureConfigurationError):
+            enforce_credential(
+                service="Session id hashing",
+                credential="abc",
+                env_var="SESSION_ID_SECRET",
+                min_length=32,
+            )
+
+    def test_enforce_credential_passes_a_strong_secret(self):
+        enforce_credential(
+            service="Session id hashing",
+            credential=self.STRONG,
+            env_var="SESSION_ID_SECRET",
+            min_length=32,
+        )
+
+    def test_escape_hatch_still_applies(self, monkeypatch):
+        """Local development must not be blocked by the floor."""
+        monkeypatch.setenv(ALLOW_INSECURE_ENV, "1")
+        enforce_credential(
+            service="Session id hashing",
+            credential="abc",
+            env_var="SESSION_ID_SECRET",
+            min_length=32,
+        )

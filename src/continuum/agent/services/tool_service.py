@@ -11,6 +11,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from continuum.agent.approval import build_approval_settings
 from continuum.agent.exceptions import AgentToolError
 from continuum.agent.interfaces.service_interface import IToolService
 from continuum.agent.types import ToolExecutionSummary
@@ -302,6 +303,9 @@ class ToolService(IToolService):
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
                         data_labels=context.data_labels if agent_policy_store else None,
+                        # Independent of the policy store: an app may want a
+                        # person on one tool without writing any policy at all.
+                        approval=build_approval_settings(agent),
                     )
                     if results:
                         result = self._message_to_dict(results[0])
@@ -365,6 +369,9 @@ class ToolService(IToolService):
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
                         data_labels=context.data_labels if agent_policy_store else None,
+                        # Independent of the policy store: an app may want a
+                        # person on one tool without writing any policy at all.
+                        approval=build_approval_settings(agent),
                     )
                     if results:
                         result = self._message_to_dict(results[0])

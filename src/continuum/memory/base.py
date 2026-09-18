@@ -50,6 +50,7 @@ class BaseMemoryProvider(ABC):
         metadata: dict[str, Any] | None = None,
         custom_prompt: str | None = None,
         infer: bool = True,
+        pre_store_filter: Any | None = None,
     ) -> MemoryAddResult:
         """
         Add memories from messages or text.
@@ -174,6 +175,7 @@ class BaseMemoryProvider(ABC):
         data: str,
         *,
         custom_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MemoryEntry:
         """
         Update a specific memory.
@@ -182,6 +184,9 @@ class BaseMemoryProvider(ABC):
             memory_id: The ID of the memory to update
             data: New data for the memory
             custom_prompt: Custom prompt for memory update
+            metadata: Replacement metadata for the row, or None to leave it
+                alone. Implementations REPLACE rather than merge, so a caller
+                editing one key must pass the whole payload back.
 
         Returns:
             Updated MemoryEntry.

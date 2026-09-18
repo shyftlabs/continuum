@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.agent.interfaces.service_interface import ISessionService
 from continuum.logging import get_logger
 from continuum.observability.decorators import observe
+from continuum.session.exceptions import SessionOwnershipError
 
 if TYPE_CHECKING:
     from continuum.agent.base import BaseAgent
@@ -198,6 +199,14 @@ class SessionService(ISessionService):
                 f"skipped {skipped_count} (tool-related/system)"
             )
 
+        except SessionOwnershipError:
+            # Not an infrastructure failure, so it does not get the degrade-and-
+            # continue treatment below. Swallowed, an ownership refusal produces a
+            # request that succeeds while silently loading no history and
+            # persisting nothing: data loss for a caller who forgot to bind a
+            # principal, and a 200 that looks like it worked for one using
+            # somebody else's session id. Let it reach the caller.
+            raise
         except Exception as e:
             from continuum.session.exceptions import SessionNotFoundError
 
@@ -255,6 +264,14 @@ class SessionService(ISessionService):
 
             return ToolContextState()
 
+        except SessionOwnershipError:
+            # Not an infrastructure failure, so it does not get the degrade-and-
+            # continue treatment below. Swallowed, an ownership refusal produces a
+            # request that succeeds while silently loading no history and
+            # persisting nothing: data loss for a caller who forgot to bind a
+            # principal, and a 200 that looks like it worked for one using
+            # somebody else's session id. Let it reach the caller.
+            raise
         except Exception as e:
             logger.warning(f"Failed to load tool context state: {e}")
             return ToolContextState()
@@ -298,6 +315,14 @@ class SessionService(ISessionService):
                 f"{len(context_state.get_all_namespaces())} namespaces"
             )
 
+        except SessionOwnershipError:
+            # Not an infrastructure failure, so it does not get the degrade-and-
+            # continue treatment below. Swallowed, an ownership refusal produces a
+            # request that succeeds while silently loading no history and
+            # persisting nothing: data loss for a caller who forgot to bind a
+            # principal, and a 200 that looks like it worked for one using
+            # somebody else's session id. Let it reach the caller.
+            raise
         except Exception as e:
             logger.warning(f"Failed to save tool context state: {e}")
 
@@ -322,6 +347,14 @@ class SessionService(ISessionService):
         try:
             history = await self._session_client.get_conversation_history(session_id, limit=limit)
             return [self._message_to_dict(msg) for msg in history]
+        except SessionOwnershipError:
+            # Not an infrastructure failure, so it does not get the degrade-and-
+            # continue treatment below. Swallowed, an ownership refusal produces a
+            # request that succeeds while silently loading no history and
+            # persisting nothing: data loss for a caller who forgot to bind a
+            # principal, and a 200 that looks like it worked for one using
+            # somebody else's session id. Let it reach the caller.
+            raise
         except Exception as e:
             logger.warning(f"Failed to load session history: {e}")
             return []

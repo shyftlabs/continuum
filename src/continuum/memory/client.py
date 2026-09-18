@@ -8,8 +8,10 @@ for actual memory operations.
 import asyncio
 import threading
 from collections.abc import Coroutine
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
 from continuum.memory.base import BaseMemoryProvider
 from continuum.memory.config import MemoryConfig
@@ -20,16 +22,59 @@ from continuum.memory.exceptions import (
 from continuum.memory.providers import create_provider, list_providers
 from continuum.memory.scopes import MemoryScope
 from continuum.memory.types import (
+    PROVENANCE_LABELS_KEY,
+    REVIEWED_KEY,
     MemoryAddResult,
     MemoryEntry,
     MemoryMetadata,
     MemorySearchResult,
 )
+from continuum.security.policy_context import resolve_active_policy
 
 if TYPE_CHECKING:
     from continuum.security.policy import PolicyStore
 
 T = TypeVar("T")
+
+
+def _strip_hidden_from_messages(
+    messages: str | list[dict[str, Any]] | list[str],
+) -> str | list[dict[str, Any]] | list[str]:
+    """Remove invisible codepoints from anything on its way into long-term memory.
+
+    A zero-width or bidi-override sequence carries instructions the model's
+    tokenizer reads while a human reviewer, a query over the collection, and a
+    text classifier do not. ``_clean_tool`` already closes that channel for tool
+    descriptions on first contact; memory is the same channel with a far longer
+    half-life, because a stored payload is replayed into every future session.
+
+    Done on write rather than on read on purpose. This is the only point where
+    the payload can be destroyed rather than labelled, and it protects readers
+    that never come through this SDK -- a dashboard, an export, another service
+    querying the same collection.
+
+    Copy-not-mutate: the session save loop reuses its message dicts, and editing
+    in place would change what the short-term store persists.
+    """
+    if isinstance(messages, str):
+        return strip_hidden_chars(messages)
+    if not isinstance(messages, list):
+        return messages
+
+    cleaned: list[Any] = []
+    for item in messages:
+        if isinstance(item, str):
+            cleaned.append(strip_hidden_chars(item))
+        elif isinstance(item, dict):
+            content = item.get("content")
+            if isinstance(content, str):
+                cleaned.append({**item, "content": strip_hidden_chars(content)})
+            else:
+                cleaned.append(item)  # structured content: left as-is
+        else:
+            cleaned.append(item)
+    return cleaned  # type: ignore[return-value]
+
 
 logger = get_logger(__name__)
 
@@ -96,6 +141,7 @@ class MemoryClient:
         self._config = config or MemoryConfig()
         self._provider = provider
         self._initialized = False
+        self._warned_shared_write = False
 
         if auto_initialize and self._config.enabled:
             self._initialize_provider()
@@ -156,6 +202,81 @@ class MemoryClient:
     def is_enabled(self) -> bool:
         """Check if memory is enabled and initialized."""
         return self._config.enabled and self._initialized and self._provider is not None
+
+    def _enforce_memory_policy(
+        self,
+        operation: str,
+        scope_label: str,
+        policy_store: "PolicyStore | None",
+        subject: str | None,
+        data_labels: set[str] | None,
+    ) -> set[str]:
+        """Gate one memory operation on the run's data labels.
+
+        Returns the effective labels, so a caller that also needs them -- the
+        write path stamps them onto the row as provenance -- does not resolve the
+        ambient policy a second time and risk disagreeing with the gate.
+
+        One implementation for reads and writes. There used to be two: ``add``
+        resolved the ambient run policy while ``search`` used its raw arguments,
+        and since automatic retrieval passes no policy arguments the read gate
+        never ran at all -- a run the policy said must not touch memory could
+        still read every row out of it. Two copies of one rule is how one copy
+        ends up wrong, and ``resolve_active_policy`` warns about exactly this:
+        threading policy args through every call site is "fragile, and silently
+        bypassed by any call site that forgets".
+
+        Resources checked, in order:
+
+        - ``memory:<operation>:<scope>`` -- the precise form, so a deployment can
+          say "never persist this, but recalling is fine". With one shared
+          resource string that was inexpressible, and a rule written to stop
+          persistence would silently start denying retrieval.
+        - ``memory:<scope>`` -- the legacy form. ``memory:*`` covers both new
+          shapes by fnmatch, but an exact ``memory:u1`` covers neither, and such
+          policies are already shipped. Checked so they do not quietly lapse.
+
+        Labels ride as additional subjects, the same convention the tool and
+        session gates use.
+        """
+        eff_store, eff_subject, eff_labels = resolve_active_policy(
+            policy_store, subject, data_labels
+        )
+        labels = set(eff_labels or ())
+        if eff_store is None or eff_subject is None:
+            return labels
+
+        from continuum.agent.exceptions import MemoryAccessDeniedError
+
+        subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
+        for resource in (f"memory:{operation}:{scope_label}", f"memory:{scope_label}"):
+            decision = eff_store.check(subjects, resource)
+            if not decision.allowed:
+                raise MemoryAccessDeniedError(
+                    operation=operation,
+                    scope=scope_label,
+                    policy_name=decision.policy_name,
+                )
+        return labels
+
+    def _provider_supports_gate(self) -> bool:
+        """Does the provider accept ``pre_store_filter``?
+
+        Checked by signature rather than by catching TypeError: a provider whose
+        own body raises TypeError for an unrelated reason would otherwise look
+        like an old provider and be silently retried without the gate.
+        """
+        import inspect
+
+        try:
+            params = inspect.signature(self._provider.add).parameters
+        except (TypeError, ValueError):  # pragma: no cover - exotic callables
+            return False
+        # An explicit parameter only. A provider with **kwargs would ACCEPT the
+        # argument and silently drop it -- no error, no gate, and no warning
+        # either, which is worse than the TypeError this check exists to avoid.
+        # Naming the parameter is how a provider says it will act on one.
+        return "pre_store_filter" in params
 
     def _ensure_enabled(self) -> None:
         """Raise error if memory is not enabled."""
@@ -242,6 +363,7 @@ class MemoryClient:
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
         data_labels: set[str] | None = None,
+        pre_store_filter: Any | None = None,
     ) -> MemoryAddResult:
         """
         Add memories from messages or text.
@@ -262,30 +384,34 @@ class MemoryClient:
         """
         self._ensure_enabled()
 
-        # Access control check. Explicit policy args win; otherwise fall back to
-        # the ambient run policy — the session-save write path doesn't thread
-        # RunContext, so this is how a tainted run's labels gate the write.
-        from continuum.security.policy_context import resolve_active_policy
-
-        eff_store, eff_subject, eff_labels = resolve_active_policy(
-            policy_store, subject, data_labels
+        # Access control. Explicit policy args win; otherwise the ambient run
+        # policy is used — the session-save write path doesn't thread RunContext,
+        # so that is how a tainted run's labels reach the gate.
+        eff_labels = self._enforce_memory_policy(
+            "write", agent_id or user_id or "unknown", policy_store, subject, data_labels
         )
-        if eff_store is not None and eff_subject is not None:
-            from continuum.agent.exceptions import MemoryAccessDeniedError
-
-            scope_label = agent_id or user_id or "unknown"
-            subjects = [eff_subject, *sorted(eff_labels)] if eff_labels else eff_subject
-            decision = eff_store.check(subjects, f"memory:{scope_label}")
-            if not decision.allowed:
-                raise MemoryAccessDeniedError(
-                    operation="write",
-                    scope=scope_label,
-                    policy_name=decision.policy_name,
-                )
 
         # Build scope from identifiers
         scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
+
+        # A shared-scope write is global knowledge: one user's poisoned memory
+        # becomes every user's retrieved fact, with no per-user scoping between
+        # them. Permitted, and a legitimate deployment choice -- but not one to
+        # arrive at by leaving a config field at a value set months ago, so say
+        # it once on the path that actually does it.
+        if self._config.memory_isolation == "shared" and not self._warned_shared_write:
+            self._warned_shared_write = True
+            logger.warning(
+                "memory_isolation='shared': this write goes to a single global scope "
+                "visible to every user and agent, so anything stored here -- including a "
+                "fact extracted from attacker-influenced content -- is recalled for "
+                "everyone. Set MEMORY_ISOLATION=user (the default) unless a shared "
+                "knowledge base is intended, and deny 'memory:shared' in a PolicyStore "
+                "for runs whose data must not become global."
+            )
+
+        messages = _strip_hidden_from_messages(messages)
 
         # Convert metadata if needed
         if isinstance(metadata, MemoryMetadata):
@@ -293,8 +419,48 @@ class MemoryClient:
         else:
             metadata_dict = metadata
 
+        # Provenance stamp (security finding F6).
+        #
+        # Record how tainted the run that produced this memory was, so a later
+        # run that recalls the row can inherit the taint and be gated on it. The
+        # labels come from the same resolution the write gate above uses, so the
+        # session-save path -- which never threads RunContext -- is covered by
+        # the ambient publish rather than needing a new parameter.
+        #
+        # Copy-not-mutate: the caller's dict is reused across messages in a save
+        # loop, so stamping in place would leak one message's labels onto the
+        # next. Absent labels write no key at all: a clean row must stay clean so
+        # the read side can tell "never labelled" from "labelled with nothing".
+        if eff_labels:
+            metadata_dict = {
+                **(metadata_dict or {}),
+                PROVENANCE_LABELS_KEY: sorted(eff_labels),
+            }
+
+        # BaseMemoryProvider is a public interface, and a provider written
+        # before the gate existed does not accept this parameter -- passing it
+        # would raise TypeError and break memory entirely for an integration
+        # that was working. Degrade instead, and say so: without the gate the
+        # filter reverts to delete-after-write, which is weaker and racy, so an
+        # operator who configured a filter needs to know which one they have.
+        provider_kwargs: dict[str, Any] = {}
+        if pre_store_filter is not None:
+            if self._provider_supports_gate():
+                provider_kwargs["pre_store_filter"] = pre_store_filter
+            elif not getattr(self, "_warned_no_gate", False):
+                self._warned_no_gate = True
+                logger.warning(
+                    "%s does not accept pre_store_filter, so rejected facts are deleted "
+                    "AFTER the write rather than stopped before it. That delete can lose a "
+                    "race with the store's write visibility and leave the fact searchable. "
+                    "Use a provider that supports the gate, or infer=False for content that "
+                    "must never be written.",
+                    type(self._provider).__name__,
+                )
+
         return await self._provider.add(
             messages,
+            **provider_kwargs,
             **identifiers,
             metadata=metadata_dict,
             custom_prompt=custom_prompt,
@@ -312,6 +478,7 @@ class MemoryClient:
         filters: dict[str, Any] | None = None,
         policy_store: "PolicyStore | None" = None,
         subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemorySearchResult:
         """
         Search memories using semantic similarity.
@@ -347,18 +514,12 @@ class MemoryClient:
             )
             query = query[:max_query_chars]
 
-        # Access control check
-        if policy_store is not None and subject is not None:
-            from continuum.agent.exceptions import MemoryAccessDeniedError
-
-            scope_label = agent_id or user_id or "unknown"
-            decision = policy_store.check(subject, f"memory:{scope_label}")
-            if not decision.allowed:
-                raise MemoryAccessDeniedError(
-                    operation="read",
-                    scope=scope_label,
-                    policy_name=decision.policy_name,
-                )
+        # Access control. Same gate as the write path: automatic retrieval
+        # passes no policy arguments, so resolving the ambient run policy here is
+        # what makes this reachable at all.
+        self._enforce_memory_policy(
+            "read", agent_id or user_id or "unknown", policy_store, subject, data_labels
+        )
 
         scope = self._build_scope(user_id, agent_id, conversation_id)
         identifiers = scope.to_identifiers()
@@ -471,6 +632,7 @@ class MemoryClient:
         data: str,
         *,
         custom_prompt: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MemoryEntry:
         """
         Update a specific memory.
@@ -479,12 +641,75 @@ class MemoryClient:
             memory_id: The ID of the memory to update
             data: New data for the memory
             custom_prompt: Custom prompt for memory update
+            metadata: Replacement metadata for the row. REPLACES rather than
+                merges: mem0's own docstring claims unspecified fields are
+                preserved, and they are not -- it rebuilds the payload from what
+                you pass, re-preserving only a fixed set (user_id, agent_id,
+                run_id, actor_id, role) and dropping everything else, including
+                Continuum's own ``_user_id``/``session_id``. So read the row and
+                pass its whole metadata back with your edit applied. For the
+                common case of clearing provenance after review, use
+                :meth:`mark_reviewed`, which does that for you.
 
         Returns:
             Updated MemoryEntry.
         """
         self._ensure_enabled()
-        return await self._provider.update(memory_id, data, custom_prompt=custom_prompt)
+        kwargs: dict[str, Any] = {"custom_prompt": custom_prompt}
+        # Only forward when supplied: passing metadata=None would still be a
+        # replacement, wiping the row's payload for every existing caller.
+        if metadata is not None:
+            kwargs["metadata"] = metadata
+        return await self._provider.update(memory_id, data, **kwargs)
+
+    async def mark_reviewed(self, memory_id: str, *, reviewer: str) -> MemoryEntry:
+        """Record that a person reviewed a tainted row, clearing its provenance.
+
+        Provenance labelling is deliberately coarse: every row written by a
+        tainted run is stamped, so a useful fact picked up from a fetched page
+        carries the same label as a planted instruction. The SDK cannot tell them
+        apart and does not try. This is the operation that lets a person who can.
+
+        The label is replaced by a review record rather than deleted, so a
+        blessed row stays distinguishable from one nobody ever looked at, and the
+        decision keeps an owner. Once cleared, the row renders in the plain
+        profile block and no longer taints runs that recall it -- which also
+        means it stops denying whatever actions that label was gating. That is
+        the reviewer's call to make, and worth surfacing to them before they
+        make it.
+
+        Args:
+            memory_id: Row to mark.
+            reviewer: Who reviewed it. Recorded verbatim for audit; in a real
+                deployment this should be a staff identity, not the end user
+                whose session may itself have been poisoned.
+
+        Returns:
+            The updated MemoryEntry.
+
+        Raises:
+            MemoryNotFoundError: If no such row exists -- telling a reviewer
+                "approved" about a row that is not there would report a decision
+                that was never recorded.
+        """
+        self._ensure_enabled()
+
+        entry = await self._provider.get(memory_id)
+        if entry is None:
+            from continuum.memory.exceptions import MemoryNotFoundError
+
+            raise MemoryNotFoundError(f"No memory with id {memory_id!r} to review")
+
+        existing = entry.metadata if isinstance(entry.metadata, dict) else {}
+        metadata = dict(existing)
+        cleared = metadata.pop(PROVENANCE_LABELS_KEY, None)
+        metadata[REVIEWED_KEY] = {
+            "by": reviewer,
+            "at": datetime.now(UTC).isoformat(),
+            "cleared": sorted(cleared) if isinstance(cleared, list | tuple) else [],
+        }
+
+        return await self.update(memory_id, entry.memory, metadata=metadata)
 
     async def history(self, memory_id: str) -> list[dict[str, Any]]:
         """
@@ -566,6 +791,9 @@ class MemoryClient:
         conversation_id: str | None = None,
         limit: int | None = None,
         filters: dict[str, Any] | None = None,
+        policy_store: "PolicyStore | None" = None,
+        subject: str | None = None,
+        data_labels: set[str] | None = None,
     ) -> MemorySearchResult:
         """Synchronous version of search()."""
         return self._run_sync(
@@ -576,6 +804,9 @@ class MemoryClient:
                 conversation_id=conversation_id,
                 limit=limit,
                 filters=filters,
+                policy_store=policy_store,
+                subject=subject,
+                data_labels=data_labels,
             )
         )
 

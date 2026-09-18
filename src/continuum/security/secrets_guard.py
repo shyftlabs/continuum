@@ -45,18 +45,45 @@ WEAK_SECRETS = frozenset(
 )
 
 
-def is_weak_secret(value: str | None) -> bool:
+#: Length floor for a credential an attacker can attack offline. 32 characters is
+#: the output of the ``openssl rand -hex 16`` this project recommends doubling —
+#: short enough not to reject a genuinely random secret, long enough that nothing
+#: typed from memory survives it.
+MIN_OFFLINE_SECRET_LENGTH = 32
+
+
+def is_weak_secret(value: str | None, *, min_length: int = 0) -> bool:
     """Return True if *value* is missing, blank, or a known-weak placeholder.
 
     A credential is considered weak when it is ``None``/empty/whitespace, an
     exact (case-insensitive) match for a shipped placeholder in
     :data:`WEAK_SECRETS`, or contains the substring ``changeme`` (which catches
     placeholder variants like ``CHANGEME_generate_with_openssl_rand_hex_32``).
+
+    ``min_length`` additionally rejects anything shorter, measured after
+    stripping. It is opt-in per call site rather than global, because it suits
+    only some credentials. A Redis password is guessed *through the network*,
+    where the server rate-limits the attacker; a key like ``SESSION_ID_SECRET``
+    is guessed *offline*, because any user of the system holds a matched
+    (plaintext, digest) pair from their own session and can grind candidates
+    locally with no rate limit and no logs. Only the second kind needs a floor —
+    and making it opt-in means no existing deployment is failed over a rule its
+    credential was never held to.
     """
     if value is None:
         return True
     stripped = value.strip()
     if not stripped:
+        return True
+    if stripped.startswith("#"):
+        # A mis-parsed inline comment, not a secret. python-dotenv only strips
+        # '#' when a value precedes it, so `KEY= # note` yields the note as the
+        # value — and it is long enough to clear any length floor. Caught here
+        # because such a value would otherwise be accepted as a real credential,
+        # identical in every deployment that copied the file, and readable by
+        # anyone with the repository. No generated secret starts with '#'.
+        return True
+    if min_length and len(stripped) < min_length:
         return True
     lowered = stripped.lower()
     if lowered in WEAK_SECRETS:
@@ -69,7 +96,13 @@ def _allow_insecure() -> bool:
     return os.environ.get(ALLOW_INSECURE_ENV, "").strip().lower() in _TRUTHY
 
 
-def enforce_credential(*, service: str, credential: str | None, env_var: str) -> None:
+def enforce_credential(
+    *,
+    service: str,
+    credential: str | None,
+    env_var: str,
+    min_length: int = 0,
+) -> None:
     """Refuse to proceed when *credential* is missing or a known-weak default.
 
     Args:
@@ -77,12 +110,16 @@ def enforce_credential(*, service: str, credential: str | None, env_var: str) ->
         credential: The secret value being used to authenticate to the store.
         env_var: The environment variable the operator should set to fix it
             (e.g. ``SESSION_REDIS_PASSWORD``), named in the error/warning.
+        min_length: Reject anything shorter than this. Defaults to 0 (no floor)
+            so existing call sites keep their exact behaviour; pass
+            :data:`MIN_OFFLINE_SECRET_LENGTH` for a secret an attacker can
+            brute-force offline. See :func:`is_weak_secret`.
 
     Raises:
         InsecureConfigurationError: when the credential is weak and the
             ``CONTINUUM_ALLOW_INSECURE`` escape hatch is not set.
     """
-    if not is_weak_secret(credential):
+    if not is_weak_secret(credential, min_length=min_length):
         return
 
     hint = (

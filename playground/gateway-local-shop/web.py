@@ -26,6 +26,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from continuum import LogLevel, setup_logging
+from continuum.memory.types import PROVENANCE_LABELS_KEY, REVIEWED_KEY
+from continuum.session import bind_principal
 
 setup_logging(level=LogLevel.INFO)
 
@@ -55,6 +57,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+# Sessions record an owner, and the framework will not load or save one unless
+# the caller says who it is. The application binds that, at the boundary where it
+# would normally have just authenticated the request.
+#
+# NOTE FOR ANYONE COPYING THIS: `req.user_id` is typed into a box in the browser.
+# It is NOT a verified identity, and binding it here is only defensible because
+# this is a local single-user demo with no login. A real deployment must bind an
+# id it derived from a credential it checked — otherwise the ownership check
+# compares an attacker-supplied value against itself and protects nothing:
+#
+#     user = verify_jwt(request.headers["Authorization"])
+#     with bind_principal(user.id):
+#         ...
+
+
 class ChatRequest(BaseModel):
     message: str
     user_id: str
@@ -69,6 +86,11 @@ class DeleteMemoryRequest(BaseModel):
     memory_id: str
 
 
+class ApproveMemoryRequest(BaseModel):
+    memory_id: str
+    user_id: str
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_PAGE
@@ -79,9 +101,10 @@ async def chat(req: ChatRequest):
     if not _agent or not _agent._initialized:
         msg = f"Agent not connected to MCP server. {_init_error or 'Start the MCP server with: python server.py'}"
         return {"response": msg}
-    response = await _agent.chat(
-        req.message, user_id=req.user_id, conversation_id=req.conversation_id
-    )
+    with bind_principal(req.user_id):
+        response = await _agent.chat(
+            req.message, user_id=req.user_id, conversation_id=req.conversation_id
+        )
     return {"response": response}
 
 
@@ -94,8 +117,19 @@ async def chat_stream(req: ChatRequest):
             yield f"data: {json.dumps({'type': 'error', 'error': msg})}\n\n"
 
         return StreamingResponse(error_gen(), media_type="text/event-stream")
+
+    async def bound_stream():
+        # The binding has to live INSIDE the generator: StreamingResponse
+        # consumes it after this handler has already returned, so a `with` around
+        # the call would have exited before a single chunk was produced.
+        with bind_principal(req.user_id):
+            async for chunk in _agent.chat_stream(
+                req.message, user_id=req.user_id, conversation_id=req.conversation_id
+            ):
+                yield chunk
+
     return StreamingResponse(
-        _agent.chat_stream(req.message, user_id=req.user_id, conversation_id=req.conversation_id),
+        bound_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -115,7 +149,34 @@ async def list_memories(user_id: str):
         return {"success": False, "error": "Memory not available"}
     try:
         entries = await client.get_all(user_id=user_id)
-        return {"success": True, "memories": [{"id": e.id, "text": e.memory} for e in entries]}
+        # `labels` is the provenance stamp: the taint the run carried when this
+        # row was written, so a fact laundered out of an injected tool result is
+        # distinguishable from one the user actually stated. That difference is
+        # invisible in the text -- both are just sentences -- so without it a
+        # reviewer cleaning up poisoned memory has nothing to go on.
+        #
+        # None, not [], for an unstamped row: everything written before
+        # provenance existed is unlabelled, which is not the same as labelled
+        # with nothing. Only this one key is surfaced; the rest of a row's
+        # metadata holds session and user ids this listing need not expose.
+        return {
+            "success": True,
+            "memories": [
+                {
+                    "id": e.id,
+                    "text": e.memory,
+                    "labels": (e.metadata or {}).get(PROVENANCE_LABELS_KEY)
+                    if isinstance(e.metadata, dict)
+                    else None,
+                    # Mutually exclusive with `labels` by construction:
+                    # mark_reviewed removes the label as it writes the record.
+                    "reviewed": (e.metadata or {}).get(REVIEWED_KEY)
+                    if isinstance(e.metadata, dict)
+                    else None,
+                }
+                for e in entries
+            ],
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -129,6 +190,31 @@ async def delete_memory(req: DeleteMemoryRequest):
         await client.delete(req.memory_id)
         return {"success": True}
     except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/memory/approve")
+async def approve_memory(req: ApproveMemoryRequest):
+    """Human review: clear a row's provenance label and record who cleared it.
+
+    The third option between deleting a labelled row and living with the gate.
+    Provenance is coarse -- a useful fact learned from a fetched page is stamped
+    the same as a planted instruction -- so a person has to be able to say "I
+    looked at this one, it is fine".
+
+    Note the reviewer here is the end user, which suits a demo. A real
+    deployment wants a staff identity: the person whose session was poisoned is
+    the wrong person to clear the label on it.
+    """
+    client = _get_memory_client()
+    if not client:
+        return {"success": False, "error": "Memory not available"}
+    try:
+        await client.mark_reviewed(req.memory_id, reviewer=req.user_id)
+        return {"success": True}
+    except Exception as e:
+        # Reported, not raised: the panel renders data["error"], while a 500
+        # would leave the reviewer unsure whether the decision was recorded.
         return {"success": False, "error": str(e)}
 
 
@@ -297,16 +383,45 @@ async function openMemoryPanel() {
     list.innerHTML = '<p style="color:#999;">No memories found.</p>';
     return;
   }
-  list.innerHTML = data.memories.map(m => `
-    <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+  // Labelled rows first: they are the ones needing a decision, and a reviewer
+  // should not have to scroll past clean rows to find them.
+  const rows = [...data.memories].sort((a, b) => (b.labels ? 1 : 0) - (a.labels ? 1 : 0));
+  list.innerHTML = rows.map(m => {
+    const tainted = m.labels && m.labels.length;
+    const badge = tainted
+      ? `<span title="derived from content the agent read from an external source" style="background:#fdecea; color:#c0392b; border:1px solid #f5c6c2; border-radius:3px; padding:1px 6px; font-size:11px; white-space:nowrap;">⚠ ${m.labels.join(', ')}</span>`
+      : (m.reviewed
+        ? `<span title="cleared by ${m.reviewed.by} on ${m.reviewed.at}" style="background:#eaf6ec; color:#1e7e34; border:1px solid #c3e6cb; border-radius:3px; padding:1px 6px; font-size:11px; white-space:nowrap;">✓ reviewed</span>`
+        : '');
+    const approve = tainted
+      ? `<button onclick="approveMemory('${m.id}', this)" style="padding:4px 10px; background:#1e7e34; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Approve</button>`
+      : '';
+    return `
+    <div style="display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid #f0f0f0;">
+      ${badge}
       <span style="flex:1; font-size:14px;">${m.text}</span>
+      ${approve}
       <button onclick="deleteMemory('${m.id}', this)" style="padding:4px 10px; background:#c0392b; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Delete</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 function closeMemoryPanel() {
   document.getElementById('memory-overlay').style.display = 'none';
+}
+
+async function approveMemory(id, btn) {
+  // Spell out the consequence: clearing the label also stops this row taints
+  // gating actions, and the reviewer is the one taking that on.
+  if (!confirm('Mark this memory as reviewed? It will no longer be treated as untrusted, and will stop blocking gated actions for turns that recall it.')) return;
+  btn.disabled = true; btn.textContent = '...';
+  const res = await fetch('/memory/approve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({memory_id: id, user_id: currentUserId})
+  });
+  const data = await res.json();
+  if (data.success) { openMemoryPanel(); }
+  else { btn.disabled = false; btn.textContent = 'Approve'; alert(data.error); }
 }
 
 async function deleteMemory(memoryId, btn) {

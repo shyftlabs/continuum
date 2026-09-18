@@ -81,7 +81,9 @@ class TestCheckpoint2_SessionIdComputation:
         from continuum.session.config import SessionConfig
         from continuum.session.providers.redis import RedisSessionProvider
 
-        return RedisSessionProvider(SessionConfig(), auto_initialize=False)
+        # These assert the plaintext key shape, so hashing is pinned off rather
+        # than inherited from the ambient .env.
+        return RedisSessionProvider(SessionConfig(hash_session_ids=False), auto_initialize=False)
 
     def test_whitespace_user_id_falls_through_to_uuid(self):
         """

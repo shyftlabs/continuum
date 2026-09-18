@@ -1069,6 +1069,7 @@
     <div class="sidebar-group-label">Safety</div>
     <a class="sidebar-link" onclick="scrollToAnchor('run-safety')">Input / Output Scanning</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-data-labels')">Data-Label Enforcement</a>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-approval')">Human-in-the-Loop Approval</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-testing')">Testing Guide</a>
   </div>
 
@@ -1457,6 +1458,18 @@ SESSION_REDIS_SSL=false
 SESSION_TTL_SECONDS=172800
 SESSION_MAX_MESSAGES=1000
 SESSION_KEY_PREFIX=orchestrator:session
+
+<span class="cm"># ── Session Ownership and Security ────────────────────────────────────────────</span>
+<span class="cm"># A session id names storage, not the caller. See Components → Sessions.</span>
+SESSION_OWNERSHIP=enforce                  <span class="cm"># open | audit | enforce(default)</span>
+SESSION_REQUIRE_PRINCIPAL=false            <span class="cm"># true | false(default)</span>
+SESSION_HASH_IDS=false                     <span class="cm"># true | false(default), opaque vs plaintext keys</span>
+SESSION_ID_SECRET=CHANGEME_generate_with_openssl_rand_hex_32
+<span class="cm">#</span>
+<span class="cm"># The three above are the compatible defaults. For a multi-tenant deployment set</span>
+<span class="cm"># SESSION_REQUIRE_PRINCIPAL=true and SESSION_HASH_IDS=true — and replace the</span>
+<span class="cm"># secret first (openssl rand -hex 32), because hashing refuses to start on a</span>
+<span class="cm"># CHANGEME placeholder.</span>
 
 <span class="cm"># ── Langfuse Observability ────────────────────────────────────────────────────</span>
 LANGFUSE_ENABLED=true
@@ -2037,33 +2050,42 @@ runner = <span class="cls">AgentRunner</span>(
 
   <a class="anchor" id="run-session"></a>
   <h2>Session History</h2>
-  <p>Pass a <code>session_id</code> to automatically load and save conversation history from Redis.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Turn 1 — user's first message</span>
-response1 = <span class="kw">await</span> runner.run(agent, <span class="str">"My name is Alice."</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
+  <p>Pass a <code>session_id</code> to automatically load and save conversation history from Redis. Bind the caller's verified identity around the run: a session that records an owner is not readable or writable without it — see <a onclick="showSection('components'); scrollToAnchor('comp-session')">Sessions</a>.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> bind_principal
 
-<span class="cm"># Turn 2 — agent remembers context from Redis</span>
-response2 = <span class="kw">await</span> runner.run(agent, <span class="str">"What's my name?"</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
-<span class="cm"># → "Your name is Alice."</span></pre></div>
+<span class="kw">with</span> <span class="fn">bind_principal</span>(<span class="str">"u-1"</span>):          <span class="cm"># an id you verified, not one the caller sent</span>
+
+    <span class="cm"># Turn 1 — user's first message</span>
+    response1 = <span class="kw">await</span> runner.run(agent, <span class="str">"My name is Alice."</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
+
+    <span class="cm"># Turn 2 — agent remembers context from Redis</span>
+    response2 = <span class="kw">await</span> runner.run(agent, <span class="str">"What's my name?"</span>, session_id=<span class="str">"sess-1"</span>, user_id=<span class="str">"u-1"</span>)
+    <span class="cm"># → "Your name is Alice."</span></pre></div>
 
   <p>Control how many turns are loaded with <code>AgentConfig.session_history_turns</code>. Set <code>log_to_session=False</code> in <code>AgentConfig</code> to disable session writes for intermediate pipeline agents.</p>
 
   <a class="anchor" id="run-session-create"></a>
   <h3>Creating sessions with get_or_create_session()</h3>
-  <p>If you want session history to persist across requests, create a session <em>before</em> calling <code>runner.run()</code>. Passing a <code>session_id</code> that was never created will silently fail to save or load history.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Step 1: create or retrieve the session</span>
-session_id = <span class="kw">await</span> session_client.get_or_create_session(
-    session_id=session_id,          <span class="cm"># pass existing ID to resume</span>
-    user_id=<span class="str">"user-123"</span>,
-    conversation_id=<span class="str">"conv-456"</span>,   <span class="cm"># optional — see below</span>
-)
+  <p>If you want session history to persist across requests, create a session <em>before</em> calling <code>runner.run()</code>. Passing a <code>session_id</code> that was never created will silently fail to save or load history — set <code>SessionConfig.strict_sessions=True</code> to raise instead. Passing one that <em>was</em> created, and is owned by a user, fails differently: without a bound principal it raises <code>SessionOwnershipError</code> rather than failing quietly.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> bind_principal
 
-<span class="cm"># Step 2: run with that session_id</span>
-response = <span class="kw">await</span> runner.run(
-    agent=agent,
-    input=<span class="str">"Hello!"</span>,
-    session_id=session_id,
-    user_id=<span class="str">"user-123"</span>,
-)</pre></div>
+<span class="cm"># Step 0: bind the identity you just authenticated</span>
+<span class="kw">with</span> <span class="fn">bind_principal</span>(<span class="str">"user-123"</span>):
+
+    <span class="cm"># Step 1: create or retrieve the session</span>
+    session_id = <span class="kw">await</span> session_client.get_or_create_session(
+        session_id=session_id,          <span class="cm"># pass existing ID to resume</span>
+        user_id=<span class="str">"user-123"</span>,
+        conversation_id=<span class="str">"conv-456"</span>,   <span class="cm"># optional — see below</span>
+    )
+
+    <span class="cm"># Step 2: run with that session_id</span>
+    response = <span class="kw">await</span> runner.run(
+        agent=agent,
+        input=<span class="str">"Hello!"</span>,
+        session_id=session_id,
+        user_id=<span class="str">"user-123"</span>,
+    )</pre></div>
 
   <h4>How session_id is computed</h4>
   <p><code>get_or_create_session()</code> derives a deterministic key from the arguments you pass:</p>
@@ -2074,6 +2096,7 @@ response = <span class="kw">await</span> runner.run(
     <tr><td><code>user_id</code> only</td><td><code>u:{user_id}</code></td></tr>
     <tr><td>neither</td><td>random UUID</td></tr>
   </table>
+  <p>These keys are <strong>derivable</strong>: anyone who knows a user id can construct that user's session id. Ownership checking is what stops them using it; <code>SESSION_HASH_IDS=true</code> derives the key as an HMAC (<code>s_&lt;hex&gt;</code>) so they cannot name it either, while keeping the determinism above.</p>
 
   <h4>When to use conversation_id</h4>
   <p>Use <code>conversation_id</code> when a single user can have multiple independent chat windows. Without it, all conversations for a user share one session (<code>u:{user_id}</code>). With it, each window gets its own isolated session (<code>c:{conversation_id}:u:{user_id}</code>).</p>
@@ -2104,6 +2127,10 @@ response = <span class="kw">await</span> runner.run(
 
   <div class="callout callout-warn">
     <strong>Custom workflow agents:</strong> If you build a custom workflow by subclassing <code>BaseAgent</code>, you must follow this pattern yourself. Forgetting <code>suppress_session_log = True</code> will save every sub-agent turn to session history.
+  </div>
+
+  <div class="callout callout-warn">
+    <strong><code>save_turn()</code> is ownership-checked:</strong> it writes through the same path as any other session write, so on an owned session it raises <code>SessionOwnershipError</code> unless a principal is bound. Bind it once around the whole workflow, not per sub-agent call.
   </div>
 
   <a class="anchor" id="run-final"></a>
@@ -2453,7 +2480,7 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="run-data-labels"></a>
   <h2>Data-Label Enforcement</h2>
-  <p>Make sensitivity labels such as <code>pii</code>, <code>confidential</code>, or <code>restricted</code> change what a run is <em>allowed to do</em>. A run carries a set of labels (<code>ctx.data_labels</code>); labels are added by <strong>producers</strong> and then <strong>gate</strong> six runtime sinks. Taint is monotonic (only added, propagates forward) and is enforced identically in streaming and non-streaming.</p>
+  <p>Make sensitivity labels such as <code>pii</code>, <code>confidential</code>, or <code>restricted</code> change what a run is <em>allowed to do</em>. A run carries a set of labels (<code>ctx.data_labels</code>); labels are added by <strong>producers</strong> and then <strong>gate</strong> seven runtime sinks. Taint is monotonic (only added, propagates forward) and is enforced identically in streaming and non-streaming. One further path — what to do with a <em>recalled</em> memory row that carries labels — is a config choice rather than a policy deny, covered under <em>What a labelled recall does</em> below.</p>
   <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># producer (taint) ─▶ ctx.data_labels = {"pii"} ─▶ gate at each sink (deny?)</span></pre></div>
 
   <p><strong>Independent of <a onclick="scrollToAnchor('run-safety')" style="cursor:pointer;text-decoration:underline">Input / Output Scanning</a>.</strong> Scanners <em>sanitize text</em>; data labels <em>gate behavior</em>. Neither feeds the other — a scanner never taints a run.</p>
@@ -2466,6 +2493,8 @@ agent = <span class="cls">BaseAgent</span>(
     <tr><td><code>AgentConfig.tool_data_labels</code></td><td><code>{}</code></td><td>no tool taints the run</td></tr>
     <tr><td><code>AgentMemoryConfig.scope_data_labels</code></td><td><code>{}</code></td><td>no memory-read taint</td></tr>
     <tr><td>run-level <code>data_labels</code></td><td><code>None</code></td><td>run starts clean</td></tr>
+    <tr><td><code>AgentMemoryConfig.on_labeled_recall</code></td><td><code>"fence"</code></td><td>labelled rows are fenced in the prompt, not dropped or blocked</td></tr>
+    <tr><td><code>AgentConfig.tool_approval</code></td><td><code>set()</code></td><td>no tool call is put to a human</td></tr>
     <tr><td>policy evaluation</td><td>open-default-allow</td><td>unmatched resource → allowed (opt into fail-closed via <code>PolicyStore.default_deny()</code>)</td></tr>
   </table>
 
@@ -2506,7 +2535,52 @@ store.<span class="fn">add_policy</span>(<span class="cls">AccessPolicy</span>(
 ctx = <span class="fn">create_run_context</span>(user_id=<span class="str">"u1"</span>, data_labels={<span class="str">"pii"</span>})
 
 <span class="cm"># (d) Anywhere in your own code</span>
-ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)</pre></div>
+ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)
+
+<span class="cm"># (e) Row provenance — NEEDS NO DECLARATION. Whatever labels a run carries are</span>
+<span class="cm">#     stamped onto every memory row it writes; recalling that row re-taints the</span>
+<span class="cm">#     reader, even a turn that calls no tool at all.</span></pre></div>
+
+  <p><strong>Row provenance needs no declaration of its own, and it is the only producer whose taint
+  crosses sessions.</strong> It is not free of the others, though: a row is only stamped if the run
+  that wrote it was already labelled by (a)-(d), so with nothing declared anywhere nothing is ever
+  stamped and this never fires. What it adds is <em>persistence</em> — (a)-(d) label a run from
+  something happening <em>now</em>, while a stamped row labels a run from something that happened
+  days ago. That is what makes memory poisoning outlive the session that planted it, and it is the
+  producer the <code>on_labeled_recall</code> setting below exists to handle.</p>
+
+  <p>The label is a property of the <em>run that stored the row</em>, not of the sentence. A user's
+  own stated preference, saved by a turn that had read a web page, carries that page's label. The
+  over-approximation is deliberate: once untrusted text is in the context window, nothing can say
+  which part of the output it shaped.</p>
+
+  <h3>What a labelled recall does</h3>
+  <p>Recall is the one path that is <strong>not</strong> a policy resource. The other sinks answer
+  "is this action allowed?"; a recalled row asks "what should be done with this text?", which no
+  deny/allow can express. It is configured on the agent instead:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cls">AgentMemoryConfig</span>(on_labeled_recall=<span class="str">"fence"</span>)  <span class="cm"># "fence" | "drop" | "block"</span></pre></div>
+  <table>
+    <tr><th>Value</th><th>Effect</th><th>Run taint</th></tr>
+    <tr><td><code>"fence"</code> <em>(default)</em></td><td>the row enters the prompt wrapped in <code>&lt;recalled_memory untrusted="true"&gt;</code>, under a rule that grants factual use and withholds instruction authority. Unlabelled rows stay in the plain profile block</td><td>tainted</td></tr>
+    <tr><td><code>"drop"</code></td><td>the row never reaches the prompt</td><td><strong>clean</strong> — the run did not touch it, so it must not be tainted by it</td></tr>
+    <tr><td><code>"block"</code></td><td>the turn refuses with <code>MemoryReviewRequiredError</code>, naming the offending row ids and labels</td><td>n/a — the turn does not run</td></tr>
+  </table>
+  <p><strong>Fencing is selective, and that matters.</strong> Fencing every recalled row was measured
+  and rejected: the envelope alone costs Claude its factual recall (3/3 → 0/3 on a retrieval check).
+  Only rows that provenance marks untrusted are quarantined, which is what makes the fence
+  affordable.</p>
+  <p><strong>Prompt-level framing is defence in depth, not the control.</strong> Across four models a
+  planted instruction inside the fence was refused by two and obeyed by <code>gpt-4o-mini</code> in
+  every envelope tried. The control that holds regardless is the tool gate above — set membership on
+  the run's labels, which never asks the model anything. Choose <code>"drop"</code> or
+  <code>"block"</code> if you cannot rely on the model honouring a fence.</p>
+  <p><strong><code>"block"</code> needs a review route.</strong> A blocked turn with no way to clear
+  the row is an outage, not a workflow. <code>MemoryClient.mark_reviewed(memory_id, reviewer=…)</code>
+  removes the labels and records who cleared them and when — a reviewed row stays distinguishable
+  from one nobody examined. Note the third option it creates: deleting a coarsely-labelled row loses
+  a real user preference, leaving it keeps the gate firing forever, and review is neither.</p>
+  <p><code>"fence"</code> is the default because it is the only mode where every step is observable,
+  and because changing what an existing deployment does on upgrade is not a security improvement.</p>
 
   <h3>Sink reference</h3>
   <p>Write policy <code>resources=[…]</code> using these strings. Each sink checks the policy with subjects <code>[agent.name, *sorted(labels)]</code>.</p>
@@ -2514,7 +2588,8 @@ ctx.<span class="fn">taint</span>(<span class="str">"confidential"</span>)</pre>
     <tr><th>Sink</th><th>Resource string</th><th>What a deny does</th></tr>
     <tr><td>Model routing</td><td><code>llm:&lt;model&gt;</code></td><td>raises <code>ModelAccessDeniedError</code> (catch → reroute to an allowed model)</td></tr>
     <tr><td>Tool call</td><td><code>tool:&lt;name&gt;</code> (globs). MCP tools are namespaced by default, so the resource is <code>tool:&lt;server&gt;__&lt;name&gt;</code>; local function tools keep bare names</td><td>tool result becomes <code>POLICY DENIED: …</code> (tool not run; model sees it)</td></tr>
-    <tr><td>Long-term memory</td><td><code>memory:&lt;scope&gt;</code> or <code>memory:*</code></td><td>write blocked (<code>MemoryAccessDeniedError</code> on explicit add; auto-store skipped)</td></tr>
+    <tr><td>Long-term memory — write</td><td><code>memory:write:&lt;scope&gt;</code> (globs; <code>memory:&lt;scope&gt;</code> still checked for policies predating the split)</td><td>write blocked (<code>MemoryAccessDeniedError</code> on explicit add; auto-store skipped)</td></tr>
+    <tr><td>Long-term memory — read</td><td><code>memory:read:&lt;scope&gt;</code> (same legacy fallback)</td><td>recall returns nothing; the turn proceeds without memories</td></tr>
     <tr><td>Telemetry</td><td><code>telemetry</code></td><td>payload replaced with <code>{"_redacted": "…"}</code> before egress</td></tr>
     <tr><td>Short-term session</td><td><code>session</code></td><td>assistant answer stored as a placeholder, not verbatim</td></tr>
     <tr><td>Decision trace</td><td><code>telemetry</code> (reused)</td><td>trace content redacted before persistence; audit skeleton kept</td></tr>
@@ -2549,6 +2624,141 @@ runner = <span class="cls">AgentRunner</span>()  <span class="cm"># one per app;
   <h3>Example</h3>
   <p>A complete, runnable example lives at <code>playground/data-label-clinic/</code>.</p>
 
+
+
+  <a class="anchor" id="run-approval"></a>
+  <h2>Human-in-the-Loop Approval</h2>
+  <p>Put a <strong>person</strong> in front of a tool call. A declared tool's call is suspended, a handler you supply is shown the tool name <strong>and its arguments</strong>, and the call proceeds only if the answer is yes. Continuum already had two controls either side of this — <a onclick="scrollToAnchor('comp-mcp')" style="cursor:pointer;text-decoration:underline">tool-trust</a> verifies the <em>catalogue</em> a server serves, and the <a onclick="scrollToAnchor('run-data-labels')" style="cursor:pointer;text-decoration:underline">policy gate</a> decides whether a run may touch a <em>resource</em> — but neither can see a call's arguments, so neither can tell a routine call from a consequential one.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm">policy gate: tool:transfer_funds                    ─▶ allow</span>
+<span class="cm">approval:    transfer_funds {"amount": 5000000}     ─▶ ask a person</span></pre></div>
+
+  <p><strong>Independent of the policy gate.</strong> The policy gate answers <em>"is this run allowed this kind of thing?"</em> from rules, every time, with no human. This answers <em>"should this particular call happen?"</em> and only for tools you name. They compose: the policy gate runs first, and a call it denies never reaches a reviewer.</p>
+
+  <h3>Defaults — opt-in &amp; inert</h3>
+  <p>With nothing configured the feature does nothing — no lookup on the call path, no behavior change, fully backward-compatible.</p>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
+    <tr><td><code>AgentConfig.tool_approval</code></td><td><code>set()</code></td><td>no tool call is put to a human</td></tr>
+    <tr><td><code>AgentConfig.approval_handler</code></td><td><code>None</code></td><td>nobody to ask</td></tr>
+    <tr><td><code>AgentConfig.approval_timeout</code></td><td><code>30.0</code></td><td>seconds before an unanswered call is denied</td></tr>
+  </table>
+
+  <h3>Enable it in three steps</h3>
+  <p><strong>1 · Declare which tools need a person.</strong> fnmatch patterns, matched against the tool name as the model calls it.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cls">AgentConfig</span>(tool_approval={<span class="str">"send_*"</span>, <span class="str">"*transfer_funds"</span>})</pre></div>
+
+  <p><strong>2 · Write a handler.</strong> Any async callable of this shape — no base class, no registration:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>ToolApprovalHandler = Callable[[ToolApprovalRequest], Awaitable[ToolApprovalDecision]]
+
+<span class="kw">async def</span> <span class="fn">approve_in_slack</span>(request: ToolApprovalRequest) -&gt; ToolApprovalDecision:
+    ok = <span class="kw">await</span> ask_somewhere(request.tool_name, request.arguments)
+    <span class="kw">return</span> ToolApprovalDecision(approved=ok, reviewer=<span class="str">"alice"</span>)</pre></div>
+
+  <p><strong>3 · Wire it.</strong> Both fields, or the gate refuses:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cls">AgentConfig</span>(
+    tool_approval={<span class="str">"send_*"</span>},
+    approval_handler=approve_in_slack,
+    approval_timeout=<span class="num">30.0</span>,
+)</pre></div>
+  <p>Declaring a tool with no handler wired is <strong>not</strong> silently ungated — it is denied, loudly. That configuration is the one most easily mistaken for protection.</p>
+
+  <h3>Three outcomes, not two</h3>
+  <table>
+    <tr><th></th><th><code>approved</code></th><th><code>deferred</code></th><th>The model is told</th></tr>
+    <tr><td><strong>approved</strong></td><td><code>True</code></td><td><code>False</code></td><td><em>(nothing — the tool runs)</em></td></tr>
+    <tr><td><strong>denied</strong></td><td><code>False</code></td><td><code>False</code></td><td><code>APPROVAL DENIED</code></td></tr>
+    <tr><td><strong>deferred</strong></td><td><code>False</code></td><td><code>True</code></td><td><code>APPROVAL PENDING</code> — not performed, ask again once reviewed</td></tr>
+  </table>
+  <p><code>deferred</code> is for a call handed to someone who will answer <strong>later</strong>: the turn ends now, the user is told it is pending, and a later run asking the same thing proceeds. Without it, a deferral and a refusal are the same value, so the model reports <em>DENIED</em> for something merely waiting — and a user told they were refused does not go looking for an approver.</p>
+  <p><strong>Only a handler may defer.</strong> A timeout or a crash is a refusal: nothing is queued, so promising a resumption would promise something nothing is going to deliver.</p>
+  <p>A refusal becomes a <strong>tool result</strong>, not a raised exception. The model reads it and tells the user; the turn ends normally rather than crashing over a decision the system made on purpose.</p>
+
+
+  <h3>Two shapes of handler</h3>
+  <p>The three outcomes give you two ways to build. The choice is <strong>where the wait lives</strong>.</p>
+
+  <p><strong>Blocking</strong> — hold the call until someone answers. The answer arrives on a different connection than the one waiting, so the handler parks on a <code>Future</code> that your endpoint resolves:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>_PENDING: dict[str, dict] = {}
+
+<span class="kw">async def</span> <span class="fn">blocking_handler</span>(request):
+    fut = asyncio.get_running_loop().create_future()
+    request_id = uuid.uuid4().hex[:<span class="num">8</span>]
+    _PENDING[request_id] = {<span class="str">"request"</span>: request, <span class="str">"future"</span>: fut}
+    <span class="kw">try</span>:
+        <span class="kw">return await</span> fut                       <span class="cm"># the turn stops here</span>
+    <span class="kw">finally</span>:
+        _PENDING.pop(request_id, <span class="kw">None</span>)         <span class="cm"># also on the SDK's timeout</span>
+
+<span class="cm"># elsewhere — your "approve" endpoint</span>
+<span class="kw">def</span> <span class="fn">decide</span>(request_id, approved):
+    _PENDING[request_id][<span class="str">"future"</span>].set_result(
+        <span class="cls">ToolApprovalDecision</span>(approved=approved, reviewer=<span class="str">"alice"</span>))</pre></div>
+  <p>Give your UI a second endpoint that reads <code>_PENDING</code> — the request holding the turn cannot deliver the question blocking it.</p>
+  <p>No timeout of your own: <code>approval_timeout</code> already bounds this and denies on expiry. It also <strong>cancels</strong> the handler, which is why the cleanup is in <code>finally</code> rather than after the <code>await</code>.</p>
+
+  <p><strong>Refuse-and-resume</strong> — return immediately, answer out of band:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">async def</span> <span class="fn">deferring_handler</span>(request):
+    key = <span class="str">f"{request.tool_name}::{json.dumps(request.arguments, sort_keys=True)}"</span>
+    answer = store.pop(key, <span class="kw">None</span>)              <span class="cm"># answered since last time?</span>
+    <span class="kw">if</span> answer <span class="kw">is not</span> <span class="kw">None</span>:
+        <span class="kw">return</span> <span class="cls">ToolApprovalDecision</span>(approved=answer[<span class="str">"approved"</span>],
+                                    reviewer=answer[<span class="str">"reviewer"</span>])
+    store.park(key, request)                   <span class="cm"># queue it for a reviewer</span>
+    <span class="kw">return</span> <span class="cls">ToolApprovalDecision</span>(approved=<span class="kw">False</span>, deferred=<span class="kw">True</span>)</pre></div>
+  <p>The turn ends telling the user it is pending. Someone answers into <code>store</code>, and the <strong>next</strong> run asking the same thing proceeds. There is no <code>request_id</code> to carry over — the second run is a different run — so the key is the tool and its arguments.</p>
+  <p><code>store.pop</code> rather than <code>store.get</code>: one answer authorises <strong>one</strong> execution, not a standing permit.</p>
+
+  <table>
+    <tr><th></th><th>Blocking</th><th>Refuse-and-resume</th></tr>
+    <tr><td>the turn</td><td>held open</td><td>ends immediately</td></tr>
+    <tr><td>bounded by</td><td>browser/proxy limits, <code>approval_timeout</code></td><td>nothing</td></tr>
+    <tr><td>reviewer must be</td><td>watching now</td><td>anywhere, any time</td></tr>
+    <tr><td>cost</td><td>a held connection</td><td>the turn's work is redone when asked again</td></tr>
+    <tr><td>survives a restart</td><td>no</td><td>yes — nothing is held to lose</td></tr>
+  </table>
+  <p>Neither is more correct. Use blocking for an interactive UI where someone is looking at the screen; use refuse-and-resume for Slack, email, or anything asynchronous. The Temporal handler below is a third point: it blocks in place <em>without</em> holding a connection open.</p>
+
+  <h3>What the handler is shown</h3>
+  <table>
+    <tr><th>Field</th><th>Why it is there</th></tr>
+    <tr><td><code>tool_name</code></td><td>which tool, as the model named it</td></tr>
+    <tr><td><code>arguments</code></td><td><strong>the reason this gate exists</strong> — invisible to tool-trust and the policy gate</td></tr>
+    <tr><td><code>data_labels</code></td><td>the run's taint. <em>"This run has read the public web"</em> is what a reviewer wants to know before approving an outbound action</td></tr>
+    <tr><td><code>agent_name</code>, <code>run_id</code></td><td>attribution, and the material for your own idempotency key</td></tr>
+  </table>
+  <p>The request is frozen: a handler cannot edit the arguments the gate is about to run.</p>
+
+  <h3>It fails closed</h3>
+  <table>
+    <tr><th>Path</th><th>Result</th></tr>
+    <tr><td>handler does not answer within <code>approval_timeout</code></td><td>denied</td></tr>
+    <tr><td>handler raises</td><td>denied</td></tr>
+    <tr><td>handler returns a bare <code>True</code>, <code>None</code>, anything else</td><td>denied</td></tr>
+    <tr><td>tool declared with no handler wired</td><td>denied</td></tr>
+  </table>
+  <p>Approvals are <strong>serialised</strong> — concurrent tool calls in one turn are put to the reviewer one at a time, so two prompts never race for one terminal.</p>
+  <p>Approvals are <strong>not remembered</strong>: a retried run asks again. A cached "approve" authorises an execution the reviewer never saw, and whether a retry is the same action depends on the tool — transferring money and sending a reminder want opposite answers. <code>run_id</code> and <code>arguments</code> are on the request so your app can build the key it needs; the SDK does not pick one, because half-built idempotency looks like protection while quietly authorising repeats. If you want it remembered, do it in your app — see below.</p>
+
+  <h3>If you want approvals remembered</h3>
+  <p>Do it in your app, not in the SDK. An approval handler is just <code>async (request) -&gt; decision</code>, so wrap yours in one that looks up a store first and writes the answer back after.</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre>approval_handler = remembering(my_handler, key=..., store=redis)</pre></div>
+  <p>You choose the key — the arguments, a business id, or nothing at all — because only you know whether running your tool twice is safe. Two rules: never cache a <code>deferred</code> (nobody answered yet), and delete a cached answer once it is used, so one approval authorises one execution rather than becoming a standing permit. <code>queue_approval_handler</code> in <a href="https://github.com/shyftlabs/continuum/blob/dev/playground/data-label-clinic/approval_ui.py"><code>approval_ui.py</code></a> is a working example.</p>
+
+  <h3>A reviewer who answers in an hour</h3>
+  <p>A blocking handler holds the caller's connection open, so it is bounded by whatever a browser or proxy tolerates. For a reviewer who is not watching, Continuum ships a Temporal handler:</p>
+  <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.temporal <span class="kw">import</span> temporal_tool_approval
+
+<span class="cls">AgentConfig</span>(
+    tool_approval={<span class="str">"*transfer_funds"</span>},
+    approval_handler=temporal_tool_approval(),   <span class="cm"># finds its own workflow</span>
+    approval_timeout=<span class="num">600.0</span>,
+)</pre></div>
+  <p>It registers the request on the running workflow and waits for the same <code>submit_approval</code> signal a planned approval step uses — the same reviewer UI, the same allow-list check. A tool approval is not a second, weaker door.</p>
+  <p>The whole agent turn is one activity, so the call <strong>blocks in place and resumes</strong>: work done before the gate is not repeated and nobody has to ask again. It does <strong>not</strong> survive a worker restart — a retried activity starts from the beginning. For a reviewer who may outlast a deploy, the deferred shape is the honest answer, because it holds nothing open at all.</p>
+  <p>Every failure defers rather than denying: an unreachable workflow is not a reviewer saying no.</p>
+
+  <h3>Example</h3>
+  <p>Six scenarios, live — including a timeout failing closed, refuse-and-resume, and a durable wait through Temporal — at <a href="https://github.com/shyftlabs/continuum/blob/dev/playground/data-label-clinic/docs/F7-approval.md">playground/data-label-clinic/docs/F7-approval.md</a>.</p>
 
   <a class="anchor" id="run-testing"></a>
   <h2>Testing Guide</h2>
@@ -2793,7 +3003,7 @@ agent = <span class="cls">BaseAgent</span>(
 )</pre></div>
 
   <h3>Controlling what gets stored</h3>
-  <p>Use <code>extraction_prompt</code> to tell mem0 exactly which facts to extract. Use <code>pre_store_filter</code> to remove PII or irrelevant facts <em>after</em> they are stored.</p>
+  <p>Use <code>extraction_prompt</code> to tell mem0 exactly which facts to extract. Use <code>pre_store_filter</code> to keep PII or irrelevant facts out of the store: it is offered each extracted fact and returns the ones allowed to remain, and a rejected fact is never written.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># extraction_prompt — override mem0's default extraction logic</span>
 <span class="cls">AgentMemoryConfig</span>(
     store_memories=<span class="cls">True</span>,
@@ -2803,7 +3013,7 @@ agent = <span class="cls">BaseAgent</span>(
     ),
 )
 
-<span class="cm"># pre_store_filter — runs after storage; facts not returned are deleted</span>
+<span class="cm"># pre_store_filter — gates the write; facts not returned are never stored</span>
 <span class="kw">def</span> <span class="fn">remove_pii</span>(facts: <span class="fn">list</span>[<span class="fn">str</span>]) -> <span class="fn">list</span>[<span class="fn">str</span>]:
     <span class="kw">return</span> [f <span class="kw">for</span> f <span class="kw">in</span> facts <span class="kw">if</span> <span class="str">"credit card"</span> <span class="kw">not in</span> f]
 
@@ -2871,21 +3081,50 @@ results = <span class="kw">await</span> memory.search(<span class="str">"user pr
   <h2>Sessions (Redis)</h2>
   <p>Short-term conversation history stored in Redis. <code>AgentRunner</code> handles loading and saving automatically — you only use <code>SessionClient</code> directly when you need to manage sessions outside a run (e.g. building a chat history UI, clearing history, debugging).</p>
   <p>Persistence initializes <strong>lazily</strong> — no connection is attempted (and no warnings logged) until the first session op, so a disabled or unconfigured Redis costs nothing. If Redis is unreachable, the client degrades to a non-durable in-memory store and keeps serving with a single warning instead of an error per request. Which you want is a choice: <code>degrade</code> (the default) keeps the app running through the outage, while <code>fail</code> raises instead — surfacing the error loudly so you can catch and debug it. Set <code>SESSION_FALLBACK_MODE</code> to opt in; it defaults to <code>degrade</code>. Either way the fallback flips a <code>session_persistence</code> health check to <code>degraded</code> and a <code>session_persistence_degraded</code> gauge to <code>1.0</code> for alerting.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> <span class="cls">SessionClient</span>
+  <p><strong>Ownership.</strong> A session id names storage — it is not proof of who is calling. When a session records a <code>user_id</code>, the caller must have bound a matching principal or the read is refused with <code>SessionOwnershipError</code>. Bind it once where you authenticate, using <code>bind_principal()</code>; <code>AgentRunner</code>, <code>LLMClient</code> and <code>SessionClient</code> all inherit it without an argument being threaded through. Bind an id you <em>verified</em> — one the caller supplied compares an attacker-controlled value against itself. Sessions created without a <code>user_id</code> have no owner and need no principal, so anonymous and single-user apps are unaffected. Upgrading an app that does not bind one yet? <code>SESSION_OWNERSHIP=audit</code> lets you measure the impact before taking it.</p>
+  <p><strong>What the defaults do not stop.</strong> <code>SESSION_REQUIRE_PRINCIPAL</code> ships <em>off</em>, so a caller who names nobody is let through — the compatibility choice, since every application written before <code>bind_principal()</code> existed is in that position. <code>enforce</code> does not cover it: that refuses a caller who gives the <em>wrong</em> identity, not one who gives <em>none</em>. Combined with plaintext ids (below), anyone who knows a user id can construct their session id and present it while naming nobody. Before running multi-tenant, turn on either <code>SESSION_REQUIRE_PRINCIPAL=true</code> or <code>SESSION_HASH_IDS=true</code> — either one closes that path.</p>
+  <p><strong>Opaque ids.</strong> By default a session id is built in plaintext from the identifiers it scopes, so anyone who knows a user id can <em>construct</em> it. Ownership checking is what stops them using it; hashing stops them naming it at all. Recommended for multi-tenant deployments, and doing real work if you have relaxed <code>SESSION_REQUIRE_PRINCIPAL</code> while migrating. It needs <code>SESSION_ID_SECRET</code> (<code>openssl rand -hex 32</code>) — startup fails without one rather than falling back to plaintext, and weak or placeholder values are refused. The secret is a derivation parameter, not a per-process random: it must be <em>identical in every process</em> (a per-worker value splits one user's history across workers) and <em>stable across restarts</em> (changing it re-derives every id). Determinism is preserved — the same identifiers still resolve to the same session — and existing plaintext sessions migrate to their new keys on first access.</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.session <span class="kw">import</span> <span class="cls">SessionClient</span>, bind_principal
 
 session = <span class="cls">SessionClient</span>()
 
-<span class="cm"># Create or resume a session</span>
-session_id = <span class="kw">await</span> session.get_or_create_session(user_id=<span class="str">"user-123"</span>)
+<span class="cm"># Bind the caller's verified identity — an owned session is not</span>
+<span class="cm"># readable or writable without it.</span>
+<span class="kw">with</span> <span class="fn">bind_principal</span>(<span class="str">"user-123"</span>):
 
-<span class="cm"># Read history (e.g. to display in a chat UI)</span>
-messages = <span class="kw">await</span> session.get_conversation_history(session_id)
+    <span class="cm"># Create or resume a session</span>
+    session_id = <span class="kw">await</span> session.get_or_create_session(user_id=<span class="str">"user-123"</span>)
 
-<span class="cm"># Clear messages but keep the session</span>
-<span class="kw">await</span> session.clear_session(session_id)
+    <span class="cm"># Read history (e.g. to display in a chat UI)</span>
+    messages = <span class="kw">await</span> session.get_conversation_history(session_id)
 
-<span class="cm"># Delete the session entirely</span>
-<span class="kw">await</span> session.delete_session(session_id)</pre></div>
+    <span class="cm"># Clear messages but keep the session</span>
+    <span class="kw">await</span> session.clear_session(session_id)
+
+    <span class="cm"># Delete the session entirely</span>
+    <span class="kw">await</span> session.delete_session(session_id)</pre></div>
+
+  <h3>Settings</h3>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>What it does</th></tr>
+    <tr><td rowspan="3"><code>SESSION_OWNERSHIP</code></td><td><code>open</code></td><td>Log the problem quietly, allow the call</td></tr>
+    <tr><td><code>audit</code></td><td>Log a warning and emit a metric, allow the call — measure before enforcing</td></tr>
+    <tr><td><code>enforce</code> (default)</td><td>Raise <code>SessionOwnershipError</code></td></tr>
+    <tr><td rowspan="2"><code>SESSION_REQUIRE_PRINCIPAL</code></td><td><code>true</code></td><td>A caller who names nobody is refused</td></tr>
+    <tr><td><code>false</code> (default)</td><td>Holding the session id is enough</td></tr>
+    <tr><td rowspan="2"><code>SESSION_HASH_IDS</code></td><td><code>true</code></td><td>Ids are <code>s_&lt;hex&gt;</code> — not derivable, and no user ids in Redis keys or logs</td></tr>
+    <tr><td><code>false</code> (default)</td><td>Ids are <code>u:{user_id}</code> — readable, and constructible by anyone who knows a user id</td></tr>
+    <tr><td><code>SESSION_ID_SECRET</code></td><td>a random string</td><td>HMAC key. Required when hashing is on; short, memorable and placeholder values are refused at startup</td></tr>
+  </table>
+
+  <p>The defaults above are the compatible ones, so that upgrading an existing application does not break it. For a multi-tenant deployment, set all three:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># Session Ownership and Security</span>
+SESSION_OWNERSHIP=enforce           <span class="cm"># refuse a caller whose identity does not match</span>
+SESSION_REQUIRE_PRINCIPAL=true      <span class="cm"># and one who gives no identity at all</span>
+SESSION_HASH_IDS=true               <span class="cm"># ids become s_&lt;hex&gt;; re-derives existing keys</span>
+
+<span class="cm"># generate with: openssl rand -hex 32</span>
+SESSION_ID_SECRET=…</pre></div>
 
   <a class="anchor" id="comp-temporal"></a>
   <h2>Temporal Integration</h2>
@@ -3504,7 +3743,8 @@ agent = <span class="cls">BaseAgent</span>(
 
   <a class="anchor" id="rs-pii"></a>
   <h2>PII filtering on memory writes</h2>
-  <p>Continuum does not ship a built-in PII scrubber — you supply your own redaction logic via <code>pre_store_filter</code>, which runs over extracted facts before they are written to memory. Return the facts with PII masked, or drop them entirely. With no filter configured, facts are stored unmodified.</p>
+  <p>Continuum does not ship a built-in PII scrubber — you supply your own logic via <code>pre_store_filter</code>, which is offered each extracted fact before it is written. Return the fact to keep it; anything else drops it, and the row is never inserted. Note it is a <em>gate</em>, not a transformer: returning a rewritten string counts as a rejection rather than storing the rewrite. With no filter configured, facts are stored unmodified — the SDK ships no detector and will not guess.</p>
+  <p>It fails closed. A filter that raises has said nothing about the fact, so the fact is not written; a broken detector therefore drops the harmless facts in that turn too, which is the trade against keeping everything when the thing meant to exclude content is unavailable. And it filters <em>facts</em>, not <em>inputs</em> — the text still reaches the model and the session transcript. For content that must never get that far, sanitise the message with an input scanner or set <code>infer=False</code>.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">import</span> re
 <span class="kw">from</span> continuum <span class="kw">import</span> <span class="cls">AgentMemoryConfig</span>
 

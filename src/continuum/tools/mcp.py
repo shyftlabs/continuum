@@ -18,6 +18,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
+from types import UnionType
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypeVar, Union
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -42,6 +43,7 @@ from continuum.exceptions import ValidationError
 from continuum.llm.untrusted_content import strip_hidden_chars
 from continuum.logging import get_logger
 from continuum.tools.exceptions import MCPConnectionError, MCPError, MCPServerUnreviewedError
+from continuum.tools.schema import validate_arguments_against_schema
 from continuum.tools.types import (
     HttpClientFactory,
     ToolChangeEvent,
@@ -1720,18 +1722,73 @@ class MCPServerStreamableHttp(_MCPServerWithClientSession):
 # ---------------------------------------------------------------------------
 
 
+def _union_members(hint: Any) -> list[Any] | None:
+    """The members of a union hint, or ``None`` if ``hint`` is not a union.
+
+    Both spellings must be recognised. ``Optional[X]`` / ``Union[X, None]`` is a
+    ``typing`` generic whose ``__origin__`` is ``Union``; PEP 604's ``X | None``
+    is a ``types.UnionType`` instance with no ``__origin__`` at all. They denote
+    the same type, so testing only for the first silently dropped the second --
+    and ``X | None`` is the spelling this codebase uses everywhere, which meant
+    the common case fell through to an open schema.
+    """
+    if isinstance(hint, UnionType):  # PEP 604: X | Y
+        return list(typing.get_args(hint))
+    if getattr(hint, "__origin__", None) is Union:  # typing.Union[X, Y]
+        return list(getattr(hint, "__args__", ()) or ())
+    return None
+
+
+def _resolve_hints(fn: Callable[..., Any]) -> dict[str, Any]:
+    """Resolve a function's annotations, degrading one parameter at a time.
+
+    ``typing.get_type_hints`` is all-or-nothing. Under ``from __future__ import
+    annotations`` every annotation is a string evaluated against the function's
+    *module* globals, so a single name that only exists in a local scope raises
+    NameError and the entire hint dict is lost -- every parameter then becomes an
+    open, required ``{}``. One cosmetic import detail was enough to strip the
+    schema off a whole tool.
+
+    So: try the wholesale resolution first (it handles nesting and forward
+    references properly), and only on failure fall back to evaluating each
+    annotation on its own. That per-annotation ``eval`` is the same operation
+    ``get_type_hints`` performs internally, against the same globals -- the
+    strings are developer-authored source from an already-imported module, not
+    input. The only difference is blast radius: an unresolvable annotation now
+    costs its own parameter instead of all of them.
+    """
+    try:
+        return typing.get_type_hints(fn)
+    except Exception:
+        pass
+
+    resolved: dict[str, Any] = {}
+    globalns = getattr(fn, "__globals__", {})
+    for name, annotation in (getattr(fn, "__annotations__", None) or {}).items():
+        if not isinstance(annotation, str):
+            resolved[name] = annotation
+            continue
+        try:
+            resolved[name] = eval(annotation, globalns)  # noqa: S307
+        except Exception:
+            continue  # this parameter alone falls back to an open schema
+    return resolved
+
+
 def _type_to_schema(hint: Any) -> dict[str, Any]:
     """Convert a single Python type hint to a JSON Schema fragment.
 
-    Handles: str, int, float, bool, list, dict, Optional[X].
+    Handles: str, int, float, bool, list, dict, and single-member optionals in
+    either spelling (``Optional[X]``, ``X | None``).
     Falls back to {} (open schema) for anything more complex.
     """
     origin = getattr(hint, "__origin__", None)
-    args = getattr(hint, "__args__", None)
 
-    # Optional[X]  →  Union[X, None]
-    if origin is Union and args and type(None) in args:
-        non_none = [a for a in args if a is not type(None)]
+    # Optional[X] / X | None  →  the schema for X. A union with more than one
+    # non-None member has no single JSON Schema type here, so {} is honest.
+    members = _union_members(hint)
+    if members is not None and type(None) in members:
+        non_none = [a for a in members if a is not type(None)]
         if len(non_none) == 1:
             return _type_to_schema(non_none[0])
         return {}
@@ -1758,19 +1815,25 @@ def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
     Parameters without type hints get an open ``{}`` schema.
     Parameters without defaults (and not Optional) are added to ``required``.
     """
-    try:
-        hints = typing.get_type_hints(fn)
-    except Exception:
-        hints = {}
+    hints = _resolve_hints(fn)
 
     sig = inspect.signature(fn)
     properties: dict[str, Any] = {}
     required: list[str] = []
+    accepts_extra = False
+    unexpressible: list[str] = []
 
     for name, param in sig.parameters.items():
         if name == "self":
             continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            # **kwargs is the developer declaring the argument set open, which
+            # is the JSON Schema `additionalProperties: true` contract. Recording
+            # it keeps argument validation from rejecting the extra keys such a
+            # function exists to receive.
+            accepts_extra = True
+            continue
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
             continue
 
         hint = hints.get(name)
@@ -1778,16 +1841,43 @@ def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
         properties[name] = prop
 
         if param.default is inspect.Parameter.empty:
-            # Optional[X] parameters are not required even without a default
-            origin = getattr(hint, "__origin__", None)
-            args = getattr(hint, "__args__", None)
-            is_optional = origin is Union and args and type(None) in args
+            # Optional[X] / X | None parameters are not required even without
+            # a default -- None is an accepted value.
+            members = _union_members(hint)
+            is_optional = members is not None and type(None) in members
             if not is_optional:
                 required.append(name)
+                if not prop:
+                    unexpressible.append(name)
 
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
+    if accepts_extra:
+        schema["additionalProperties"] = True
+
+    if unexpressible:
+        # The {} fallback is correct -- there is no honest JSON Schema for a live
+        # database handle. What was wrong is that it happened silently: the
+        # parameter reaches the model as *required* with no constraint, so the
+        # model is obliged to invent a value for something it cannot possibly
+        # know, and the invention arrives in the tool body.
+        #
+        # The schema stays truthful about requiredness -- Python really does
+        # demand the argument, and dropping it from `required` would trade a
+        # fabricated value for a guaranteed TypeError. So the developer is the
+        # one told, at registration, while it is still cheap to fix.
+        logger.warning(
+            f"Tool '{getattr(fn, '__name__', 'unknown')}': "
+            f"required parameter(s) {', '.join(unexpressible)} have no type hint this "
+            f"schema generator can express, so the model is shown an open {{}} schema and "
+            f"asked to invent a value. Either annotate them with a type the model can "
+            f"satisfy (str/int/float/bool/list/dict), or -- if they hold process-local "
+            f"state such as a connection or a client -- keep them out of the model's "
+            f"reach entirely by binding them before registration (functools.partial, a "
+            f"closure) or supplying them via ToolContextConfig capture/inject."
+        )
+
     return schema
 
 
@@ -1882,6 +1972,23 @@ class MCPServerFunction(MCPServer):
     contract: in-process tools have direct access to your application's state,
     databases, and local APIs without any serialization overhead.
 
+    The corollary, which that sentence alone does not state: a tool body here
+    runs with the full authority of the calling process, and its arguments come
+    from the model. The model's output is attacker-influenced the moment any
+    upstream tool result is -- a fetched page, a database row, a retrieved
+    document. Treat every argument as hostile input: parameterise the query,
+    resolve the path, check the scope. There is no sandbox to fall back on, by
+    design. If you need isolation rather than authority, that is what
+    ``MCPServerStdio`` (subprocess) and ``MCPServerStreamableHttp`` (network)
+    are for -- the boundary is the process, so it cannot be added here.
+
+    ``call_tool`` does validate arguments against the tool's declared
+    ``input_schema`` before dispatch, rejecting wrong types, missing required
+    arguments and undeclared ones as ``isError=True`` for the model to correct
+    (security finding F5). That narrows the *shape* of what reaches the body; it
+    cannot sanitise the contents. ``query="'; DROP TABLE users; --"`` is a valid
+    string and satisfies every schema you could write for it.
+
     Accepts three tool formats:
 
     1. ``FunctionTool`` dataclass — full control over name, description, schema.
@@ -1966,9 +2073,15 @@ class MCPServerFunction(MCPServer):
                 server_name=self._name,
                 tool_name=tool_name,
             )
-        _, fn = self._registry[tool_name]
+        mcp_tool, fn = self._registry[tool_name]
         args = arguments or {}
         try:
+            # The declared schema is a promise to the model about what this tool
+            # accepts; enforcing it here is what turns that promise into a
+            # boundary. Inside the try on purpose -- a wrong argument is
+            # something the model can correct next turn, so it belongs in the
+            # isError envelope rather than propagating as a run-ending fault.
+            validate_arguments_against_schema(mcp_tool.inputSchema, args, tool_name=tool_name)
             if inspect.iscoroutinefunction(fn):
                 result = await fn(args)
             else:

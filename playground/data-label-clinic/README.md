@@ -5,6 +5,10 @@ four gates: **model routing, tools, memory, telemetry**. It's a glassbox: the
 web UI shows, per turn, the run's taint, which model answered, and every gate
 decision.
 
+**Guides** — [Setup & index](docs/TESTING_GUIDE.md) ·
+[Labels & policy](docs/labels-and-policy.md) · [F6 memory](docs/F6-memory.md) ·
+[F3 server trust](docs/F3-server-trust.md) · [Namespacing](docs/namespacing.md)
+
 ## The one idea
 
 The SDK ships **no PII detector**. A run becomes sensitive ("tainted") only
@@ -14,9 +18,12 @@ policy. This demo wires all three producers and all four gates:
 | | Mechanism | Where |
 |---|---|---|
 | **Producer** | both `lookup_patient` tools declared PHI → calling either taints the run | `config.py` `tool_data_labels` |
+| **Producer** | `web_lookup` declared EXTERNAL → what it returns came from the public web | `config.py` `tool_data_labels` |
+| **Gate** | EXTERNAL run denied **outbound email** (a planted instruction must not become an action) | policy `external-no-outbound-email` |
+| **Memory** | an EXTERNAL run's row IS stored, stamped with its origin, fenced on recall (F6) | `docs/F6-memory.md` |
 | **Gate** | PHI run denied the **cloud model** → re-routed on-prem | policy `phi-no-cloud-model` |
 | **Gate** | PHI run denied **exfiltration tools** (email / web) | policy `phi-no-exfiltration-tools` |
-| **Gate** | PHI run's **long-term memory write denied** (any scope) | policy `phi-never-persisted` (`memory:*`) |
+| **Gate** | PHI run's **long-term memory write denied** (any scope) | policy `phi-never-persisted` (`memory:write:*`) |
 | **Gate** | PHI run's **telemetry redacted** | policy `phi-redact-telemetry` |
 | **Gate** | PHI run's answer **not persisted verbatim to short-term memory** (session/Redis) → placeholder | policy `phi-no-short-term` (`session`) |
 
@@ -32,7 +39,9 @@ python pharmacy_server.py   # terminal 2 — pharmacy MCP tools on :8912 (needs 
 python web.py               # terminal 3 — web UI on  :8910
 ```
 
-Optional switches, each documented in TESTING_GUIDE.md:
+Optional switches, each documented in docs/TESTING_GUIDE.md (the index — it links
+the four topic guides: labels-and-policy, F6-memory, F3-server-trust,
+namespacing):
 
 | | |
 |---|---|
@@ -45,7 +54,7 @@ Optional switches, each documented in TESTING_GUIDE.md:
 Two MCP servers, deliberately overlapping on `lookup_patient` — the clinic
 returns a clinical record, the pharmacy a dispensing history. That collision is
 what makes tool namespacing (`<server>__<tool>`) observable instead of
-theoretical; see TESTING_GUIDE.md Layer D.
+theoretical; see docs/namespacing.md.
 
 Open http://localhost:8910.
 
@@ -70,7 +79,7 @@ builds the servers through the same `build_mcp_servers()` the agent uses, so a
 bare `python review.py` against an SSE pharmacy looks for `:8912/mcp` and finds
 nothing. You get one catalogue read, one `Could not review 'pharmacy'` line, and
 if you approve both anyway, a pin file that vouches for a server nobody looked
-at. See TESTING_GUIDE.md D4e.
+at. See docs/namespacing.md, D4e.
 
 `review.py` exists because `continuum mcp inspect` cannot review the pharmacy:
 that command sends a bare URL and the pharmacy requires a bearer token, so it

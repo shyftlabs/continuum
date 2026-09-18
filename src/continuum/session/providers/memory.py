@@ -25,13 +25,12 @@ from continuum.session.exceptions import (
     SessionMessageLimitError,
     SessionNotFoundError,
 )
+from continuum.session.identity import compute_session_id, legacy_session_id
 from continuum.session.types import (
     ChatMessage,
     SessionMessage,
     SessionMetadata,
-    generate_session_id,
 )
-from continuum.utils.sanitization import validate_conversation_id, validate_user_id
 
 logger = get_logger(__name__)
 
@@ -78,20 +77,50 @@ class MemorySessionProvider(BaseSessionProvider):
         user_id: str | None,
         conversation_id: str | None,
     ) -> str:
-        """Deterministic session ID — same scheme as the Redis provider."""
-        if session_id:
-            return session_id
-        user_id = validate_user_id(user_id)
-        conversation_id = validate_conversation_id(conversation_id)
-        if conversation_id and user_id:
-            return f"c:{conversation_id}:u:{user_id}"
-        if user_id:
-            return f"u:{user_id}"
-        return generate_session_id()
+        """Deterministic session ID — same scheme as the Redis provider.
+
+        Keyed with the deployment secret when ``hash_session_ids`` is on, so the
+        id cannot be constructed from the identifiers it scopes. See
+        :mod:`continuum.session.identity`.
+        """
+        return compute_session_id(
+            session_id,
+            user_id,
+            conversation_id,
+            secret=self._config.active_session_id_secret,
+        )
 
     # -------------------------------------------------------------------------
     # Operations
     # -------------------------------------------------------------------------
+
+    def _migrate_legacy_session(
+        self,
+        resolved: str,
+        session_id: str | None,
+        user_id: str | None,
+        conversation_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Move a pre-hashing plaintext session under its new keyed id.
+
+        Switching ``hash_session_ids`` on changes every derived key, which would
+        otherwise orphan live conversations. Sessions move on first touch and
+        the plaintext key is removed, so the guessable id stops resolving.
+
+        Caller holds ``self._lock``.
+        """
+        if not self._config.active_session_id_secret:
+            return None
+        legacy = legacy_session_id(session_id, user_id, conversation_id)
+        if legacy is None or legacy == resolved:
+            return None
+        entry = self._store.pop(legacy, None)
+        if entry is None:
+            return None
+        entry["metadata"].session_id = resolved
+        self._store[resolved] = entry
+        logger.info(f"Migrated session to keyed id: {resolved}")
+        return entry
 
     async def get_or_create_session(
         self,
@@ -102,6 +131,8 @@ class MemorySessionProvider(BaseSessionProvider):
         resolved = self._compute_session_id(session_id, user_id, conversation_id)
         with self._lock:
             entry = self._store.get(resolved)
+            if entry is None:
+                entry = self._migrate_legacy_session(resolved, session_id, user_id, conversation_id)
             now = datetime.now(UTC)
             if entry is not None:
                 entry["metadata"].last_accessed_at = now

@@ -77,3 +77,25 @@ class SessionMessageLimitError(SessionError):
         super().__init__(message, session_id, original_error)
         self.current_count = current_count
         self.max_messages = max_messages
+
+
+class SessionOwnershipError(SessionError):
+    """Raised when a caller touches a session owned by a different principal.
+
+    A session id names storage; it is not authorization on its own. When a
+    stored session records an owner, the ``SessionClient`` compares it against
+    the principal bound for the call (see
+    :func:`continuum.session.principal.bind_principal`) before reading history,
+    reading metadata, or writing anything back.
+
+    Only raised when ``SessionConfig.session_ownership='enforce'``. Under
+    ``'open'`` (the default) and ``'audit'`` the same condition is reported to
+    logs and metrics and the call proceeds, so a deployment can measure the
+    impact before enforcing.
+
+    The message deliberately never names the stored owner — the caller has just
+    failed to prove they are that person, so disclosing it would make the
+    refusal an identity oracle.
+    """
+
+    pass

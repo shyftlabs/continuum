@@ -18,6 +18,7 @@ import pytest
 from continuum.session.client import SessionClient
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import SessionNotEnabledError
+from continuum.session.principal import bind_principal
 from continuum.session.providers.memory import MemorySessionProvider
 from continuum.session.types import ChatMessage
 
@@ -184,9 +185,13 @@ class TestUnconfiguredFallback:
         cfg = SessionConfig(enabled=True, redis_host="", fallback_mode="degrade")  # not configured
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
-        sid = await client.get_or_create_session(user_id="alice")
-        await client.add_message(sid, _msg("user", "hi"))
-        history = await client.get_conversation_history(sid)
+        # Ownership is enforced by default, so the caller identifies itself the
+        # way a real application does. This test is about the fallback warning,
+        # not about ownership.
+        with bind_principal("alice"):
+            sid = await client.get_or_create_session(user_id="alice")
+            await client.add_message(sid, _msg("user", "hi"))
+            history = await client.get_conversation_history(sid)
 
         assert [m.content for m in history] == ["hi"]
         assert isinstance(client._provider, MemorySessionProvider)
@@ -220,11 +225,12 @@ class TestUnreachableFallback:
         )
         client = SessionClient(session_config=cfg, auto_initialize=False)
 
-        sid = await client.get_or_create_session(user_id="alice")
-        # Hammer it: many operations must not produce more warnings or any errors.
-        for i in range(10):
-            await client.add_message(sid, _msg("user", f"m{i}"))
-        history = await client.get_conversation_history(sid)
+        with bind_principal("alice"):
+            sid = await client.get_or_create_session(user_id="alice")
+            # Hammer it: many operations must not produce more warnings or any errors.
+            for i in range(10):
+                await client.add_message(sid, _msg("user", f"m{i}"))
+            history = await client.get_conversation_history(sid)
 
         assert len(history) == 10
         assert isinstance(client._provider, MemorySessionProvider)

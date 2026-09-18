@@ -312,6 +312,50 @@ class Settings(BaseSettings):
     #             worse than failing loudly.
     session_fallback_mode: Literal["degrade", "fail"] = "degrade"
 
+    # --- Session ownership (a session id is a name, not an authorization) ---
+    # How to react when a caller touches a session owned by a different
+    # principal (see continuum.session.bind_principal):
+    #   'open'    — report it, allow it. The pre-ownership behaviour.
+    #   'audit'   — report it loudly with a metric, still allow. The measuring
+    #             step: see what would break before you enforce.
+    #   'enforce' (default) — raise SessionOwnershipError.
+    # Secure by default: almost nobody changes a default, so shipping "report
+    # but allow" would ship a check that in most deployments never refuses
+    # anything — the same shape as the warning it replaced. A deployment that
+    # cannot bind principals yet opts DOWN (SESSION_OWNERSHIP=open,
+    # SESSION_REQUIRE_PRINCIPAL=false) rather than opting in to protection.
+    session_ownership: Literal["open", "audit", "enforce"] = "enforce"
+    # Treat "no principal bound" as an ownership problem.
+    #
+    # OFF by default, which is a compatibility choice and not a security one:
+    # every application written before bind_principal() existed names no
+    # principal, so requiring one would refuse each of them on upgrade.
+    #
+    # The consequence is worth stating plainly. With this off, holding the
+    # session id is accepted as sufficient — and on defaults SESSION_HASH_IDS is
+    # off too, so the id is computed in plaintext from the user id it scopes.
+    # Anyone who knows a user id can construct their session id and present it
+    # while naming nobody. SESSION_OWNERSHIP=enforce does not cover that path:
+    # it refuses a caller who gives the WRONG identity, not one who gives none.
+    #
+    # Either escape closes it, and a multi-tenant deployment needs one:
+    #   SESSION_REQUIRE_PRINCIPAL=true  — the caller must say who they are
+    #   SESSION_HASH_IDS=true           — the id can no longer be derived
+    #
+    # Sessions with no stored owner (anonymous / single-user deployments) are
+    # unaffected either way.
+    session_require_principal: bool = False
+    # Derive session ids as an HMAC of the identifiers rather than storing them
+    # in plaintext, so "u:{user_id}" can no longer be constructed by anyone who
+    # knows a user id. Changes every key — see the dual-read migration in
+    # continuum.session.identity. Requires SESSION_ID_SECRET.
+    session_hash_ids: bool = False
+    # The HMAC key for the above. Must be identical across every process and
+    # stable across restarts: it is a derivation parameter, not a per-process
+    # random. A per-worker value would split one user's history across workers
+    # and orphan every stored session on redeploy.
+    session_id_secret: str | None = None
+
     # -------------------------------------------------------------------------
     # Context Management Configuration (Dynamic Context Compression)
     # -------------------------------------------------------------------------

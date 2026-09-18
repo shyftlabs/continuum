@@ -9,6 +9,43 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+PROVENANCE_LABELS_KEY = "_data_labels"
+"""Metadata key carrying a row's provenance labels (security finding F6).
+
+The taint labels active on the run that produced a memory, stamped on write and
+read back to re-taint any run that recalls the row. Underscore-prefixed to match
+the internal metadata convention (``_user_id``, ``_agent_id``) and to stay out of
+the way of integrator-supplied keys.
+
+Stored as a sorted ``list[str]``: metadata round-trips through the vector store
+as JSON, where a ``set`` is not serialisable and its iteration order is not
+stable. Sorting keeps a row's stamp byte-identical for the same label set.
+
+Why row-level rather than only scope-level: ``scope_data_labels`` taints on the
+scope being read, which cannot separate a preference the user genuinely stated
+from a sentence an attacker planted upstream and the model echoed -- both land as
+rows in the same scope. The row's own provenance can.
+"""
+
+
+REVIEWED_KEY = "_reviewed"
+"""Metadata key recording that a person reviewed a tainted row (finding F6).
+
+Written by :meth:`MemoryClient.mark_reviewed` in place of
+:data:`PROVENANCE_LABELS_KEY`, as ``{"by": ..., "at": ..., "cleared": [...]}``.
+
+A record rather than an erasure. Provenance is deliberately coarse -- every row
+a tainted run writes is stamped, so a useful fact learned from a fetched page
+carries the same label as a planted instruction -- which means a real deployment
+accumulates labelled rows that are genuinely fine. Clearing the label outright
+would leave those indistinguishable from rows that were never tainted, so nobody
+could later ask which a human had actually blessed, or who blessed them. Same
+reasoning as the tool-catalogue approval in F3: the decision is the artifact.
+
+The read path keys off ``PROVENANCE_LABELS_KEY`` alone, so a reviewed row renders
+in the plain profile block and no longer taints the runs that recall it.
+"""
+
 
 class MemoryMetadata(BaseModel):
     """Metadata for a memory entry."""
@@ -158,6 +195,12 @@ class MemoryAddResult(BaseModel):
     message: str
     results: list[dict[str, Any]] = Field(default_factory=list)
     relations: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Facts a pre_store_filter stopped before the write. They are NOT in the
+    # store, but mem0's ADD branch still returns them (it appends the result
+    # entry whatever _create_memory returned), so `results` alone would report a
+    # suppressed fact as stored.
+    suppressed: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_mem0_response(cls, response: dict[str, Any] | str) -> "MemoryAddResult":

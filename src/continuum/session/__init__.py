@@ -32,6 +32,15 @@ from continuum.session.exceptions import (
     SessionNotCreatedError,
     SessionNotEnabledError,
     SessionNotFoundError,
+    SessionOwnershipError,
+)
+from continuum.session.identity import compute_session_id, legacy_session_id
+from continuum.session.ownership import OwnershipCheck, evaluate_ownership
+from continuum.session.principal import (
+    bind_principal,
+    get_principal,
+    reset_principal,
+    set_principal,
 )
 from continuum.session.providers import (
     create_provider,
@@ -73,4 +82,15 @@ __all__ = [
     "SessionNotFoundError",
     "SessionNotCreatedError",
     "SessionMessageLimitError",
+    "SessionOwnershipError",
+    # Ownership — a session id names storage, not the caller
+    "bind_principal",
+    "get_principal",
+    "set_principal",
+    "reset_principal",
+    "evaluate_ownership",
+    "OwnershipCheck",
+    # Identity — how a session's storage key is derived
+    "compute_session_id",
+    "legacy_session_id",
 ]

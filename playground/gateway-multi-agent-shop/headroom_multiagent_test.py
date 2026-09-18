@@ -352,6 +352,10 @@ async def t2_real_workflows() -> None:
         return comp
 
     async def run_mode(mode: str, query: str) -> tuple[int, str]:
+        # Imported here, not at module scope: this file loads .env before any
+        # continuum import, so every continuum symbol is pulled in locally.
+        from continuum.session import bind_principal
+
         created.clear()
         hc.new_run_compressor = spy  # type: ignore[assignment]
         # runner.run imports the symbol at call time
@@ -360,7 +364,9 @@ async def t2_real_workflows() -> None:
         try:
             wf = create_workflow(mode)
             await wf.initialize()
-            reply = await wf.chat(query, user_id="e2e", conversation_id=f"e2e-{mode}")
+            # Owned session: the driver has to identify itself like any caller.
+            with bind_principal("e2e"):
+                reply = await wf.chat(query, user_id="e2e", conversation_id=f"e2e-{mode}")
         finally:
             hc.new_run_compressor = real_new  # type: ignore[assignment]
         return len(set(created)), reply

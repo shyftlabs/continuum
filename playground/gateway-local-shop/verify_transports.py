@@ -31,19 +31,17 @@ from continuum.tools.mcp import (
     MCPServerStdio,
     MCPServerStreamableHttp,
 )
+from continuum.tools.util import build_namespaced_tool_name
 
 EXPECTED_TOOLS = {"search_products", "get_product", "add_to_cart", "view_cart", "checkout"}
 STDIO_SERVER_PATH = os.path.join(os.path.dirname(__file__), "server_stdio.py")
 
 
-def _search_tool_call() -> ToolCall:
+def _tool_call(call_id: str, name: str, arguments: dict) -> ToolCall:
     return ToolCall(
-        id="verify-1",
+        id=call_id,
         type="function",
-        function=FunctionCall(
-            name="search_products",
-            arguments=json.dumps({"query": "dog", "animal": "dog"}),
-        ),
+        function=FunctionCall(name=name, arguments=json.dumps(arguments)),
     )
 
 
@@ -57,16 +55,28 @@ async def _verify(label: str, server) -> bool:
         await executor.initialize()
 
         # 1. Tool discovery
+        #
+        # namespace_tools defaults to True, so the executor exposes each tool as
+        # "<server>__<tool>" -- and the prefix differs per transport here (the
+        # three remote servers are name="shop", the in-process one is
+        # "local-shop-function"). Build the expected names with the SDK's own
+        # namespacing function rather than restating the convention, so this
+        # script follows the SDK if the convention ever changes.
+        def ns(tool_name: str) -> str:
+            return build_namespaced_tool_name(server.name, tool_name)
+
         defs = executor.get_tool_definitions()
         discovered = {d.function.name for d in defs}
-        missing = EXPECTED_TOOLS - discovered
+        missing = {ns(t) for t in EXPECTED_TOOLS} - discovered
         if missing:
             print(f"  ✗ Missing tools: {missing}")
             return False
         print(f"  ✓ Tools discovered: {', '.join(sorted(discovered))}")
 
         # 2. Tool execution
-        result = await executor.execute_tool_call(_search_tool_call())
+        result = await executor.execute_tool_call(
+            _tool_call("verify-1", ns("search_products"), {"query": "dog", "animal": "dog"})
+        )
         if not result.content:
             print("  ✗ search_products returned empty content")
             return False
@@ -77,15 +87,10 @@ async def _verify(label: str, server) -> bool:
         print(f"  ✓ search_products returned {len(parsed)} result(s)")
 
         # 3. Cart tool execution
-        cart_call = ToolCall(
-            id="verify-2",
-            type="function",
-            function=FunctionCall(
-                name="add_to_cart",
-                arguments=json.dumps(
-                    {"session_id": "verify-session", "product_id": "p5", "quantity": 1}
-                ),
-            ),
+        cart_call = _tool_call(
+            "verify-2",
+            ns("add_to_cart"),
+            {"session_id": "verify-session", "product_id": "p5", "quantity": 1},
         )
         cart_result = await executor.execute_tool_call(cart_call)
         cart_data = json.loads(cart_result.content)

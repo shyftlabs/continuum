@@ -239,3 +239,74 @@ Use sparingly — auto-approvals defeat the point of an approval gate.
   `get_pending_approvals()` are cheap and don't replay the workflow.
 - **Reasonable timeouts.** Default is 24h. Longer for human-driven
   flows; shorter for time-sensitive ones.
+
+
+## 9 · Ad-hoc tool approvals
+
+Everything above is an **`ApprovalStep`** — an approval the workflow *planned*.
+A second kind exists: an agent proposes a tool call mid-run, and a person has to
+see it before it happens. That one is not in the step list, because nothing knew
+it was coming.
+
+```python
+from continuum.temporal import temporal_tool_approval
+
+AgentConfig(
+    tool_approval={"*transfer_funds"},          # which tools need a person
+    approval_handler=temporal_tool_approval(),  # finds its own workflow
+    approval_timeout=600.0,
+)
+```
+
+`temporal_tool_approval()` takes no arguments because an agent is built long
+before any workflow exists. It resolves one per call: the workflow id from
+`activity.info()`, the handle from the **global** Temporal client.
+
+### One reviewer, not two
+
+The request is registered with a `request_tool_approval` signal and lands on the
+**same `_pending_approvals` list** an `ApprovalStep` uses, so
+`get_pending_approvals()` and your existing reviewer UI see it unchanged. The
+answer comes back through the **same `submit_approval` signal**, validated by the
+**same `is_authorized`** allow-list check.
+
+A tool approval is not a second, weaker door into the same workflow.
+
+```python
+# identical to answering a planned step
+await hlm.approve(workflow_id, request_id, decided_by="alice")
+```
+
+### What it buys, precisely
+
+The whole agent turn is one activity (`run_agent_activity` calls
+`runner.run()`), so the workflow cannot pause *between* the agent's own steps.
+What this gives is that the activity **blocks in place** and resumes: work done
+before the gate is not repeated and the user does not have to ask again.
+
+It does **not** survive a worker restart. A retried activity starts from the
+beginning, with a fresh `request_id`, so the reviewer's pending prompt refers to
+a turn that no longer exists. For a reviewer who may outlast a deploy, a
+refuse-and-resume handler (one that returns `deferred=True`) is the honest
+answer, because it holds nothing open at all.
+
+### Every failure defers
+
+An unreachable workflow, a query that fails mid-wait, or a `request_id` the
+workflow does not recognise all return **deferred**, never denied and never
+approved. Temporal being down is not a reviewer saying no, and `unknown` is a
+distinct status from `pending` precisely so silence cannot read as permission.
+
+> **The global client must be connected.** `temporal_tool_approval()` resolves
+> its handle through the **global** client; a worker connects its **own**, and
+> they are different objects. A setup that looks entirely correct — worker up,
+> activities running — will defer every approval with *"Not connected to
+> Temporal server"* until you call:
+>
+> ```python
+> await get_temporal_client().connect(host)
+> ```
+
+A runnable end-to-end driver lives at
+`playground/data-label-clinic/approval_temporal.py`; the walkthrough is AP6 in
+`playground/data-label-clinic/docs/F7-approval.md`.

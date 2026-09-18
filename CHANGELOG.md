@@ -7,6 +7,24 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+- **Session ownership** — a session id names storage; it is not proof of who is calling. Previously a caller could hand back any session id with a different `user_id`, or with none at all, and `AgentRunner` would log a warning and carry on: history was read into their prompt, MCP tool state was restored, and their turns were written back into the other user's session. Omitting the id was the quietest path of all, because the check short-circuited before it could fire. `SessionClient` now compares the session's stored owner against a principal the application binds from a credential it verified, and refuses when they disagree. The check sits at the client rather than the runner because `LLMClient.achat(session_id=...)` reads and writes history directly and accepts no `user_id`, so a runner-level gate cannot see it.
+- **Session ids are no longer derivable** — ids were built in plaintext from the identifiers they scope (`u:{user_id}`), so anyone who knew a user id could *construct* that user's session id and reach their conversation. No leak was required. `SESSION_HASH_IDS=true` derives them as an HMAC under `SESSION_ID_SECRET` instead, preserving determinism (the same identifiers still resolve to the same session) while making the id impossible to compute without the secret. It also keeps user identifiers out of Redis keys, log lines and traces. Off by default; existing plaintext sessions migrate to their new keys on first access.
+- **Weak `SESSION_ID_SECRET` values are refused at startup** — routed through the same fail-closed guard as the Redis password, plus a 32-character floor and a rejection of values beginning with `#` (a mis-parsed `.env` inline comment, which is long enough to clear a length check and identical in every deployment that copied the file). The floor applies here and not to the Redis password because the attack differs in kind: this secret is brute-forced offline, since every user holds a matched pair from their own session. `CONTINUUM_ALLOW_INSECURE=1` downgrades the refusal to a warning for local work.
+
+### Added
+- **`continuum.session.bind_principal()`** — binds the caller's verified identity for the current execution context, so `AgentRunner`, `LLMClient` and direct `SessionClient` calls all inherit it without an argument being threaded through. The framework never derives a principal itself: from inside `run()` a validated user id and a typed-in string are both just `str`, and only the application knows which came from a credential it checked.
+- **`SessionOwnershipError`**, and `SessionConfig.session_ownership` / `require_principal` / `hash_session_ids` / `session_id_secret`, with the matching `SESSION_*` environment variables.
+- **`audit` mode** — reports what enforcement would refuse (log line plus a `session_ownership_*` metric) while still allowing the call, so a deployment can measure impact before enforcing.
+
+### Changed
+- **BREAKING: session ownership is enforced by default** (`SESSION_OWNERSHIP=enforce`). An application that does not call `bind_principal()` will have every read and write of an *owned* session refused. Sessions created without a `user_id` have no owner and are unaffected, so anonymous and single-user deployments keep working untouched. To upgrade without downtime, set `SESSION_OWNERSHIP=audit`, adopt `bind_principal()` at your auth boundary, watch the metric reach zero, then remove it. The strict setting is the default deliberately: shipping "report but allow" would have shipped a check that in most deployments never refuses anything — the same shape as the warning it replaces.
+- `SESSION_REQUIRE_PRINCIPAL` ships **off**, which is a compatibility choice and not a security one: an application written before `bind_principal()` existed names no principal, and requiring one would refuse it on upgrade. `enforce` does not cover that path — it refuses a caller who gives the *wrong* identity, not one who gives *none* — and with `SESSION_HASH_IDS` also off the session id is derived in plaintext from the user id, so anyone who knows a user id can construct it and present it while naming nobody. **A multi-tenant deployment must set either `SESSION_REQUIRE_PRINCIPAL=true` or `SESSION_HASH_IDS=true`**; either one closes it. The combination is pinned in the test suite so it stays a stated property rather than a discovery.
+- `AgentRunner` no longer swallows `SessionOwnershipError`. Every other session-store failure keeps its degrade-and-continue behaviour, so a Redis blip still costs one run its history rather than the whole request.
+
+### Fixed
+- `docs/session.md` documented `get_or_create_session(..., agent_id=...)`, a parameter that method has never accepted. The documented signatures are now asserted against the real ones in the test suite.
+
 ## [1.2.0] — 2026-07-17
 
 ### Added

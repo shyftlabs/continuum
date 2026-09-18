@@ -23,7 +23,7 @@ config.tool_data_labels. That declaration is written with the *namespaced*
 names: a bare "lookup_patient" would resolve to both, which is safe here (they
 really are both PHI) but is reported, because labelling the tool you did not
 mean is how a policy ends up blocking work nobody intended to block. See
-TESTING_GUIDE.md Layer D.
+docs/namespacing.md.
 
 This server is never poisoned. One hostile server is enough to demonstrate the
 trust layer, and keeping this one honest means the pin file shows two servers

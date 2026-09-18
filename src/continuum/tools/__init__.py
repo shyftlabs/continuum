@@ -6,7 +6,7 @@ agent capabilities with external tools and resources.
 """
 
 try:
-    from .exceptions import MCPServerUnreviewedError
+    from .exceptions import MCPServerUnreviewedError, ToolArgumentError
     from .executor import ToolExecutor
     from .mcp import (
         FunctionTool,
@@ -36,6 +36,7 @@ try:
     from .schema import (
         ensure_strict_json_schema,
         normalize_schema_for_llm,
+        validate_arguments_against_schema,
     )
     from .types import (
         MCPToolArtifact,
@@ -81,6 +82,9 @@ __all__ = [
     "ToolFilterContext",
     "ToolFilterStatic",
     "create_static_tool_filter",
+    # In-process tool argument validation (F5)
+    "ToolArgumentError",
+    "validate_arguments_against_schema",
     # Tool trust: review, pinning, drift (F3)
     "MCPServerUnreviewedError",
     "PIN_FORMAT_VERSION",

@@ -82,3 +82,25 @@ class MCPServerUnreviewedError(MCPError):
         """
         super().__init__(message, **kwargs)
         self.commands = commands
+
+
+class ToolArgumentError(ToolError):
+    """Raised when tool arguments do not satisfy the tool's declared schema.
+
+    A tool's ``inputSchema`` reaches the model as a promise about what the tool
+    accepts. For in-process tools that promise used to end there: the schema was
+    advertised and then discarded, so a parameter declared ``{"type": "string"}``
+    could receive a dict and hand it straight to the Python body (security
+    finding F5). The model's arguments are attacker-influenced the moment any
+    upstream tool result is, which makes an unenforced schema a description of
+    the happy path rather than a boundary.
+
+    Deliberately *not* an ``MCPError``: nothing is wrong with the server or the
+    transport, and reporting it as an MCP fault sends the reader to the wrong
+    layer. The argument is wrong, and the model is the one that can fix it --
+    which is why callers envelope this as ``isError=True`` for the model to read
+    and correct, rather than propagating it as a run-ending failure.
+    """
+
+    default_message = "Tool argument does not match the declared schema"
+    default_error_code = "TOOL_ARGUMENT_ERROR"

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from workflows import MODES, _BaseWorkflow, create_workflow
 
 from continuum import LogLevel, setup_logging
+from continuum.session import bind_principal
 
 setup_logging(level=LogLevel.INFO)
 
@@ -81,7 +82,22 @@ async def chat(req: ChatRequest):
         return {
             "response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"
         }
-    response = await wf.chat(req.message, user_id=req.user_id, conversation_id=req.conversation_id)
+    # Sessions record an owner, and the framework will not load or save one
+    # unless the caller says who it is.
+    #
+    # NOTE FOR ANYONE COPYING THIS: `req.user_id` is a value the browser sent.
+    # It is NOT a verified identity, and binding it here is only defensible
+    # because this is a local single-user demo with no login. A real deployment
+    # must bind an id derived from a credential it checked, or the ownership
+    # check compares an attacker-supplied value against itself:
+    #
+    #     user = verify_jwt(request.headers["Authorization"])
+    #     with bind_principal(user.id):
+    #         ...
+    with bind_principal(req.user_id):
+        response = await wf.chat(
+            req.message, user_id=req.user_id, conversation_id=req.conversation_id
+        )
     return {"response": response}
 
 
