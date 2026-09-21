@@ -39,12 +39,7 @@ import logging
 import pytest
 
 from continuum.config import Settings, settings
-from continuum.logging import (
-    ARGUMENT_LIMIT,
-    PromptContentFilter,
-    log_content,
-    setup_logging,
-)
+from continuum.logging import PromptContentFilter, log_content, setup_logging
 
 PHI = "PATIENT-SSN-123-45-6789-DIAGNOSIS-HIV-POSITIVE"
 
@@ -89,27 +84,46 @@ class TestTheShippedDefault:
         assert Settings.model_fields["log_prompt_content"].default is False
 
 
-# ── the protected half: arguments are replaced, not shortened ─────────────────
+# ── declared content is withheld, and nothing else is ─────────────────────────
 
 
-class TestArgumentsAreElided:
-    def test_a_long_argument_does_not_survive_in_any_form(self, content_logging_off):
-        rendered = _filtered(_record("===== FINAL PROMPT [%s] =====\n%s", "clinic", PHI * 3))
+class TestDeclaredContentIsWithheld:
+    def test_it_does_not_survive_in_any_form(self, content_logging_off):
+        rendered = _filtered(
+            _record("===== FINAL PROMPT [%s] =====\n%s", "clinic", log_content(PHI * 3))
+        )
         assert PHI not in rendered
         assert "PATIENT" not in rendered, "a prefix of the record is still the record"
 
     def test_the_developer_s_structure_survives(self, content_logging_off):
         """The line has to stay useful: which agent, which event."""
-        rendered = _filtered(_record("===== FINAL PROMPT [%s] =====\n%s", "clinic", PHI * 3))
+        rendered = _filtered(
+            _record("===== FINAL PROMPT [%s] =====\n%s", "clinic", log_content(PHI * 3))
+        )
         assert "FINAL PROMPT" in rendered
         assert "clinic" in rendered
 
-    def test_the_elision_says_how_much_was_withheld(self, content_logging_off):
+    def test_it_says_how_much_was_withheld(self, content_logging_off):
         blob = PHI * 3
-        rendered = _filtered(_record("prompt: %s", blob))
+        rendered = _filtered(_record("prompt: %s", log_content(blob)))
         assert f"<{len(blob)} chars>" in rendered
 
-    def test_a_short_argument_is_untouched(self, content_logging_off):
+    def test_the_record_still_renders(self, content_logging_off):
+        """A bare %s left in the output would mean an argument was dropped
+        rather than replaced."""
+        rendered = _filtered(_record("a=%s b=%s", log_content(PHI * 3), log_content(PHI * 3)))
+        assert "%s" not in rendered
+
+
+class TestUndeclaredArgumentsAreUntouched:
+    """A length threshold used to sit here, withholding any argument over 64
+    characters. It was wrong in both directions -- 46 characters of PHI passed
+    it, a 65-character pasteable `continuum mcp diff` command did not -- and was
+    removed. These pin its absence, because length is not a property that
+    distinguishes a medical note from a file path.
+    """
+
+    def test_a_short_label_is_untouched(self, content_logging_off):
         rendered = _filtered(_record("Gateway selected model: %s", "claude-opus-5"))
         assert rendered == "Gateway selected model: claude-opus-5"
 
@@ -117,19 +131,17 @@ class TestArgumentsAreElided:
         rendered = _filtered(_record("agent=%s message_count=%d", "clinic", 7))
         assert rendered == "agent=clinic message_count=7"
 
-    def test_an_argument_at_the_limit_is_kept(self, content_logging_off):
-        value = "x" * ARGUMENT_LIMIT
-        assert _filtered(_record("v=%s", value)) == f"v={value}"
+    def test_a_long_label_survives_whole(self, content_logging_off):
+        """The F3 case, at the length that used to break it."""
+        command = "continuum mcp diff srv --pins /etc/continuum/tool-trust/pins.json"
+        assert len(command) > 64
+        assert _filtered(_record("Review with `%s`.", command)) == f"Review with `{command}`."
 
-    def test_one_past_the_limit_goes(self, content_logging_off):
-        value = "x" * (ARGUMENT_LIMIT + 1)
-        assert _filtered(_record("v=%s", value)) == f"v=<{ARGUMENT_LIMIT + 1} chars>"
-
-    def test_the_record_still_renders_after_the_swap(self, content_logging_off):
-        """If args were dropped instead of replaced, getMessage() would raise or
-        leave a bare %s in the output."""
-        rendered = _filtered(_record("a=%s b=%s", PHI * 3, PHI * 3))
-        assert "%s" not in rendered
+    def test_an_undeclared_value_leaks(self, content_logging_off):
+        """Stated rather than implied: forgetting log_content() leaks, and the
+        thing that catches that is tests/unit/test_log_canary.py, not this
+        filter."""
+        assert PHI in _filtered(_record("memory: %s", PHI))
 
     def test_mapping_style_args_are_left_alone(self, content_logging_off):
         """logging also accepts a single dict for %(name)s interpolation. It is
@@ -173,22 +185,15 @@ class TestAPreformattedMessageIsNotProtected:
         assert "charge_card" in rendered
 
 
-# ── declared content, which length cannot catch ───────────────────────────────
+# ── declared content, at any length ───────────────────────────────────────────
 
 
 class TestDeclaredContent:
-    """PHI is 46 characters. So is a session id and a model name. The length
-    backstop catches prompt dumps; only the call site can catch a short note."""
+    """PHI is 46 characters. So is a session id and a model name. No rule based
+    on the value itself can separate them, which is why the call site declares."""
 
     def test_short_content_is_withheld_when_declared(self, content_logging_off):
         assert PHI not in _filtered(_record("memory: %s", log_content(PHI)))
-
-    def test_the_same_value_undeclared_slips_past_the_backstop(self, content_logging_off):
-        """Why log_content() exists rather than a lower ARGUMENT_LIMIT: dropping
-        the threshold under 46 would also elide session ids and model names,
-        which are exactly what a log line is for."""
-        assert len(PHI) < ARGUMENT_LIMIT
-        assert PHI in _filtered(_record("memory: %s", PHI))
 
     def test_it_still_says_how_much_was_withheld(self, content_logging_off):
         assert f"<{len(PHI)} chars>" in _filtered(_record("memory: %s", log_content(PHI)))
@@ -287,12 +292,21 @@ class TestTheFilterIsWired:
         finally:
             root.handlers[:] = saved
 
-    def test_a_child_logger_is_covered(self, content_logging_off, captured_log):
+    def test_a_child_logger_reaches_the_filter(self, content_logging_on, captured_log):
         """Every module logs through continuum.<module>, whose records reach the
-        parent's handlers by propagation. A filter on the *logger* would be
-        skipped for those; only a handler filter sees them."""
-        logging.getLogger("continuum.agent.execution.message_builder").info("prompt: %s", PHI * 3)
-        assert PHI not in captured_log.getvalue()
+        parent's handlers by propagation. Propagation runs the ancestors'
+        *handlers* and skips their filters, so a filter on the logger would never
+        see these records.
+
+        Asserted with content logging ON, because that is the direction the
+        filter is responsible for: withholding happens in _Content.__str__ and
+        would pass even with no filter installed at all, so it proves nothing
+        about wiring. Revealing only happens if the filter actually ran.
+        """
+        logging.getLogger("continuum.agent.execution.message_builder").info(
+            "prompt: %s", log_content(PHI)
+        )
+        assert PHI in captured_log.getvalue()
 
 
 # ── the leak this was written for ─────────────────────────────────────────────

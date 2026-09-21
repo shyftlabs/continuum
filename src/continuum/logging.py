@@ -119,18 +119,6 @@ def clear_log_context() -> None:
     _session_id.set(None)
 
 
-# Below this length an *undeclared* argument is a label -- an agent name, a tool
-# name, a model id, a session id, a count. Above it, it is almost certainly data.
-# This is a backstop for call sites that have not been marked up, not the control:
-# length cannot tell a 36-character session id from a 36-character medical note,
-# so anything known to be content should say so with log_content().
-ARGUMENT_LIMIT = 64
-
-# Numbers must survive intact: replacing one with a placeholder string would make
-# a "%d" format specifier raise while formatting the line.
-_UNELIDABLE = (int, float, complex, type(None))
-
-
 class _Content:
     """An argument the call site has declared to be user or model content.
 
@@ -175,12 +163,19 @@ class PromptContentFilter(logging.Filter):
     which is how ``tools/executor.py`` came to log a reviewer's free-text
     approval reason at INFO eleven days after the problem was first reported.
 
-    The contract is narrow and worth stating exactly, because the coverage it
-    gives is not automatic:
+    The contract is one rule, and it is worth stating exactly because the
+    coverage it gives is not automatic:
 
-        an argument wrapped in log_content() is always withheld;
-        an undeclared argument longer than ARGUMENT_LIMIT is withheld too;
-        content baked into the message by an f-string is not withheld at all.
+        an argument wrapped in log_content() is withheld; nothing else is.
+
+    A length threshold sat here too, briefly, on the theory that a long argument
+    is probably data. It was wrong in both directions and is gone: 46 characters
+    of PHI passed it, while a 65-character pasteable `continuum mcp diff` command
+    did not. Guessing from length damages diagnostics and protects nothing that
+    can be relied on. ``tests/unit/test_log_canary.py`` replaces it -- a sentinel
+    driven through the real paths, failing the build by name when a site forgets
+    to declare its content, which is a net that says what is wrong instead of
+    silently hiding the wrong things.
 
     ``logger.info("FINAL PROMPT [%s]\\n%s", name, prompt)`` keeps the format
     string and its values apart until the formatter runs, so the literal (the
@@ -207,40 +202,21 @@ class PromptContentFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        # A mapping (for %(name)s interpolation) is not a shape this codebase
-        # uses, and rewriting it would break the line.
-        if not (isinstance(record.args, tuple) and record.args):
+        # Withholding needs no work here: _Content renders as "<N chars>" by
+        # itself, which is what makes an unfiltered handler fail closed. The
+        # filter's only job is the opposite one -- unwrapping, when an operator
+        # has asked for content.
+        if not settings.log_prompt_content:
             return True
 
-        if settings.log_prompt_content:
-            record.args = tuple(self._reveal(arg) for arg in record.args)
-        else:
-            record.args = tuple(self._elide(arg) for arg in record.args)
+        # A mapping (for %(name)s interpolation) is not a shape this codebase
+        # uses, and rewriting it would break the line.
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(
+                arg.value if isinstance(arg, _Content) else arg for arg in record.args
+            )
 
         return True
-
-    @staticmethod
-    def _reveal(value: Any) -> Any:
-        """Unwrap a declared-content argument. Only reached when the operator
-        has asked for content, which is why _Content stays redacted otherwise."""
-        return value.value if isinstance(value, _Content) else value
-
-    @staticmethod
-    def _elide(value: Any) -> Any:
-        if isinstance(value, _Content):
-            # Declared content: withheld whatever its size. _Content.__str__
-            # already renders as "<N chars>".
-            return value
-        if isinstance(value, _UNELIDABLE):
-            return value
-        try:
-            text = str(value)
-        except Exception:
-            # A __str__ that raises would otherwise take the whole line down.
-            return "<unrenderable>"
-        if len(text) <= ARGUMENT_LIMIT:
-            return value
-        return f"<{len(text)} chars>"
 
 
 class JSONFormatter(logging.Formatter):
