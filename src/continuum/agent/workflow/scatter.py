@@ -58,7 +58,7 @@ from continuum.agent.workflow._forkable import (
     segment_by_markers,
 )
 from continuum.config import settings
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
 
 if TYPE_CHECKING:
@@ -469,7 +469,7 @@ class ScatterAgent(BaseAgent):
             )
 
             content = (response.content or "").strip()
-            logger.info(f"ScatterAgent: raw split response: {content[:500]}")
+            logger.info("ScatterAgent: raw split response: %s", log_content(content))
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
@@ -483,7 +483,7 @@ class ScatterAgent(BaseAgent):
 
             logger.info(f"ScatterAgent: LLM split into {len(slices)} slices")
             for i, (agent, s) in enumerate(zip(self.agents, slices, strict=False)):
-                logger.debug(f"  branch {i + 1} ({agent.name}): {s[:100]}")
+                logger.debug("  branch %s (%s): %s", i + 1, agent.name, log_content(s))
 
             return slices
 

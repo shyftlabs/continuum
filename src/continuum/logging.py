@@ -119,6 +119,130 @@ def clear_log_context() -> None:
     _session_id.set(None)
 
 
+# Below this length an *undeclared* argument is a label -- an agent name, a tool
+# name, a model id, a session id, a count. Above it, it is almost certainly data.
+# This is a backstop for call sites that have not been marked up, not the control:
+# length cannot tell a 36-character session id from a 36-character medical note,
+# so anything known to be content should say so with log_content().
+ARGUMENT_LIMIT = 64
+
+# Numbers must survive intact: replacing one with a placeholder string would make
+# a "%d" format specifier raise while formatting the line.
+_UNELIDABLE = (int, float, complex, type(None))
+
+
+class _Content:
+    """An argument the call site has declared to be user or model content.
+
+    Redacted by ``PromptContentFilter`` whatever its length, which is the part a
+    size threshold cannot do. ``__str__`` returns the *redacted* form so that a
+    handler without the filter -- someone's own, or a bare ``basicConfig`` --
+    fails closed rather than printing the value. The filter unwraps it to the
+    real thing only when content logging is switched on.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return f"<{len(str(self.value))} chars>"
+
+    __repr__ = __str__
+
+
+def log_content(value: Any) -> _Content:
+    """Mark a log argument as content, so the filter can withhold it.
+
+    Use at any site that logs a prompt, a memory, a tool argument or result, or
+    model output::
+
+        logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+
+    Pass the whole value -- no ``[:200]`` slicing. Truncation at the call site
+    both leaks a prefix and throws the rest away; here the operator gets nothing
+    by default and everything when they set ``LOG_PROMPT_CONTENT=true``.
+    """
+    return _Content(value)
+
+
+class PromptContentFilter(logging.Filter):
+    """Keeps prompt and tool content out of the log unless asked for.
+
+    Installed on the handlers rather than written into the call sites, so it
+    covers every ``continuum.*`` logger -- including modules written after this,
+    which is how ``tools/executor.py`` came to log a reviewer's free-text
+    approval reason at INFO eleven days after the problem was first reported.
+
+    The contract is narrow and worth stating exactly, because the coverage it
+    gives is not automatic:
+
+        an argument wrapped in log_content() is always withheld;
+        an undeclared argument longer than ARGUMENT_LIMIT is withheld too;
+        content baked into the message by an f-string is not withheld at all.
+
+    ``logger.info("FINAL PROMPT [%s]\\n%s", name, prompt)`` keeps the format
+    string and its values apart until the formatter runs, so the literal (the
+    developer's structure) can be kept while the values (the data) go. A value is
+    *replaced* rather than shortened -- the first 200 characters of a patient
+    record are still a patient record.
+
+    An f-string has already collapsed the two by the time the record exists, and
+    nothing here can separate them again. Capping such a message by length was
+    tried and removed: it cannot tell a prompt dump from a thorough operator
+    message, and it destroyed the pasteable ``continuum mcp diff`` command in the
+    tool-trust warnings. So a call site that logs content opts into protection by
+    passing it as an argument -- ``log_content()`` when it knows, which also
+    covers content too short to trip the length backstop.
+    ``tests/unit/test_log_content_redaction.py`` pins every part of that
+    contract, including the unprotected one.
+
+    ``record.exc_info`` is left alone. The leak is the exception text
+    interpolated into a message; the traceback is a separate field, carries no
+    locals, and is the only thing that says where a failure happened.
+
+    The record is mutated in place, so every handler downstream sees the redacted
+    version -- which is the intent, not a side effect.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # A mapping (for %(name)s interpolation) is not a shape this codebase
+        # uses, and rewriting it would break the line.
+        if not (isinstance(record.args, tuple) and record.args):
+            return True
+
+        if settings.log_prompt_content:
+            record.args = tuple(self._reveal(arg) for arg in record.args)
+        else:
+            record.args = tuple(self._elide(arg) for arg in record.args)
+
+        return True
+
+    @staticmethod
+    def _reveal(value: Any) -> Any:
+        """Unwrap a declared-content argument. Only reached when the operator
+        has asked for content, which is why _Content stays redacted otherwise."""
+        return value.value if isinstance(value, _Content) else value
+
+    @staticmethod
+    def _elide(value: Any) -> Any:
+        if isinstance(value, _Content):
+            # Declared content: withheld whatever its size. _Content.__str__
+            # already renders as "<N chars>".
+            return value
+        if isinstance(value, _UNELIDABLE):
+            return value
+        try:
+            text = str(value)
+        except Exception:
+            # A __str__ that raises would otherwise take the whole line down.
+            return "<unrenderable>"
+        if len(text) <= ARGUMENT_LIMIT:
+            return value
+        return f"<{len(text)} chars>"
+
+
 class JSONFormatter(logging.Formatter):
     """
     JSON formatter for production logging.
@@ -390,12 +514,18 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(log_level)
+    # On the handler, not the logger: every module logs through a child logger
+    # (continuum.agent.execution.message_builder), whose records reach us by
+    # propagation. Propagation runs the ancestors' *handlers* and skips their
+    # filters, so a logger-level filter here would see almost nothing.
+    console_handler.addFilter(PromptContentFilter())
     root_logger.addHandler(console_handler)
 
     # Langfuse handler for errors
     if enable_langfuse_handler:
         langfuse_handler = LangfuseHandler(min_level=logging.ERROR)
         langfuse_handler.setFormatter(formatter)
+        langfuse_handler.addFilter(PromptContentFilter())
         root_logger.addHandler(langfuse_handler)
 
     # Prevent propagation to root logger

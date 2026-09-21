@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.agent.handoff.manager import HandoffManager
 from continuum.agent.interfaces.handler_interface import IHandoffExecutor
 from continuum.agent.types import HandoffResult, generate_handoff_id
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.decorators import observe
 
 if TYPE_CHECKING:
@@ -392,22 +392,27 @@ class HandoffExecutor(IHandoffExecutor):
                     f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
                 )
             logger.info(
-                f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
-                + "\n".join(
-                    f"[{m.get('role', '?')}] {str(m.get('content', ''))[:300]}"
-                    for m in target_messages
-                )
-                + "\n"
-                + "=" * 30
+                "===== HANDOFF FINAL PROMPT [%s] =====\n%s\n%s",
+                target_agent.name,
+                log_content(
+                    "\n".join(
+                        f"[{m.get('role', '?')}] {str(m.get('content', ''))}"
+                        for m in target_messages
+                    )
+                ),
+                "=" * 30,
             )
             _tools = target_agent.get_tools_for_llm()
             if _tools:
                 _tools_formatted = "\n".join(
-                    f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:200]}"
+                    f"  - {t.get('function', {}).get('name', '?')}: "
+                    f"{str(t.get('function', {}).get('parameters', ''))}"
                     for t in _tools
                 )
                 logger.info(
-                    f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
+                    "===== TOOLS [%s] =====\n%s\n========================",
+                    target_agent.name,
+                    log_content(_tools_formatted),
                 )
 
             # Execute target agent (executor guaranteed to be set by early validation).

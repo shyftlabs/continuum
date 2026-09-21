@@ -169,6 +169,16 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
+    # Whether log lines may carry the content they describe -- assembled prompts,
+    # retrieved memories, tool arguments and results, model output. Off means a
+    # log line still says which agent, which tool and how much, but not what.
+    #
+    # Off by default because the leaky call sites log at INFO, which is also the
+    # default level: an operator who configures nothing must still be safe. Turn
+    # it on to debug why an agent ignored a memory or a RAG chunk -- on a laptop,
+    # not in production.
+    log_prompt_content: bool = False
+
     # -------------------------------------------------------------------------
     # MCP tool trust (security finding F3)
     # -------------------------------------------------------------------------

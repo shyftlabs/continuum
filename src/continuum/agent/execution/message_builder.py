@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.handler_interface import IMessageBuilder
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.decorators import observe
 from continuum.utils.sanitization import (
     detect_injection_patterns,
@@ -250,7 +250,7 @@ class MessageBuilder(IMessageBuilder):
                         context.metadata.setdefault(CACHE_BREAKPOINT_KEY, len(messages))
 
                     logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
-                    logger.debug(f"💾 Memory context content:\n{memory_content}")
+                    logger.debug("💾 Memory context content:\n%s", log_content(memory_content))
 
                     if memory_content:
                         messages.append({"role": "system", "content": memory_content})
@@ -439,11 +439,6 @@ class MessageBuilder(IMessageBuilder):
         if context.metadata is not None:
             context.metadata["_filtered_tools"] = filtered_tools
 
-        import os
-
-        _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
-        _limit = None if _full else 2000
-
         # Build display messages: insert Phase 1 inline so it appears in FINAL PROMPT log.
         _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
         if _phase1:
@@ -457,23 +452,33 @@ class MessageBuilder(IMessageBuilder):
         else:
             display_messages = messages
 
+        # The assembled prompt carries the system instructions, retrieved memories,
+        # session history, RAG context and the user's input. log_content() withholds
+        # it unless LOG_PROMPT_CONTENT is set; the line itself -- which agent, that a
+        # prompt was built, how big -- survives either way. This replaces the old
+        # LOG_FULL_PROMPT slicing, which capped the dump at 2000 characters per
+        # message but logged it by default.
         formatted = "\n".join(
-            f"[{m.get('role', '?')}] {str(m.get('content', ''))[:_limit]}" for m in display_messages
+            f"[{m.get('role', '?')}] {str(m.get('content', ''))}" for m in display_messages
         )
         logger.info(
-            "===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted
+            "===== FINAL PROMPT [%s] =====\n%s\n========================",
+            agent.name,
+            log_content(formatted),
         )
 
         if filtered_tools:
-            _tool_limit = None if _full else 200
             _tools_formatted = "\n".join(
-                f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
+                f"  - {t.get('function', {}).get('name', '?')}: "
+                f"{str(t.get('function', {}).get('parameters', ''))}"
                 if isinstance(t, dict)
-                else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
+                else f"  - {t.function.name}: {str(t.function.parameters)}"
                 for t in filtered_tools
             )
             logger.info(
-                "===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted
+                "===== TOOLS [%s] =====\n%s\n========================",
+                agent.name,
+                log_content(_tools_formatted),
             )
 
         return messages, user_message_index

@@ -15,7 +15,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from continuum.llm.types import ChatMessage, ToolCall
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.decorators import trace_tool
 from continuum.tools.exceptions import MCPError, MCPServerUnreviewedError, MCPToolError
 from continuum.tools.types import (
@@ -1006,7 +1006,11 @@ class ToolExecutor:
                 if isinstance(result, ToolApprovalDeniedError):
                     # A person said no, nobody answered, or it was handed to
                     # someone who will answer later. All expected.
-                    logger.info(f"Tool '{tc.function.name}' was not approved: {result}")
+                    logger.info(
+                        "Tool '%s' was not approved: %s",
+                        tc.function.name,
+                        log_content(result),
+                    )
                     reason = result.context.get("reason", "")
                     reviewer = result.context.get("reviewer", "")
                     if result.context.get("deferred"):
@@ -1031,7 +1035,9 @@ class ToolExecutor:
                         )
                 elif isinstance(result, ToolAccessDeniedError):
                     # Policy denial is expected — log at INFO without traceback
-                    logger.info(f"Tool '{tc.function.name}' denied by policy: {result}")
+                    logger.info(
+                        "Tool '%s' denied by policy: %s", tc.function.name, log_content(result)
+                    )
                     denial_message = result.context.get("denial_message", "")
                     if denial_message:
                         content = f"POLICY DENIED: {denial_message}"

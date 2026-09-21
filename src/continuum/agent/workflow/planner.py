@@ -29,7 +29,7 @@ from continuum.agent.types import (
 )
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.llm.config import LLMConfig
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
 
 if TYPE_CHECKING:
@@ -618,7 +618,7 @@ class PlannerAgent(BaseAgent):
                 auto_session=False,
             )
             usage = self._extract_usage(response)
-            logger.debug(f"PlannerAgent raw plan response: {repr(response.content)}")
+            logger.debug("PlannerAgent raw plan response: %s", log_content(response.content))
             steps = self._parse_steps(response.content or "")
             return steps, usage
         except Exception as e:

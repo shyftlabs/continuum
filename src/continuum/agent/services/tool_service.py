@@ -15,7 +15,7 @@ from continuum.agent.approval import build_approval_settings
 from continuum.agent.exceptions import AgentToolError
 from continuum.agent.interfaces.service_interface import IToolService
 from continuum.agent.types import ToolExecutionSummary
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 
@@ -191,8 +191,11 @@ class ToolService(IToolService):
             )
         except json.JSONDecodeError as e:
             logger.warning(
-                f"Malformed JSON in tool arguments for '{tool_name}': {e}. "
-                f"Raw args: {str(tool_args_str)[:200]}. Proceeding with empty args.",
+                "Malformed JSON in tool arguments for '%s': %s. "
+                "Raw args: %s. Proceeding with empty args.",
+                tool_name,
+                e,
+                log_content(tool_args_str),
             )
             tool_args = {}
 
@@ -263,7 +266,7 @@ class ToolService(IToolService):
                     "tool_call_id": tool_call_id,
                 },
             )
-            logger.debug(f"  Arguments: {json.dumps(tool_args, indent=2)}")
+            logger.debug("  Arguments: %s", log_content(json.dumps(tool_args, indent=2)))
 
             # Run tool hook
             if agent.on_tool_call:
@@ -318,9 +321,11 @@ class ToolService(IToolService):
                                 context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
-                        # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        logger.info(
+                            "✅ TOOL RESULT: %s -> %s",
+                            tool_name,
+                            log_content(result.get("content", "")),
+                        )
 
                         # Update span with result
                         span.set_output(truncate_data(result))
@@ -384,9 +389,11 @@ class ToolService(IToolService):
                                 context.taint(*labels)
                         latency_ms = (time.time() - start_time) * 1000
 
-                        # Log tool result
-                        result_preview = str(result.get("content", ""))[:200]
-                        logger.info(f"✅ TOOL RESULT: {tool_name} -> {result_preview}...")
+                        logger.info(
+                            "✅ TOOL RESULT: %s -> %s",
+                            tool_name,
+                            log_content(result.get("content", "")),
+                        )
 
                         # Update span with result
                         span.set_output(truncate_data(result))

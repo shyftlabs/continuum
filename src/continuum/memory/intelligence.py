@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.memory.client import MemoryClient
 from continuum.memory.config import MemoryConfig
 from continuum.memory.types import (
@@ -608,7 +608,7 @@ class IntelligentMemoryClient(MemoryClient):
             if not raw:
                 logger.debug("User profile update: LLM returned empty response, skipping")
                 return
-            logger.debug(f"User profile raw response: {repr(raw[:200])}")
+            logger.debug("User profile raw response: %s", log_content(raw))
             parsed = self._extract_json(raw)
             # Only accept a dict — reject arrays or other types from partial parses
             delta = parsed if isinstance(parsed, dict) else {}

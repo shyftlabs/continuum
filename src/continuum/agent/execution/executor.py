@@ -38,7 +38,7 @@ from continuum.llm.structured_output import (
     schema_prompt,
     to_openai_response_format,
 )
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 from continuum.tools.tool_attention.router import _tool_name
@@ -493,9 +493,11 @@ class Executor(IExecutor):
                     logger.info("🎯 Gateway selected model: %s", response.model)
                 if not response.tool_calls:
                     logger.debug(
-                        f"💬 LLM response (no tool calls) on turn {turn}: "
-                        f"content_preview={(response.content or '')[:150]}, "
-                        f"messages_in_context={len(messages)}"
+                        "💬 LLM response (no tool calls) on turn %s: "
+                        "content=%s, messages_in_context=%s",
+                        turn,
+                        log_content(response.content or ""),
+                        len(messages),
                     )
                 else:
                     tool_names = [
@@ -572,7 +574,7 @@ class Executor(IExecutor):
                             thought = _json.loads(args_str).get("thought", "")
                         except Exception:
                             thought = str(args_str)
-                        logger.info(f"💭 Agent thought: {thought}")
+                        logger.info("💭 Agent thought: %s", log_content(thought))
                         if recorder is not None:
                             recorder.record_reasoning(
                                 agent.name,
@@ -772,8 +774,11 @@ class Executor(IExecutor):
                                         }
                                     )
                                     logger.info(
-                                        f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
-                                        f"[tool] {executor_content[:500]}\n" + "=" * 30
+                                        "🔁 RETURN TO PARENT [%s] ← [%s]\n[tool] %s\n%s",
+                                        agent.name,
+                                        target,
+                                        log_content(executor_content),
+                                        "=" * 30,
                                     )
                                     # Child-run usage is a full TokenUsage whose
                                     # model_usage the child's own executor loop
@@ -796,13 +801,16 @@ class Executor(IExecutor):
                                         }
                                     )
                                     logger.info(
-                                        f"===== RETURN TURN PROMPT [{agent.name}] =====\n"
-                                        + "\n".join(
-                                            f"[{m.get('role', '?')}] {str(m.get('content', '') or '')[:300]}"
-                                            for m in messages
-                                        )
-                                        + "\n"
-                                        + "=" * 30
+                                        "===== RETURN TURN PROMPT [%s] =====\n%s\n%s",
+                                        agent.name,
+                                        log_content(
+                                            "\n".join(
+                                                f"[{m.get('role', '?')}] "
+                                                f"{str(m.get('content', '') or '')}"
+                                                for m in messages
+                                            )
+                                        ),
+                                        "=" * 30,
                                     )
                                     continue
                                 else:
@@ -1096,7 +1104,7 @@ class Executor(IExecutor):
                 context=context,
             )
 
-            logger.info(f"✅ ReAct observation for '{action}': {observation[:200]}")
+            logger.info("✅ ReAct observation for '%s': %s", action, log_content(observation))
 
             # Inject the real observation so the LLM sees it on the next turn
             messages.append({"role": "user", "content": f"Observation: {observation}"})
