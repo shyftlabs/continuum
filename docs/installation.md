@@ -248,12 +248,50 @@ and `HEADROOM_CCR_SQLITE_PATH`.
 |---|---|---|
 | `SHARED_SERVICES_ENABLED` | `true` | If `true`, `Container.shutdown()` does not close Redis or flush Langfuse |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` |
+| `LOG_PROMPT_CONTENT` | `false` | Whether log lines may carry the content they describe |
 
-**`LOG_FULL_PROMPT`** is **not** a `Settings` field — it's read directly
-via `os.environ.get("LOG_FULL_PROMPT", "")` in
-`agent/execution/message_builder.py`. Set it to `true` to log the
-assembled prompt before each LLM call. Useful for debugging memory /
-RAG / handoff flows; does not need to appear in `.env` to work.
+### `LOG_PROMPT_CONTENT`
+
+Off, a log line says which agent, which tool, and how much — not what.
+The `FINAL PROMPT` line still appears, with `<1843 chars>` where the
+prompt was:
+
+```
+===== FINAL PROMPT [clinic] =====
+<1843 chars>
+========================
+```
+
+On, you get the assembled prompt itself: the system instructions, the
+retrieved memories, the session history, the RAG context and the user's
+input. That is the whole point when you are debugging why an agent
+ignored a memory or a RAG chunk — and the reason to keep it off anywhere
+the logs are shipped off the machine.
+
+It is enforced by `PromptContentFilter` in `continuum/logging.py`, which
+sits on the handlers rather than in the call sites, so it covers modules
+written after it. Its coverage is not unconditional, and the rule is
+worth knowing before you add a log line:
+
+- an argument wrapped in `log_content()` is always withheld
+- an argument longer than 64 characters is withheld as a backstop
+- **content built into the message by an f-string is not withheld**
+
+So log content as an argument, never as an f-string:
+
+```python
+logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+```
+
+Pass the whole value — no `[:200]` slicing. Truncating at the call site
+leaks a prefix and throws the rest away; `log_content` gives the operator
+nothing by default and everything when they ask.
+
+> **Replaces `LOG_FULL_PROMPT`.** That variable was read directly from
+> `os.environ` in `message_builder.py` and only lifted a 2000-character
+> per-message cap — the prompt was logged by default either way. It no
+> longer exists; `LOG_PROMPT_CONTENT=true` is the equivalent, and there is
+> no longer a cap to lift.
 
 ---
 
