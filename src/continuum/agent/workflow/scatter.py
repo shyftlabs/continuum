@@ -548,10 +548,11 @@ class ScatterAgent(BaseAgent):
                 f"Synthesise these into a single coherent response that integrates all perspectives."
             )
 
+        # Carries every specialist's full output, plus the original task.
         logger.info(
             "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
             self.name,
-            prompt,
+            log_content(prompt),
         )
 
         from continuum.llm.config import LLMConfig

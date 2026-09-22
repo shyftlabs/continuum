@@ -352,10 +352,18 @@ class MessageBuilder(IMessageBuilder):
                 try:
                     input, is_safe, reason = scanner(input)
                     if not is_safe:
+                        # Two fixes in one line. The field said scanner= and was
+                        # fed reason -- mislabelled since it was written. And
+                        # reason comes from a callable the integrator supplies:
+                        # AgentConfig's contract says (text, is_safe, reason) and
+                        # nothing about what reason may hold, so a scanner that
+                        # quotes the offending input satisfies it. Undecidable
+                        # from here, at WARNING on the security path, so declare it.
                         logger.warning(
-                            "Input scanner blocked request — agent=%s scanner=%s",
+                            "Input scanner blocked request — agent=%s scanner=%s reason=%s",
                             agent.name,
-                            reason,
+                            getattr(scanner, "__name__", type(scanner).__name__),
+                            log_content(reason),
                         )
                         raise InputBlockedError(
                             f"Input blocked by scanner: {reason}",

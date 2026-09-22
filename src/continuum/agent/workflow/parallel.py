@@ -31,7 +31,7 @@ from continuum.agent.workflow._forkable import (
     resumed_input,
     segment_by_markers,
 )
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -403,10 +403,11 @@ Here are their responses:
 
 Please synthesize these responses into a single coherent answer that captures the key information from all sources."""
 
+            # Carries every branch's full output, plus the original request.
             logger.info(
                 "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
                 self.name,
-                prompt,
+                log_content(prompt),
             )
             try:
                 from continuum.llm.config import LLMConfig

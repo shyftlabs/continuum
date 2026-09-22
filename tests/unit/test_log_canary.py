@@ -49,12 +49,26 @@ def logged(monkeypatch):
 
     rendered: list[str] = []
 
+    _STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
+
     class Collector(logging.Handler):
+        """Sees what a *third-party* handler sees, which is more than a formatter.
+
+        Continuum's own formatters render ``getMessage()`` and ignore unknown
+        record attributes, so ``logger.info(msg, extra={...})`` is invisible to
+        them. Datadog's handler, python-json-logger and most structlog bridges
+        serialise ``record.__dict__`` and would emit it. Capturing both channels
+        keeps the canary honest about where content can actually escape.
+        """
+
         def emit(self, record: logging.LogRecord) -> None:
             try:
                 rendered.append(record.getMessage())
             except Exception as e:  # a malformed format string is its own bug
                 rendered.append(f"<unrenderable record: {e}>")
+            for key, value in record.__dict__.items():
+                if key not in _STANDARD:
+                    rendered.append(f"extra[{key}]={value!r}")
 
     root = logging.getLogger("continuum")
     handler = Collector()
@@ -221,6 +235,128 @@ class TestHeadroomSidecar:
         )
         await client.compress([{"role": "user", "content": "x"}], model="gpt-4o-mini")
         assert_clean(logged, "headroom.client.compress(response)")
+
+
+# ── workflows ─────────────────────────────────────────────────────────────────
+
+
+def _response(content: str):
+    from continuum.agent.types import AgentResponse, ResponseStatus
+
+    return AgentResponse(content=content, status=ResponseStatus.SUCCESS, agent_name="branch")
+
+
+def _llm_returning(content: str):
+    """An LLM client whose chat() answers, so the merge path runs to the end."""
+    reply = MagicMock()
+    reply.content = content
+    client = MagicMock()
+    client.chat = AsyncMock(return_value=reply)
+    return client
+
+
+@pytest.mark.asyncio
+class TestWorkflowMerge:
+    """A merge prompt carries every branch's full output -- the most concentrated
+    content in the codebase, and it is logged at INFO."""
+
+    async def test_parallel_merge_prompt(self, logged):
+        from continuum.agent.workflow.parallel import MergeStrategy, ParallelAgent, ParallelConfig
+
+        agent = ParallelAgent(
+            name="fan",
+            agents=[BaseAgent(name="a", instructions="x")],
+            parallel_config=ParallelConfig(merge_strategy=MergeStrategy.LLM_SUMMARIZE),
+        )
+        await agent._merge_results(
+            {"a": _response(CANARY)}, input_text="summarise", llm_client=_llm_returning("done")
+        )
+        assert_clean(logged, "parallel._merge_results")
+
+    async def test_parallel_merge_carries_the_original_input(self, logged):
+        from continuum.agent.workflow.parallel import MergeStrategy, ParallelAgent, ParallelConfig
+
+        agent = ParallelAgent(
+            name="fan",
+            agents=[BaseAgent(name="a", instructions="x")],
+            parallel_config=ParallelConfig(merge_strategy=MergeStrategy.LLM_SUMMARIZE),
+        )
+        await agent._merge_results(
+            {"a": _response("ok")}, input_text=CANARY, llm_client=_llm_returning("done")
+        )
+        assert_clean(logged, "parallel._merge_results(input)")
+
+    async def test_scatter_merge_prompt(self, logged):
+        from continuum.agent.workflow.scatter import ScatterAgent
+
+        agent = ScatterAgent(name="scat", agents=[BaseAgent(name="a", instructions="x")])
+        await agent._merge_results(
+            {"a": _response(CANARY)},
+            original_input="summarise",
+            llm_client=_llm_returning("done"),
+        )
+        assert_clean(logged, "scatter._merge_results")
+
+
+@pytest.mark.asyncio
+class TestReflection:
+    """The critique prompt is the model's own answer, handed back for review."""
+
+    async def test_the_critiqued_response(self, logged):
+        from continuum.agent.workflow.reflection import ReflectionAgent
+
+        agent = ReflectionAgent(name="ref", agent=BaseAgent(name="a", instructions="x"))
+        await agent._critique(CANARY, llm_client=_llm_returning('{"verdict": "ok"}'))
+        assert_clean(logged, "reflection._critique")
+
+
+# ── tool-attention routing ────────────────────────────────────────────────────
+
+
+class TestToolAttention:
+    """The router logs the query it routed on -- that is the user's question."""
+
+    def test_the_routed_query(self, logged):
+        from continuum.agent.types import RunContext
+        from continuum.tools.tool_attention.router import ToolAttentionConfig, ToolAttentionRouter
+
+        router = ToolAttentionRouter(ToolAttentionConfig(k=1, min_tools=1))
+        # Stand in for the embedding registry: this test is about the log line,
+        # not about which tools semantic search would pick.
+        router._initialized = True
+        router._registry = MagicMock(ready=True, search=MagicMock(return_value=["lookup"]))
+
+        tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+        router.route([{"role": "user", "content": CANARY}], tools, RunContext(run_id="r"))
+        assert_clean(logged, "tool_attention.route(query)")
+
+
+# ── input scanners ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestInputScanner:
+    """``reason`` comes from a callable the integrator supplies. The contract at
+    AgentConfig does not say what it may contain, so a scanner that quotes the
+    offending input satisfies it -- and this line runs at WARNING on the security
+    path, which is exactly what gets forwarded and kept."""
+
+    async def test_a_scanner_reason_that_quotes_the_input(self, logged):
+        from continuum.agent.config import AgentConfig
+        from continuum.agent.execution.message_builder import MessageBuilder
+        from continuum.exceptions import InputBlockedError
+
+        def nosy_scanner(text: str):
+            return text, False, f"blocked: {text}"
+
+        agent = BaseAgent(
+            name="clinic", instructions="hi", config=AgentConfig(input_scanners=[nosy_scanner])
+        )
+        with pytest.raises(InputBlockedError):
+            await MessageBuilder().prepare_messages(
+                agent=agent, input=CANARY, context=RunContext(run_id="run-7")
+            )
+        assert_clean(logged, "message_builder input scanner reason")
 
 
 # ── the canary itself has to work ─────────────────────────────────────────────

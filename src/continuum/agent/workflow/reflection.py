@@ -15,7 +15,7 @@ from continuum.agent.config import ReflectionConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -306,11 +306,17 @@ class ReflectionAgent(BaseAgent):
             {"role": "user", "content": self.reflection_config.critique_prompt},
         ]
 
+        # response_content is the model's own answer about the user. The critique
+        # prompt is operator-written, like agent.instructions, and gets the same
+        # treatment: operator prompts routinely embed customer names and worked
+        # examples. The [:500] slice is gone -- truncating here leaked a prefix and
+        # discarded the rest; log_content gives nothing by default and all of it
+        # when an operator asks.
         logger.info(
             "===== CRITIQUE PROMPT [%s] =====\n%s\n%s\n=========================",
             self.name,
-            response_content[:500],
-            self.reflection_config.critique_prompt,
+            log_content(response_content),
+            log_content(self.reflection_config.critique_prompt),
         )
 
         try:

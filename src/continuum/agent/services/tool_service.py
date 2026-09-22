@@ -257,15 +257,13 @@ class ToolService(IToolService):
                 ),
             },
         ) as span:
-            # Log tool call for debugging
-            logger.info(
-                f"🔧 TOOL CALL: {tool_name}",
-                extra={
-                    "tool_name": tool_name,
-                    "tool_args": tool_args,
-                    "tool_call_id": tool_call_id,
-                },
-            )
+            # No extra={} here. Continuum's formatters ignore unknown record
+            # attributes, but a third-party handler (Datadog, python-json-logger,
+            # most structlog bridges) serialises record.__dict__ and would emit
+            # the arguments verbatim -- a channel PromptContentFilter cannot
+            # reach, since it rewrites record.args. The line below logs the same
+            # arguments through the channel that can be withheld.
+            logger.info("🔧 TOOL CALL: %s", tool_name)
             logger.debug("  Arguments: %s", log_content(json.dumps(tool_args, indent=2)))
 
             # Run tool hook

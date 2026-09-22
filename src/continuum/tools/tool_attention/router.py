@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.tool_attention.registry import ToolSummaryRegistry
 
@@ -194,7 +194,7 @@ class ToolAttentionRouter:
             "tool-attention: %d/%d tools promoted — query=%r routed=%s always=%s",
             len(result),
             total,
-            query[:60],
+            log_content(query),
             sorted(routed),
             sorted(always),
         )
