@@ -118,10 +118,9 @@ class PlannerAgent(BaseAgent):
         if self.agents:
             agent_names = ", ".join(a.name for a in self.agents)
             logger.warning(
-                f"PlannerAgent '{self.name}' is using agent-pool mode. "
-                f"The LLM can ONLY use these agents: [{agent_names}]. "
-                f"Any agent not in this list will be skipped. "
-                f"Consider single-agent mode (agent=worker) for more flexibility."
+                "PlannerAgent '%s' is using agent-pool mode. The LLM can ONLY use these agents: [%s]. Any agent not in this list will be skipped. Consider single-agent mode (agent=worker) for more flexibility.",
+                self.name,
+                agent_names,
             )
 
     @property
@@ -164,8 +163,10 @@ class PlannerAgent(BaseAgent):
                 # Stage 0: generate the plan (one LLM call).
                 plan_steps, plan_usage = await self._generate_plan(input_text, llm_client)
                 logger.info(
-                    f"PlannerAgent '{self.name}' [{self._mode} mode]: "
-                    f"generated {len(plan_steps)} steps"
+                    "PlannerAgent '%s' [%s mode]: generated %s steps",
+                    self.name,
+                    self._mode,
+                    len(plan_steps),
                 )
 
                 # Decision trace: mark the planning call as stage 0 and embed the
@@ -251,9 +252,9 @@ class PlannerAgent(BaseAgent):
                             run_id=context.run_id,
                         )
                     logger.warning(
-                        f"PlannerAgent: step {step_id} references unknown agent "
-                        f"'{agent_name}' — skipping. "
-                        f"Add it to the agents list to fix this."
+                        "PlannerAgent: step %s references unknown agent '%s' — skipping. Add it to the agents list to fix this.",
+                        step_id,
+                        agent_name,
                     )
                     i += 1
                     continue
@@ -281,7 +282,9 @@ class PlannerAgent(BaseAgent):
                     f"{instruction}\n\nInput:\n{current_input}" if instruction else current_input
                 )
 
-            logger.info(f"PlannerAgent step {step_id} → {agent_name}: {instruction[:80]}")
+            logger.info(
+                "PlannerAgent step %s → %s: %s", step_id, agent_name, log_content(instruction)
+            )
 
             async with SpanScope(
                 f"workflow.planner.step.{step_id}",
@@ -348,15 +351,16 @@ class PlannerAgent(BaseAgent):
                         if new_remaining is not None:
                             plan_steps = plan_steps[: i + 1] + new_remaining
                             logger.info(
-                                f"PlannerAgent: replanned after step {step_id} — "
-                                f"{len(new_remaining)} remaining steps"
+                                "PlannerAgent: replanned after step %s — %s remaining steps",
+                                step_id,
+                                len(new_remaining),
                             )
 
                     i += 1
                     executed += 1
 
                 except Exception as e:
-                    logger.error(f"PlannerAgent step {step_id} ({agent_name}) failed: {e}")
+                    logger.error("PlannerAgent step %s (%s) failed: %s", step_id, agent_name, e)
                     step_span.set_error(str(e))
                     completed.append(
                         {
@@ -380,8 +384,9 @@ class PlannerAgent(BaseAgent):
                         if new_plan is not None:
                             plan_steps = plan_steps[:i] + new_plan
                             logger.info(
-                                f"PlannerAgent: replanned after failure at step {step_id} — "
-                                f"{len(new_plan)} new steps"
+                                "PlannerAgent: replanned after failure at step %s — %s new steps",
+                                step_id,
+                                len(new_plan),
                             )
                             continue
 
@@ -622,7 +627,7 @@ class PlannerAgent(BaseAgent):
             steps = self._parse_steps(response.content or "")
             return steps, usage
         except Exception as e:
-            logger.error(f"PlannerAgent plan generation failed: {e}")
+            logger.error("PlannerAgent plan generation failed: %s", e)
             return [], TokenUsage()
 
     # -------------------------------------------------------------------------
@@ -685,7 +690,7 @@ class PlannerAgent(BaseAgent):
             steps = self._parse_steps(content)
             return (steps if steps else None), usage
         except Exception as e:
-            logger.warning(f"PlannerAgent replan check failed: {e}")
+            logger.warning("PlannerAgent replan check failed: %s", e)
             return None, TokenUsage()
 
     async def _replan_on_failure(
@@ -746,7 +751,7 @@ class PlannerAgent(BaseAgent):
             steps = self._parse_steps(response.content or "")
             return (steps if steps else None), usage
         except Exception as e:
-            logger.warning(f"PlannerAgent replan-on-failure failed: {e}")
+            logger.warning("PlannerAgent replan-on-failure failed: %s", e)
             return None, TokenUsage()
 
     # -------------------------------------------------------------------------
@@ -779,7 +784,7 @@ class PlannerAgent(BaseAgent):
             data = json.loads(content)
             return data.get("steps", [])
         except Exception as e:
-            logger.warning(f"PlannerAgent failed to parse steps: {e}")
+            logger.warning("PlannerAgent failed to parse steps: %s", e)
             return []
 
     def _extract_usage(self, response: Any) -> TokenUsage:

@@ -161,7 +161,7 @@ class ParallelAgent(BaseAgent):
                     results[agent.name] = TimeoutError("Task timed out")
 
         except Exception as e:
-            logger.error(f"Parallel execution failed: {e}")
+            logger.error("Parallel execution failed: %s", e)
             raise ParallelWorkflowError(
                 f"Parallel execution failed: {e}",
                 run_id=context.run_id,
@@ -355,7 +355,7 @@ class ParallelAgent(BaseAgent):
                 context=context,
             )
         except Exception as e:
-            logger.error(f"Agent {agent.name} failed: {e}")
+            logger.error("Agent %s failed: %s", agent.name, e)
             raise
 
     async def _merge_results(
@@ -421,7 +421,7 @@ Please synthesize these responses into a single coherent answer that captures th
                 )
                 return response.content
             except Exception as e:
-                logger.warning(f"LLM merge failed: {e}, falling back to concatenation")
+                logger.warning("LLM merge failed: %s, falling back to concatenation", e)
                 return self._concatenate_results(results)
 
         # Default: concatenate

@@ -569,6 +569,64 @@ class TestMCPToolInvocation:
         assert_clean(logged, "tools.util.invoke_mcp_tool_with_artifact")
 
 
+# ── the agent's memory service ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestAgentMemoryService:
+    """Two values, both the user's: the query the run searches memory with, and
+    the memories that come back. Both were logged with a slice."""
+
+    async def _service(self, returned):
+        from continuum.agent.services.memory_service import MemoryService
+
+        memory_client = MagicMock()
+        memory_client.is_enabled = True
+        memory_client.search = AsyncMock(
+            return_value=MagicMock(results=returned, total_results=len(returned))
+        )
+        return MemoryService(memory_client=memory_client)
+
+    async def test_the_search_query_is_not_logged(self, logged, monkeypatch):
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        agent = BaseAgent(name="clinic", instructions="hi")
+        agent.memory_config.search_memories = True
+        service = await self._service([])
+        await service.retrieve_memories(agent, CANARY, RunContext(run_id="r", user_id="u1"))
+        assert_clean(logged, "memory_service.retrieve_memories(query)")
+
+    async def test_the_owning_user_of_a_memory_is_not_logged(self, logged, monkeypatch):
+        """Each recalled row is logged with the user it belongs to, to prove
+        isolation -- which means proving it by printing the person."""
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        agent = BaseAgent(name="clinic", instructions="hi")
+        agent.memory_config.search_memories = True
+        service = await self._service(
+            [MagicMock(memory="a note", user_id=CANARY, metadata={}, score=0.9)]
+        )
+        await service.retrieve_memories(agent, "recall", RunContext(run_id="r", user_id="u1"))
+        assert_clean(logged, "memory_service.retrieve_memories(memory owner)")
+
+    async def test_a_returned_memory_is_not_logged(self, logged, monkeypatch):
+        """The memory text itself, coming back out of long-term storage."""
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        agent = BaseAgent(name="clinic", instructions="hi")
+        agent.memory_config.search_memories = True
+        # score must be a real float or None: the site formats it with :.3f, and
+        # a MagicMock there diverts the code before the memory text is logged.
+        service = await self._service(
+            [MagicMock(memory=CANARY, user_id="u1", metadata={}, score=0.9)]
+        )
+        await service.retrieve_memories(agent, "recall", RunContext(run_id="r", user_id="u1"))
+        assert_clean(logged, "memory_service.retrieve_memories(results)")
+
+
 # ── credentials ───────────────────────────────────────────────────────────────
 
 

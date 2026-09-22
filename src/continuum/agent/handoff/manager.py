@@ -253,7 +253,9 @@ class HandoffManager:
         )
 
         logger.info(
-            f"Prepared handoff: {from_agent.name} → {to_agent.name}",
+            "Prepared handoff: %s → %s",
+            from_agent.name,
+            to_agent.name,
             extra={
                 "handoff_id": handoff_id,
                 "from_agent": from_agent.name,
@@ -510,7 +512,7 @@ class HandoffManager:
                 metadata=event_data,
                 level="DEFAULT" if (not result or result.success) else "ERROR",
             )
-            logger.debug(f"Traced handoff event '{event_name}' under trace {trace_id}")
+            logger.debug("Traced handoff event '%s' under trace %s", event_name, trace_id)
 
         except Exception as e:
-            logger.warning(f"Failed to trace handoff: {e}")
+            logger.warning("Failed to trace handoff: %s", e)

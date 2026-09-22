@@ -147,16 +147,17 @@ class ToolService(IToolService):
 
         if unmatched:
             logger.warning(
-                f"Agent '{agent.name}' declares data labels for {sorted(unmatched)}, which "
-                f"match no tool on any connected server, so those labels are never applied "
-                f"and anything gated on them silently stops applying. Known tools: "
-                f"{sorted(registry)}"
+                "Agent '%s' declares data labels for %s, which match no tool on any connected server, so those labels are never applied and anything gated on them silently stops applying. Known tools: %s",
+                agent.name,
+                sorted(unmatched),
+                sorted(registry),
             )
         for declared, matches in sorted(ambiguous.items()):
             logger.warning(
-                f"Agent '{agent.name}' declares data labels for '{declared}', which matches "
-                f"{matches} on more than one server -- all of them are labelled. Use the "
-                f"namespaced name to label only the one you mean."
+                "Agent '%s' declares data labels for '%s', which matches %s on more than one server -- all of them are labelled. Use the namespaced name to label only the one you mean.",
+                agent.name,
+                declared,
+                matches,
             )
 
     async def execute_tool_call(
@@ -343,7 +344,7 @@ class ToolService(IToolService):
 
                         return result, exec_metadata
                 except Exception as e:
-                    logger.warning(f"❌ TOOL ERROR: {tool_name} failed: {e}")
+                    logger.warning("❌ TOOL ERROR: %s failed: %s", tool_name, e)
                     span.set_error(str(e))
                     metrics.track_error(f"tool_{tool_name}", e, metadata={"agent_name": agent.name})
                     exec_metadata["error"] = str(e)[:100]
@@ -355,7 +356,7 @@ class ToolService(IToolService):
                     "agent executor failed" if _agent_executor_failed else "agent has no executor"
                 )
                 logger.warning(
-                    f"⚠️ TOOL FALLBACK: {tool_name} retrying on global executor ({_reason})"
+                    "⚠️ TOOL FALLBACK: %s retrying on global executor (%s)", tool_name, _reason
                 )
                 try:
                     # Get server name from tool registry if available
@@ -413,7 +414,7 @@ class ToolService(IToolService):
                 except Exception as e:
                     span.set_error(str(e))
                     span.add_metadata("success", False)
-                    logger.error(f"❌ TOOL ERROR: {tool_name} failed: {e}")
+                    logger.error("❌ TOOL ERROR: %s failed: %s", tool_name, e)
                     metrics.track_error(f"tool_{tool_name}", e, metadata={"agent_name": agent.name})
                     exec_metadata["latency_ms"] = (time.time() - start_time) * 1000
                     exec_metadata["error"] = str(e)[:100]
@@ -430,7 +431,7 @@ class ToolService(IToolService):
             latency_ms = (time.time() - start_time) * 1000
             span.add_metadata("success", False)
             span.set_error(f"Tool '{tool_name}' not available")
-            logger.warning(f"⚠️ NO EXECUTOR: Tool '{tool_name}' not available")
+            logger.warning("⚠️ NO EXECUTOR: Tool '%s' not available", tool_name)
 
             exec_metadata["latency_ms"] = latency_ms
             exec_metadata["error"] = f"Tool '{tool_name}' not available"
@@ -582,7 +583,7 @@ class ToolService(IToolService):
                         if hasattr(tc, "function")
                         else tc.get("function", {}).get("name", "unknown")
                     )
-                    logger.warning(f"Tool '{tool_name}' failed in parallel batch: {e}")
+                    logger.warning("Tool '%s' failed in parallel batch: %s", tool_name, e)
                     return (
                         {
                             "role": "tool",
@@ -600,7 +601,7 @@ class ToolService(IToolService):
 
         # Execute all tools in parallel (limited by semaphore)
         logger.debug(
-            f"Executing {len(tool_calls)} tools in parallel (max {max_parallel} concurrent)"
+            "Executing %s tools in parallel (max %s concurrent)", len(tool_calls), max_parallel
         )
 
         results_with_meta = await asyncio.gather(

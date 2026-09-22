@@ -151,8 +151,10 @@ class ReflectionAgent(BaseAgent):
 
         for attempt in range(start_attempt, self.reflection_config.max_reflections + 1):
             logger.info(
-                f"ReflectionAgent '{self.name}': attempt {attempt + 1} / "
-                f"{self.reflection_config.max_reflections + 1}"
+                "ReflectionAgent '%s': attempt %s / %s",
+                self.name,
+                attempt + 1,
+                self.reflection_config.max_reflections + 1,
             )
 
             # Decision trace: mark the start of this reflection attempt (0-based stage).
@@ -199,13 +201,14 @@ class ReflectionAgent(BaseAgent):
 
             if critique["verdict"].startswith("PASS"):
                 logger.info(
-                    f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}"
+                    "ReflectionAgent '%s': critique passed on attempt %s", self.name, attempt + 1
                 )
                 break
 
             logger.info(
-                f"ReflectionAgent '{self.name}': critique says NEEDS IMPROVEMENT — retrying. "
-                f"Reason: {critique['verdict']}"
+                "ReflectionAgent '%s': critique says NEEDS IMPROVEMENT — retrying. Reason: %s",
+                self.name,
+                log_content(critique["verdict"]),
             )
             current_input = (
                 f"{original_input}\n\nPrevious attempt:\n{response.content}\n\n"
@@ -343,7 +346,7 @@ class ReflectionAgent(BaseAgent):
             return {"verdict": verdict, "usage": usage}
 
         except Exception as e:
-            logger.warning(f"ReflectionAgent critique call failed: {e}")
+            logger.warning("ReflectionAgent critique call failed: %s", e)
             return {"verdict": "PASS", "usage": TokenUsage()}
 
     def to_dict(self) -> dict[str, Any]:
@@ -430,7 +433,7 @@ async def generate_critique_prompt(
         )
         return (response.content or "").strip()
     except Exception as e:
-        logger.warning(f"generate_critique_prompt failed: {e} — using default")
+        logger.warning("generate_critique_prompt failed: %s — using default", e)
         return ReflectionConfig().critique_prompt
 
 

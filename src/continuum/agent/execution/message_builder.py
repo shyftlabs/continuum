@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.handler_interface import IMessageBuilder
-from continuum.logging import get_logger, log_content
+from continuum.logging import get_logger, log_content, log_id
 from continuum.observability.decorators import observe
 from continuum.utils.sanitization import (
     detect_injection_patterns,
@@ -187,12 +187,12 @@ class MessageBuilder(IMessageBuilder):
         # Log agent memory config at start
         if hasattr(agent, "memory_config") and agent.memory_config:
             logger.info(
-                f"🔍 AGENT MEMORY CONFIG: "
-                f"search_memories={agent.memory_config.search_memories}, "
-                f"store_memories={agent.memory_config.store_memories}, "
-                f"search_scope={agent.memory_config.search_scope}, "
-                f"store_scope={agent.memory_config.store_scope}, "
-                f"search_limit={agent.memory_config.search_limit}"
+                "🔍 AGENT MEMORY CONFIG: search_memories=%s, store_memories=%s, search_scope=%s, store_scope=%s, search_limit=%s",
+                agent.memory_config.search_memories,
+                agent.memory_config.store_memories,
+                agent.memory_config.search_scope,
+                agent.memory_config.store_scope,
+                agent.memory_config.search_limit,
             )
         else:
             logger.warning("⚠️ Agent has no memory_config!")
@@ -220,8 +220,8 @@ class MessageBuilder(IMessageBuilder):
                     namespaces = tool_context_state.get_all_namespaces()
                     if not isinstance(namespaces, (list, set, tuple)):
                         logger.warning(
-                            f"Tool context state returned invalid namespaces type: {type(namespaces)}. "
-                            f"Skipping injection."
+                            "Tool context state returned invalid namespaces type: %s. Skipping injection.",
+                            type(namespaces),
                         )
                     else:
                         context_prompt = self._inject_tool_context_to_prompt(tool_context_state)
@@ -232,7 +232,7 @@ class MessageBuilder(IMessageBuilder):
                             )
             except Exception as e:
                 logger.warning(
-                    f"Failed to validate/inject tool context state: {e}. Continuing without it."
+                    "Failed to validate/inject tool context state: %s. Continuing without it.", e
                 )
 
         # Retrieved memory. NOT stable context, despite where it sits: this is a
@@ -249,7 +249,7 @@ class MessageBuilder(IMessageBuilder):
                     if memory_content and context.metadata is not None:
                         context.metadata.setdefault(CACHE_BREAKPOINT_KEY, len(messages))
 
-                    logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
+                    logger.info("💾 Injecting %s memories into LLM context", len(memories))
                     logger.debug("💾 Memory context content:\n%s", log_content(memory_content))
 
                     if memory_content:
@@ -263,7 +263,7 @@ class MessageBuilder(IMessageBuilder):
                     # memories"; a review demand that degrades is the human step
                     # silently skipped, which is what the mode exists to force.
                     raise
-                logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
+                logger.warning("❌ Failed to retrieve memories: %s", e, exc_info=True)
 
         # Inject pipeline context from sequential/supervised/planner workflows
         # so sub-agents can see prior steps' outputs without loading Redis.
@@ -292,7 +292,9 @@ class MessageBuilder(IMessageBuilder):
                     )
                     if history:
                         logger.debug(
-                            f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}"
+                            "🔄 SESSION HISTORY: Retrieved %s short-term messages using session_id=%s",
+                            len(history),
+                            log_id(context.session_id),
                         )
                     messages.extend(history)
             except Exception as e:
@@ -300,12 +302,11 @@ class MessageBuilder(IMessageBuilder):
 
                 if isinstance(e, SessionNotFoundError):
                     logger.warning(
-                        f"No history loaded: session {context.session_id!r} does not exist "
-                        f"(it was never created via get_or_create_session). Run continues "
-                        f"without prior context."
+                        "No history loaded: session %r does not exist (it was never created via get_or_create_session). Run continues without prior context.",
+                        log_id(context.session_id),
                     )
                 else:
-                    logger.warning(f"Failed to load session history: {e}")
+                    logger.warning("Failed to load session history: %s", e)
 
         # Inject RAG context last (closest to current question for maximum recency effect)
         rag_context = agent.config.rag_context if agent.config else None
@@ -332,8 +333,9 @@ class MessageBuilder(IMessageBuilder):
                 detected = detect_injection_patterns(input)
                 if detected:
                     logger.warning(
-                        f"Potential prompt injection detected in input to agent "
-                        f"'{agent.name}': {detected}"
+                        "Potential prompt injection detected in input to agent '%s': %s",
+                        agent.name,
+                        detected,
                     )
 
         # Run product input scanners (e.g. an LLM Guard PromptInjection/Gibberish scanner).
@@ -421,9 +423,12 @@ class MessageBuilder(IMessageBuilder):
 
                 if compression_result.was_compressed:
                     logger.info(
-                        f"Agent {agent.name}: Context compressed proactively - "
-                        f"{compression_result.original_token_count} → {compression_result.compressed_token_count} tokens "
-                        f"({compression_result.compression_ratio:.1%} ratio, strategy: {compression_result.strategy_used})"
+                        "Agent %s: Context compressed proactively - %s → %s tokens (%s ratio, strategy: %s)",
+                        agent.name,
+                        compression_result.original_token_count,
+                        compression_result.compressed_token_count,
+                        format(compression_result.compression_ratio, ".1%"),
+                        compression_result.strategy_used,
                     )
                     # Compression may have shortened the list, so find the user message
                     # by scanning backward from the end (it was the last message appended).
@@ -435,7 +440,9 @@ class MessageBuilder(IMessageBuilder):
                         user_message_index -= 1
         except Exception as e:
             logger.warning(
-                f"Context management failed for agent {agent.name}, continuing without compression: {e}"
+                "Context management failed for agent %s, continuing without compression: %s",
+                agent.name,
+                e,
             )
 
         # Run tool-attention routing: filters tools and produces Phase 1 summary.

@@ -171,7 +171,9 @@ class LoopAgent(BaseAgent):
             iteration += 1
 
             logger.info(
-                f"Loop iteration {iteration}/{self.termination.max_iterations}",
+                "Loop iteration %s/%s",
+                iteration,
+                self.termination.max_iterations,
                 extra={"run_id": context.run_id, "iteration": iteration},
             )
 
@@ -217,7 +219,7 @@ class LoopAgent(BaseAgent):
                 )
 
                 if should_terminate:
-                    logger.info(f"Loop terminated at iteration {iteration}")
+                    logger.info("Loop terminated at iteration %s", iteration)
                     break
 
                 current_input = self._build_next_input(
@@ -227,7 +229,7 @@ class LoopAgent(BaseAgent):
                 )
 
             except Exception as e:
-                logger.error(f"Loop iteration {iteration} failed: {e}")
+                logger.error("Loop iteration %s failed: %s", iteration, e)
                 raise LoopWorkflowError(
                     f"Iteration {iteration} failed: {e}",
                     iteration=iteration,
@@ -236,7 +238,7 @@ class LoopAgent(BaseAgent):
                 ) from e
         else:
             if iteration >= self.termination.max_iterations:
-                logger.warning(f"Loop reached max iterations ({self.termination.max_iterations})")
+                logger.warning("Loop reached max iterations (%s)", self.termination.max_iterations)
 
         final_response = (
             all_responses[-1]
@@ -393,7 +395,7 @@ Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
             return "COMPLETE" in result
 
         except Exception as e:
-            logger.warning(f"LLM termination check failed: {e}")
+            logger.warning("LLM termination check failed: %s", e)
             return False
 
     def _build_next_input(

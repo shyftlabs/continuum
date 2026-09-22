@@ -213,9 +213,9 @@ class HandoffExecutor(IHandoffExecutor):
             if handoff_def:
                 # Fix #13: Log clearly that agent is defined but not registered
                 logger.error(
-                    f"Handoff target '{target_name}' is defined in agent '{agent.name}' handoffs "
-                    f"but not registered in the agent registry. Register the agent via "
-                    f"runner.register_agent() or pass it in agent_registry."
+                    "Handoff target '%s' is defined in agent '%s' handoffs but not registered in the agent registry. Register the agent via runner.register_agent() or pass it in agent_registry.",
+                    target_name,
+                    agent.name,
                 )
                 return HandoffResult(
                     handoff_id=generate_handoff_id(),
@@ -227,8 +227,9 @@ class HandoffExecutor(IHandoffExecutor):
                 )
             else:
                 logger.error(
-                    f"Handoff target '{target_name}' not found: no handoff definition "
-                    f"on agent '{agent.name}' and not in registry."
+                    "Handoff target '%s' not found: no handoff definition on agent '%s' and not in registry.",
+                    target_name,
+                    agent.name,
                 )
                 return HandoffResult(
                     handoff_id=generate_handoff_id(),
@@ -242,8 +243,11 @@ class HandoffExecutor(IHandoffExecutor):
         if self._handoff_manager.detect_cycle(run_state.agent_stack, target_name):
             cycle_path = " → ".join(run_state.agent_stack + [target_name])
             logger.warning(
-                f"Handoff cycle detected: {agent.name} → {target_name}. "
-                f"Agent '{target_name}' already in chain: {cycle_path}"
+                "Handoff cycle detected: %s → %s. Agent '%s' already in chain: %s",
+                agent.name,
+                target_name,
+                target_name,
+                cycle_path,
             )
             return HandoffResult(
                 handoff_id=generate_handoff_id(),
@@ -386,10 +390,12 @@ class HandoffExecutor(IHandoffExecutor):
             mem_cfg = getattr(target_agent, "memory_config", None)
             if mem_cfg:
                 logger.info(
-                    f"🔍 HANDOFF TARGET MEMORY CONFIG [{target_agent.name}]: "
-                    f"search_memories={mem_cfg.search_memories}, store_memories={mem_cfg.store_memories}, "
-                    f"search_scope={getattr(mem_cfg, 'search_scope', 'N/A')}, "
-                    f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
+                    "🔍 HANDOFF TARGET MEMORY CONFIG [%s]: search_memories=%s, store_memories=%s, search_scope=%s, store_scope=%s",
+                    target_agent.name,
+                    mem_cfg.search_memories,
+                    mem_cfg.store_memories,
+                    getattr(mem_cfg, "search_scope", "N/A"),
+                    getattr(mem_cfg, "store_scope", "N/A"),
                 )
             logger.info(
                 "===== HANDOFF FINAL PROMPT [%s] =====\n%s\n%s",
@@ -435,7 +441,9 @@ class HandoffExecutor(IHandoffExecutor):
                     run_state=run_state,
                 )
             except Exception as e:
-                logger.error(f"Failed to execute target agent '{target_name}': {e}", exc_info=True)
+                logger.error(
+                    "Failed to execute target agent '%s': %s", target_name, e, exc_info=True
+                )
                 if target_agent.on_error:
                     target_agent.on_error(target_agent, e, {"context": target_context})
                 result = HandoffResult(
@@ -470,8 +478,7 @@ class HandoffExecutor(IHandoffExecutor):
 
         except Exception as e:
             logger.error(
-                f"Handoff from '{agent.name}' to '{target_name}' failed: {e}",
-                exc_info=True,
+                "Handoff from '%s' to '%s' failed: %s", agent.name, target_name, e, exc_info=True
             )
             return HandoffResult(
                 handoff_id=generate_handoff_id(),

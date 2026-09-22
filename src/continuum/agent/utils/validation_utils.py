@@ -138,13 +138,12 @@ async def validate_input(
         # Validate against schema
         agent.input_schema.model_validate(data)
 
-        logger.debug(f"Input validation passed for agent {agent.name}")
+        logger.debug("Input validation passed for agent %s", agent.name)
         return None  # Validation passed
 
     except ValidationError as e:
         logger.warning(
-            f"Input validation failed for agent {agent.name}: {e}",
-            extra={"errors": e.errors()},
+            "Input validation failed for agent %s: %s", agent.name, e, extra={"errors": e.errors()}
         )
 
         # Return graceful error response (safe access to avoid KeyError if Pydantic structure changes)
@@ -164,6 +163,6 @@ async def validate_input(
         )
 
     except Exception as e:
-        logger.error(f"Unexpected error during input validation: {e}")
+        logger.error("Unexpected error during input validation: %s", e)
         # Don't fail on validation errors, continue with execution
         return None

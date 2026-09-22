@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.service_interface import IMemoryService
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.observability.decorators import observe
 
 if TYPE_CHECKING:
@@ -115,15 +115,8 @@ class MemoryService(IMemoryService):
             pass  # a frozen/slotted agent just gets the warning again
 
         logger.warning(
-            f"Agent '{getattr(agent, 'name', '?')}' has long-term memory enabled but declares no "
-            "data provenance, so the memory-poisoning defences are inactive: rows are written "
-            "without provenance, recalled content is never fenced, and no tool call can be gated "
-            "on where its data came from. A fact laundered out of an injected tool result will "
-            "come back indistinguishable from one the user stated. Declare which tools return "
-            "attacker-influenced data via AgentConfig.tool_data_labels "
-            '(e.g. {"fetch_page": {"external"}}), and/or which memory scopes are sensitive via '
-            'AgentMemoryConfig.scope_data_labels (e.g. {"user": {"pii"}}), then add a PolicyStore '
-            "rule denying those labels the actions they must not reach."
+            'Agent \'%s\' has long-term memory enabled but declares no data provenance, so the memory-poisoning defences are inactive: rows are written without provenance, recalled content is never fenced, and no tool call can be gated on where its data came from. A fact laundered out of an injected tool result will come back indistinguishable from one the user stated. Declare which tools return attacker-influenced data via AgentConfig.tool_data_labels (e.g. {"fetch_page": {"external"}}), and/or which memory scopes are sensitive via AgentMemoryConfig.scope_data_labels (e.g. {"user": {"pii"}}), then add a PolicyStore rule denying those labels the actions they must not reach.',
+            getattr(agent, "name", "?"),
         )
 
     @observe(name="retrieve_memories", capture_output=True)
@@ -148,8 +141,9 @@ class MemoryService(IMemoryService):
 
         if not agent.memory_config.search_memories or not self._memory_client:
             logger.debug(
-                f"💾 Skipping memory search: search_memories={agent.memory_config.search_memories}, "
-                f"memory_client={'available' if self._memory_client else 'not available'}"
+                "💾 Skipping memory search: search_memories=%s, memory_client=%s",
+                agent.memory_config.search_memories,
+                "available" if self._memory_client else "not available",
             )
             return []
 
@@ -175,17 +169,19 @@ class MemoryService(IMemoryService):
                         if session_metadata and session_metadata.agent_id:
                             agent_id_for_memory = session_metadata.agent_id
                             logger.debug(
-                                f"🔍 Using agent_id from session metadata: {agent_id_for_memory} "
-                                f"(session_id={context.session_id}...)"
+                                "🔍 Using agent_id from session metadata: %s (session_id=%s...)",
+                                log_id(agent_id_for_memory),
+                                log_id(context.session_id),
                             )
                         else:
                             logger.warning(
-                                f"⚠️ Session {context.session_id}... exists but has no agent_id in metadata. "
-                                f"Falling back to agent.name={agent.name}. This may cause memory isolation issues."
+                                "⚠️ Session %s... exists but has no agent_id in metadata. Falling back to agent.name=%s. This may cause memory isolation issues.",
+                                log_id(context.session_id),
+                                agent.name,
                             )
                             agent_id_for_memory = agent.name
                     except Exception as e:
-                        logger.debug(f"Could not get session metadata for agent_id: {e}")
+                        logger.debug("Could not get session metadata for agent_id: %s", e)
                         agent_id_for_memory = agent.name
                 else:
                     # No session_id or session client not available - use agent.name
@@ -194,8 +190,9 @@ class MemoryService(IMemoryService):
                 # Log final agent_id being used
                 if agent_id_for_memory != agent.name:
                     logger.debug(
-                        f"🔍 Agent isolation mode: Using agent_id={agent_id_for_memory} "
-                        f"(agent.name={agent.name}, may differ when switching agents)"
+                        "🔍 Agent isolation mode: Using agent_id=%s (agent.name=%s, may differ when switching agents)",
+                        log_id(agent_id_for_memory),
+                        agent.name,
                     )
 
             conversation_id_for_memory = None
@@ -209,11 +206,13 @@ class MemoryService(IMemoryService):
 
             # Log memory search parameters at DEBUG level
             logger.debug(
-                f"🔍 MEMORY SEARCH: query='{query[:100]}...', "
-                f"scope={search_scope}, isolation={memory_isolation}, "
-                f"user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
-                f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
-                f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}"
+                "🔍 MEMORY SEARCH: query='%s...', scope=%s, isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s",
+                log_content(query),
+                search_scope,
+                memory_isolation,
+                log_id(user_id_for_memory) if user_id_for_memory else "none",
+                log_id(agent_id_for_memory) if agent_id_for_memory else "none",
+                log_id(conversation_id_for_memory) if conversation_id_for_memory else "none",
             )
 
             memories = await self._memory_client.search(
@@ -226,16 +225,19 @@ class MemoryService(IMemoryService):
 
             # Log search results at DEBUG level
             logger.debug(
-                f"💾 MEMORY SEARCH RESULT: found {len(memories.results)} memories "
-                f"(total_results={memories.total_results if hasattr(memories, 'total_results') else 'N/A'})"
+                "💾 MEMORY SEARCH RESULT: found %s memories (total_results=%s)",
+                len(memories.results),
+                memories.total_results if hasattr(memories, "total_results") else "N/A",
             )
 
             if not memories.results:
                 logger.warning(
-                    f"⚠️ NO MEMORIES FOUND for query='{query[:100]}...' "
-                    f"(isolation={memory_isolation}, user_id={user_id_for_memory if user_id_for_memory else 'none'}, "
-                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'none'}, "
-                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'})"
+                    "⚠️ NO MEMORIES FOUND for query='%s...' (isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s)",
+                    log_content(query),
+                    memory_isolation,
+                    log_id(user_id_for_memory) if user_id_for_memory else "none",
+                    log_id(agent_id_for_memory) if agent_id_for_memory else "none",
+                    log_id(conversation_id_for_memory) if conversation_id_for_memory else "none",
                 )
 
             if memories.results:
@@ -295,11 +297,13 @@ class MemoryService(IMemoryService):
 
                 # Log memory search summary at DEBUG level
                 logger.debug(
-                    f"💾 Memory search: scope={search_scope}, isolation={memory_isolation}, "
-                    f"user_id={context.user_id if context.user_id else 'none'}, "
-                    f"agent_id={agent_id_for_memory if agent_id_for_memory else 'N/A'}, "
-                    f"conversation_id={conversation_id_for_memory if conversation_id_for_memory else 'none'}, "
-                    f"found={len(memories.results)} memories"
+                    "💾 Memory search: scope=%s, isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s, found=%s memories",
+                    search_scope,
+                    memory_isolation,
+                    log_id(context.user_id) if context.user_id else "none",
+                    log_id(agent_id_for_memory) if agent_id_for_memory else "N/A",
+                    log_id(conversation_id_for_memory) if conversation_id_for_memory else "none",
+                    len(memories.results),
                 )
 
                 # Log each memory with its metadata to verify isolation (INFO level)
@@ -308,8 +312,11 @@ class MemoryService(IMemoryService):
                     memory_user_id = m.user_id or memory_metadata.get("_user_id") or "unknown"
                     score_str = f"{m.score:.3f}" if m.score is not None else "N/A"
                     logger.info(
-                        f"📝 Memory #{idx}: '{m.memory[:100]}...' "
-                        f"(score={score_str}, user_id={memory_user_id if memory_user_id != 'unknown' else 'unknown'})"
+                        "📝 Memory #%s: '%s...' (score=%s, user_id=%s)",
+                        idx,
+                        log_content(m.memory),
+                        score_str,
+                        log_id(memory_user_id) if memory_user_id != "unknown" else "unknown",
                     )
 
                 return context.retrieved_memories
@@ -341,7 +348,7 @@ class MemoryService(IMemoryService):
                     e.context.get("policy_name"),
                 )
                 return []
-            logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
+            logger.warning("❌ Failed to retrieve memories: %s", e, exc_info=True)
             return []
 
     @observe(name="store_memories", capture_output=False)

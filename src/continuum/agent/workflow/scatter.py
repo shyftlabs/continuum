@@ -184,7 +184,10 @@ class ScatterAgent(BaseAgent):
             # Step 1 — determine input slices
             slices = await self._get_slices(input_text, llm_client)
             logger.info(
-                f"ScatterAgent '{self.name}': {len(slices)} slices for {len(self.agents)} agents"
+                "ScatterAgent '%s': %s slices for %s agents",
+                self.name,
+                len(slices),
+                len(self.agents),
             )
             workflow_span.add_metadata("slices_preview", [s[:100] for s in slices])
 
@@ -193,7 +196,7 @@ class ScatterAgent(BaseAgent):
             successful, failed = await self._scatter(slices, runner, context)
 
             if failed:
-                logger.warning(f"ScatterAgent: failed branches: {list(failed.keys())}")
+                logger.warning("ScatterAgent: failed branches: %s", list(failed.keys()))
                 if self.scatter_config.fail_strategy == FailStrategy.REQUIRE_ALL:
                     raise ParallelWorkflowError(
                         f"Some branches failed: {list(failed.keys())}",
@@ -481,7 +484,7 @@ class ScatterAgent(BaseAgent):
             if not isinstance(slices, list) or len(slices) != len(self.agents):
                 raise ValueError(f"Expected {len(self.agents)} slices, got {len(slices)}")
 
-            logger.info(f"ScatterAgent: LLM split into {len(slices)} slices")
+            logger.info("ScatterAgent: LLM split into %s slices", len(slices))
             for i, (agent, s) in enumerate(zip(self.agents, slices, strict=False)):
                 logger.debug("  branch %s (%s): %s", i + 1, agent.name, log_content(s))
 
@@ -489,7 +492,9 @@ class ScatterAgent(BaseAgent):
 
         except Exception as e:
             logger.warning(
-                f"ScatterAgent: LLM splitting failed ({type(e).__name__}: {e}) — using same input for all branches"
+                "ScatterAgent: LLM splitting failed (%s: %s) — using same input for all branches",
+                type(e).__name__,
+                e,
             )
             return [input_text] * len(self.agents)
 
@@ -504,7 +509,7 @@ class ScatterAgent(BaseAgent):
         try:
             return await runner.run(agent=agent, input=input_text, context=context)
         except Exception as e:
-            logger.error(f"Scatter branch '{agent.name}' failed: {e}")
+            logger.error("Scatter branch '%s' failed: %s", agent.name, e)
             raise
 
     async def _merge_results(
@@ -568,7 +573,7 @@ class ScatterAgent(BaseAgent):
             )
             return response.content or ""
         except Exception as e:
-            logger.warning(f"ScatterAgent: LLM merge failed ({e}) — concatenating")
+            logger.warning("ScatterAgent: LLM merge failed (%s) — concatenating", e)
             return "\n\n".join(f"## {name}\n{resp.content}" for name, resp in results.items())
 
     def _get_llm(self) -> Any | None:

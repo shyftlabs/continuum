@@ -273,8 +273,10 @@ class DebateAgent(BaseAgent):
         from continuum.agent.workflow._forkable import branch_recorder_context
 
         logger.info(
-            f"DebateAgent '{self.name}': running '{self.pro_agent.name}' "
-            f"and '{self.con_agent.name}' in parallel"
+            "DebateAgent '%s': running '%s' and '%s' in parallel",
+            self.name,
+            self.pro_agent.name,
+            self.con_agent.name,
         )
 
         # round_index is 0 here; stage = round_index * _NUM_DEBATERS + debater_index.
@@ -297,14 +299,14 @@ class DebateAgent(BaseAgent):
         total_usage = TokenUsage()
 
         if isinstance(pro_response, Exception):
-            logger.error(f"DebateAgent: pro_agent failed: {pro_response}")
+            logger.error("DebateAgent: pro_agent failed: %s", pro_response)
             pro_content = f"[Pro argument unavailable: {pro_response}]"
         else:
             pro_content = pro_response.content or ""
             total_usage = total_usage.add(pro_response.usage)
 
         if isinstance(con_response, Exception):
-            logger.error(f"DebateAgent: con_agent failed: {con_response}")
+            logger.error("DebateAgent: con_agent failed: %s", con_response)
             con_content = f"[Con argument unavailable: {con_response}]"
         else:
             con_content = con_response.content or ""
@@ -328,8 +330,10 @@ class DebateAgent(BaseAgent):
                 )
 
         logger.info(
-            f"DebateAgent '{self.name}': both sides complete — "
-            f"pro={len(pro_content)} chars, con={len(con_content)} chars"
+            "DebateAgent '%s': both sides complete — pro=%s chars, con=%s chars",
+            self.name,
+            len(pro_content),
+            len(con_content),
         )
         return pro_content, con_content, total_usage
 
@@ -379,7 +383,7 @@ class DebateAgent(BaseAgent):
         stage so the synthesis occupies its own contiguous segment."""
         from continuum.agent.workflow._forkable import branch_recorder_context
 
-        logger.info(f"DebateAgent '{self.name}': running judge '{self.judge_agent.name}'")
+        logger.info("DebateAgent '%s': running judge '%s'", self.name, self.judge_agent.name)
 
         total_usage = TokenUsage()
         judge_ctx, judge_rec = branch_recorder_context(context, index=self._judge_stage)
@@ -392,7 +396,7 @@ class DebateAgent(BaseAgent):
             total_usage = total_usage.add(judge_response.usage)
             synthesis = judge_response.content or ""
         except Exception as e:
-            logger.error(f"DebateAgent: judge_agent failed: {e}")
+            logger.error("DebateAgent: judge_agent failed: %s", e)
             synthesis = (
                 f"Judge synthesis unavailable ({e}).\n\n"
                 f"Pro argument:\n{pro_content}\n\n"
@@ -531,9 +535,11 @@ class DebateAgent(BaseAgent):
             if not pro_needs_summary and not con_needs_summary:
                 # Both arguments already fit — skip LLM summarisation entirely
                 logger.info(
-                    f"DebateAgent '{self.name}': skipping summarisation — "
-                    f"both arguments fit within truncate_chars limit "
-                    f"(pro={len(pro_content)}, con={len(con_content)}, limit={limit})"
+                    "DebateAgent '%s': skipping summarisation — both arguments fit within truncate_chars limit (pro=%s, con=%s, limit=%s)",
+                    self.name,
+                    len(pro_content),
+                    len(con_content),
+                    limit,
                 )
             else:
                 llm = self._get_llm()
@@ -552,9 +558,12 @@ class DebateAgent(BaseAgent):
                     )
                     total_usage = total_usage.add(pro_usage).add(con_usage)
                     logger.info(
-                        f"DebateAgent '{self.name}': summarised arguments — "
-                        f"pro {len(pro_content)}→{len(pro_excerpt)} chars, "
-                        f"con {len(con_content)}→{len(con_excerpt)} chars"
+                        "DebateAgent '%s': summarised arguments — pro %s→%s chars, con %s→%s chars",
+                        self.name,
+                        len(pro_content),
+                        len(pro_excerpt),
+                        len(con_content),
+                        len(con_excerpt),
                     )
                     return pro_excerpt, con_excerpt, total_usage
                 else:
@@ -617,7 +626,7 @@ class DebateAgent(BaseAgent):
                 )
             return (response.content or content), usage
         except Exception as e:
-            logger.warning(f"DebateAgent: argument summarisation failed ({e}) — using original")
+            logger.warning("DebateAgent: argument summarisation failed (%s) — using original", e)
             return content, TokenUsage()
 
     def _get_llm(self) -> Any | None:

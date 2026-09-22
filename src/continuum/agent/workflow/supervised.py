@@ -228,8 +228,11 @@ class SupervisedSequentialAgent(BaseAgent):
 
                     for attempt in range(self.supervised_config.max_retries + 1):
                         logger.info(
-                            f"SupervisedSequential step {step_num}/{len(self.agents)} "
-                            f"'{agent.name}' — attempt {attempt + 1}"
+                            "SupervisedSequential step %s/%s '%s' — attempt %s",
+                            step_num,
+                            len(self.agents),
+                            agent.name,
+                            attempt + 1,
                         )
 
                         try:
@@ -258,8 +261,11 @@ class SupervisedSequentialAgent(BaseAgent):
                             total_usage = total_usage.add(score_usage)
 
                             logger.info(
-                                f"SupervisedSequential step {step_num} '{agent.name}' "
-                                f"score={score:.2f} (threshold={self.supervised_config.quality_threshold})"
+                                "SupervisedSequential step %s '%s' score=%s (threshold=%s)",
+                                step_num,
+                                agent.name,
+                                format(score, ".2f"),
+                                self.supervised_config.quality_threshold,
                             )
 
                             if score > best_score:
@@ -268,8 +274,9 @@ class SupervisedSequentialAgent(BaseAgent):
 
                             if score >= self.supervised_config.quality_threshold:
                                 logger.info(
-                                    f"SupervisedSequential step {step_num} passed "
-                                    f"(score={score:.2f})"
+                                    "SupervisedSequential step %s passed (score=%s)",
+                                    step_num,
+                                    format(score, ".2f"),
                                 )
                                 step_span.set_output(
                                     {
@@ -283,8 +290,9 @@ class SupervisedSequentialAgent(BaseAgent):
                             # Score too low — prepare retry with feedback
                             if attempt < self.supervised_config.max_retries:
                                 logger.info(
-                                    f"SupervisedSequential step {step_num} below threshold "
-                                    f"(score={score:.2f}) — retrying with feedback"
+                                    "SupervisedSequential step %s below threshold (score=%s) — retrying with feedback",
+                                    step_num,
+                                    format(score, ".2f"),
                                 )
                                 attempt_input = (
                                     f"{current_input}\n\n"
@@ -294,8 +302,9 @@ class SupervisedSequentialAgent(BaseAgent):
                                 )
                             else:
                                 logger.warning(
-                                    f"SupervisedSequential step {step_num} exhausted retries "
-                                    f"(best score={best_score:.2f})"
+                                    "SupervisedSequential step %s exhausted retries (best score=%s)",
+                                    step_num,
+                                    format(best_score, ".2f"),
                                 )
                                 step_span.set_output(
                                     {
@@ -306,7 +315,7 @@ class SupervisedSequentialAgent(BaseAgent):
                                 )
 
                         except Exception as e:
-                            logger.error(f"SupervisedSequential step {step_num} failed: {e}")
+                            logger.error("SupervisedSequential step %s failed: %s", step_num, e)
                             step_span.set_error(str(e))
 
                             if self.supervised_config.fail_strategy == FailStrategy.FAIL_FAST:
@@ -510,7 +519,7 @@ class SupervisedSequentialAgent(BaseAgent):
             return score, feedback, usage
 
         except Exception as e:
-            logger.debug(f"Supervisor scoring failed: {e} — defaulting to 0.5")
+            logger.debug("Supervisor scoring failed: %s — defaulting to 0.5", e)
             return 0.5, f"Scoring error: {e}", TokenUsage()
 
     def _get_llm(self) -> Any | None:

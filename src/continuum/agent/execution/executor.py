@@ -284,8 +284,9 @@ class Executor(IExecutor):
             )
             total_usage = total_usage.add(reasoning_usage)
             logger.info(
-                f"🧠 Reasoning pass completed for agent {agent.name} "
-                f"({reasoning_usage.total_tokens} tokens)"
+                "🧠 Reasoning pass completed for agent %s (%s tokens)",
+                agent.name,
+                reasoning_usage.total_tokens,
             )
 
         while turn < context.max_turns:
@@ -343,17 +344,17 @@ class Executor(IExecutor):
                         else:
                             json_mode_info += " (simple json_object mode)"
                         logger.info(
-                            f"📋 JSON mode {json_mode_info} for agent {agent.name}",
+                            "📋 JSON mode %s for agent %s",
+                            json_mode_info,
+                            agent.name,
                             extra={
                                 "agent_name": agent.name,
                                 "json_mode": True,
-                                "json_schema": (
-                                    agent.json_schema.__name__
-                                    if isinstance(agent.json_schema, type)
-                                    else "dict"
-                                    if isinstance(agent.json_schema, dict)
-                                    else None
-                                ),
+                                "json_schema": agent.json_schema.__name__
+                                if isinstance(agent.json_schema, type)
+                                else "dict"
+                                if isinstance(agent.json_schema, dict)
+                                else None,
                             },
                         )
 
@@ -507,7 +508,10 @@ class Executor(IExecutor):
                         for tc in response.tool_calls
                     ]
                     logger.info(
-                        f"🔧 LLM response (with {len(response.tool_calls)} tool calls) on turn {turn}: {', '.join(tool_names)}"
+                        "🔧 LLM response (with %s tool calls) on turn %s: %s",
+                        len(response.tool_calls),
+                        turn,
+                        ", ".join(tool_names),
                     )
 
                 # Handle tool calls
@@ -520,7 +524,9 @@ class Executor(IExecutor):
                     ]
                     turn_span.add_metadata("tool_calls", called_tool_names)
                     logger.info(
-                        f"🤖 LLM requesting {len(response.tool_calls)} tool(s): {', '.join(called_tool_names)}"
+                        "🤖 LLM requesting %s tool(s): %s",
+                        len(response.tool_calls),
+                        ", ".join(called_tool_names),
                     )
 
                     # Separate handoffs from regular tools
@@ -905,8 +911,9 @@ class Executor(IExecutor):
                     )
                     if structured_output is not None:
                         logger.info(
-                            f"✅ structured_output ready for agent {agent.name} "
-                            f"({agent.output_schema.__name__})",
+                            "✅ structured_output ready for agent %s (%s)",
+                            agent.name,
+                            agent.output_schema.__name__,
                             extra={"agent_name": agent.name},
                         )
                     elif agent.output_schema_strict:
@@ -920,8 +927,9 @@ class Executor(IExecutor):
                     else:
                         # Soft failure: visible (warning + error field), not silent.
                         logger.warning(
-                            f"⚠️ structured_output unavailable for agent {agent.name}: "
-                            f"{structured_output_error}",
+                            "⚠️ structured_output unavailable for agent %s: %s",
+                            agent.name,
+                            structured_output_error,
                             extra={
                                 "agent_name": agent.name,
                                 "output_schema": agent.output_schema.__name__,
@@ -934,8 +942,8 @@ class Executor(IExecutor):
                     # they are not worth a warning.
                     if not looks_like_json(response.content):
                         logger.warning(
-                            f"⚠️ JSON mode enabled but response is not valid JSON for "
-                            f"agent {agent.name}"
+                            "⚠️ JSON mode enabled but response is not valid JSON for agent %s",
+                            agent.name,
                         )
 
                 # No tool calls, we're done
@@ -1059,7 +1067,7 @@ class Executor(IExecutor):
             content = response.content or ""
             action, action_input, final_answer = self._parse_react_action(content)
 
-            logger.info(f"🔄 ReAct turn {turn}: action={action!r}")
+            logger.info("🔄 ReAct turn %s: action=%r", turn, action)
 
             # Final Answer — stop the loop
             if final_answer is not None:
@@ -1197,7 +1205,7 @@ class Executor(IExecutor):
                 if results:
                     return str(results[0].get("content", "No result"))
             except Exception as e:
-                logger.warning(f"ReAct tool '{tool_name}' failed: {e}")
+                logger.warning("ReAct tool '%s' failed: %s", tool_name, e)
                 return f"Error executing '{tool_name}': {e}"
 
         return f"Tool '{tool_name}' is not available"
@@ -1239,7 +1247,7 @@ class Executor(IExecutor):
                 )
             except Exception as e:  # provider rejected the request, etc.
                 logger.warning(
-                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                    "structured-output formatting call failed for agent %s: %s", agent.name, e
                 )
                 last_err = f"formatting call failed: {e}"
                 break

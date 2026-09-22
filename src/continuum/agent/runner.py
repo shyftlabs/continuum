@@ -79,7 +79,7 @@ from continuum.llm.structured_output import (
     schema_prompt,
     to_openai_response_format,
 )
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.tools.tool_attention.router import _tool_name
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
@@ -409,7 +409,7 @@ class AgentRunner:
                 # A real session-store failure (e.g. Redis down) — NOT a
                 # "forgot to create" case. Skip the preflight quietly; the load
                 # path below surfaces the outage on its own.
-                logger.debug(f"Session preflight skipped (store error): {e}")
+                logger.debug("Session preflight skipped (store error): %s", e)
                 session_metadata = None
             else:
                 # In degrade mode a Redis outage makes get_session_metadata return
@@ -421,8 +421,8 @@ class AgentRunner:
                 )
                 if session_metadata is None and persistence_degraded:
                     logger.debug(
-                        f"Session preflight inconclusive: persistence degraded, cannot "
-                        f"confirm session {context.session_id!r} exists."
+                        "Session preflight inconclusive: persistence degraded, cannot confirm session %r exists.",
+                        log_id(context.session_id),
                     )
                 elif session_metadata is None:
                     # Resolve strict mode: per-call require_session wins; else the
@@ -453,11 +453,10 @@ class AgentRunner:
                         and session_metadata.user_id != context.user_id
                     ):
                         logger.warning(
-                            f"user_id mismatch: session {context.session_id!r} was created with "
-                            f"user_id={session_metadata.user_id!r} but run() received "
-                            f"user_id={context.user_id!r}. Long-term memory is WRITTEN under the "
-                            f"session's user_id but SEARCHED under run()'s — stored facts won't be "
-                            f"found. Pass the same user_id to run() as the session was created with."
+                            "user_id mismatch: session %r was created with user_id=%r but run() received user_id=%r. Long-term memory is WRITTEN under the session's user_id but SEARCHED under run()'s — stored facts won't be found. Pass the same user_id to run() as the session was created with.",
+                            log_id(context.session_id),
+                            log_id(session_metadata.user_id),
+                            log_id(context.user_id),
                         )
 
             tool_context_state = await self._session_service.load_tool_context_state(
@@ -472,8 +471,9 @@ class AgentRunner:
                     mcp_session_id = tool_context_state.get(namespace, "session_id")
                     if mcp_session_id:
                         logger.info(
-                            f"Loaded MCP session_id from tool context: {mcp_session_id[:8]}... "
-                            f"(namespace={namespace})"
+                            "Loaded MCP session_id from tool context: %s... (namespace=%s)",
+                            log_id(mcp_session_id[:8]),
+                            namespace,
                         )
                         break
 
@@ -591,7 +591,7 @@ class AgentRunner:
         try:
             self._circuit_breaker.check()
         except CircuitBreakerOpen as e:
-            logger.error(f"Circuit breaker open for agent '{agent.name}': {e}")
+            logger.error("Circuit breaker open for agent '%s': %s", agent.name, e)
             return AgentResponse(
                 content=f"Service temporarily unavailable: {e}",
                 agent_name=agent.name,
@@ -614,7 +614,7 @@ class AgentRunner:
         # outer trace and must not tear it down.
         owns_trace = await self._lifecycle.start_trace(agent, context, None, input_text[:500])
 
-        logger.info(f"Dispatching workflow agent '{agent.name}' to its execute() entry point")
+        logger.info("Dispatching workflow agent '%s' to its execute() entry point", agent.name)
         try:
             response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
             await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
@@ -718,7 +718,7 @@ class AgentRunner:
         try:
             self._circuit_breaker.check()
         except CircuitBreakerOpen as e:
-            logger.error(f"Circuit breaker open for agent '{agent.name}': {e}")
+            logger.error("Circuit breaker open for agent '%s': %s", agent.name, e)
             return AgentResponse(
                 content=f"Service temporarily unavailable: {e}",
                 agent_name=agent.name,
@@ -1136,7 +1136,7 @@ class AgentRunner:
                 )
             except Exception as e:
                 logger.warning(
-                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                    "structured-output formatting call failed for agent %s: %s", agent.name, e
                 )
                 last_err = f"formatting call failed: {e}"
                 break
@@ -1929,8 +1929,9 @@ class AgentRunner:
                     )
                 if structured_output is None:
                     logger.warning(
-                        f"⚠️ structured_output unavailable for agent {agent.name}: "
-                        f"{structured_output_error}"
+                        "⚠️ structured_output unavailable for agent %s: %s",
+                        agent.name,
+                        structured_output_error,
                     )
 
             # NOTE: no usage= is passed — streamed runs carry an EMPTY TokenUsage
