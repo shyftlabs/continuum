@@ -158,19 +158,10 @@ known-first-party = ["continuum"]
 # deliberately assert on broad exceptions.
 "tests/**" = ["E402", "C408", "B017"]
 # Playground demos set gateway env vars / sys.path before importing continuum.
-"playground/**" = ["E402"]
-# G004 (f-string in a logging call) is being adopted package by package. An
-# f-string collapses the format string and its values into one finished message
-# before `logging` sees it, so PromptContentFilter cannot separate structure from
-# data and the line cannot be redacted at all -- converting to "%s" + arguments is
-# what makes a site reachable by log_content()/log_id(). These packages have not
-# been converted yet; delete an entry when its package is done.
-"src/continuum/evaluation/**" = ["G004"]
-"src/continuum/temporal/**" = ["G004"]
-"src/continuum/connectors/**" = ["G004"]
-"src/continuum/cli.py" = ["G004"]
-"src/continuum/utils/**" = ["G004"]
-"src/continuum/security/**" = ["G004"]
+# G004: the demos print their own prompts and tool results on purpose -- showing
+# what the agent saw is what they are for -- and they are not shipped in the
+# package. src/ carries no G004 exemption.
+"playground/**" = ["E402", "G004"]
 
 [tool.mypy]
 python_version = "3.13"

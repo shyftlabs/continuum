@@ -38,6 +38,8 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
+from continuum.logging import log_id
+
 _logger = logging.getLogger(__name__)
 
 
@@ -144,9 +146,10 @@ class AgentWorkflow:
             # event loop, which workflow.logger requires. Determinism is
             # unaffected -- logging is not part of replayed state.
             _logger.warning(
-                f"Unauthorized tool-approval attempt by '{decision.decided_by}' for "
-                f"request '{decision.request_id}': not in approvers {entry['approvers']}. "
-                "Discarded; the request stays pending."
+                "Unauthorized tool-approval attempt by '%s' for request '%s': not in approvers %s. Discarded; the request stays pending.",
+                log_id(decision.decided_by),
+                decision.request_id,
+                log_id(entry["approvers"]),
             )
             return True  # handled: it was ours, and it was refused
 

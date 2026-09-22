@@ -79,7 +79,7 @@ class TemporalConnector(BaseConnector["Client"]):
 
         try:
             self._client = await Client.connect(target_host, **connect_kw)
-            logger.info(f"Connected to Temporal at {target_host} (ns={target_ns})")
+            logger.info("Connected to Temporal at %s (ns=%s)", target_host, target_ns)
             return self._client
         except Exception as e:
             raise TemporalConnectionError(

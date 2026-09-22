@@ -627,6 +627,37 @@ class TestAgentMemoryService:
         assert_clean(logged, "memory_service.retrieve_memories(results)")
 
 
+# ── human approvers ───────────────────────────────────────────────────────────
+
+
+class TestApproverIdentity:
+    """An unauthorized tool-approval attempt is logged by name. The actor and the
+    allow-list are both people -- a reviewer's email or username.
+
+    This is a security audit line and naming the actor is its purpose, so the
+    pseudonym has to be stable: "the same unknown actor tried forty times" must
+    still be readable, and an operator investigating can set LOG_PROMPT_CONTENT
+    to get the real name back.
+    """
+
+    def test_an_unauthorized_approver_is_not_named(self, logged, monkeypatch):
+        from continuum.config import settings
+        from continuum.temporal.types import ApprovalDecision
+        from continuum.temporal.workflows.agent_workflow import AgentWorkflow
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+
+        workflow = AgentWorkflow.__new__(AgentWorkflow)
+        workflow._tool_approvals = {
+            "req-1": {"description": "delete everything", "approvers": ["boss@clinic.example"]}
+        }
+        decision = ApprovalDecision(
+            request_id="req-1", decision="approve", decided_by=CANARY, reason="ok"
+        )
+        assert workflow._resolve_tool_approval(decision) is True
+        assert_clean(logged, "temporal.agent_workflow unauthorized approver")
+
+
 # ── credentials ───────────────────────────────────────────────────────────────
 
 
