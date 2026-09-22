@@ -164,7 +164,7 @@ class HeadroomClient:
             resp = await self._client.get(f"{self._base}/health")
             return resp.status_code == 200
         except Exception as e:
-            logger.debug(f"Headroom sidecar health check failed: {e}")
+            logger.debug("Headroom sidecar health check failed: %s", e)
             return False
 
     async def aclose(self) -> None:

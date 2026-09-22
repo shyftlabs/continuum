@@ -23,6 +23,7 @@ So a failure here means: wrap that value in ``log_content()``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -481,6 +482,48 @@ class TestMemoryPaths:
         client = await self._client(monkeypatch)
         await client.search("what did I say?", user_id=CANARY)
         assert_clean(logged, "memory.client.search(user_id)")
+
+
+# ── the llm client's session handling ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestLLMClientSessionId:
+    """The client logs which session it loaded history from, on every call that
+    has one -- the highest-frequency site in the package. With
+    SESSION_HASH_IDS=false that id contains the user id.
+
+    Driven through the real chat() rather than by calling the logger directly:
+    a test that wraps the value itself would pass whatever client.py does.
+    """
+
+    async def test_loading_history_does_not_log_the_session_id(self, logged, monkeypatch):
+        from continuum.config import settings
+        from continuum.llm.client import LLMClient
+        from continuum.llm.config import LLMConfig
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+
+        session_client = MagicMock()
+        session_client.is_enabled = True
+        session_client.get_conversation_history = AsyncMock(
+            return_value=[{"role": "user", "content": "earlier"}]
+        )
+        container = MagicMock(session_client=session_client)
+        # Imported inside the function, so patch it where it is defined.
+        monkeypatch.setattr("continuum.core.container.get_container", lambda: container)
+
+        client = LLMClient(config=LLMConfig(model="nonexistent-model-xyz"), enable_langfuse=False)
+        with contextlib.suppress(Exception):
+            # The provider call after the history load is expected to fail; the
+            # line under test has already been emitted by then.
+            await client.chat(
+                messages=[{"role": "user", "content": "hi"}],
+                session_id=f"u:{CANARY}",
+                auto_session=True,
+            )
+
+        assert_clean(logged, "llm.client history load")
 
 
 # ── credentials ───────────────────────────────────────────────────────────────

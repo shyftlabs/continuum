@@ -27,7 +27,7 @@ from continuum.llm.types import (
     ToolDefinition,
 )
 from continuum.llm.utils import supports_tools_with_json_mode
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.observability.decorators import observe
 from continuum.observability.trace_context import (
     get_current_session_id,
@@ -59,7 +59,7 @@ class _LLMRateLimiter:
 
             if self.tokens < 1:
                 wait_time = (1 - self.tokens) * (60.0 / self.rpm)
-                logger.warning(f"Rate limit reached, waiting {wait_time:.2f}s")
+                logger.warning("Rate limit reached, waiting %ss", format(wait_time, ".2f"))
                 await asyncio.sleep(wait_time)
                 self.tokens = 0
             else:
@@ -151,17 +151,17 @@ class LLMClient:
         if tools_dict and (config.json_mode or config.response_format):
             if not supports_tools_with_json_mode(config.model, config.custom_llm_provider):
                 logger.warning(
-                    f"Model '{config.model}' does not support tools + JSON mode simultaneously. "
-                    "Disabling JSON mode to allow tool usage."
+                    "Model '%s' does not support tools + JSON mode simultaneously. Disabling JSON mode to allow tool usage.",
+                    config.model,
                 )
                 return config.model_copy(update={"json_mode": False, "response_format": None})
         return config
 
     def _log_json_mode_status(self, config: LLMConfig) -> None:
         if config.json_mode:
-            logger.info(f"JSON mode active: json_object for model {config.model}")
+            logger.info("JSON mode active: json_object for model %s", config.model)
         elif config.response_format is not None:
-            logger.info(f"JSON mode active: schema for model {config.model}")
+            logger.info("JSON mode active: schema for model %s", config.model)
 
     def _log_schema_enforcement(self, provider: Any, config: LLMConfig) -> None:
         """Say once, per provider+model, how the requested schema is being held.
@@ -261,7 +261,7 @@ class LLMClient:
 
         provider = get_provider(effective_config)
         self._log_schema_enforcement(provider, effective_config)
-        logger.debug(f"Sync completion: model={effective_config.model}")
+        logger.debug("Sync completion: model=%s", effective_config.model)
 
         response = provider.complete(messages_dict, effective_config, tools_dict, tool_choice)
         self._validate_json_response(response.content, effective_config)
@@ -286,7 +286,7 @@ class LLMClient:
 
         provider = get_provider(effective_config)
         self._log_schema_enforcement(provider, effective_config)
-        logger.debug(f"Sync stream: model={effective_config.model}")
+        logger.debug("Sync stream: model=%s", effective_config.model)
 
         yield from provider.stream(messages_dict, effective_config, tools_dict, tool_choice)
 
@@ -342,7 +342,9 @@ class LLMClient:
                         ]
                         messages_dict = history_dicts + self._convert_messages(messages)
                         logger.debug(
-                            f"Loaded {len(history_messages)} messages from session: {effective_session_id}",
+                            "Loaded %s messages from session: %s",
+                            len(history_messages),
+                            log_id(effective_session_id),
                             extra={"total_messages": len(messages_dict)},
                         )
                     else:
@@ -351,7 +353,7 @@ class LLMClient:
                     messages_dict = self._convert_messages(messages)
             except Exception as e:
                 logger.warning(
-                    f"Failed to load session history: {e}, continuing with provided messages"
+                    "Failed to load session history: %s, continuing with provided messages", e
                 )
                 messages_dict = self._convert_messages(messages)
         else:
@@ -384,12 +386,13 @@ class LLMClient:
                 )
                 if compression_result.was_compressed:
                     logger.info(
-                        f"Context compressed: {compression_result.original_token_count} → "
-                        f"{compression_result.compressed_token_count} tokens "
-                        f"({compression_result.compression_ratio:.1%} ratio)"
+                        "Context compressed: %s → %s tokens (%s ratio)",
+                        compression_result.original_token_count,
+                        compression_result.compressed_token_count,
+                        format(compression_result.compression_ratio, ".1%"),
                     )
         except Exception as e:
-            logger.warning(f"Context management failed, continuing without compression: {e}")
+            logger.warning("Context management failed, continuing without compression: %s", e)
 
         # Untrusted tool-content hardening (F2): strip invisible/control chars and
         # wrap tool outputs in an untrusted-data envelope. Last transform before
@@ -423,7 +426,7 @@ class LLMClient:
 
         provider = get_provider(effective_config)
         self._log_schema_enforcement(provider, effective_config)
-        logger.debug(f"Async completion: model={effective_config.model}")
+        logger.debug("Async completion: model=%s", effective_config.model)
 
         # Hard wall-clock ceiling for the whole completion (all SDK retries +
         # backoff). The provider's per-request timeout is per-attempt only, so
@@ -499,9 +502,9 @@ class LLMClient:
                         message=assistant_message,
                         store_in_memory=should_store_in_memory,
                     )
-                    logger.debug(f"Saved messages to session: {effective_session_id}")
+                    logger.debug("Saved messages to session: %s", log_id(effective_session_id))
             except Exception as e:
-                logger.warning(f"Failed to save messages to session: {e}")
+                logger.warning("Failed to save messages to session: %s", e)
 
         return llm_response
 
@@ -576,11 +579,12 @@ class LLMClient:
                 )
                 if compression_result.was_compressed:
                     logger.info(
-                        f"Context compressed before streaming: {compression_result.original_token_count} → "
-                        f"{compression_result.compressed_token_count} tokens"
+                        "Context compressed before streaming: %s → %s tokens",
+                        compression_result.original_token_count,
+                        compression_result.compressed_token_count,
                     )
         except Exception as e:
-            logger.warning(f"Context management failed, continuing without compression: {e}")
+            logger.warning("Context management failed, continuing without compression: %s", e)
 
         # Untrusted tool-content hardening (F2) — same as chat(): last transform
         # before streaming to the provider. System instruction gated on tool
@@ -602,7 +606,7 @@ class LLMClient:
 
         provider = get_provider(effective_config)
         self._log_schema_enforcement(provider, effective_config)
-        logger.debug(f"Async stream: model={effective_config.model}")
+        logger.debug("Async stream: model=%s", effective_config.model)
 
         async for chunk in provider.astream(
             messages_dict, effective_config, tools_dict, tool_choice
@@ -623,7 +627,7 @@ class LLMClient:
             limits = get_context_window_manager().get_model_limits(model)
             return limits.to_dict()
         except Exception as e:
-            logger.warning(f"Could not get model info for {model}: {e}")
+            logger.warning("Could not get model info for %s: %s", model, e)
             return {}
 
     def get_supported_models(self) -> list[str]:
@@ -658,7 +662,7 @@ class LLMClient:
         try:
             return get_context_window_manager().count_tokens(messages_dict, model)
         except Exception as e:
-            logger.warning(f"Token counting failed: {e}")
+            logger.warning("Token counting failed: %s", e)
             return 0
 
     def complete(

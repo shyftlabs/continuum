@@ -194,7 +194,7 @@ class SummaryCache:
                 if time.time() - timestamp < self._ttl:
                     # Refresh timestamp for LRU behavior
                     self._cache[key] = (cached_messages, time.time())
-                    logger.debug(f"Cache hit for summary key: {key[:8]}")
+                    logger.debug("Cache hit for summary key: %s", key[:8])
                     return cached_messages
                 else:
                     # Expired, remove
@@ -207,7 +207,7 @@ class SummaryCache:
         with self._lock:
             self._cache[key] = (summary, time.time())
             self._evict_expired_and_lru()
-            logger.debug(f"Cached summary key: {key[:8]} (cache size: {len(self._cache)})")
+            logger.debug("Cached summary key: %s (cache size: %s)", key[:8], len(self._cache))
 
     def clear(self) -> None:
         """Clear all cached summaries."""
@@ -280,7 +280,7 @@ class ProgressiveContextManager:
         try:
             return LLMClient(enable_langfuse=True)
         except Exception as e:
-            logger.warning(f"Failed to create LLM client for summarization: {e}")
+            logger.warning("Failed to create LLM client for summarization: %s", e)
             return None
 
     async def compress_if_needed(
@@ -348,8 +348,10 @@ class ProgressiveContextManager:
             )
 
         logger.info(
-            f"Context compression needed: {current_tokens} tokens "
-            f"(threshold: {threshold_tokens}, limit: {limits.effective_input_limit})"
+            "Context compression needed: %s tokens (threshold: %s, limit: %s)",
+            current_tokens,
+            threshold_tokens,
+            limits.effective_input_limit,
         )
 
         # Create span for compression operation (uses contextvars)
@@ -428,8 +430,11 @@ class ProgressiveContextManager:
                 compression_span.add_metadata("strategy_used", result.strategy_used)
 
                 logger.info(
-                    f"Context compressed: {current_tokens} → {result.compressed_token_count} tokens "
-                    f"({result.compression_ratio:.1%} ratio, {result.latency_ms:.1f}ms)"
+                    "Context compressed: %s → %s tokens (%s ratio, %sms)",
+                    current_tokens,
+                    result.compressed_token_count,
+                    format(result.compression_ratio, ".1%"),
+                    format(result.latency_ms, ".1f"),
                 )
 
                 return compressed, result
@@ -446,7 +451,7 @@ class ProgressiveContextManager:
                     },
                 )
                 compression_span.set_error(str(e))
-                logger.error(f"Context compression failed: {e}, falling back to truncation")
+                logger.error("Context compression failed: %s, falling back to truncation", e)
 
                 # Fallback to truncation on any error
                 try:
@@ -466,7 +471,7 @@ class ProgressiveContextManager:
                     return compressed, result
                 except Exception as fallback_error:
                     # Even truncation failed - return original messages
-                    logger.error(f"Fallback truncation also failed: {fallback_error}")
+                    logger.error("Fallback truncation also failed: %s", fallback_error)
                     compression_span.set_error(f"Compression and fallback failed: {fallback_error}")
                     return messages, CompressionResult(
                         original_token_count=current_tokens,
@@ -524,7 +529,7 @@ class ProgressiveContextManager:
             return truncated, result
 
         except Exception as e:
-            logger.warning(f"Summarization failed, falling back to truncation: {e}")
+            logger.warning("Summarization failed, falling back to truncation: %s", e)
             # Fallback to truncation
             return await self._compress_truncate(
                 messages=messages,
@@ -758,7 +763,7 @@ SUMMARY:"""
                 )
                 return self._text_summary(messages)
             except Exception as e:
-                logger.warning(f"Summarization failed: {e}, using text fallback")
+                logger.warning("Summarization failed: %s, using text fallback", e)
                 span.set_error(str(e))
                 # Track error in metrics
                 self._metrics.track_error(
