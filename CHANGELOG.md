@@ -5,6 +5,29 @@ All notable changes to Continuum are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Prompts, memories, tool results and user identity no longer reach the log by default.** `MessageBuilder.prepare_messages` logged the whole assembled prompt — system instructions, retrieved memories, session history, RAG context and the user's input — at `INFO`, which is the shipped level, and neither formatter redacted anything, so in production `JSONFormatter` shipped it verbatim to the aggregator. The existing `data_redaction` module guards *telemetry*; nothing guarded this path. `LOG_PROMPT_CONTENT` (default `false`) now governs it, enforced by `PromptContentFilter` on the handlers rather than at 460 call sites, so the policy lives in one place. Turn it on to debug why an agent ignored a memory — on a laptop, not where logs are shipped.
+- **mem0 logged live API keys** — `Mem0Provider` logged its whole config at `DEBUG`, and `to_mem0_config()` embeds the fact-extraction LLM's and the embedder's keys two levels down. Masked with `redact_dict`, which recurses; deliberately *not* routed through `LOG_PROMPT_CONTENT`, because a provider key is not a debugging convenience an operator should be able to switch back on. The rest of the config — provider, model, host — still prints, which is what the line exists to show.
+- **A session id is the user id on shipped defaults.** With `SESSION_HASH_IDS=false`, `c:conv-1:u:alice@clinic.example` *is* a session id, so every line carrying one wrote an email address to the aggregator. `log_id()` renders a stable pseudonym (`id#4f2a9c1e…`) instead: the same id every time, so incidents stay groupable, and unlinkable to the person without `SESSION_ID_SECRET`. Where it can be set, `SESSION_HASH_IDS=true` remains the better fix — it makes the id opaque at the source, so Redis keys and dashboards benefit too.
+- **Identity was stamped on every structured line.** `llm/callbacks.py` publishes `user_id` and `session_id` into the logging context and `JSONFormatter` copies the context onto each record, a channel that never passes through `record.args` and so could not be reached by any call-site fix. Both formatters now read a pseudonymised view. `get_log_context()` itself is unchanged, because `callbacks.py` correlates traces from it and `error_reporter.py` attributes errors from it — redaction belongs at the exit, not the source. `error_reporter` also pseudonymises the `user_id`/`session_id` it sends to Langfuse when an error outside a traced run creates a new trace.
+
+### Added
+- **`log_content()`** and **`log_id()`** (`continuum.logging`) — mark a log argument as the user's words, or as their identity. Both fail closed: `__str__` renders the redacted form, so a handler this SDK did not install (someone's own, or a bare `basicConfig`) withholds rather than leaks.
+- **`LOG_PROMPT_CONTENT`** (default `false`).
+- **`tests/unit/test_log_canary.py`** — drives the real paths with a sentinel and fails by name when one logs it. Marking is a human act and humans forget; this makes forgetting a red build rather than a silent leak. It found two sites reading could not: the whole conversation sent to the Headroom sidecar, and a line logging every recalled memory's text at `INFO`.
+
+### Changed
+- **BREAKING: `LOG_FULL_PROMPT` is gone.** It was read straight from `os.environ` in `message_builder.py` and only lifted a 2000-character per-message cap — the prompt was logged by default either way. `LOG_PROMPT_CONTENT=true` is the equivalent, and there is no longer a cap to lift.
+- **Ruff `G004` is enabled for all of `src/`**, no exemption. An f-string collapses the format string and its values into one finished message before `logging` sees it, so such a line cannot be redacted at all; converting to `%s` plus arguments is what makes a site reachable. 464 calls converted across ten packages; `playground/` keeps an exemption, because the demos print their own prompts on purpose.
+- Call sites that truncated before logging (`query[:100]`, `response_content[:500]`, `error_msg[:300]`) no longer do. A prefix of a patient record is still a patient record, and truncating discarded the rest for an operator who had asked for it.
+- An unauthorized tool-approval attempt (`temporal`) logs a pseudonym rather than the reviewer's name. Naming the actor is the point of that line, so the pseudonym is stable and `LOG_PROMPT_CONTENT` reveals it — the one place in this work where withholding trades against the log's purpose rather than only against convenience.
+
+### Known limits
+- **Telemetry is not covered.** `redact_for_telemetry` withholds a span payload only when a policy denies the run's data labels, and both `SpanScope` call sites pass `mask_secrets=False` deliberately (`redact_dict` matches keys by substring and would mask `prompt_tokens`, destroying cost observability). On an unlabelled run, or with no `PolicyStore` configured, span content reaches Langfuse in full.
+- **Forgetting still leaks.** Nothing forces a call site to declare its content; the canary catches it only on paths that have a test.
+
 ## [2.0.0] — 2026-09-21
 
 ### Security

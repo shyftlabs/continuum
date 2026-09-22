@@ -332,3 +332,75 @@ class TestTheRealLeak:
         assert out, "nothing was logged — the test is not exercising the path"
         assert PHI not in out
         assert "FINAL PROMPT" in out, "the diagnostic itself should survive, only its content goes"
+
+
+# ── the documentation must not drift from the code ────────────────────────────
+
+
+class TestTheDocsMatchTheCode:
+    """docs/installation.md described the 64-character backstop for a while
+    after it was deleted, so it promised a guarantee that no longer existed.
+    These pin the claims that section makes."""
+
+    @staticmethod
+    def _doc() -> str:
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[2] / "docs" / "installation.md").read_text()
+
+    @staticmethod
+    def _pyproject() -> str:
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text()
+
+    def test_it_documents_the_setting_that_exists(self):
+        assert "LOG_PROMPT_CONTENT" in self._doc()
+        assert "log_prompt_content" in Settings.model_fields
+
+    def test_it_names_both_wrappers_and_both_are_importable(self):
+        from continuum import logging as continuum_logging
+
+        doc = self._doc()
+        for name in ("log_content()", "log_id()"):
+            assert name in doc, name
+            assert hasattr(continuum_logging, name.rstrip("()"))
+
+    def test_it_does_not_still_promise_the_deleted_backstop(self):
+        """The specific drift that happened. 'longer than 64 characters' was a
+        guarantee the code stopped making."""
+        assert "longer than 64 characters" not in self._doc()
+        assert not hasattr(__import__("continuum.logging", fromlist=["x"]), "ARGUMENT_LIMIT")
+
+    def test_the_G004_claim_is_true(self):
+        """The doc says the rule is enabled for all of src/ with no exemption.
+        An exemption added later would make that a lie."""
+        pyproject = self._pyproject()
+        assert "no\nexemption" in self._doc() or "no exemption" in self._doc()
+        assert '"G004"' in pyproject, "G004 is not selected"
+        exempted = [
+            line for line in pyproject.splitlines() if line.startswith('"src/') and "G004" in line
+        ]
+        assert exempted == [], f"src/ carries a G004 exemption: {exempted}"
+
+    def test_no_f_string_logging_call_remains_in_src(self):
+        """The other half of that claim, checked against the code rather than
+        against the lint config."""
+        import ast
+        from pathlib import Path
+
+        offenders = []
+        for path in (Path(__file__).resolve().parents[2] / "src" / "continuum").rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                    continue
+                if node.func.attr not in ("info", "debug", "warning", "error", "critical"):
+                    continue
+                if not (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in ("logger", "_logger")
+                ):
+                    continue
+                if node.args and isinstance(node.args[0], ast.JoinedStr):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert offenders == [], offenders

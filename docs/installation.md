@@ -269,9 +269,9 @@ ignored a memory or a RAG chunk — and the reason to keep it off anywhere
 the logs are shipped off the machine.
 
 It is enforced by `PromptContentFilter` in `continuum/logging.py`, which
-sits on the handlers rather than in the call sites, so it covers modules
-written after it. Its coverage is not unconditional, and the rule is
-worth knowing before you add a log line:
+sits on the handlers rather than in the call sites, so one rule covers
+every `continuum.*` logger. The rule itself is narrow and worth knowing
+before you add a log line:
 
 - an argument wrapped in `log_content()` or `log_id()` is withheld
 - **nothing else is** — in particular, content built into the message by
@@ -284,15 +284,38 @@ directions: 46 characters of PHI passed it, while a 65-character
 pasteable `continuum mcp diff … --pins PATH` command did not. Length does
 not distinguish a medical note from a file path.
 
-So log content as an argument, never as an f-string:
+### Adding a log line
+
+Pass values as arguments, never as an f-string:
 
 ```python
 logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+#                                    └ label ┘  └── content ───┘
 ```
 
+**Ruff enforces the shape.** `G004` is enabled for all of `src/`, with no
+exemption, so an f-string in a logging call fails lint. That is not a
+style preference here: an f-string site cannot be redacted at all, and
+the rule is what stops new ones appearing.
+
+Then decide, per value, what it is. The question is not *"does this look
+sensitive?"* but *"whose data is it?"*:
+
+| value | wrapper |
+|---|---|
+| a prompt, a memory, a tool argument or result, model output | `log_content()` |
+| `user_id`, `session_id`, `memory_id`, an approver's name | `log_id()` |
+| agent and tool names, model ids, counts, `trace_id`, paths, commands | bare |
+
 Pass the whole value — no `[:200]` slicing. Truncating at the call site
-leaks a prefix and throws the rest away; `log_content` gives the operator
+leaks a prefix *and* throws the rest away; the wrappers give the operator
 nothing by default and everything when they ask.
+
+Nothing forces you to wrap. The net for that is
+`tests/unit/test_log_canary.py`, which drives the real paths with a
+sentinel string and fails by name when one of them logs it — so a
+forgotten wrapper is a red build rather than a silent leak. A path with
+no canary test has no net, so add one when you add a path.
 
 ### Identity: `log_id()`
 
