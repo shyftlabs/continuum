@@ -92,7 +92,7 @@ class TokenUsageMetric:
             )
             return total if total > 0 else None
         except Exception as e:
-            logger.warning(f"Could not calculate cost for model {self.model}: {e}")
+            logger.warning("Could not calculate cost for model %s: %s", self.model, e)
             return None
 
 
@@ -361,8 +361,8 @@ class MetricsCollector:
             if not model:
                 # Log warning and skip this entry - model should always be provided
                 logger.warning(
-                    f"Token usage metric missing model name: {t.name}. "
-                    "Model must be provided for proper tracking."
+                    "Token usage metric missing model name: %s. Model must be provided for proper tracking.",
+                    t.name,
                 )
                 continue  # Skip entries without model
 
@@ -689,7 +689,7 @@ class MetricsCollector:
                 value=float(error_stats.get("total_errors", 0)),
             )
         except Exception as e:
-            logger.warning(f"Failed to report metrics to providers: {e}")
+            logger.warning("Failed to report metrics to providers: %s", e)
 
     @asynccontextmanager
     async def track_latency_async(
@@ -932,17 +932,19 @@ class PrometheusExporter(MetricsExporter):
                     auth=auth,
                 ) as response:
                     if response.status in (200, 202):
-                        logger.debug(f"Exported metrics to Prometheus: {url}")
+                        logger.debug("Exported metrics to Prometheus: %s", url)
                         return True
                     else:
-                        logger.warning(f"Failed to export metrics to Prometheus: {response.status}")
+                        logger.warning(
+                            "Failed to export metrics to Prometheus: %s", response.status
+                        )
                         return False
 
         except ImportError:
             logger.warning("aiohttp not installed, cannot export to Prometheus")
             return False
         except Exception as e:
-            logger.error(f"Error exporting metrics to Prometheus: {e}")
+            logger.error("Error exporting metrics to Prometheus: %s", e)
             return False
 
 
@@ -1015,11 +1017,11 @@ class JSONFileExporter(MetricsExporter):
                 else:
                     json.dump(data_to_write, f, default=str)
 
-            logger.debug(f"Exported metrics to JSON file: {self.file_path}")
+            logger.debug("Exported metrics to JSON file: %s", self.file_path)
             return True
 
         except Exception as e:
-            logger.error(f"Error exporting metrics to JSON file: {e}")
+            logger.error("Error exporting metrics to JSON file: %s", e)
             return False
 
 
@@ -1095,11 +1097,11 @@ class StatsD_Exporter(MetricsExporter):
             sock.sendto(data.encode(), (self.host, self.port))
             sock.close()
 
-            logger.debug(f"Exported metrics to StatsD: {self.host}:{self.port}")
+            logger.debug("Exported metrics to StatsD: %s:%s", self.host, self.port)
             return True
 
         except Exception as e:
-            logger.error(f"Error exporting metrics to StatsD: {e}")
+            logger.error("Error exporting metrics to StatsD: %s", e)
             return False
 
 
@@ -1134,7 +1136,7 @@ class CompositeExporter(MetricsExporter):
         )
 
         success_count = sum(1 for r in results if r is True)
-        logger.debug(f"Exported metrics to {success_count}/{len(self.exporters)} exporters")
+        logger.debug("Exported metrics to %s/%s exporters", success_count, len(self.exporters))
 
         return success_count > 0
 

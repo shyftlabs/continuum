@@ -170,7 +170,7 @@ class Span:
                     status_message=status_message,
                 )
             except Exception as e:
-                logger.warning(f"Failed to update Langfuse span: {e}")
+                logger.warning("Failed to update Langfuse span: %s", e)
 
         return self
 
@@ -203,7 +203,7 @@ class Span:
                     status_message=status_message,
                 )
             except Exception as e:
-                logger.warning(f"Failed to end Langfuse span: {e}")
+                logger.warning("Failed to end Langfuse span: %s", e)
 
     def span(
         self,
@@ -232,7 +232,7 @@ class Span:
                     level=level.value,
                 )
             except Exception as e:
-                logger.warning(f"Failed to create Langfuse child span: {e}")
+                logger.warning("Failed to create Langfuse child span: %s", e)
 
         child = Span(langfuse_span, data)
         self._children.append(child)
@@ -268,7 +268,7 @@ class Span:
                     metadata=metadata,
                 )
             except Exception as e:
-                logger.warning(f"Failed to create Langfuse generation: {e}")
+                logger.warning("Failed to create Langfuse generation: %s", e)
 
         child = GenerationSpan(langfuse_generation, data)
         self._children.append(child)
@@ -294,7 +294,7 @@ class Span:
                     level=level.value,
                 )
             except Exception as e:
-                logger.warning(f"Failed to log Langfuse event: {e}")
+                logger.warning("Failed to log Langfuse event: %s", e)
 
     def score(
         self,
@@ -314,7 +314,7 @@ class Span:
                     data_type=data_type,
                 )
             except Exception as e:
-                logger.warning(f"Failed to add Langfuse score: {e}")
+                logger.warning("Failed to add Langfuse score: %s", e)
 
 
 class GenerationSpan:
@@ -406,7 +406,7 @@ class GenerationSpan:
                     usage=usage,
                 )
             except Exception as e:
-                logger.warning(f"Failed to update Langfuse generation: {e}")
+                logger.warning("Failed to update Langfuse generation: %s", e)
 
         return self
 
@@ -458,7 +458,7 @@ class GenerationSpan:
                     usage=usage,
                 )
             except Exception as e:
-                logger.warning(f"Failed to end Langfuse generation: {e}")
+                logger.warning("Failed to end Langfuse generation: %s", e)
 
     def score(
         self,
@@ -478,7 +478,7 @@ class GenerationSpan:
                     data_type=data_type,
                 )
             except Exception as e:
-                logger.warning(f"Failed to add Langfuse score: {e}")
+                logger.warning("Failed to add Langfuse score: %s", e)
 
 
 class Trace:
@@ -557,7 +557,7 @@ class Trace:
                     public=public,
                 )
             except Exception as e:
-                logger.warning(f"Failed to update Langfuse trace: {e}")
+                logger.warning("Failed to update Langfuse trace: %s", e)
 
         return self
 
@@ -588,7 +588,7 @@ class Trace:
                     level=level.value,
                 )
             except Exception as e:
-                logger.warning(f"Failed to create Langfuse span: {e}")
+                logger.warning("Failed to create Langfuse span: %s", e)
 
         span = Span(langfuse_span, data)
         self._spans.append(span)
@@ -624,7 +624,7 @@ class Trace:
                     metadata=metadata,
                 )
             except Exception as e:
-                logger.warning(f"Failed to create Langfuse generation: {e}")
+                logger.warning("Failed to create Langfuse generation: %s", e)
 
         gen = GenerationSpan(langfuse_generation, data)
         self._generations.append(gen)
@@ -650,7 +650,7 @@ class Trace:
                     level=level.value,
                 )
             except Exception as e:
-                logger.warning(f"Failed to log Langfuse event: {e}")
+                logger.warning("Failed to log Langfuse event: %s", e)
 
     def score(
         self,
@@ -670,7 +670,7 @@ class Trace:
                     data_type=data_type,
                 )
             except Exception as e:
-                logger.warning(f"Failed to add Langfuse score: {e}")
+                logger.warning("Failed to add Langfuse score: %s", e)
 
     def get_trace_url(self) -> str | None:
         """Get the URL to view this trace in Langfuse UI."""
@@ -796,8 +796,9 @@ class TracingManager:
             existing_trace_id = get_current_trace_id()
             if existing_trace_id:
                 logger.warning(
-                    f"Attempted to create trace '{name}' but trace {existing_trace_id} already exists in context. "
-                    "Returning existing trace context. Use force=True to override."
+                    "Attempted to create trace '%s' but trace %s already exists in context. Returning existing trace context. Use force=True to override.",
+                    name,
+                    existing_trace_id,
                 )
                 # Return a Trace wrapper for the existing trace
                 existing_client = get_current_trace_client()
@@ -846,9 +847,9 @@ class TracingManager:
                     version=version,
                     public=public,
                 )
-                logger.debug(f"Created trace '{name}' with ID {data.id}")
+                logger.debug("Created trace '%s' with ID %s", name, data.id)
             except Exception as e:
-                logger.warning(f"Failed to create trace via ProviderManager: {e}")
+                logger.warning("Failed to create trace via ProviderManager: %s", e)
 
         trace = Trace(langfuse_trace, data)
 
@@ -990,7 +991,7 @@ class TracingManager:
             try:
                 manager.flush()
             except Exception as e:
-                logger.warning(f"Failed to flush via ProviderManager: {e}")
+                logger.warning("Failed to flush via ProviderManager: %s", e)
 
     def shutdown(self) -> None:
         """Shutdown the tracing manager and flush all events."""
@@ -1001,4 +1002,4 @@ class TracingManager:
             try:
                 manager.shutdown()
             except Exception as e:
-                logger.warning(f"Failed to shutdown via ProviderManager: {e}")
+                logger.warning("Failed to shutdown via ProviderManager: %s", e)

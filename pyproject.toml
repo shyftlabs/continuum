@@ -165,7 +165,6 @@ known-first-party = ["continuum"]
 # data and the line cannot be redacted at all -- converting to "%s" + arguments is
 # what makes a site reachable by log_content()/log_id(). These packages have not
 # been converted yet; delete an entry when its package is done.
-"src/continuum/observability/**" = ["G004"]
 "src/continuum/core/**" = ["G004"]
 "src/continuum/evaluation/**" = ["G004"]
 "src/continuum/temporal/**" = ["G004"]

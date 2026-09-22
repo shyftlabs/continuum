@@ -58,7 +58,7 @@ class LangfuseProvider(ObservabilityProvider):
             try:
                 obs_config = ObservabilityConfig(**config)
             except Exception as e:
-                logger.warning(f"Failed to create ObservabilityConfig from dict: {e}")
+                logger.warning("Failed to create ObservabilityConfig from dict: %s", e)
                 obs_config = ObservabilityConfig()
 
         super().__init__(name, config)

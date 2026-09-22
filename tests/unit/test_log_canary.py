@@ -671,6 +671,26 @@ class TestCredentialsNeverReachTheLog:
         assert "gemini" in rendered
         assert "gemini-2.5-flash" in rendered
 
+    def test_langfuse_initialisation_does_not_log_its_keys(self, logged, monkeypatch):
+        """The other place credentials live. LangfuseClient logs host,
+        environment and sample rate on init and deliberately not the key pair --
+        this pins that, because the config object holding them is right there
+        and one extra dict entry would undo it."""
+        from continuum.observability.config import ObservabilityConfig
+        from continuum.observability.providers.langfuse_client import LangfuseClient
+
+        config = ObservabilityConfig(
+            enabled=True,
+            public_key=f"pk-{self.FAKE_KEY}",
+            secret_key=f"sk-{self.FAKE_KEY}",
+            host="http://localhost:3000",
+        )
+        with contextlib.suppress(Exception):
+            LangfuseClient(config=config, auto_initialize=True)
+
+        offenders = [line for line in logged if self.FAKE_KEY in line]
+        assert not offenders, offenders
+
     def test_it_is_not_governed_by_LOG_PROMPT_CONTENT(self, monkeypatch):
         """A credential is not a debugging convenience. Turning content logging
         on must not turn keys back on."""
