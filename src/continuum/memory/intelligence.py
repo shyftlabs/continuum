@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from continuum.logging import get_logger, log_content
+from continuum.logging import get_logger, log_content, log_id
 from continuum.memory.client import MemoryClient
 from continuum.memory.config import MemoryConfig
 from continuum.memory.types import (
@@ -373,13 +373,17 @@ class IntelligentMemoryClient(MemoryClient):
                     await self.delete(entry.id)
                     pruned += 1
                     logger.debug(
-                        f"IntelligentMemoryClient: pruned memory '{entry.id}' "
-                        f"(importance={importance:.2f}, decay={decay:.2f})"
+                        "IntelligentMemoryClient: pruned memory '%s' (importance=%s, decay=%s)",
+                        log_id(entry.id),
+                        importance,
+                        decay,
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to prune memory '{entry.id}': {e}")
+                    logger.warning("Failed to prune memory '%s': %s", log_id(entry.id), e)
 
-        logger.info(f"IntelligentMemoryClient: pruned {pruned} memories for user '{user_id}'")
+        logger.info(
+            "IntelligentMemoryClient: pruned %s memories for user '%s'", pruned, log_id(user_id)
+        )
         return pruned
 
     # -------------------------------------------------------------------------
@@ -484,7 +488,7 @@ class IntelligentMemoryClient(MemoryClient):
                     return val
             return 0.5
         except Exception as e:
-            logger.debug(f"Importance scoring failed: {e}")
+            logger.debug("Importance scoring failed: %s", e)
             return 0.5
 
     async def _extract_and_store_entities(
@@ -525,7 +529,7 @@ class IntelligentMemoryClient(MemoryClient):
             data = self._extract_json(response.content or '{"entities": []}')
             entities = data.get("entities", []) if isinstance(data, dict) else []
         except Exception as e:
-            logger.debug(f"Entity extraction failed: {e}")
+            logger.debug("Entity extraction failed: %s", e)
             return
 
         for entity in entities:
@@ -557,7 +561,7 @@ class IntelligentMemoryClient(MemoryClient):
                     metadata=entity_meta,
                 )
             except Exception as e:
-                logger.debug(f"Failed to store entity '{name}': {e}")
+                logger.debug("Failed to store entity '%s': %s", name, e)
 
     async def _update_user_profile(
         self,
@@ -613,7 +617,7 @@ class IntelligentMemoryClient(MemoryClient):
             # Only accept a dict — reject arrays or other types from partial parses
             delta = parsed if isinstance(parsed, dict) else {}
         except Exception as e:
-            logger.debug(f"User profile update failed: {e}")
+            logger.debug("User profile update failed: %s", e)
             return
 
         if not delta:
@@ -675,9 +679,9 @@ class IntelligentMemoryClient(MemoryClient):
                 metadata=profile_meta,
                 infer=False,
             )
-            logger.debug(f"User profile updated for '{user_id}'")
+            logger.debug("User profile updated for '%s'", log_id(user_id))
         except Exception as e:
-            logger.debug(f"Failed to store user profile for '{user_id}': {e}")
+            logger.debug("Failed to store user profile for '%s': %s", log_id(user_id), e)
 
     def _get_llm(self) -> Any | None:
         """Lazy-load LLM client from the container."""

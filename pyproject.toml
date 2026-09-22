@@ -167,7 +167,6 @@ known-first-party = ["continuum"]
 # been converted yet; delete an entry when its package is done.
 "src/continuum/agent/**" = ["G004"]
 "src/continuum/tools/**" = ["G004"]
-"src/continuum/memory/**" = ["G004"]
 "src/continuum/llm/**" = ["G004"]
 "src/continuum/observability/**" = ["G004"]
 "src/continuum/core/**" = ["G004"]

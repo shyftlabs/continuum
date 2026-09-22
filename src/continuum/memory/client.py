@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from continuum.llm.untrusted_content import strip_hidden_chars
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.memory.base import BaseMemoryProvider
 from continuum.memory.config import MemoryConfig
 from continuum.memory.exceptions import (
@@ -169,24 +169,27 @@ class MemoryClient:
 
             if provider_name not in available:
                 logger.warning(
-                    f"Provider '{provider_name}' not available. "
-                    f"Available providers: {available}. Falling back to '{available[0]}'"
+                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'",
+                    provider_name,
+                    available,
+                    available[0],
                 )
                 provider_name = available[0]
 
             self._provider = create_provider(provider_name, self._config)
             self._initialized = self._provider.is_initialized
 
-            logger.info(f"Memory provider initialized: {provider_name}")
+            logger.info("Memory provider initialized: %s", provider_name)
 
         except ImportError as e:
             logger.error(
-                f"Failed to import memory provider '{provider_name}': {e}. "
-                "Install the required package (e.g., pip install mem0ai).",
+                "Failed to import memory provider '%s': %s. Install the required package (e.g., pip install mem0ai).",
+                provider_name,
+                e,
                 exc_info=True,
             )
         except Exception as e:
-            logger.error(f"Failed to initialize memory provider: {e}", exc_info=True)
+            logger.error("Failed to initialize memory provider: %s", e, exc_info=True)
 
     @property
     def config(self) -> MemoryConfig:
@@ -508,9 +511,9 @@ class MemoryClient:
         max_query_chars = self._config.max_query_chars
         if max_query_chars is not None and len(query) > max_query_chars:
             logger.warning(
-                f"Memory search query of {len(query)} chars exceeds max_query_chars="
-                f"{max_query_chars}; truncating before embedding. Raise "
-                f"MemoryConfig.max_query_chars (or set it to None) to change this."
+                "Memory search query of %s chars exceeds max_query_chars=%s; truncating before embedding. Raise MemoryConfig.max_query_chars (or set it to None) to change this.",
+                len(query),
+                max_query_chars,
             )
             query = query[:max_query_chars]
 
@@ -527,10 +530,15 @@ class MemoryClient:
 
         # Log search parameters
         logger.info(
-            f"🔍 MEMORY CLIENT SEARCH: query='{query[:100]}...', "
-            f"isolation={self._config.memory_isolation}, "
-            f"scope={scope}, identifiers={identifiers}, "
-            f"limit={search_limit}, filters={filters}"
+            "🔍 MEMORY CLIENT SEARCH: query='%s...', isolation=%s, scope=%s, identifiers=%s, limit=%s, filters=%s",
+            log_content(query),
+            self._config.memory_isolation,
+            # MemoryScope's repr embeds the identifiers it scopes by, so it
+            # carries the user id as surely as identifiers does.
+            log_id(scope),
+            log_id(identifiers),
+            search_limit,
+            filters,
         )
 
         result = await self._provider.search(
@@ -542,8 +550,9 @@ class MemoryClient:
 
         # Log search results
         logger.info(
-            f"✅ MEMORY CLIENT SEARCH RESULT: found {len(result.results)} memories "
-            f"(total_results={result.total_results if hasattr(result, 'total_results') else 'N/A'})"
+            "✅ MEMORY CLIENT SEARCH RESULT: found %s memories (total_results=%s)",
+            len(result.results),
+            result.total_results if hasattr(result, "total_results") else "N/A",
         )
 
         return result

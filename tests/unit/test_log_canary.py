@@ -448,6 +448,96 @@ class TestSessionPaths:
         assert_clean(logged, "session.get_conversation_history")
 
 
+# ── long-term memory ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestMemoryPaths:
+    """A search query is what the user asked. A stored memory is what they said
+    last week. Both were logged with a slice -- query[:100], query[:50] -- which
+    leaks a prefix and discards the rest."""
+
+    async def _client(self, monkeypatch):
+        from continuum.memory.base import BaseMemoryProvider
+        from continuum.memory.client import MemoryClient
+        from continuum.memory.config import MemoryConfig
+
+        provider = MagicMock(spec=BaseMemoryProvider)
+        provider.search = AsyncMock(return_value=MagicMock(results=[], total_results=0))
+        provider.add = AsyncMock(return_value=MagicMock(results=[], message="ok"))
+        client = MemoryClient(config=MemoryConfig(), provider=provider, auto_initialize=False)
+        client._initialized = True
+        return client
+
+    async def test_a_search_query_is_not_logged(self, logged, monkeypatch):
+        client = await self._client(monkeypatch)
+        await client.search(CANARY, user_id="u1")
+        assert_clean(logged, "memory.client.search(query)")
+
+    async def test_the_searching_user_is_not_logged(self, logged, monkeypatch):
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        client = await self._client(monkeypatch)
+        await client.search("what did I say?", user_id=CANARY)
+        assert_clean(logged, "memory.client.search(user_id)")
+
+
+# ── credentials ───────────────────────────────────────────────────────────────
+
+
+class TestCredentialsNeverReachTheLog:
+    """A different canary, for a different kind of secret.
+
+    mem0's config embeds live provider API keys -- the embedder's and the
+    fact-extraction LLM's -- and the provider logged the whole dict at DEBUG.
+    Not user content, so log_content() is the wrong tool: an operator wants to
+    see which provider, which model, which host. Only the credentials must go,
+    which is what redact_dict already does everywhere else.
+    """
+
+    FAKE_KEY = "sk-svcacct-ZZQX-FAKE-KEY-NEVER-LOG-ME"
+
+    def test_the_mem0_config_is_masked_before_logging(self, logged):
+        from continuum.memory.providers.mem0 import _loggable_config
+
+        config = {
+            "version": "v1.1",
+            "llm": {"provider": "gemini", "config": {"model": "x", "api_key": self.FAKE_KEY}},
+            "embedder": {"provider": "openai", "config": {"api_key": self.FAKE_KEY}},
+        }
+        rendered = str(_loggable_config(config))
+        assert self.FAKE_KEY not in rendered
+
+    def test_the_useful_parts_survive(self, logged):
+        """Masking must not cost the diagnostic: which provider and model is the
+        reason this line exists."""
+        from continuum.memory.providers.mem0 import _loggable_config
+
+        rendered = str(
+            _loggable_config(
+                {
+                    "llm": {
+                        "provider": "gemini",
+                        "config": {"model": "gemini-2.5-flash", "api_key": self.FAKE_KEY},
+                    }
+                }
+            )
+        )
+        assert "gemini" in rendered
+        assert "gemini-2.5-flash" in rendered
+
+    def test_it_is_not_governed_by_LOG_PROMPT_CONTENT(self, monkeypatch):
+        """A credential is not a debugging convenience. Turning content logging
+        on must not turn keys back on."""
+        from continuum.config import settings
+        from continuum.memory.providers.mem0 import _loggable_config
+
+        monkeypatch.setattr(settings, "log_prompt_content", True)
+        config = {"embedder": {"config": {"api_key": self.FAKE_KEY}}}
+        assert self.FAKE_KEY not in str(_loggable_config(config))
+
+
 # ── the canary itself has to work ─────────────────────────────────────────────
 
 
