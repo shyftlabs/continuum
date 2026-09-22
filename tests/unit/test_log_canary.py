@@ -691,6 +691,31 @@ class TestCredentialsNeverReachTheLog:
         offenders = [line for line in logged if self.FAKE_KEY in line]
         assert not offenders, offenders
 
+    def test_startup_config_validation_names_fields_not_values(self, logged, monkeypatch):
+        """Startup logs one line per configuration problem. Each message names
+        the field that is wrong -- "SESSION_REDIS_HOST: Required when
+        SESSION_ENABLED=true" -- and never the value, which is the only reason
+        it is safe to log a settings problem at all. A message rewritten to
+        include the offending value would leak whatever that setting holds."""
+        from continuum.config import settings
+        from continuum.core.lifecycle import validate_configuration
+
+        monkeypatch.setattr(settings, "session_id_secret", self.FAKE_KEY)
+        monkeypatch.setattr(settings, "langfuse_secret_key", self.FAKE_KEY)
+        monkeypatch.setattr(settings, "openai_api_key", self.FAKE_KEY)
+        # Force problems, or the assertion below has nothing to inspect: on a
+        # correctly configured machine validate_configuration() returns empty
+        # lists and the test passes without exercising a single message.
+        monkeypatch.setattr(settings, "session_enabled", True)
+        monkeypatch.setattr(settings, "session_redis_host", "")
+        monkeypatch.setattr(settings, "memory_enabled", True)
+        monkeypatch.setattr(settings, "qdrant_host", "")
+
+        errors, warnings = validate_configuration()
+        assert errors or warnings, "no configuration problems produced — nothing was checked"
+        rendered = " ".join(str(c.message) + str(c.field) for c in [*errors, *warnings])
+        assert self.FAKE_KEY not in rendered, rendered
+
     def test_it_is_not_governed_by_LOG_PROMPT_CONTENT(self, monkeypatch):
         """A credential is not a debugging convenience. Turning content logging
         on must not turn keys back on."""
