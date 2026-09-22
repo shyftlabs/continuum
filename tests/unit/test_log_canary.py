@@ -359,6 +359,36 @@ class TestInputScanner:
         assert_clean(logged, "message_builder input scanner reason")
 
 
+# ── identity, on the channel no call site can reach ───────────────────────────
+
+
+class TestIdentityInTheLogContext:
+    """llm/callbacks.py publishes user_id and session_id into the logging
+    context, and JSONFormatter stamps it onto every structured line -- so a
+    single leaking value appears on thousands of lines, not one."""
+
+    def test_the_context_does_not_carry_it_to_the_line(self, logged, monkeypatch):
+        from continuum.config import settings
+        from continuum.logging import LogContext, _context_for_output
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        with LogContext(trace_id="t-1", user_id=CANARY, session_id=f"u:{CANARY}"):
+            rendered = _context_for_output()
+        assert CANARY not in str(rendered), rendered
+
+    def test_a_real_run_does_not_stamp_the_caller(self, logged, monkeypatch):
+        """set_log_context is what callbacks.py calls; this is that shape."""
+        from continuum.config import settings
+        from continuum.logging import _context_for_output, clear_log_context, set_log_context
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        try:
+            set_log_context(trace_id="t-1", user_id=CANARY, session_id=f"u:{CANARY}")
+            assert CANARY not in str(_context_for_output())
+        finally:
+            clear_log_context()
+
+
 # ── the canary itself has to work ─────────────────────────────────────────────
 
 

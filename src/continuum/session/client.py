@@ -13,7 +13,7 @@ from typing import Any
 
 from continuum.core.background_tasks import BackgroundTaskRegistry
 from continuum.exceptions import InsecureConfigurationError
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.memory import MemoryClient
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
@@ -653,7 +653,11 @@ class SessionClient:
                 configured_mode = self._session_config.memory_write_mode
                 in_temporal = _in_temporal_activity()
                 effective_mode = "sync" if in_temporal else configured_mode
-                sid = session_id[:8] if session_id else "none"
+                # Not session_id[:8]: on shipped defaults a session id is
+                # plaintext ("u:alice@clinic.example"), so the first 8 characters
+                # are the front of an email. The pseudonym is opaque and still
+                # lets an operator group a session's lines.
+                sid = log_id(session_id) if session_id else "none"
                 if effective_mode == "background" and registry is not None:
                     logger.info(
                         "🧠 Memory write mode=background — scheduling mem0 write off the "
@@ -879,7 +883,7 @@ class SessionClient:
                             logger.error(
                                 "Rejected fact %s could not be deleted (%s: %s) — it REMAINS in "
                                 "long-term memory",
-                                fact_id,
+                                log_id(fact_id),
                                 type(de).__name__,
                                 de,
                             )
@@ -889,7 +893,7 @@ class SessionClient:
                                 logger.error(
                                     "Rejected fact %s was not deleted (the provider reported "
                                     "failure) — it REMAINS in long-term memory",
-                                    fact_id,
+                                    log_id(fact_id),
                                 )
                                 undeletable.append(fact_id)
 

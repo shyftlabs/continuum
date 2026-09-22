@@ -273,9 +273,16 @@ sits on the handlers rather than in the call sites, so it covers modules
 written after it. Its coverage is not unconditional, and the rule is
 worth knowing before you add a log line:
 
-- an argument wrapped in `log_content()` is always withheld
-- an argument longer than 64 characters is withheld as a backstop
-- **content built into the message by an f-string is not withheld**
+- an argument wrapped in `log_content()` or `log_id()` is withheld
+- **nothing else is** — in particular, content built into the message by
+  an f-string is not withheld, because by the time `logging` sees an
+  f-string the message is one finished string and the structure can no
+  longer be told from the data
+
+A length threshold sat here briefly and was removed. It was wrong in both
+directions: 46 characters of PHI passed it, while a 65-character
+pasteable `continuum mcp diff … --pins PATH` command did not. Length does
+not distinguish a medical note from a file path.
 
 So log content as an argument, never as an f-string:
 
@@ -286,6 +293,64 @@ logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
 Pass the whole value — no `[:200]` slicing. Truncating at the call site
 leaks a prefix and throws the rest away; `log_content` gives the operator
 nothing by default and everything when they ask.
+
+### Identity: `log_id()`
+
+The user's *words* and the user's *identity* are different data and get
+different treatment:
+
+```python
+logger.info("Session ready: %s", log_id(session_id))
+```
+
+`<31 chars>` would be the wrong redaction for an identifier — every
+session would render the same and you could no longer tell whether two
+lines belong to one user. `log_id()` gives a **stable pseudonym**
+instead:
+
+```
+LOG_PROMPT_CONTENT unset  →  Session ready: id#4f2a9c1e8b3d7a05
+LOG_PROMPT_CONTENT=true   →  Session ready: c:conv-1:u:alice@clinic.example
+```
+
+The same id renders to the same pseudonym every time, so incidents stay
+groupable while the person stays unidentifiable.
+
+It is keyed by **`SESSION_ID_SECRET`**. With no secret configured it
+withholds outright (`<31 chars>`) rather than falling back to a bare
+hash: user ids are guessable — an email, a customer number — so an
+unkeyed digest of one is reversible with a word list. Correlation is what
+degrades, not privacy.
+
+This also applies to the `user_id` and `session_id` fields that
+`JSONFormatter` stamps on **every** structured line from the logging
+context. `trace_id` and `span_id` are left whole: Continuum generates
+them, they are derived from nobody, and they are the remaining
+correlation thread.
+
+> **Why `session_id` is identity, not a label.** With
+> `SESSION_HASH_IDS=false` (the default) a session id is derived in
+> plaintext from the user id, so it *is* the user id:
+> `c:conv-1:u:alice@clinic.example`. Where you can set it,
+> **`SESSION_HASH_IDS=true` is the better fix** — it makes the id opaque
+> at the source, so Redis keys and dashboards benefit too, not just the
+> log. `log_id()` covers the deployments that cannot.
+
+### What this does not cover
+
+Two limits, stated so they are not mistaken for solved:
+
+- **Telemetry.** `redact_for_telemetry` withholds a span payload only
+  when a policy denies the run's data labels, and the two `SpanScope`
+  call sites pass `mask_secrets=False` deliberately (`redact_dict`
+  matches keys by substring and would mask `prompt_tokens`, destroying
+  cost observability). On an unlabelled run, or with no `PolicyStore`
+  configured, span content reaches Langfuse in full. Error reports are
+  the exception: their `user_id`/`session_id` are pseudonymised.
+- **Forgetting still leaks.** Nothing forces a call site to declare its
+  content. `tests/unit/test_log_canary.py` drives the real paths with a
+  sentinel and fails the build when a covered one leaks — but a path
+  without a canary test has no net.
 
 > **Replaces `LOG_FULL_PROMPT`.** That variable was read directly from
 > `os.environ` in `message_builder.py` and only lifted a 2000-character
