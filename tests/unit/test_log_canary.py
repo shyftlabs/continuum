@@ -389,6 +389,65 @@ class TestIdentityInTheLogContext:
             clear_log_context()
 
 
+# ── sessions ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestSessionPaths:
+    """A session id is not an opaque handle. With SESSION_HASH_IDS=false -- the
+    shipped default -- it is derived in plaintext from the user id, so every line
+    that logs one writes the user id too, and the sentinel arrives at both.
+    """
+
+    async def _client(self):
+        from continuum.session import SessionClient, SessionConfig
+        from continuum.session.providers.memory import MemorySessionProvider
+
+        cfg = SessionConfig(enabled=True, provider="memory", hash_session_ids=False)
+        client = SessionClient(session_config=cfg, memory_client=None, auto_initialize=False)
+        client.set_provider(MemorySessionProvider(cfg))
+        client._initialized = True
+        return client
+
+    async def test_creating_a_session_does_not_log_the_user(self, logged, monkeypatch):
+        from continuum.config import settings
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        client = await self._client()
+        await client.get_or_create_session(user_id=CANARY, conversation_id="conv-1")
+        assert_clean(logged, "session.get_or_create_session")
+
+    async def test_adding_a_message_does_not_log_the_session_id(self, logged, monkeypatch):
+        """bind_principal because the session is owned -- PR #98's ownership gate
+        refuses an unbound caller, and the refusal would end the test before the
+        write ever logged anything."""
+        from continuum.config import settings
+        from continuum.llm.types import ChatMessage
+        from continuum.session import bind_principal
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        client = await self._client()
+        with bind_principal(CANARY):
+            sid = await client.get_or_create_session(user_id=CANARY)
+            logged.clear()
+            await client.add_message(
+                sid, ChatMessage(role="user", content="hi"), store_in_memory=False
+            )
+        assert_clean(logged, "session.add_message")
+
+    async def test_reading_history_does_not_log_the_session_id(self, logged, monkeypatch):
+        from continuum.config import settings
+        from continuum.session import bind_principal
+
+        monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
+        client = await self._client()
+        with bind_principal(CANARY):
+            sid = await client.get_or_create_session(user_id=CANARY)
+            logged.clear()
+            await client.get_conversation_history(sid)
+        assert_clean(logged, "session.get_conversation_history")
+
+
 # ── the canary itself has to work ─────────────────────────────────────────────
 
 

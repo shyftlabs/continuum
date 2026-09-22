@@ -136,6 +136,12 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    # G004 specifically, not all of "G": the rest of flake8-logging-format is
+    # style (G201 prefers .exception() over .error(exc_info=True)) and would pull
+    # 26 unrelated sites into a security change. G004 is the one that matters
+    # here -- an f-string message cannot be redacted, because logging receives it
+    # already interpolated.
+    "G004",  # f-string in a logging call
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -153,6 +159,24 @@ known-first-party = ["continuum"]
 "tests/**" = ["E402", "C408", "B017"]
 # Playground demos set gateway env vars / sys.path before importing continuum.
 "playground/**" = ["E402"]
+# G004 (f-string in a logging call) is being adopted package by package. An
+# f-string collapses the format string and its values into one finished message
+# before `logging` sees it, so PromptContentFilter cannot separate structure from
+# data and the line cannot be redacted at all -- converting to "%s" + arguments is
+# what makes a site reachable by log_content()/log_id(). These packages have not
+# been converted yet; delete an entry when its package is done.
+"src/continuum/agent/**" = ["G004"]
+"src/continuum/tools/**" = ["G004"]
+"src/continuum/memory/**" = ["G004"]
+"src/continuum/llm/**" = ["G004"]
+"src/continuum/observability/**" = ["G004"]
+"src/continuum/core/**" = ["G004"]
+"src/continuum/evaluation/**" = ["G004"]
+"src/continuum/temporal/**" = ["G004"]
+"src/continuum/connectors/**" = ["G004"]
+"src/continuum/cli.py" = ["G004"]
+"src/continuum/utils/**" = ["G004"]
+"src/continuum/security/**" = ["G004"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -13,7 +13,7 @@ from typing import Any
 
 from continuum.core.background_tasks import BackgroundTaskRegistry
 from continuum.exceptions import InsecureConfigurationError
-from continuum.logging import get_logger, log_id
+from continuum.logging import get_logger, log_content, log_id
 from continuum.memory import MemoryClient
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
@@ -380,7 +380,7 @@ class SessionClient:
                 "get_session_metadata", session_id=session_id
             )
         except Exception as e:  # noqa: BLE001 — the store is what failed
-            logger.debug(f"Ownership lookup failed for {session_id}: {e}")
+            logger.debug("Ownership lookup failed for %s: %s", log_id(session_id), e)
             return None, True
         if metadata is None:
             # Absent metadata on a healthy store genuinely means "no such
@@ -490,22 +490,24 @@ class SessionClient:
 
             if provider_name not in available:
                 logger.warning(
-                    f"Provider '{provider_name}' not available. "
-                    f"Available providers: {available}. Falling back to '{available[0]}'"
+                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'",
+                    provider_name,
+                    available,
+                    available[0],
                 )
                 provider_name = available[0]
 
             self._provider = create_provider(provider_name, self._session_config)
-            logger.info(f"Session provider initialized: {provider_name}")
+            logger.info("Session provider initialized: %s", provider_name)
 
         except ImportError as e:
-            logger.error(f"Failed to import session provider: {e}")
+            logger.error("Failed to import session provider: %s", e)
         except InsecureConfigurationError:
             # Fail closed on an insecure secret rather than silently leaving the
             # provider unset (which surfaces later as a confusing "not available").
             raise
         except Exception as e:
-            logger.error(f"Failed to initialize session provider: {e}")
+            logger.error("Failed to initialize session provider: %s", e)
 
     def initialize(self) -> bool:
         """
@@ -580,14 +582,15 @@ class SessionClient:
             )
 
             logger.info(
-                f"Session ready: {session_id}",
-                extra={"user_id": user_id, "conversation_id": conversation_id},
+                "Session ready: %s",
+                log_id(session_id),
+                extra={"user_id": log_id(user_id), "conversation_id": log_id(conversation_id)},
             )
 
             return session_id
 
         except Exception as e:
-            logger.error(f"Failed to get or create session: {e}")
+            logger.error("Failed to get or create session: %s", e)
             report_error(
                 e,
                 context="session_get_or_create",
@@ -710,14 +713,15 @@ class SessionClient:
                     )
 
             logger.debug(
-                f"Added message to session: {session_id}",
+                "Added message to session: %s",
+                log_id(session_id),
                 extra={"role": message.role, "store_in_memory": store_in_memory},
             )
 
         except (SessionNotFoundError, SessionMessageLimitError):
             raise
         except Exception as e:
-            logger.error(f"Failed to add message to session: {e}")
+            logger.error("Failed to add message to session: %s", e)
             report_error(
                 e,
                 context="session_add_message",
@@ -762,9 +766,10 @@ class SessionClient:
                     memory_metadata["_agent_id"] = agent_id
 
                 logger.debug(
-                    f"🧠 Extracting memory: role={message.role} "
-                    f"session={session_id[:8] if session_id else 'none'} "
-                    f"user={session_metadata.user_id[:8] if session_metadata.user_id else 'none'}"
+                    "🧠 Extracting memory: role=%s session=%s user=%s",
+                    message.role,
+                    log_id(session_id[:8] if session_id else "none"),
+                    log_id(session_metadata.user_id[:8] if session_metadata.user_id else "none"),
                 )
 
                 result = await self.memory_client.add(
@@ -915,7 +920,11 @@ class SessionClient:
 
                 if stored_pairs:
                     facts_preview = "; ".join(t[:60] for t, _ in stored_pairs[:3])
-                    logger.info(f"✅ Memory: {len(stored_pairs)} fact(s) stored — {facts_preview}")
+                    logger.info(
+                        "✅ Memory: %s fact(s) stored — %s",
+                        len(stored_pairs),
+                        log_content(facts_preview),
+                    )
                 else:
                     logger.debug("🧠 Memory: no new facts extracted")
 
@@ -925,10 +934,11 @@ class SessionClient:
                     try:
                         on_stored(final_facts)
                     except Exception as ce:
-                        logger.warning(f"on_stored callback failed: {ce}")
+                        logger.warning("on_stored callback failed: %s", ce)
             else:
                 logger.warning(
-                    f"⚠️ Cannot store memory: Session metadata not found for session_id={session_id[:8] if session_id else 'none'}"
+                    "⚠️ Cannot store memory: Session metadata not found for session_id=%s",
+                    log_id(session_id[:8] if session_id else "none"),
                 )
         except Exception as mem_error:
             # Memory storage failures should not break session operations.
@@ -957,9 +967,10 @@ class SessionClient:
                 )
             else:
                 logger.error(
-                    f"❌ Memory storage failed: {mem_error}",
+                    "❌ Memory storage failed: %s",
+                    mem_error,
                     exc_info=True,
-                    extra={"session_id": session_id, "role": message.role},
+                    extra={"session_id": log_id(session_id), "role": message.role},
                 )
                 report_error(
                     mem_error,
@@ -1001,7 +1012,7 @@ class SessionClient:
         except (SessionNotFoundError, SessionMessageLimitError):
             raise
         except Exception as e:
-            logger.error(f"Failed to get conversation history: {e}")
+            logger.error("Failed to get conversation history: %s", e)
             report_error(
                 e,
                 context="session_get_history",
@@ -1050,7 +1061,7 @@ class SessionClient:
             session_metadata = await self._call("get_session_metadata", session_id)
 
             if not session_metadata:
-                logger.warning(f"Session metadata not found: {session_id}")
+                logger.warning("Session metadata not found: %s", log_id(session_id))
                 return []
 
             search_result = await self.memory_client.search(
@@ -1064,7 +1075,7 @@ class SessionClient:
             return search_result.results
 
         except Exception as e:
-            logger.error(f"Failed to get relevant memories: {e}")
+            logger.error("Failed to get relevant memories: %s", e)
             report_error(
                 e,
                 context="session_get_memories",
@@ -1099,7 +1110,7 @@ class SessionClient:
             return result
 
         except Exception as e:
-            logger.error(f"Failed to clear session: {e}")
+            logger.error("Failed to clear session: %s", e)
             report_error(
                 e,
                 context="session_clear",
@@ -1134,7 +1145,7 @@ class SessionClient:
             return result
 
         except Exception as e:
-            logger.error(f"Failed to delete session: {e}")
+            logger.error("Failed to delete session: %s", e)
             report_error(
                 e,
                 context="session_delete",
@@ -1171,7 +1182,7 @@ class SessionClient:
             return metadata_result
 
         except Exception as e:
-            logger.error(f"Failed to get session metadata: {e}")
+            logger.error("Failed to get session metadata: %s", e)
             report_error(
                 e,
                 context="session_get_metadata",
@@ -1210,11 +1221,11 @@ class SessionClient:
         try:
             result: bool = await self._call("update_session_metadata", session_id, metadata)
             if not result:
-                logger.warning(f"Session not found when updating metadata: {session_id}")
+                logger.warning("Session not found when updating metadata: %s", log_id(session_id))
             return result
 
         except Exception as e:
-            logger.error(f"Failed to update session metadata: {e}")
+            logger.error("Failed to update session metadata: %s", e)
             report_error(
                 e,
                 context="session_update_metadata",
