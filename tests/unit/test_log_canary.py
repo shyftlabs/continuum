@@ -631,31 +631,64 @@ class TestAgentMemoryService:
 
 
 class TestApproverIdentity:
-    """An unauthorized tool-approval attempt is logged by name. The actor and the
-    allow-list are both people -- a reviewer's email or username.
+    """The one line in this work where withholding is the wrong answer.
 
-    This is a security audit line and naming the actor is its purpose, so the
-    pseudonym has to be stable: "the same unknown actor tried forty times" must
-    still be readable, and an operator investigating can set LOG_PROMPT_CONTENT
-    to get the real name back.
+    An unauthorized tool-approval attempt is a security event, and naming the
+    actor is what the line is for. The two arguments get opposite treatment, for
+    two different reasons:
+
+      the actor      named. Identifying them is the purpose. Pseudonymising it
+                     was tried and reverted: the only way back to the real name
+                     was LOG_PROMPT_CONTENT, which reveals every prompt and
+                     memory in the deployment, so nobody would turn it on
+                     mid-incident to answer one question. With no
+                     SESSION_ID_SECRET it degraded to "<38 chars>", which cannot
+                     even tell two attempts apart.
+
+      the allow-list withheld, and not for privacy. Printing the roster on every
+                     failed attempt publishes the exact list of people to
+                     impersonate or phish -- on the line that fires precisely
+                     when someone is probing the approval gate.
     """
 
-    def test_an_unauthorized_approver_is_not_named(self, logged, monkeypatch):
+    def _attempt(self, monkeypatch, actor: str, approvers: list[str]):
         from continuum.config import settings
         from continuum.temporal.types import ApprovalDecision
         from continuum.temporal.workflows.agent_workflow import AgentWorkflow
 
         monkeypatch.setattr(settings, "session_id_secret", "0123456789abcdef" * 4)
-
         workflow = AgentWorkflow.__new__(AgentWorkflow)
         workflow._tool_approvals = {
-            "req-1": {"description": "delete everything", "approvers": ["boss@clinic.example"]}
+            "req-1": {"description": "delete everything", "approvers": approvers}
         }
         decision = ApprovalDecision(
-            request_id="req-1", decision="approve", decided_by=CANARY, reason="ok"
+            request_id="req-1", decision="approve", decided_by=actor, reason="ok"
         )
         assert workflow._resolve_tool_approval(decision) is True
-        assert_clean(logged, "temporal.agent_workflow unauthorized approver")
+
+    def test_the_unauthorized_actor_is_named(self, logged, monkeypatch):
+        self._attempt(monkeypatch, actor="mallory@clinic.example", approvers=["boss@x.test"])
+        assert any("mallory@clinic.example" in line for line in logged), logged
+
+    def test_the_approver_roster_is_not_published(self, logged, monkeypatch):
+        self._attempt(
+            monkeypatch,
+            actor="mallory@clinic.example",
+            approvers=[f"{CANARY}@clinic.example", "oncall@clinic.example"],
+        )
+        assert_clean(logged, "temporal.agent_workflow approver roster")
+
+    def test_the_line_still_says_how_many_could_have_approved(self, logged, monkeypatch):
+        """Withholding the roster must not cost the diagnostic entirely -- an
+        empty approver list and a list of six are different problems.
+
+        Asserted on the full phrase, not on the digit: an earlier version looked
+        for "2" anywhere in the line and passed against the pseudonym
+        id#762482c8db15b989, which contains one."""
+        self._attempt(
+            monkeypatch, actor="mallory@clinic.example", approvers=["a@x.test", "b@x.test"]
+        )
+        assert any("2 configured approvers" in line for line in logged), logged
 
 
 # ── credentials ───────────────────────────────────────────────────────────────

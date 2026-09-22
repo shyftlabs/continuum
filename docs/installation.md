@@ -307,6 +307,14 @@ sensitive?"* but *"whose data is it?"*:
 | `user_id`, `session_id`, `memory_id`, an approver's name | `log_id()` |
 | agent and tool names, model ids, counts, `trace_id`, paths, commands | bare |
 
+One deliberate exception, in `temporal/workflows/agent_workflow.py`: an
+unauthorized tool-approval attempt names the actor rather than
+pseudonymising them, because identifying them is what a security audit
+line is for. The same line withholds the approver roster — not for
+privacy, but because publishing who *could* have approved, on the line
+that fires when someone is probing the gate, hands over the list of
+people to impersonate.
+
 Pass the whole value — no `[:200]` slicing. Truncating at the call site
 leaks a prefix *and* throws the rest away; the wrappers give the operator
 nothing by default and everything when they ask.

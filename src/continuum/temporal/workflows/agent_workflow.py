@@ -38,8 +38,6 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
-from continuum.logging import log_id
-
 _logger = logging.getLogger(__name__)
 
 
@@ -145,11 +143,29 @@ class AgentWorkflow:
             # a signal handler that has to remain callable without a workflow
             # event loop, which workflow.logger requires. Determinism is
             # unaffected -- logging is not part of replayed state.
+            # The one log line in the SDK that names a person on purpose, and
+            # the one place log_id() is deliberately not used.
+            #
+            # The actor is named because identifying them is what this line is
+            # for. Pseudonymising it was tried and reverted: the only route back
+            # to the real name is LOG_PROMPT_CONTENT, which reveals every prompt
+            # and memory in the deployment, so nobody turns it on mid-incident to
+            # answer one question -- and with no SESSION_ID_SECRET configured it
+            # degraded to "<38 chars>", which cannot even tell two attempts apart.
+            #
+            # The allow-list is withheld for a different reason, not privacy:
+            # printing the roster on every failed attempt publishes the exact
+            # list of people to impersonate or phish, on the line that fires
+            # precisely when someone is probing the approval gate. The count is
+            # kept, because an empty approver list and a list of six are
+            # different problems.
             _logger.warning(
-                "Unauthorized tool-approval attempt by '%s' for request '%s': not in approvers %s. Discarded; the request stays pending.",
-                log_id(decision.decided_by),
+                "Unauthorized tool-approval attempt by '%s' for request '%s': "
+                "not one of the %d configured approvers. "
+                "Discarded; the request stays pending.",
+                decision.decided_by,
                 decision.request_id,
-                log_id(entry["approvers"]),
+                len(entry["approvers"]),
             )
             return True  # handled: it was ours, and it was refused
 
