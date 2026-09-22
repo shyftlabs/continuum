@@ -526,6 +526,49 @@ class TestLLMClientSessionId:
         assert_clean(logged, "llm.client history load")
 
 
+# ── tools ─────────────────────────────────────────────────────────────────────
+
+
+class TestToolContextCapture:
+    """A tool result that will not parse is logged with a preview. The preview is
+    the tool's output -- a record, a balance, a search hit."""
+
+    def test_an_unparseable_result_is_not_previewed(self, logged):
+        from continuum.tools.executor import ToolExecutor
+        from continuum.tools.types import ToolContextConfig, ToolContextVariable
+
+        server = MagicMock()
+        server.name = "srv"
+        server.context_config = ToolContextConfig(
+            variables=[ToolContextVariable(name="x", capture_from="lookup", json_path="$.x")]
+        )
+
+        ToolExecutor()._capture_context_variables(server, "lookup", f"not json: {CANARY}")
+        assert_clean(logged, "tools.executor._capture_context_variables")
+
+
+@pytest.mark.asyncio
+class TestMCPToolInvocation:
+    """Malformed arguments are logged whole on the way in. They are whatever the
+    model asked for on the user's behalf."""
+
+    async def test_malformed_arguments_are_not_logged(self, logged):
+        from continuum.tools.util import MCPUtil
+
+        server = MagicMock()
+        server.name = "srv"
+        tool = MagicMock()
+        tool.name = "lookup"
+
+        with contextlib.suppress(Exception):
+            await MCPUtil.invoke_mcp_tool_with_artifact(
+                server=server,
+                tool=tool,
+                input_json=f'{{"q": "{CANARY}"',  # unterminated
+            )
+        assert_clean(logged, "tools.util.invoke_mcp_tool_with_artifact")
+
+
 # ── credentials ───────────────────────────────────────────────────────────────
 
 

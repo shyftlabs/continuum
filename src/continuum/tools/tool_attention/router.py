@@ -234,7 +234,7 @@ async def apply_tool_attention(
     try:
         filtered = await asyncio.to_thread(router.route, messages, all_tools, context)
     except Exception as e:
-        logger.warning(f"tool-attention routing error (using all tools): {e}")
+        logger.warning("tool-attention routing error (using all tools): %s", e)
         return None
 
     # Phase 1: build summary message so the LLM sees all tool names each turn.

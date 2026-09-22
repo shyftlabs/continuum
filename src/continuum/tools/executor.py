@@ -375,8 +375,10 @@ class ToolExecutor:
             expected_type = param_schema.get("type")
             if expected_type and not self._validate_injection_type(stored_value, expected_type):
                 logger.warning(
-                    f"Skipping injection of {param_name}: stored value type "
-                    f"{type(stored_value).__name__} does not match schema type '{expected_type}'"
+                    "Skipping injection of %s: stored value type %s does not match schema type '%s'",
+                    param_name,
+                    type(stored_value).__name__,
+                    expected_type,
                 )
                 continue
 
@@ -390,8 +392,10 @@ class ToolExecutor:
                     # Override LLM value with stored value
                     if arguments[param_name] != stored_value:
                         logger.debug(
-                            f"Overriding LLM-provided {param_name}='{arguments[param_name]}' "
-                            f"with stored value '{stored_value}'"
+                            "Overriding LLM-provided %s='%s' with stored value '%s'",
+                            param_name,
+                            log_content(arguments[param_name]),
+                            log_content(stored_value),
                         )
                         arguments[param_name] = stored_value
                         injected.append(f"{param_name} (override)")
@@ -404,7 +408,7 @@ class ToolExecutor:
                 injected.append(param_name)
 
         if injected:
-            logger.info(f"💉 Injected context variables into {tool.name}: {', '.join(injected)}")
+            logger.info("💉 Injected context variables into %s: %s", tool.name, ", ".join(injected))
 
         return arguments
 
@@ -437,8 +441,10 @@ class ToolExecutor:
         except (json.JSONDecodeError, TypeError) as e:
             # Log JSON parsing errors for debugging
             logger.warning(
-                f"⚠️ Failed to parse tool result JSON for context capture ({tool_name}): {e}. "
-                f"Result preview: {str(result)[:200]}"
+                "⚠️ Failed to parse tool result JSON for context capture (%s): %s. Result preview: %s",
+                tool_name,
+                e,
+                log_content(result),
             )
             return
 
@@ -493,7 +499,7 @@ class ToolExecutor:
             captured.append(f"{key}={display_value}")
 
         if captured:
-            logger.info(f"📥 Captured context variables from {tool_name}: {', '.join(captured)}")
+            logger.info("📥 Captured context variables from %s: %s", tool_name, ", ".join(captured))
 
     async def initialize(self, metadata: dict[str, Any] | None = None) -> None:
         """Initialize the tool registry from MCP servers.
@@ -585,10 +591,12 @@ class ToolExecutor:
                 unmatched = sorted(set(configured) - available)
                 if unmatched:
                     logger.warning(
-                        f"ToolContextVariable '{variable.name}' on server "
-                        f"'{server.name}': {field_name} names no such tool "
-                        f"{unmatched}. Available: {sorted(available)}. Use the "
-                        f"server's own tool names, not the namespaced keys."
+                        "ToolContextVariable '%s' on server '%s': %s names no such tool %s. Available: %s. Use the server's own tool names, not the namespaced keys.",
+                        variable.name,
+                        server.name,
+                        field_name,
+                        unmatched,
+                        sorted(available),
                     )
 
     async def _build_registry(
@@ -661,7 +669,7 @@ class ToolExecutor:
                 # tool name above). Re-raise without the generic wrapper log.
                 raise
             except Exception as e:
-                logger.error(f"Error building tool registry for server {server.name}: {e}")
+                logger.error("Error building tool registry for server %s: %s", server.name, e)
                 raise
 
         if len(unreviewed) == 1:
@@ -841,7 +849,9 @@ class ToolExecutor:
                     # Context capture failures should not break tool execution
                     # Log but continue - the tool result is still valid
                     logger.debug(
-                        f"Context variable capture failed for tool '{tool_name}': {capture_error}",
+                        "Context variable capture failed for tool '%s': %s",
+                        tool_name,
+                        capture_error,
                         extra={"tool_name": tool_name, "server_name": server.name},
                     )
 
@@ -868,7 +878,7 @@ class ToolExecutor:
                         "error_type": "TimeoutError",
                     }
                 )
-                logger.error(f"Tool execution timed out: {tool_name}")
+                logger.error("Tool execution timed out: %s", tool_name)
 
                 # Store error artifact
                 error_artifact = MCPToolArtifact(
@@ -902,7 +912,9 @@ class ToolExecutor:
 
                 if is_json_error:
                     logger.error(
-                        f"❌ Tool execution failed due to invalid JSON response for '{tool_name}': {error_msg}",
+                        "❌ Tool execution failed due to invalid JSON response for '%s': %s",
+                        tool_name,
+                        error_msg,
                         extra={
                             "tool_name": tool_name,
                             "server_name": server.name,
@@ -912,7 +924,9 @@ class ToolExecutor:
                     )
                 else:
                     logger.error(
-                        f"Tool execution failed for '{tool_name}': {error_msg}",
+                        "Tool execution failed for '%s': %s",
+                        tool_name,
+                        error_msg,
                         extra={
                             "tool_name": tool_name,
                             "server_name": server.name,
@@ -1049,8 +1063,7 @@ class ToolExecutor:
                         )
                 else:
                     logger.error(
-                        f"Tool call '{tc.function.name}' failed: {result}",
-                        exc_info=result,
+                        "Tool call '%s' failed: %s", tc.function.name, result, exc_info=result
                     )
                     content = f"Error executing tool '{tc.function.name}': {result}"
                 processed.append(
