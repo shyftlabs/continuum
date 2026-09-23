@@ -3,6 +3,7 @@ Tests for MessageBuilder.prepare_messages() refactored behaviors:
 - Returns (messages, user_message_index) tuple
 - Injects pipeline_context from context.metadata as a system message
 - Skips Redis session history when context.is_handoff=True
+- Injects tool context only into agents that have tools to use it with
 """
 
 from __future__ import annotations
@@ -544,3 +545,81 @@ class TestCatalogueInsertPosition:
         mem = _idx(out, "User profile")
         assert cat < mem, "the marker must precede the block that changes every turn"
         assert _idx(out, "agent prompt") < cat, "the stable prompt stays in the prefix"
+
+
+# ---------------------------------------------------------------------------
+# Tool context reaches only agents that can use it
+# ---------------------------------------------------------------------------
+
+_CART = "tl:conv-4f1a"  # the shape gateway-local-shop builds: f"{user_id}:{conversation_id}"
+
+_SHOP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "shop__view_cart",
+        "description": "View the cart",
+        "parameters": {"type": "object", "properties": {"session_id": {"type": "string"}}},
+    },
+}
+
+
+def _cart_context():
+    from continuum.tools.types import ToolContextState
+
+    state = ToolContextState()
+    state.set("shop", "session_id", _CART)
+    return state
+
+
+async def _system_text(agent, state) -> str:
+    builder, _, _ = _make_builder()
+    with patch("continuum.observability.decorators.observe", lambda **kw: lambda f: f):
+        messages, _ = await builder.prepare_messages(
+            agent, "which food?", create_run_context(), tool_context_state=state
+        )
+    return "\n".join(m["content"] for m in messages if m["role"] == "system")
+
+
+class TestToolContextOnlyForAgentsWithTools:
+    """Tool context is a hint for tool calls: "Current tool context (use these
+    values for tool calls)" followed by the values, and an instruction not to
+    create a session because one exists.
+
+    It was injected into every agent that inherited a non-empty context, whether
+    or not the agent had a tool to call. A live debate run showed it three times
+    -- pro-premium, pro-budget and food-judge, none of which has a tool -- so each
+    of their prompts carried the cart id, and in gateway-local-shop that id is
+    "<user_id>:<conversation_id>", built with an f-string and never hashed. The
+    user's id went to the model provider three extra times, alongside
+    instructions about tools the agents did not have.
+
+    The test is "has regular tools", the same one BaseAgent.get_tools_for_llm()
+    uses before adding the think and headroom built-ins. It is deliberately not
+    "get_tools_for_llm() is non-empty": that also counts handoffs, and in a live
+    handoff run handoff-orchestrator -- whose only tool was
+    handoff_to_handoff-executor, which takes a reason and never a session_id --
+    received the context too.
+    """
+
+    async def test_a_tool_less_agent_is_not_given_it(self):
+        text = await _system_text(_make_agent(), _cart_context())
+        assert _CART not in text
+        assert "Current tool context" not in text
+
+    async def test_a_handoff_only_agent_is_not_given_it(self):
+        from continuum.agent.types import Handoff
+
+        agent = _make_agent()
+        agent.handoffs = [Handoff(target_agent="executor", description="does the shop work")]
+        assert agent.get_tools_for_llm(), "the handoff tool should be the agent's only tool"
+
+        text = await _system_text(agent, _cart_context())
+        assert _CART not in text
+
+    async def test_an_agent_with_a_tool_still_gets_it(self):
+        """The case the injection exists for must not regress."""
+        agent = _make_agent()
+        agent.tools = [_SHOP_TOOL]
+        text = await _system_text(agent, _cart_context())
+        assert _CART in text
+        assert "Current tool context" in text

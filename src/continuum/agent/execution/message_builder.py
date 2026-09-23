@@ -205,8 +205,24 @@ class MessageBuilder(IMessageBuilder):
         if agent.config and agent.config.react_mode:
             messages.append({"role": "system", "content": _build_react_template(agent)})
 
-        # Inject tool context into system prompt for LLM awareness
-        if tool_context_state and not tool_context_state.is_empty():
+        # Inject tool context into system prompt for LLM awareness -- but only for
+        # an agent with a tool to use it with. The block reads "use these values
+        # for tool calls", and was going to every agent that inherited a
+        # non-empty context: a live debate run put the cart id into the prompts
+        # of three agents that had no tools, and in gateway-local-shop that id is
+        # "<user_id>:<conversation_id>", never hashed, so the user's id went to
+        # the model provider for nothing.
+        #
+        # "Has regular tools" is the test BaseAgent.get_tools_for_llm() itself
+        # applies before adding the think and headroom built-ins. Not "has any
+        # tool": get_tools_for_llm() also returns handoffs, and a handoff takes a
+        # reason, never a session_id -- an orchestrator whose only tool is a
+        # handoff was receiving the context too.
+        if (
+            tool_context_state
+            and not tool_context_state.is_empty()
+            and getattr(agent, "tools", None)
+        ):
             # Validate tool context state before injection
             try:
                 if not hasattr(tool_context_state, "to_prompt_context") or not hasattr(
