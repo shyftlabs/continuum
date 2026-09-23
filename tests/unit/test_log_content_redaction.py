@@ -38,6 +38,7 @@ import logging
 
 import pytest
 
+from continuum.agent import BaseAgent
 from continuum.config import Settings, settings
 from continuum.logging import PromptContentFilter, log_content, setup_logging
 
@@ -332,6 +333,146 @@ class TestTheRealLeak:
         assert out, "nothing was logged — the test is not exercising the path"
         assert PHI not in out
         assert "FINAL PROMPT" in out, "the diagnostic itself should survive, only its content goes"
+
+
+# ── the tool list is the system's own fact, and prints ────────────────────────
+
+_SHOP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "shop__search_products",
+        "description": "Search the catalogue",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+    },
+}
+
+
+@pytest.fixture
+def info_records(content_logging_off):
+    """Every INFO+ record under continuum, as (level, rendered) pairs."""
+    records: list[tuple[int, str]] = []
+
+    class Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append((record.levelno, record.getMessage()))
+
+    root = logging.getLogger("continuum")
+    handler, level = Collector(), root.level
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(level)
+
+
+def _tools_line(records):
+    found = [(lvl, msg) for lvl, msg in records if "===== TOOLS [" in msg]
+    assert found, f"no TOOLS line was emitted: {[m for _, m in records]}"
+    return found[0]
+
+
+@pytest.mark.asyncio
+class TestTheToolListPrints:
+    """The TOOLS line lists each tool's name and parameter *schema* -- the shape
+    of its arguments, defined by the developer or the MCP server before any user
+    arrived. It is the system's own fact, so by the rule it prints. It was
+    wrapped in log_content() in the first commit of this work, before that rule
+    was settled, because it is emitted beside FINAL PROMPT and "everything we
+    send the model" was treated as content. The prompt carries the user's input;
+    the tool list does not.
+
+    Kept at INFO deliberately: whether it is noisy is a separate question from
+    whether it is the user's data, and only the second is this filter's job."""
+
+    async def test_the_agent_s_tool_schemas_print_by_default(self, info_records):
+        from continuum.agent.execution.message_builder import MessageBuilder
+
+        agent = BaseAgent(name="shop", instructions="hi", tools=[_SHOP_TOOL])
+        await MessageBuilder().prepare_messages(
+            agent=agent, input="find socks", context=_run_context()
+        )
+        _, line = _tools_line(info_records)
+        assert "shop__search_products" in line
+        assert "'query'" in line, "the parameter schema is what was being withheld"
+        assert "chars>" not in line
+
+    async def test_it_stays_at_info(self, info_records):
+        from continuum.agent.execution.message_builder import MessageBuilder
+
+        agent = BaseAgent(name="shop", instructions="hi", tools=[_SHOP_TOOL])
+        await MessageBuilder().prepare_messages(
+            agent=agent, input="find socks", context=_run_context()
+        )
+        level, _ = _tools_line(info_records)
+        assert level == logging.INFO
+
+    async def test_the_prompt_beside_it_is_still_withheld(self, info_records):
+        """The neighbouring line carries the user's input and must not follow."""
+        from continuum.agent.execution.message_builder import MessageBuilder
+
+        agent = BaseAgent(name="shop", instructions="hi", tools=[_SHOP_TOOL])
+        await MessageBuilder().prepare_messages(agent=agent, input=PHI, context=_run_context())
+        assert not any(PHI in msg for _, msg in info_records)
+
+    async def test_a_handoff_target_s_tool_schemas_print_too(self, info_records):
+        """The same line, emitted for the agent a handoff lands on."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from continuum.agent.execution.handoff_executor import HandoffExecutor
+        from continuum.agent.handoff.manager import HandoffManager
+        from continuum.agent.types import (
+            HANDOFF_TOOL_PREFIX,
+            AgentResponse,
+            ResponseStatus,
+            RunState,
+        )
+        from continuum.agent.utils.context_utils import create_run_context
+
+        hm = MagicMock(spec=HandoffManager)
+        hm._max_depth = 10
+        hm.detect_cycle = MagicMock(return_value=False)
+        hm.prepare_handoff = AsyncMock(
+            return_value=MagicMock(handoff_id="h1", to_dict=MagicMock(return_value={}))
+        )
+        hm.build_handoff_messages = MagicMock(return_value=[{"role": "user", "content": "go"}])
+        hm.trace_handoff = AsyncMock()
+
+        async def fake_loop(agent, messages, context, run_state):
+            return AgentResponse(content="ok", agent_name=agent.name, status=ResponseStatus.SUCCESS)
+
+        inner = MagicMock()
+        inner.execute_loop = fake_loop
+        executor = HandoffExecutor(handoff_manager=hm, agent_registry={}, executor=inner)
+        executor.register_agent(BaseAgent(name="shop", instructions="hi", tools=[_SHOP_TOOL]))
+
+        call = MagicMock()
+        call.function.name = f"{HANDOFF_TOOL_PREFIX}shop"
+        call.function.arguments = '{"reason": "test"}'
+        call.id = "tc-1"
+        state = RunState(run_id="run-1")
+        state.push_agent("front")
+
+        with patch("continuum.observability.decorators.observe", lambda **kw: lambda f: f):
+            await executor.execute_handoff(
+                BaseAgent(name="front", instructions="hi"),
+                "shop",
+                call,
+                [],
+                create_run_context(session_id="sess-1"),
+                state,
+            )
+        level, line = _tools_line(info_records)
+        assert "shop__search_products" in line
+        assert "'query'" in line
+        assert level == logging.INFO
+
+
+def _run_context():
+    from continuum.agent.types import RunContext
+
+    return RunContext(run_id="run-tools")
 
 
 # ── the documentation must not drift from the code ────────────────────────────

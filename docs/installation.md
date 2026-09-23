@@ -305,7 +305,7 @@ sensitive?"* but *"whose data is it?"*:
 |---|---|
 | a prompt, a memory, a tool argument or result, model output | `log_content()` |
 | `user_id`, `session_id`, `memory_id`, an approver's name | `log_id()` |
-| agent and tool names, model ids, counts, `trace_id`, paths, commands | bare |
+| agent and tool names, tool parameter schemas, model ids, counts, `trace_id`, paths, commands | bare |
 
 One deliberate exception, in `temporal/workflows/agent_workflow.py`: an
 unauthorized tool-approval attempt names the actor rather than

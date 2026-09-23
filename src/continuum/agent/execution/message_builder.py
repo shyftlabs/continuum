@@ -490,10 +490,14 @@ class MessageBuilder(IMessageBuilder):
                 else f"  - {t.function.name}: {str(t.function.parameters)}"
                 for t in filtered_tools
             )
+            # Bare, not log_content(): this is each tool's name and parameter
+            # schema, defined by the developer or the MCP server -- the system's
+            # own fact, not the user's words. The prompt logged just above
+            # carries the user's input; this does not.
             logger.info(
                 "===== TOOLS [%s] =====\n%s\n========================",
                 agent.name,
-                log_content(_tools_formatted),
+                _tools_formatted,
             )
 
         return messages, user_message_index

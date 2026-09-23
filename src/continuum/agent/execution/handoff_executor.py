@@ -415,10 +415,14 @@ class HandoffExecutor(IHandoffExecutor):
                     f"{str(t.get('function', {}).get('parameters', ''))}"
                     for t in _tools
                 )
+                # Bare, not log_content(): this is each tool's name and parameter
+                # schema, defined by the developer or the MCP server -- the system's
+                # own fact, not the user's words. The handoff prompt logged just
+                # above carries the user's input; this does not.
                 logger.info(
                     "===== TOOLS [%s] =====\n%s\n========================",
                     target_agent.name,
-                    log_content(_tools_formatted),
+                    _tools_formatted,
                 )
 
             # Execute target agent (executor guaranteed to be set by early validation).
