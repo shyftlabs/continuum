@@ -768,8 +768,8 @@ class SessionClient:
                 logger.debug(
                     "🧠 Extracting memory: role=%s session=%s user=%s",
                     message.role,
-                    log_id(session_id[:8] if session_id else "none"),
-                    log_id(session_metadata.user_id[:8] if session_metadata.user_id else "none"),
+                    log_id(session_id) if session_id else "none",
+                    log_id(session_metadata.user_id) if session_metadata.user_id else "none",
                 )
 
                 result = await self.memory_client.add(
@@ -938,7 +938,7 @@ class SessionClient:
             else:
                 logger.warning(
                     "⚠️ Cannot store memory: Session metadata not found for session_id=%s",
-                    log_id(session_id[:8] if session_id else "none"),
+                    log_id(session_id) if session_id else "none",
                 )
         except Exception as mem_error:
             # Memory storage failures should not break session operations.

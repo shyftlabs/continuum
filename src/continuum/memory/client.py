@@ -530,12 +530,11 @@ class MemoryClient:
 
         # Log search parameters
         logger.info(
-            "🔍 MEMORY CLIENT SEARCH: query='%s...', isolation=%s, scope=%s, identifiers=%s, limit=%s, filters=%s",
+            "🔍 MEMORY CLIENT SEARCH: query=%s, isolation=%s, identifiers=%s, limit=%s, filters=%s",
             log_content(query),
             self._config.memory_isolation,
-            # MemoryScope's repr embeds the identifiers it scopes by, so it
-            # carries the user id as surely as identifiers does.
-            log_id(scope),
+            # identifiers only: scope is a MemoryScope wrapping the same values,
+            # and log_id of its repr was a pseudonym that matched no other line.
             log_id(identifiers),
             search_limit,
             filters,

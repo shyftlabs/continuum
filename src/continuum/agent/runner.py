@@ -471,8 +471,8 @@ class AgentRunner:
                     mcp_session_id = tool_context_state.get(namespace, "session_id")
                     if mcp_session_id:
                         logger.info(
-                            "Loaded MCP session_id from tool context: %s... (namespace=%s)",
-                            log_id(mcp_session_id[:8]),
+                            "Loaded MCP session_id from tool context: %s (namespace=%s)",
+                            log_id(mcp_session_id),
                             namespace,
                         )
                         break

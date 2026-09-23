@@ -390,7 +390,7 @@ class Mem0Provider(BaseMemoryProvider):
             kwargs["filters"] = filters
 
         try:
-            logger.debug("mem0.search() query='%s...', limit=%s", log_content(query), limit)
+            logger.debug("mem0.search() query='%s', limit=%s", log_content(query), limit)
 
             # Run sync memory.search() in thread pool
             response = await asyncio.to_thread(self._sync_memory.search, **kwargs)

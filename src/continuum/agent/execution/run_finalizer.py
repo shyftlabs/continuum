@@ -244,10 +244,12 @@ class RunFinalizer:
                     original = context.session_id
                     if mcp_session_id != original:
                         logger.debug(
-                            "Found MCP session_id (namespace=%s): %s... (our session: %s...)",
+                            "Found MCP session_id (namespace=%s): %s (our session: %s)",
                             namespace,
-                            log_id(mcp_session_id[:8]),
-                            original[:8] if original else "None",
+                            log_id(mcp_session_id),
+                            # Was original[:8], bare: on plaintext session ids the
+                            # first eight characters are the front of the user id.
+                            log_id(original) if original else "None",
                         )
                     break
         else:
@@ -297,6 +299,6 @@ class RunFinalizer:
                     context_state=final_context_state,
                     trace_id=context.trace_id,
                 )
-                logger.debug("Saved tool context to session %s...", log_id(original_session_id[:8]))
+                logger.debug("Saved tool context to session %s", log_id(original_session_id))
             except Exception as e:
                 logger.warning("Failed to save tool context: %s", e)

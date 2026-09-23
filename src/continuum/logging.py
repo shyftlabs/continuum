@@ -15,6 +15,7 @@ import hmac
 import json
 import logging
 import sys
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
@@ -206,6 +207,17 @@ class _Id:
         self.value = value
 
     def __str__(self) -> str:
+        # A mapping of identifiers -- {"user_id": ..., "agent_id": ...} -- is
+        # pseudonymised value by value. Pseudonymising its repr instead gave a
+        # stand-in for the whole dict that matched nothing else, so the user
+        # inside {'user_id': 'tl'} rendered differently from the same user logged
+        # on its own, and a live log showed one person as three people.
+        if isinstance(self.value, Mapping):
+            inner = ", ".join(
+                f"{key!r}: {'None' if v is None else repr(_pseudonym(v))}"
+                for key, v in self.value.items()
+            )
+            return "{" + inner + "}"
         return _pseudonym(self.value)
 
     __repr__ = __str__
@@ -226,7 +238,15 @@ def log_id(value: Any) -> Any:
     dashboards benefit too, not only the log.
 
     ``None`` passes through: a missing id is not a secret, and rendering it as a
-    pseudonym would imply one existed.
+    pseudonym would imply one existed. For the same reason, wrap the value and
+    not a fallback: ``log_id(x) if x else "none"``, never
+    ``log_id(x if x else "none")``, which gives the word "none" a stable id.
+
+    Pass the whole id, never a slice. ``log_id(session_id[:8])`` is a pseudonym
+    of a prefix and matches the full id's pseudonym on no other line.
+
+    A mapping of identifiers is pseudonymised value by value, keeping its keys,
+    so ``log_id({"user_id": u})`` names the same user as ``log_id(u)``.
     """
     if value is None:
         return None

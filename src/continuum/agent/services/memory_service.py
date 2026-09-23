@@ -169,13 +169,13 @@ class MemoryService(IMemoryService):
                         if session_metadata and session_metadata.agent_id:
                             agent_id_for_memory = session_metadata.agent_id
                             logger.debug(
-                                "🔍 Using agent_id from session metadata: %s (session_id=%s...)",
+                                "🔍 Using agent_id from session metadata: %s (session_id=%s)",
                                 log_id(agent_id_for_memory),
                                 log_id(context.session_id),
                             )
                         else:
                             logger.warning(
-                                "⚠️ Session %s... exists but has no agent_id in metadata. Falling back to agent.name=%s. This may cause memory isolation issues.",
+                                "⚠️ Session %s exists but has no agent_id in metadata. Falling back to agent.name=%s. This may cause memory isolation issues.",
                                 log_id(context.session_id),
                                 agent.name,
                             )
@@ -206,7 +206,7 @@ class MemoryService(IMemoryService):
 
             # Log memory search parameters at DEBUG level
             logger.debug(
-                "🔍 MEMORY SEARCH: query='%s...', scope=%s, isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s",
+                "🔍 MEMORY SEARCH: query='%s', scope=%s, isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s",
                 log_content(query),
                 search_scope,
                 memory_isolation,
@@ -232,7 +232,7 @@ class MemoryService(IMemoryService):
 
             if not memories.results:
                 logger.warning(
-                    "⚠️ NO MEMORIES FOUND for query='%s...' (isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s)",
+                    "⚠️ NO MEMORIES FOUND for query='%s' (isolation=%s, user_id=%s, agent_id=%s, conversation_id=%s)",
                     log_content(query),
                     memory_isolation,
                     log_id(user_id_for_memory) if user_id_for_memory else "none",
@@ -312,7 +312,7 @@ class MemoryService(IMemoryService):
                     memory_user_id = m.user_id or memory_metadata.get("_user_id") or "unknown"
                     score_str = f"{m.score:.3f}" if m.score is not None else "N/A"
                     logger.info(
-                        "📝 Memory #%s: '%s...' (score=%s, user_id=%s)",
+                        "📝 Memory #%s: '%s' (score=%s, user_id=%s)",
                         idx,
                         log_content(m.memory),
                         score_str,

@@ -27,7 +27,7 @@ from continuum.llm.context_window import (
     get_context_window_manager,
 )
 from continuum.llm.types import ChatMessage
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 
@@ -165,6 +165,11 @@ class SummaryCache:
         """Generate cache key from messages."""
         # Create hash of message content (excluding timestamps/metadata).
         # Non-security cache key for summary dedup only — no trust boundary.
+        # It is logged through log_id(), not sliced: an unkeyed digest of the
+        # conversation is a confirmation oracle -- anyone with log access who
+        # suspects a conversation can hash their guess and compare -- and eight
+        # characters of it gave them 32 bits to compare against. The keyed
+        # pseudonym still lets a cache hit be matched to its store.
         # Uses sha256 (not md5) so static analysis never flags a weak-hash finding here.
         content = []
         for msg in messages:
@@ -194,7 +199,7 @@ class SummaryCache:
                 if time.time() - timestamp < self._ttl:
                     # Refresh timestamp for LRU behavior
                     self._cache[key] = (cached_messages, time.time())
-                    logger.debug("Cache hit for summary key: %s", key[:8])
+                    logger.debug("Cache hit for summary key: %s", log_id(key))
                     return cached_messages
                 else:
                     # Expired, remove
@@ -207,7 +212,7 @@ class SummaryCache:
         with self._lock:
             self._cache[key] = (summary, time.time())
             self._evict_expired_and_lru()
-            logger.debug("Cached summary key: %s (cache size: %s)", key[:8], len(self._cache))
+            logger.debug("Cached summary key: %s (cache size: %s)", log_id(key), len(self._cache))
 
     def clear(self) -> None:
         """Clear all cached summaries."""
