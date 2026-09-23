@@ -27,7 +27,7 @@ from continuum.llm.types import (
     ToolDefinition,
 )
 from continuum.llm.utils import supports_tools_with_json_mode
-from continuum.logging import get_logger, log_id
+from continuum.logging import get_logger, log_content, log_id
 from continuum.observability.decorators import observe
 from continuum.observability.trace_context import (
     get_current_session_id,
@@ -203,7 +203,7 @@ class LLMClient:
         if not looks_like_json(content):
             logger.warning(
                 "LLM response is not JSON despite JSON mode being enabled",
-                extra={"model": config.model, "preview": content.strip()[:100]},
+                extra={"model": config.model, "preview": log_content(content.strip())},
             )
 
     def _get_provider_from_model(self, model: str) -> str:

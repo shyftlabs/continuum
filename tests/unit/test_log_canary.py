@@ -301,7 +301,19 @@ class TestWorkflowMerge:
 
 @pytest.mark.asyncio
 class TestReflection:
-    """The critique prompt is the model's own answer, handed back for review."""
+    """The critique prompt is the model's own answer, handed back for review --
+    and the critique that comes back is the model writing about it.
+
+    Both directions need a test. The first version of this class checked only
+    the text going IN (the response being critiqued), with a stub whose reply
+    was the harmless '{"verdict": "ok"}'. So the reply coming BACK was never
+    checked, and a live run printed it in full:
+
+        ===== CRITIQUE VERDICT [reflection-shop] =====
+        NEEDS IMPROVEMENT: The email is friendly, but it lacks specific ...
+
+    one line above the retry line that withheld the same text as <214 chars>.
+    """
 
     async def test_the_critiqued_response(self, logged):
         from continuum.agent.workflow.reflection import ReflectionAgent
@@ -309,6 +321,139 @@ class TestReflection:
         agent = ReflectionAgent(name="ref", agent=BaseAgent(name="a", instructions="x"))
         await agent._critique(CANARY, llm_client=_llm_returning('{"verdict": "ok"}'))
         assert_clean(logged, "reflection._critique")
+
+    async def test_the_critique_verdict(self, logged):
+        """The reply direction: the critique model's own text about the draft."""
+        from continuum.agent.workflow.reflection import ReflectionAgent
+
+        agent = ReflectionAgent(name="ref", agent=BaseAgent(name="a", instructions="x"))
+        await agent._critique(
+            "a draft", llm_client=_llm_returning(f"NEEDS IMPROVEMENT: {CANARY} is missing")
+        )
+        assert_clean(logged, "reflection._critique verdict")
+
+    async def test_the_verdict_line_still_says_pass_or_fail(self, logged):
+        """Withholding the reason must not cost the outcome, which is the SDK's
+        own classification -- the same startswith("PASS") rule that decides
+        whether to retry -- and not the model's words."""
+        from continuum.agent.workflow.reflection import ReflectionAgent
+
+        agent = ReflectionAgent(name="ref", agent=BaseAgent(name="a", instructions="x"))
+        await agent._critique("a draft", llm_client=_llm_returning(f"NEEDS IMPROVEMENT: {CANARY}"))
+        await agent._critique("a draft", llm_client=_llm_returning("PASS"))
+
+        verdict_lines = [line for line in logged if "CRITIQUE VERDICT" in line]
+        assert "outcome=NEEDS IMPROVEMENT" in verdict_lines[0], verdict_lines
+        assert "outcome=PASS" in verdict_lines[1], verdict_lines
+
+
+# ── structured output ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestStructuredOutputFailure:
+    """When the model's answer will not validate against output_schema, the
+    soft-failure warning logs the validation error -- and pydantic's error text
+    quotes the value that failed ("input_value='...'"), i.e. the model's own
+    output. Found by re-auditing bare log arguments by what they hold rather than
+    by their names, after `verdict` was misread as a label.
+    """
+
+    async def test_the_validation_error_does_not_carry_the_output(self, logged):
+        from types import SimpleNamespace
+
+        from pydantic import BaseModel
+
+        from continuum.agent.config import AgentConfig
+        from continuum.agent.execution.executor import Executor
+        from continuum.agent.types import RunState
+
+        class Review(BaseModel):
+            score: float
+
+        # score must be a float; the model puts a string there, so validation
+        # fails and quotes it -- on the first answer and on the formatting retry.
+        bad = f'{{"score": "{CANARY}"}}'
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+
+        class _LLM:
+            async def chat(self, **kwargs):
+                return SimpleNamespace(content=bad, tool_calls=[], usage=usage, model="m")
+
+        agent = BaseAgent(
+            name="reviewer",
+            instructions="review",
+            config=AgentConfig(log_to_session=False, input_sanitization=False),
+            output_schema=Review,
+        )
+        state = RunState(run_id="run-so")
+        state.push_agent("reviewer")
+        response = await Executor(llm_client=_LLM()).execute_loop(
+            agent, [{"role": "user", "content": "rate it"}], RunContext(run_id="run-so"), state
+        )
+
+        assert response.structured_output is None, "the soft-failure path was not reached"
+        assert_clean(logged, "executor structured_output unavailable")
+
+
+# ── paths found by re-auditing values by what they hold ───────────────────────
+
+
+class TestJsonModeWarning:
+    """When JSON mode is on and the model's answer is not JSON, a warning put
+    100 characters of that answer into extra={"preview": ...}. An earlier commit
+    claimed to have closed this and had not: the script making the edit stopped
+    at an earlier failed match and never reached it."""
+
+    def test_the_answer_does_not_ride_in_extra(self, logged):
+        from continuum.llm.client import LLMClient
+        from continuum.llm.config import LLMConfig
+
+        client = LLMClient(config=LLMConfig(model="m"), enable_langfuse=False)
+        client._validate_json_response(
+            f"Sure! {CANARY} is what you asked for.", LLMConfig(model="m", json_mode=True)
+        )
+        assert_clean(logged, "llm.client._validate_json_response")
+
+
+@pytest.mark.asyncio
+class TestHandoffReason:
+    """The handoff tool's "reason" argument is written by the model, about the
+    user's request -- free text, despite a key name that reads like a label."""
+
+    async def test_the_model_s_reason_is_not_logged(self, logged):
+        from continuum.agent.handoff.manager import HandoffManager
+
+        await HandoffManager().prepare_handoff(
+            from_agent=BaseAgent(name="front", instructions="route"),
+            to_agent=BaseAgent(name="back", instructions="work"),
+            reason=f"user wants {CANARY} for their dog",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert_clean(logged, "handoff.manager.prepare_handoff(reason)")
+
+
+@pytest.mark.asyncio
+class TestInputValidationFailure:
+    """A pydantic ValidationError quotes the value that failed. Here the value is
+    the user's input, validated against the agent's input_schema, so the
+    exception -- left bare on the rule that exceptions stay bare until one is
+    caught leaking -- is the case that rule was waiting for."""
+
+    async def test_the_rejected_input_is_not_logged(self, logged):
+        from pydantic import BaseModel
+
+        from continuum.agent.utils.validation_utils import validate_input
+
+        class Order(BaseModel):
+            quantity: int
+
+        agent = BaseAgent(name="shop", instructions="x", input_schema=Order)
+        result = await validate_input(
+            agent, f'{{"quantity": "{CANARY}"}}', RunContext(run_id="run-iv")
+        )
+        assert result is not None, "the input was accepted -- the failure path was not reached"
+        assert_clean(logged, "validation_utils.validate_input")
 
 
 # ── tool-attention routing ────────────────────────────────────────────────────

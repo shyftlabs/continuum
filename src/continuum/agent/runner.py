@@ -79,7 +79,7 @@ from continuum.llm.structured_output import (
     schema_prompt,
     to_openai_response_format,
 )
-from continuum.logging import get_logger, log_id
+from continuum.logging import get_logger, log_content, log_id
 from continuum.tools.tool_attention.router import _tool_name
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
@@ -1560,7 +1560,7 @@ class AgentRunner:
                     if not looks_like_json(content):
                         logger.warning(
                             "Streamed response is not JSON despite json_mode being set",
-                            extra={"model": _cfg.model, "preview": content.strip()[:100]},
+                            extra={"model": _cfg.model, "preview": log_content(content.strip())},
                         )
 
                 # NEED_TOOL fallback: if LLM signals a missing tool, expand and retry.
@@ -1928,10 +1928,12 @@ class AgentRunner:
                         trace_id=ctx.trace_id,
                     )
                 if structured_output is None:
+                    # log_content: a pydantic validation error quotes the value that failed
+                    # ("input_value='...'"), which here is the model's own answer.
                     logger.warning(
                         "⚠️ structured_output unavailable for agent %s: %s",
                         agent.name,
-                        structured_output_error,
+                        log_content(structured_output_error),
                     )
 
             # NOTE: no usage= is passed — streamed runs carry an EMPTY TokenUsage

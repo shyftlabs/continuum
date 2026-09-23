@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from continuum.agent.types import AgentResponse, ResponseStatus
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.base import BaseAgent
@@ -142,8 +142,15 @@ async def validate_input(
         return None  # Validation passed
 
     except ValidationError as e:
+        # Both arguments quote the user's input: a pydantic ValidationError's
+        # text and its errors() carry the value that failed ("input_value=...",
+        # "input": ...), and the value validated here is what the user sent.
+        # The one exception that is not left bare, because it was caught leaking.
         logger.warning(
-            "Input validation failed for agent %s: %s", agent.name, e, extra={"errors": e.errors()}
+            "Input validation failed for agent %s: %s",
+            agent.name,
+            log_content(e),
+            extra={"errors": log_content(e.errors())},
         )
 
         # Return graceful error response (safe access to avoid KeyError if Pydantic structure changes)

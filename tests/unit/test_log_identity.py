@@ -422,7 +422,14 @@ class TestNoPseudonymOfSomethingElse:
                     continue
                 if node.func.attr not in ("info", "debug", "warning", "error", "critical"):
                     continue
-                for arg in node.args[1:]:
+                # extra= values too: this checked positional arguments only, and
+                # so missed content.strip()[:100] handed over as extra={"preview"}
+                # in two places -- the channel a third-party handler serialises.
+                values = list(node.args[1:])
+                for kw in node.keywords:
+                    if kw.arg == "extra" and isinstance(kw.value, ast.Dict):
+                        values.extend(kw.value.values)
+                for arg in values:
                     if any(
                         isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Slice)
                         for sub in ast.walk(arg)

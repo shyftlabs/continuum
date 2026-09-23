@@ -338,10 +338,17 @@ class ReflectionAgent(BaseAgent):
                 )
 
             verdict = (llm_response.content or "PASS").strip()
+            # The outcome is the SDK's own classification -- the same
+            # startswith("PASS") rule that decides whether to retry -- so it is a
+            # label and prints. The rest is the critique model writing about the
+            # draft, i.e. content: a live run printed it in full on this line,
+            # one line above the retry line that withheld the same text.
             logger.info(
-                "===== CRITIQUE VERDICT [%s] =====\n%s\n=========================",
+                "===== CRITIQUE VERDICT [%s] =====\noutcome=%s reason=%s\n"
+                "=========================",
                 self.name,
-                verdict,
+                "PASS" if verdict.startswith("PASS") else "NEEDS IMPROVEMENT",
+                log_content(verdict),
             )
             return {"verdict": verdict, "usage": usage}
 

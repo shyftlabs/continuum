@@ -926,14 +926,18 @@ class Executor(IExecutor):
                         )
                     else:
                         # Soft failure: visible (warning + error field), not silent.
+                        # log_content: a pydantic validation error quotes the value that failed
+                        # ("input_value='...'"), which here is the model's own answer.
                         logger.warning(
                             "⚠️ structured_output unavailable for agent %s: %s",
                             agent.name,
-                            structured_output_error,
+                            log_content(structured_output_error),
                             extra={
                                 "agent_name": agent.name,
                                 "output_schema": agent.output_schema.__name__,
-                                "error": structured_output_error,
+                                # Same value as the message argument, through the
+                                # channel a third-party handler serialises.
+                                "error": log_content(structured_output_error),
                             },
                         )
                 elif agent.enable_json_mode and response.content:
