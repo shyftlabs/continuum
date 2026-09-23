@@ -311,9 +311,15 @@ class MemoryClient:
             return asyncio.run(coro)
 
         import concurrent.futures
+        import contextvars
 
+        # Run inside a copy of the caller's context. A bare submit() starts
+        # with an empty one, so the memory gate found no active policy and
+        # allowed the call: every *_sync method from a sync tool during a run
+        # bypassed the run's memory rules (security finding F12). The copy also
+        # carries the trace/session ids, and nothing set in the worker leaks back.
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
+            future = pool.submit(contextvars.copy_context().run, asyncio.run, coro)
             return future.result()
 
     def _build_scope(
