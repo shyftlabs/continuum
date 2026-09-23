@@ -524,6 +524,21 @@ class TestTheDocsMatchTheCode:
         ]
         assert exempted == [], f"src/ carries a G004 exemption: {exempted}"
 
+    def test_the_env_template_ships_it_off(self):
+        """Most people copy .env.template rather than read the docs, so a switch
+        that is only documented is one nobody knows they can turn off -- or that
+        they left on. Parsed with python-dotenv, the loader the SDK uses, rather
+        than by grep: an inline comment after an empty value (KEY= # ...) is
+        read as the value, which an earlier template edit got wrong."""
+        from pathlib import Path
+
+        from dotenv import dotenv_values
+
+        template = Path(__file__).resolve().parents[2] / ".env.template"
+        values = dotenv_values(template)
+        assert "LOG_PROMPT_CONTENT" in values, "LOG_PROMPT_CONTENT is not in .env.template"
+        assert values["LOG_PROMPT_CONTENT"] == "false", values["LOG_PROMPT_CONTENT"]
+
     def test_no_f_string_logging_call_remains_in_src(self):
         """The other half of that claim, checked against the code rather than
         against the lint config."""
