@@ -1067,6 +1067,7 @@
     <a class="sidebar-link" onclick="scrollToAnchor('run-fastapi')">FastAPI Server</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-temporal-deploy')">Temporal Workers</a>
     <div class="sidebar-group-label">Safety</div>
+    <a class="sidebar-link" onclick="scrollToAnchor('run-log-redaction')">Log Redaction</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-safety')">Input / Output Scanning</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-data-labels')">Data-Label Enforcement</a>
     <a class="sidebar-link" onclick="scrollToAnchor('run-approval')">Human-in-the-Loop Approval</a>
@@ -1501,6 +1502,9 @@ SMART_GATEWAY_API_KEY=your-smart-gateway-api-key
 <span class="cm"># ── Misc ──────────────────────────────────────────────────────────────────────</span>
 ENVIRONMENT=development
 LOG_LEVEL=INFO
+<span class="cm"># Off: log lines say which agent and how much, not what; ids show as id#… pseudonyms.</span>
+<span class="cm"># Turn on to debug locally -- never where logs leave the machine.</span>
+LOG_PROMPT_CONTENT=false
 SHARED_SERVICES_ENABLED=true
 MEM0_TELEMETRY=false
 ANONYMIZED_TELEMETRY=false
@@ -2458,6 +2462,28 @@ registry.register(my_agent)
 
 worker_manager = <span class="cls">WorkerManager</span>(agent_registry=registry)
 <span class="kw">await</span> worker_manager.start_worker()  <span class="cm"># connects to TEMPORAL_HOST</span></pre></div>
+
+  <a class="anchor" id="run-log-redaction"></a>
+  <h2>Log Redaction</h2>
+  <p>By default, Continuum's log lines say <em>which</em> agent did something and <em>how much</em>, not <em>what</em>. Prompts, memories, tool arguments and results, and model output show as <code>&lt;N chars&gt;</code>, and user and session ids are withheld or pseudonymised. One setting turns the content back on for debugging:</p>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="cm"># true | false (default)</span>
+LOG_PROMPT_CONTENT=false</pre></div>
+
+  <h3>Default: <code>LOG_PROMPT_CONTENT=false</code></h3>
+  <p>How ids render depends on <code>SESSION_ID_SECRET</code>. <strong>Without a secret</strong>, ids are withheld outright:</p>
+<div class="code-wrapper"><pre>2026-09-23 13:12:01 INFO     continuum.agent - ✓ Active Session ID: &lt;33 chars&gt;
+2026-09-23 13:12:01 INFO     continuum.memory.client - 🔍 MEMORY CLIENT SEARCH: query=&lt;16 chars&gt;, isolation=user, identifiers={'user_id': '&lt;2 chars&gt;'}, limit=5, filters=None</pre></div>
+  <p><strong>With a secret</strong>, each id becomes a stable pseudonym. It's the same <code>id#…</code> every time, so you can follow one user through the log without learning who they are:</p>
+<div class="code-wrapper"><pre>2026-09-23 13:13:45 INFO     continuum.agent - ✓ Active Session ID: id#7e2a51c9d04b8f36
+2026-09-23 13:13:45 INFO     continuum.memory.client - 🔍 MEMORY CLIENT SEARCH: query=&lt;16 chars&gt;, isolation=user, identifiers={'user_id': 'id#c06af887186f9244'}, limit=5, filters=None</pre></div>
+  <p><code>SESSION_HASH_IDS</code> makes no difference to these lines: the session id is pseudonymised whether or not it was hashed. Set <code>SESSION_ID_SECRET</code> in production. Without it every user renders as <code>&lt;N chars&gt;</code>, and two users' lines can no longer be told apart.</p>
+
+  <h3>Debugging: <code>LOG_PROMPT_CONTENT=true</code></h3>
+  <p>Everything prints, including the query and the real ids:</p>
+<div class="code-wrapper"><pre>2026-09-23 13:15:30 INFO     continuum.agent - ✓ Active Session ID: s_4b1d9e7a2c6f08e35a91d7c4e0b2f613
+2026-09-23 13:15:30 INFO     continuum.memory.client - 🔍 MEMORY CLIENT SEARCH: query=show me cat food, isolation=user, identifiers={'user_id': 'tl'}, limit=5, filters=None</pre></div>
+  <p>The session id prints as an opaque <code>s_…</code> only with <code>SESSION_HASH_IDS=true</code> <em>and</em> a <code>SESSION_ID_SECRET</code>. Otherwise it is the plaintext <code>c:&lt;conversation&gt;:u:&lt;user_id&gt;</code>, with the user id in the clear.</p>
+  <p>Contributing to Continuum itself? The rules for which wrapper a logged value gets (<code>log_content()</code>, <code>log_id()</code>, or none) are in <a href="https://github.com/shyftlabs/continuum/blob/main/docs/installation.md" target="_blank" rel="noopener"><code>docs/installation.md</code></a>.</p>
 
   <a class="anchor" id="run-safety"></a>
   <h2>Input / Output Scanning</h2>
