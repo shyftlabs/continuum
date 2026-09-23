@@ -6,6 +6,7 @@ Extracted from AgentRunner to provide clean separation of concerns.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.handler_interface import IMessageBuilder
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from continuum.agent.services.memory_service import MemoryService
     from continuum.agent.services.session_service import SessionService
     from continuum.agent.types import RunContext
+    from continuum.tools.executor import ToolExecutor
     from continuum.tools.types import ToolContextState
 
 logger = get_logger(__name__)
@@ -169,6 +171,7 @@ class MessageBuilder(IMessageBuilder):
         input: str | list[dict[str, Any]] | list[Any],
         context: RunContext,
         tool_context_state: ToolContextState | None = None,
+        tool_executor: ToolExecutor | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """
         Prepare messages for agent execution.
@@ -178,6 +181,9 @@ class MessageBuilder(IMessageBuilder):
             input: User input (string or messages)
             context: Run context
             tool_context_state: Optional tool context state
+            tool_executor: The executor that will run this agent's tools. Its
+                servers' ``inject_into_system_prompt`` settings decide which
+                namespaces of ``tool_context_state`` the model is shown.
 
         Returns:
             Prepared message list
@@ -240,7 +246,14 @@ class MessageBuilder(IMessageBuilder):
                             type(namespaces),
                         )
                     else:
-                        context_prompt = self._inject_tool_context_to_prompt(tool_context_state)
+                        hidden = (
+                            tool_executor.namespaces_kept_out_of_prompt()
+                            if tool_executor
+                            else set()
+                        )
+                        context_prompt = self._inject_tool_context_to_prompt(
+                            tool_context_state, hidden
+                        )
                         if context_prompt:
                             messages.append({"role": "system", "content": context_prompt})
                             logger.info(
@@ -521,12 +534,15 @@ class MessageBuilder(IMessageBuilder):
     def _inject_tool_context_to_prompt(
         self,
         context_state: ToolContextState,
+        hidden_namespaces: Collection[str] = (),
     ) -> str | None:
         """
         Generate system prompt injection for tool context awareness.
 
         Args:
             context_state: Tool context state with captured variables
+            hidden_namespaces: Namespaces the model must not be shown, and so
+                must not be told about ("A session already exists").
 
         Returns:
             Context string to inject into system prompt, or None if empty
@@ -534,11 +550,15 @@ class MessageBuilder(IMessageBuilder):
         if context_state.is_empty():
             return None
 
-        base_context = context_state.to_prompt_context()
+        base_context = context_state.to_prompt_context(exclude_namespaces=hidden_namespaces)
+        if base_context is None:
+            return None
 
         # Check if we have a session_id - if so, tell LLM not to create a new one
         has_session_id = False
         for namespace in context_state.get_all_namespaces():
+            if namespace in hidden_namespaces:
+                continue
             if context_state.get(namespace, "session_id"):
                 has_session_id = True
                 break

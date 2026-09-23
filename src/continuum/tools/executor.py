@@ -295,6 +295,25 @@ class ToolExecutor:
             node = node.get(part)
         return node
 
+    def namespaces_kept_out_of_prompt(self) -> set[str]:
+        """Namespaces whose captured variables must not be shown to the model.
+
+        A namespace is listed when any server storing variables under it set
+        ``ToolContextConfig.inject_into_system_prompt=False``. Servers sharing a
+        namespace share its values, so one server's request to keep them out of
+        the prompt is not overridden by another's default.
+
+        Read from the configured registry, so it needs no connection and reflects
+        the current configs, not those in force when a variable was captured.
+        """
+        servers = list(self._tool_registry_config or {})
+        servers += [server for server, _ in self.tool_registry.values()]
+        return {
+            self._get_namespace(server)
+            for server in servers
+            if server.context_config and not server.context_config.inject_into_system_prompt
+        }
+
     def _get_namespace(self, server: "MCPServer") -> str:
         """Get the namespace for a server (for context variable isolation)."""
         if server.context_config and server.context_config.namespace:

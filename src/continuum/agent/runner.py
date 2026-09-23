@@ -504,6 +504,7 @@ class AgentRunner:
                 input,
                 context,
                 tool_context_state=tool_context_state,
+                tool_executor=agent.tool_executor or self._tool_executor,
             )
         run_state.messages = [message_to_dict(m) for m in messages]
 
