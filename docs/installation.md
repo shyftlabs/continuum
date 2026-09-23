@@ -307,6 +307,14 @@ sensitive?"* but *"whose data is it?"*:
 | `user_id`, `session_id`, `memory_id`, an approver's name | `log_id()` |
 | agent and tool names, tool parameter schemas, model ids, counts, `trace_id`, paths, commands | bare |
 
+**Exceptions stay bare**: an exception's text is the system's account of
+what failed, and it is usually what the line exists to show. The
+exception to that is an error that quotes its input. A pydantic
+`ValidationError` prints the offending value (`input_value='…'`), so
+input-validation and structured-output errors are wrapped in
+`log_content()`, as is `e.errors()`. The test is the same: does the text
+contain someone's data?
+
 One deliberate exception, in `temporal/workflows/agent_workflow.py`: an
 unauthorized tool-approval attempt names the actor rather than
 pseudonymising them, because identifying them is what a security audit
@@ -318,6 +326,11 @@ people to impersonate.
 Pass the whole value — no `[:200]` slicing. Truncating at the call site
 leaks a prefix *and* throws the rest away; the wrappers give the operator
 nothing by default and everything when they ask.
+
+The same rules apply to values passed in `extra={...}`. Continuum's
+formatters do not print `extra`, but third-party handlers such as
+Datadog, `python-json-logger` or structlog serialise every field on the
+record, so `extra={"preview": log_content(text)}`, never the bare text.
 
 Nothing forces you to wrap. The net for that is
 `tests/unit/test_log_canary.py`, which drives the real paths with a
@@ -346,6 +359,28 @@ LOG_PROMPT_CONTENT=true   →  Session ready: c:conv-1:u:alice@clinic.example
 
 The same id renders to the same pseudonym every time, so incidents stay
 groupable while the person stays unidentifiable.
+
+Two consequences for call sites:
+
+- **Pass the id whole, never a prefix.** `log_id(session_id[:8])` is the
+  pseudonym of a different string, so one session appears under two ids
+  and the lines no longer join. A bare `session_id[:8]` is worse: a
+  prefix of an email address.
+- **Wrap the value, not its fallback.** Write
+  `log_id(x) if x else "none"`, not `log_id(x or "none")`, which gives
+  every missing id the same pseudonym, one that looks like a real user.
+
+A mapping is pseudonymised value by value, and its keys are kept, because
+they name fields rather than people:
+
+```python
+logger.info("Scope: %s", log_id({"user_id": user_id, "session_id": sid}))
+# Scope: {'user_id': 'id#4f2a9c1e8b3d7a05', 'session_id': 'id#91c0…'}
+```
+
+The `user_id` inside the mapping gets the same pseudonym as `user_id`
+logged alone, so a scope and a plain id join up. `None` values stay
+`None`, and `log_id(None)` is `None`.
 
 It is keyed by **`SESSION_ID_SECRET`**. With no secret configured it
 withholds outright (`<31 chars>`) rather than falling back to a bare

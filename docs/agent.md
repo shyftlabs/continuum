@@ -585,6 +585,34 @@ debate = create_debate_agent(
 
 Pro and con run in parallel; the judge synthesizes a verdict.
 
+The judge receives an excerpt of each side, not necessarily the whole
+argument, and `truncate_chars` sets the limit. What happens to a side
+over the limit depends on `summarise_arguments`:
+
+| `summarise_arguments` | a side over `truncate_chars` | cost |
+|---|---|---|
+| `False` (default) | cut to its first `truncate_chars` characters | none |
+| `True` | condensed by its own side into 3-5 bullet points | one LLM call per side over the limit, run in parallel |
+
+A side within the limit reaches the judge verbatim in both modes, and
+`truncate_chars=None` removes the limit (with `summarise_arguments=True`,
+it summarises every side).
+
+The default cut is a plain character slice, so it drops the *end* of each
+argument, which is usually where a case lands its conclusion. In a live
+run the judge saw 49% of one side and 58% of the other. When the cut
+removes anything it is logged at `INFO`:
+
+```
+DebateAgent 'debate': judge sees pro 2000 of 4056 chars, con 2000 of 3436 chars (truncate_chars=2000; ...)
+```
+
+When the verdict matters, use `summarise_arguments=True`: each side keeps
+what it considers its strongest points, rather than whatever fits in the
+first 2000 characters. `summarise_model` picks a cheaper model for it,
+and defaults to the debate's own. With no LLM client available it falls
+back to the cut, and logs a warning.
+
 ### `ScatterAgent`
 
 LLM splits the input into N focused sub-tasks (one per branch),

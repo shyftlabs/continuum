@@ -217,6 +217,47 @@ server = MCPServerStreamableHttp({"url": "..."}, context_config=ctx_cfg)
 | `required` | `bool` | `False` | If `True`, the call fails when the variable is missing |
 | `sensitive` | `bool` | `False` | Mask in logs and `to_dict()` |
 
+`ToolContextConfig` fields:
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `variables` | `list[ToolContextVariable]` | `[]` | Explicit variables, as above |
+| `auto_capture_common` | `bool` | `True` | Also capture the common names listed below |
+| `namespace` | `str \| None` | `None` | Where the values are stored. Defaults to the server name; servers given the same namespace share values |
+| `inject_into_system_prompt` | `bool` | `True` | Show the captured values to the model (see below) |
+
+### What the model is told
+
+Besides injecting values into tool arguments, Continuum adds a system
+message listing the captured values, so the model uses them rather than
+inventing its own:
+
+```
+Current tool context (use these values for tool calls):
+  [my-server]
+    session_id: fb83832c-…
+
+IMPORTANT: A session already exists. Do NOT call create_session again.
+Use the existing session_id for all tool calls that require it.
+```
+
+It is added only to an agent that has **regular tools** (`agent.tools`).
+An agent with no tools gets nothing, and neither does one whose only tool
+is a handoff: a handoff takes a reason, never a `session_id`. In a
+workflow, the debaters, the judge and an orchestrator that only hands off
+all inherit the run's tool context, and none of them is shown it.
+
+`sensitive` variables are never listed. To keep a whole server's values
+out of the prompt, set `inject_into_system_prompt=False`. Its values are
+still captured and still injected into tool arguments, and only the
+model's view changes. Use it when every tool that needs a value gets it
+by injection, so the model never has to see it. The session-exists line
+is left out too, unless another server that still shows its values has a
+`session_id`. The flag is read from the servers' current configs when the
+prompt is built, so a session restored from storage follows the new
+setting on its next turn. When two servers share a namespace, it is
+hidden if either of them asks.
+
 ### `ToolContextState`
 
 Where captured values live. Thread-safe; persists across runs at session
