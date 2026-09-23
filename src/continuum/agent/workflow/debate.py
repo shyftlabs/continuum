@@ -577,6 +577,25 @@ class DebateAgent(BaseAgent):
         if limit is not None:
             pro_excerpt = pro_content[:limit] + ("…" if len(pro_content) > limit else "")
             con_excerpt = con_content[:limit] + ("…" if len(con_content) > limit else "")
+            # Say so when this drops content. It is the default path, and it was
+            # silent: the only line naming these lengths is "both sides complete
+            # -- pro=4056 chars, con=3436 chars", which reads as if the judge saw
+            # all of it. A live run's judge saw 49% and 58%, missing the end of
+            # each argument, and nothing said so. The summarise path above has
+            # always reported what it did; this is the same line for this path.
+            # Lengths only, never the text, so it needs no log_content().
+            if len(pro_content) > limit or len(con_content) > limit:
+                logger.info(
+                    "DebateAgent '%s': judge sees pro %s of %s chars, con %s of %s chars "
+                    "(truncate_chars=%s; summarise_arguments=True keeps each side's "
+                    "conclusion instead of cutting it)",
+                    self.name,
+                    min(len(pro_content), limit),
+                    len(pro_content),
+                    min(len(con_content), limit),
+                    len(con_content),
+                    limit,
+                )
         else:
             pro_excerpt = pro_content
             con_excerpt = con_content
