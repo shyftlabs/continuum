@@ -32,6 +32,7 @@ from continuum.core.container import Container, get_container
 from continuum.core.lifecycle import OrchestratorLifecycle, get_lifecycle_manager
 from continuum.exceptions import InsecureConfigurationError
 from continuum.llm.timing_probe import timing_turn
+from continuum.logging import log_id
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.types import ToolContextConfig, ToolContextVariable
 from continuum.tools.util import NAMESPACE_SEPARATOR
@@ -288,7 +289,13 @@ class LocalShopAgent:
                         user_id=user_id,
                         conversation_id=conversation_id,
                     )
-                    logger.info(f"✓ Active Session ID: {session_id}")
+                    # log_id, not the raw id: with SESSION_HASH_IDS=false (the
+                    # default) a session id is "c:<conversation>:u:<user_id>", so
+                    # printing it printed the user. And with hashing on, the raw
+                    # s_ key matches nothing -- the SDK's own "Session ready:"
+                    # line renders this session as id#..., so this line has to as
+                    # well or the two cannot be joined.
+                    logger.info("✓ Active Session ID: %s", log_id(session_id))
                     # The runner loads tool context from Redis and overwrites the
                     # in-memory context_state, so we must also persist cart_session_id
                     # to Redis before run() is called.
@@ -302,10 +309,14 @@ class LocalShopAgent:
                 except InsecureConfigurationError as e:
                     # Fail closed: a weak/blank data-store secret is an operator
                     # config error — refuse the request instead of running stateless.
-                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    # log_id on this and the three like it (here, and in
+                    # chat_stream): they printed the user id itself, raw, two
+                    # lines below the Active Session ID line that hides it --
+                    # and only on failure, at the levels that get kept.
+                    logger.error("Insecure session config for user %s: %s", log_id(user_id), e)
                     return f"Error: {e}"
                 except Exception as e:
-                    logger.warning(f"Session init failed for user {user_id}: {e}")
+                    logger.warning("Session init failed for user %s: %s", log_id(user_id), e)
 
         # One user question fans out into several gateway calls — the agent loop
         # re-enters the model after each tool result. The probe records one line
@@ -363,11 +374,11 @@ class LocalShopAgent:
                     )
                 except InsecureConfigurationError as e:
                     # Fail closed: surface the config error to the client and stop.
-                    logger.error(f"Insecure session config for user {user_id}: {e}")
+                    logger.error("Insecure session config for user %s: %s", log_id(user_id), e)
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                     return
                 except Exception as e:
-                    logger.warning(f"Session init failed for user {user_id}: {e}")
+                    logger.warning("Session init failed for user %s: %s", log_id(user_id), e)
 
         yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'user_id': user_id})}\n\n"
 
