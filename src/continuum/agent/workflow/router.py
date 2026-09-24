@@ -417,7 +417,7 @@ Agent name:"""
             return None
 
         except Exception as e:
-            logger.warning(f"LLM routing failed: {e}")
+            logger.warning("LLM routing failed: %s", e)
             return None
 
     def get_route(self, agent_name: str) -> Route | None:

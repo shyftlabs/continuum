@@ -1,4 +1,18 @@
-"""Input sanitization utilities for prompt injection prevention."""
+"""Input cleaning, plus an advisory prompt-injection detector.
+
+Two unrelated jobs live here, with very different security value:
+
+``sanitize_user_input`` CLEANS -- it truncates, strips control characters and
+strips invisible unicode, and it runs by default. Removing the zero-width
+characters that hide an instruction between visible letters is real work.
+
+``detect_injection_patterns`` only DESCRIBES. It matches six literal patterns,
+its callers log the result and nothing reads it, and it is off by default.
+Paraphrase defeats it, and half its patterns (``[INST]``, ``<<SYS>>``, ``###``)
+guard prompt-template concatenation, which this SDK does not do -- messages go
+to providers as structured role/content dicts. Treat it as telemetry on a trust
+boundary, never as a control: ``AgentConfig.input_scanners`` is what refuses.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +28,16 @@ _INVISIBLE_UNICODE_RE = re.compile(
     r"\u00ad]"  # soft hyphen
 )
 
+# Deliberately left as-is, and not extended (F11). These six were added in one
+# commit in Feb 2026 and never edited since; they are the canonical examples from
+# public writeups, not patterns derived from observed traffic. So there is no
+# source against which "better regexes" could be judged, and a longer list would
+# buy confidence rather than coverage.
+#
+# Making them BLOCK was also considered and rejected: `system:` matches any pasted
+# log line and `### instruction` any pasted README, so a blocking version would
+# refuse real users while still missing anyone who paraphrases. The blocking
+# control is AgentConfig.input_scanners; put a real classifier there.
 INJECTION_PATTERNS = [
     re.compile(r"(?i)ignore\s+(all\s+)?previous\s+instructions"),
     re.compile(r"(?i)you\s+are\s+now\s+(a|an)\s+"),

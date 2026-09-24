@@ -16,6 +16,13 @@ Concurrency: ``contextvars`` are per-async-task. Tasks spawned with
 parallel branch inherits the value active when it was spawned and cannot clobber
 a sibling's. Always set via :func:`use_active_policy` so the previous value is
 restored on exit (no leakage across runs).
+
+Threads do NOT inherit it. ``asyncio.to_thread`` copies the context, but
+``loop.run_in_executor``, ``ThreadPoolExecutor.submit`` and ``threading.Thread``
+start with an empty one -- and an empty context means no policy, which every
+gate treats as "allow". Code that hands gated work (an LLM call, a memory
+operation) to a thread must use ``asyncio.to_thread`` or submit
+``contextvars.copy_context().run`` (security finding F12).
 """
 
 from __future__ import annotations

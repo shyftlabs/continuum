@@ -3,7 +3,7 @@ Type definitions for MCP tools.
 """
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -646,11 +646,15 @@ class ToolContextState:
         state._metadata = data.get("metadata", {})
         return state
 
-    def to_prompt_context(self) -> str | None:
+    def to_prompt_context(self, exclude_namespaces: Collection[str] = ()) -> str | None:
         """
         Generate a context string for system prompt injection.
 
         Sensitive variables are excluded from the prompt context.
+
+        Args:
+            exclude_namespaces: Namespaces to leave out entirely -- those whose
+                server set ``ToolContextConfig.inject_into_system_prompt=False``.
 
         Returns:
             String describing available context, or None if empty.
@@ -660,7 +664,7 @@ class ToolContextState:
 
         lines = ["Current tool context (use these values for tool calls):"]
         for namespace, vars in self._variables.items():
-            if vars:
+            if vars and namespace not in exclude_namespaces:
                 ns_lines: list[str] = []
                 for name, value in vars.items():
                     if self._is_sensitive(namespace, name):

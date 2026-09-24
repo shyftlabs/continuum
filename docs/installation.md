@@ -248,12 +248,181 @@ and `HEADROOM_CCR_SQLITE_PATH`.
 |---|---|---|
 | `SHARED_SERVICES_ENABLED` | `true` | If `true`, `Container.shutdown()` does not close Redis or flush Langfuse |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL` |
+| `LOG_PROMPT_CONTENT` | `false` | Whether log lines may carry the content they describe |
 
-**`LOG_FULL_PROMPT`** is **not** a `Settings` field — it's read directly
-via `os.environ.get("LOG_FULL_PROMPT", "")` in
-`agent/execution/message_builder.py`. Set it to `true` to log the
-assembled prompt before each LLM call. Useful for debugging memory /
-RAG / handoff flows; does not need to appear in `.env` to work.
+### `LOG_PROMPT_CONTENT`
+
+Off, a log line says which agent, which tool, and how much — not what.
+The `FINAL PROMPT` line still appears, with `<1843 chars>` where the
+prompt was:
+
+```
+===== FINAL PROMPT [clinic] =====
+<1843 chars>
+========================
+```
+
+On, you get the assembled prompt itself: the system instructions, the
+retrieved memories, the session history, the RAG context and the user's
+input. That is the whole point when you are debugging why an agent
+ignored a memory or a RAG chunk — and the reason to keep it off anywhere
+the logs are shipped off the machine.
+
+It is enforced by `PromptContentFilter` in `continuum/logging.py`, which
+sits on the handlers rather than in the call sites, so one rule covers
+every `continuum.*` logger. The rule itself is narrow and worth knowing
+before you add a log line:
+
+- an argument wrapped in `log_content()` or `log_id()` is withheld
+- **nothing else is** — in particular, content built into the message by
+  an f-string is not withheld, because by the time `logging` sees an
+  f-string the message is one finished string and the structure can no
+  longer be told from the data
+
+A length threshold sat here briefly and was removed. It was wrong in both
+directions: 46 characters of PHI passed it, while a 65-character
+pasteable `continuum mcp diff … --pins PATH` command did not. Length does
+not distinguish a medical note from a file path.
+
+### Adding a log line
+
+Pass values as arguments, never as an f-string:
+
+```python
+logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+#                                    └ label ┘  └── content ───┘
+```
+
+**Ruff enforces the shape.** `G004` is enabled for all of `src/`, with no
+exemption, so an f-string in a logging call fails lint. That is not a
+style preference here: an f-string site cannot be redacted at all, and
+the rule is what stops new ones appearing.
+
+Then decide, per value, what it is. The question is not *"does this look
+sensitive?"* but *"whose data is it?"*:
+
+| value | wrapper |
+|---|---|
+| a prompt, a memory, a tool argument or result, model output | `log_content()` |
+| `user_id`, `session_id`, `memory_id`, an approver's name | `log_id()` |
+| agent and tool names, tool parameter schemas, model ids, counts, `trace_id`, paths, commands | bare |
+
+**Exceptions stay bare**: an exception's text is the system's account of
+what failed, and it is usually what the line exists to show. The
+exception to that is an error that quotes its input. A pydantic
+`ValidationError` prints the offending value (`input_value='…'`), so
+input-validation and structured-output errors are wrapped in
+`log_content()`, as is `e.errors()`. The test is the same: does the text
+contain someone's data?
+
+One deliberate exception, in `temporal/workflows/agent_workflow.py`: an
+unauthorized tool-approval attempt names the actor rather than
+pseudonymising them, because identifying them is what a security audit
+line is for. The same line withholds the approver roster — not for
+privacy, but because publishing who *could* have approved, on the line
+that fires when someone is probing the gate, hands over the list of
+people to impersonate.
+
+Pass the whole value — no `[:200]` slicing. Truncating at the call site
+leaks a prefix *and* throws the rest away; the wrappers give the operator
+nothing by default and everything when they ask.
+
+The same rules apply to values passed in `extra={...}`. Continuum's
+formatters do not print `extra`, but third-party handlers such as
+Datadog, `python-json-logger` or structlog serialise every field on the
+record, so `extra={"preview": log_content(text)}`, never the bare text.
+
+Nothing forces you to wrap. The net for that is
+`tests/unit/test_log_canary.py`, which drives the real paths with a
+sentinel string and fails by name when one of them logs it — so a
+forgotten wrapper is a red build rather than a silent leak. A path with
+no canary test has no net, so add one when you add a path.
+
+### Identity: `log_id()`
+
+The user's *words* and the user's *identity* are different data and get
+different treatment:
+
+```python
+logger.info("Session ready: %s", log_id(session_id))
+```
+
+`<31 chars>` would be the wrong redaction for an identifier — every
+session would render the same and you could no longer tell whether two
+lines belong to one user. `log_id()` gives a **stable pseudonym**
+instead:
+
+```
+LOG_PROMPT_CONTENT unset  →  Session ready: id#4f2a9c1e8b3d7a05
+LOG_PROMPT_CONTENT=true   →  Session ready: c:conv-1:u:alice@clinic.example
+```
+
+The same id renders to the same pseudonym every time, so incidents stay
+groupable while the person stays unidentifiable.
+
+Two consequences for call sites:
+
+- **Pass the id whole, never a prefix.** `log_id(session_id[:8])` is the
+  pseudonym of a different string, so one session appears under two ids
+  and the lines no longer join. A bare `session_id[:8]` is worse: a
+  prefix of an email address.
+- **Wrap the value, not its fallback.** Write
+  `log_id(x) if x else "none"`, not `log_id(x or "none")`, which gives
+  every missing id the same pseudonym, one that looks like a real user.
+
+A mapping is pseudonymised value by value, and its keys are kept, because
+they name fields rather than people:
+
+```python
+logger.info("Scope: %s", log_id({"user_id": user_id, "session_id": sid}))
+# Scope: {'user_id': 'id#4f2a9c1e8b3d7a05', 'session_id': 'id#91c0…'}
+```
+
+The `user_id` inside the mapping gets the same pseudonym as `user_id`
+logged alone, so a scope and a plain id join up. `None` values stay
+`None`, and `log_id(None)` is `None`.
+
+It is keyed by **`SESSION_ID_SECRET`**. With no secret configured it
+withholds outright (`<31 chars>`) rather than falling back to a bare
+hash: user ids are guessable — an email, a customer number — so an
+unkeyed digest of one is reversible with a word list. Correlation is what
+degrades, not privacy.
+
+This also applies to the `user_id` and `session_id` fields that
+`JSONFormatter` stamps on **every** structured line from the logging
+context. `trace_id` and `span_id` are left whole: Continuum generates
+them, they are derived from nobody, and they are the remaining
+correlation thread.
+
+> **Why `session_id` is identity, not a label.** With
+> `SESSION_HASH_IDS=false` (the default) a session id is derived in
+> plaintext from the user id, so it *is* the user id:
+> `c:conv-1:u:alice@clinic.example`. Where you can set it,
+> **`SESSION_HASH_IDS=true` is the better fix** — it makes the id opaque
+> at the source, so Redis keys and dashboards benefit too, not just the
+> log. `log_id()` covers the deployments that cannot.
+
+### What this does not cover
+
+Two limits, stated so they are not mistaken for solved:
+
+- **Telemetry.** `redact_for_telemetry` withholds a span payload only
+  when a policy denies the run's data labels, and the two `SpanScope`
+  call sites pass `mask_secrets=False` deliberately (`redact_dict`
+  matches keys by substring and would mask `prompt_tokens`, destroying
+  cost observability). On an unlabelled run, or with no `PolicyStore`
+  configured, span content reaches Langfuse in full. Error reports are
+  the exception: their `user_id`/`session_id` are pseudonymised.
+- **Forgetting still leaks.** Nothing forces a call site to declare its
+  content. `tests/unit/test_log_canary.py` drives the real paths with a
+  sentinel and fails the build when a covered one leaks — but a path
+  without a canary test has no net.
+
+> **Replaces `LOG_FULL_PROMPT`.** That variable was read directly from
+> `os.environ` in `message_builder.py` and only lifted a 2000-character
+> per-message cap — the prompt was logged by default either way. It no
+> longer exists; `LOG_PROMPT_CONTENT=true` is the equivalent, and there is
+> no longer a cap to lift.
 
 ---
 

@@ -388,8 +388,8 @@ class SpanScope:
                     # This is expected for operations that happen before trace creation
                     # (e.g., session creation in API layer, initial setup)
                     logger.debug(
-                        f"Skipping span '{self.name}' - no trace context exists yet. "
-                        "This is normal for operations that occur before trace creation."
+                        "Skipping span '%s' - no trace context exists yet. This is normal for operations that occur before trace creation.",
+                        self.name,
                     )
                     self._span_client = None
                     return
@@ -417,18 +417,21 @@ class SpanScope:
                             span_client=span_result,
                         )
                         logger.debug(
-                            f"Created span '{self.name}' under trace {trace_id} "
-                            f"(parent_obs_id={parent_obs_id})"
+                            "Created span '%s' under trace %s (parent_obs_id=%s)",
+                            self.name,
+                            trace_id,
+                            parent_obs_id,
                         )
                     else:
                         logger.debug(
-                            f"No provider created span '{self.name}' (may be disabled or not sampled)"
+                            "No provider created span '%s' (may be disabled or not sampled)",
+                            self.name,
                         )
                 else:
-                    logger.debug(f"Provider manager not enabled, skipping span '{self.name}'")
+                    logger.debug("Provider manager not enabled, skipping span '%s'", self.name)
 
         except Exception as e:
-            logger.warning(f"Failed to create span '{self.name}': {e}")
+            logger.warning("Failed to create span '%s': %s", self.name, e)
 
     def _end_span(self, error: Exception | None = None) -> None:
         """End the span."""
@@ -470,7 +473,7 @@ class SpanScope:
                     )
 
         except Exception as e:
-            logger.warning(f"Failed to end span '{self.name}': {e}")
+            logger.warning("Failed to end span '%s': %s", self.name, e)
 
         # Restore previous context
         if self._token:

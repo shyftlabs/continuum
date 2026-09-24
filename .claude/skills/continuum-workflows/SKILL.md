@@ -18,12 +18,8 @@ Authoritative source: [`docs/agent.md`](../../../docs/agent.md), §6.
 from continuum.agent import (
     create_sequential_agent, create_parallel_agent, create_loop_agent,
     create_reflection_agent, create_planner_agent, create_router_agent,
-    MemoryScope, MergeStrategy, FailStrategy, TerminationType,
-)
-# Debate, Scatter, and Supervised factories live one level deeper —
-# they are NOT re-exported from `continuum.agent`.
-from continuum.agent.workflow import (
     create_debate_agent, create_scatter_agent, create_supervised_agent,
+    MemoryScope, MergeStrategy, FailStrategy, TerminationType,
 )
 ```
 
@@ -142,12 +138,21 @@ debate = create_debate_agent(
     pro_stance="Argue in favor.",
     con_stance="Argue against.",
     judge_instructions=None,
-    summarise_arguments=False,
+    summarise_arguments=True,                  # default False: see below
     truncate_chars=2000,
 )
 ```
 
 Pro and con run in parallel; judge synthesizes.
+
+The judge sees an excerpt of each side. A side over `truncate_chars` is
+either **cut** to its first N characters (`summarise_arguments=False`, the
+default), which drops the end of the argument where the conclusion
+usually is, or **condensed** by its own side into 3-5 bullets
+(`summarise_arguments=True`), at one extra LLM call per side over the
+limit. A side within the limit is passed verbatim either way. Prefer
+`True` when the verdict matters. A cut is logged at INFO:
+`judge sees pro 2000 of 4056 chars, …`.
 
 ---
 

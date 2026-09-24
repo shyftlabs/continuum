@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from continuum.agent.types import AgentResponse, ResponseStatus
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.base import BaseAgent
@@ -42,6 +42,27 @@ def last_user_prompt(
         if role == "user":
             return str(content) if content is not None else ""
     return ""
+
+
+def scanner_failure_reason(scanner: Any, exc: Exception) -> str:
+    """Explain a crashed input scanner, and name the way back.
+
+    A scanner that raised used to be logged and skipped, which turned the only
+    input control that can refuse into no control at all (security finding F11).
+    Both input call sites now fail closed, and share this wording so the two
+    cannot drift apart.
+
+    The escape hatch is in the message on purpose. Failing closed is defensible
+    only if the way back is discoverable at the moment it bites — the person
+    reading this is mid-incident, and a bare "scanner failed" tells them nothing
+    they can act on.
+    """
+    name = getattr(scanner, "__name__", None) or repr(scanner)
+    return (
+        f"Input scanner {name} failed ({type(exc).__name__}: {exc}). The input was "
+        f"blocked rather than passed unscanned. To accept that risk, handle the "
+        f"exception inside your scanner and return (text, True, None)."
+    )
 
 
 def apply_output_scanners(agent: BaseAgent, prompt: str, content: str) -> str:
@@ -117,13 +138,19 @@ async def validate_input(
         # Validate against schema
         agent.input_schema.model_validate(data)
 
-        logger.debug(f"Input validation passed for agent {agent.name}")
+        logger.debug("Input validation passed for agent %s", agent.name)
         return None  # Validation passed
 
     except ValidationError as e:
+        # Both arguments quote the user's input: a pydantic ValidationError's
+        # text and its errors() carry the value that failed ("input_value=...",
+        # "input": ...), and the value validated here is what the user sent.
+        # The one exception that is not left bare, because it was caught leaking.
         logger.warning(
-            f"Input validation failed for agent {agent.name}: {e}",
-            extra={"errors": e.errors()},
+            "Input validation failed for agent %s: %s",
+            agent.name,
+            log_content(e),
+            extra={"errors": log_content(e.errors())},
         )
 
         # Return graceful error response (safe access to avoid KeyError if Pydantic structure changes)
@@ -143,6 +170,6 @@ async def validate_input(
         )
 
     except Exception as e:
-        logger.error(f"Unexpected error during input validation: {e}")
+        logger.error("Unexpected error during input validation: %s", e)
         # Don't fail on validation errors, continue with execution
         return None

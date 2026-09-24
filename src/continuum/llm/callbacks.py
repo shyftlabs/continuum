@@ -346,7 +346,7 @@ class LangfuseTraceContext:
                         session_id=self.session_id,
                     )
             except Exception as e:
-                logger.error(f"Failed to create Langfuse trace: {e}")
+                logger.error("Failed to create Langfuse trace: %s", e)
 
         return self
 
@@ -369,7 +369,7 @@ class LangfuseTraceContext:
                         level="ERROR",
                     )
             except Exception as e:
-                logger.error(f"Failed to update Langfuse trace: {e}")
+                logger.error("Failed to update Langfuse trace: %s", e)
 
         # Restore previous context using TraceScope
         if self._trace_scope:
@@ -398,7 +398,7 @@ class LangfuseTraceContext:
                 if update_kwargs:
                     self.trace.update(**update_kwargs)
             except Exception as e:
-                logger.error(f"Failed to update Langfuse trace: {e}")
+                logger.error("Failed to update Langfuse trace: %s", e)
 
     def span(
         self,
@@ -415,7 +415,7 @@ class LangfuseTraceContext:
                     metadata=metadata,
                 )
             except Exception as e:
-                logger.error(f"Failed to create Langfuse span: {e}")
+                logger.error("Failed to create Langfuse span: %s", e)
         return None
 
     def event(
@@ -435,7 +435,7 @@ class LangfuseTraceContext:
                     metadata=metadata,
                 )
             except Exception as e:
-                logger.error(f"Failed to log Langfuse event: {e}")
+                logger.error("Failed to log Langfuse event: %s", e)
 
     def score(
         self,
@@ -452,7 +452,7 @@ class LangfuseTraceContext:
                     comment=comment,
                 )
             except Exception as e:
-                logger.error(f"Failed to add Langfuse score: {e}")
+                logger.error("Failed to add Langfuse score: %s", e)
 
     def get_trace_url(self) -> str | None:
         """Get the URL to view this trace in Langfuse UI."""

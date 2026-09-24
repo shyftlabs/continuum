@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 logger = get_logger(__name__)
 
@@ -115,10 +115,12 @@ class HeadroomClient:
         import logging as _logging
 
         if logger.isEnabledFor(_logging.DEBUG):
+            # The conversation on its way to the sidecar -- every message the
+            # user and the model have exchanged. Withheld unless asked for.
             logger.debug(
                 "headroom REQUEST (%d messages):\n%s",
                 len(messages),
-                _compact_messages(messages),
+                log_content(_compact_messages(messages)),
             )
 
         resp = await self._client.post(
@@ -133,7 +135,7 @@ class HeadroomClient:
                 len(body.get("messages", [])),
                 body.get("tokens_before", 0),
                 body.get("tokens_after", 0),
-                _compact_messages(body.get("messages", [])),
+                log_content(_compact_messages(body.get("messages", []))),
             )
         stats = CompressionStats(
             tokens_before=body.get("tokens_before", 0),
@@ -162,7 +164,7 @@ class HeadroomClient:
             resp = await self._client.get(f"{self._base}/health")
             return resp.status_code == 200
         except Exception as e:
-            logger.debug(f"Headroom sidecar health check failed: {e}")
+            logger.debug("Headroom sidecar health check failed: %s", e)
             return False
 
     async def aclose(self) -> None:

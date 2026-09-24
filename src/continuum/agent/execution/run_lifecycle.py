@@ -49,7 +49,7 @@ class RunLifecycle:
                 trace_client = get_current_trace_client()
                 if trace_client:
                     context._langfuse_trace = trace_client
-                logger.debug(f"Using existing trace context: {existing_trace_id}")
+                logger.debug("Using existing trace context: %s", existing_trace_id)
             elif not context.trace_id:
                 from continuum.observability import TracingManager
                 from continuum.observability.data_redaction import redact_for_telemetry
@@ -89,10 +89,10 @@ class RunLifecycle:
                 run_id=context.run_id,
             )
 
-            logger.debug(f"Trace context set: trace_id={context.trace_id} (owns={owns_trace})")
+            logger.debug("Trace context set: trace_id=%s (owns=%s)", context.trace_id, owns_trace)
 
         except Exception as e:
-            logger.warning(f"Failed to set trace context: {e}")
+            logger.warning("Failed to set trace context: %s", e)
 
         return owns_trace
 
@@ -144,13 +144,13 @@ class RunLifecycle:
                         },
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to update trace: {e}")
+                    logger.debug("Failed to update trace: %s", e)
 
             clear_trace_context()
-            logger.debug(f"Trace context cleared for trace_id={context.trace_id}")
+            logger.debug("Trace context cleared for trace_id=%s", context.trace_id)
 
         except Exception as e:
-            logger.warning(f"Failed to trace run end: {e}")
+            logger.warning("Failed to trace run end: %s", e)
             try:
                 clear_trace_context()
             except Exception:
@@ -229,7 +229,7 @@ class RunLifecycle:
                 clear_trace_context()
 
         except Exception as e:
-            logger.warning(f"Failed to trace run error: {e}")
+            logger.warning("Failed to trace run error: %s", e)
             if owns_trace:
                 try:
                     clear_trace_context()
@@ -247,6 +247,6 @@ class RunLifecycle:
             trace = getattr(context, "_langfuse_trace", None)
             if trace:
                 metrics.report_to_trace(trace)
-                logger.debug(f"Metrics reported to trace: {context.trace_id}")
+                logger.debug("Metrics reported to trace: %s", context.trace_id)
         except Exception as e:
-            logger.warning(f"Failed to report metrics to trace: {e}")
+            logger.warning("Failed to report metrics to trace: %s", e)

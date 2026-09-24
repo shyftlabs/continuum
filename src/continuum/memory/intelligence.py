@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.memory.client import MemoryClient
 from continuum.memory.config import MemoryConfig
 from continuum.memory.types import (
@@ -69,6 +69,12 @@ if TYPE_CHECKING:
     from continuum.security.policy import PolicyStore
 
 logger = get_logger(__name__)
+
+# The profile keys the extraction prompt asks for, and the only ones the stored
+# summary renders -- which is what pre_store_filter is shown.
+_PROFILE_KEYS = frozenset(
+    {"preferences", "employer", "expertise_level", "communication_style", "last_topics"}
+)
 
 
 # =============================================================================
@@ -185,12 +191,17 @@ class IntelligentMemoryClient(MemoryClient):
         )
 
         # 3. Entity extraction (stored as tagged memories in same collection)
-        if self._intel.enable_entity_memory and user_id and llm:
-            await self._extract_and_store_entities(text, user_id, llm)
-
         # 4. User profile update
+        #
+        # Both are writes of their own, so both take the filter. They used to be
+        # called without it, and a fact the filter stopped on the write above
+        # was stored here instead -- with nothing behind it, since the caller's
+        # delete-after-write fallback only ever sees `result`.
+        if self._intel.enable_entity_memory and user_id and llm:
+            await self._extract_and_store_entities(text, user_id, llm, pre_store_filter)
+
         if self._intel.enable_user_profiles and user_id and llm:
-            await self._update_user_profile(user_id, text, llm)
+            await self._update_user_profile(user_id, text, llm, pre_store_filter)
 
         return result
 
@@ -373,13 +384,17 @@ class IntelligentMemoryClient(MemoryClient):
                     await self.delete(entry.id)
                     pruned += 1
                     logger.debug(
-                        f"IntelligentMemoryClient: pruned memory '{entry.id}' "
-                        f"(importance={importance:.2f}, decay={decay:.2f})"
+                        "IntelligentMemoryClient: pruned memory '%s' (importance=%s, decay=%s)",
+                        log_id(entry.id),
+                        importance,
+                        decay,
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to prune memory '{entry.id}': {e}")
+                    logger.warning("Failed to prune memory '%s': %s", log_id(entry.id), e)
 
-        logger.info(f"IntelligentMemoryClient: pruned {pruned} memories for user '{user_id}'")
+        logger.info(
+            "IntelligentMemoryClient: pruned %s memories for user '%s'", pruned, log_id(user_id)
+        )
         return pruned
 
     # -------------------------------------------------------------------------
@@ -484,7 +499,7 @@ class IntelligentMemoryClient(MemoryClient):
                     return val
             return 0.5
         except Exception as e:
-            logger.debug(f"Importance scoring failed: {e}")
+            logger.debug("Importance scoring failed: %s", e)
             return 0.5
 
     async def _extract_and_store_entities(
@@ -492,6 +507,7 @@ class IntelligentMemoryClient(MemoryClient):
         text: str,
         user_id: str,
         llm: Any,
+        pre_store_filter: Any | None = None,
     ) -> None:
         """
         Extract named entities from text and store each as a tagged memory.
@@ -525,7 +541,7 @@ class IntelligentMemoryClient(MemoryClient):
             data = self._extract_json(response.content or '{"entities": []}')
             entities = data.get("entities", []) if isinstance(data, dict) else []
         except Exception as e:
-            logger.debug(f"Entity extraction failed: {e}")
+            logger.debug("Entity extraction failed: %s", e)
             return
 
         for entity in entities:
@@ -550,20 +566,25 @@ class IntelligentMemoryClient(MemoryClient):
             }
             entity_meta.update(attrs)
 
+            if not self._passes_filter(pre_store_filter, memory_text, "entity"):
+                continue
+
             try:
                 await super().add(
                     memory_text,
                     user_id=user_id,
                     metadata=entity_meta,
+                    pre_store_filter=pre_store_filter,
                 )
             except Exception as e:
-                logger.debug(f"Failed to store entity '{name}': {e}")
+                logger.debug("Failed to store entity '%s': %s", name, e)
 
     async def _update_user_profile(
         self,
         user_id: str,
         text: str,
         llm: Any,
+        pre_store_filter: Any | None = None,
     ) -> None:
         """
         Extract user facts from conversation text and merge into the user profile.
@@ -608,12 +629,19 @@ class IntelligentMemoryClient(MemoryClient):
             if not raw:
                 logger.debug("User profile update: LLM returned empty response, skipping")
                 return
-            logger.debug(f"User profile raw response: {repr(raw[:200])}")
+            logger.debug("User profile raw response: %s", log_content(raw))
             parsed = self._extract_json(raw)
-            # Only accept a dict — reject arrays or other types from partial parses
-            delta = parsed if isinstance(parsed, dict) else {}
+            # Only accept a dict — reject arrays or other types from partial parses.
+            # And only the documented keys: the filter is offered the summary
+            # text built from them below, never profile_json itself, so a key
+            # the summary does not render would be stored without being checked.
+            delta = (
+                {k: v for k, v in parsed.items() if k in _PROFILE_KEYS}
+                if isinstance(parsed, dict)
+                else {}
+            )
         except Exception as e:
-            logger.debug(f"User profile update failed: {e}")
+            logger.debug("User profile update failed: %s", e)
             return
 
         if not delta:
@@ -664,6 +692,9 @@ class IntelligentMemoryClient(MemoryClient):
             "; ".join(summary_parts) if summary_parts else "updated"
         )
 
+        if not self._passes_filter(pre_store_filter, profile_summary, "user profile"):
+            return
+
         try:
             # infer=False bypasses mem0's LLM fact extraction so the profile
             # summary is stored verbatim with our metadata (including profile_json).
@@ -674,10 +705,40 @@ class IntelligentMemoryClient(MemoryClient):
                 user_id=user_id,
                 metadata=profile_meta,
                 infer=False,
+                pre_store_filter=pre_store_filter,
             )
-            logger.debug(f"User profile updated for '{user_id}'")
+            logger.debug("User profile updated for '%s'", log_id(user_id))
         except Exception as e:
-            logger.debug(f"Failed to store user profile for '{user_id}': {e}")
+            logger.debug("Failed to store user profile for '%s': %s", log_id(user_id), e)
+
+    @staticmethod
+    def _passes_filter(pre_store_filter: Any | None, fact: str, kind: str) -> bool:
+        """Check text this class is about to write against ``pre_store_filter``.
+
+        The provider gate also receives the filter, but it sees only what mem0
+        extracts, and a provider without the gate sees nothing at all. This
+        class already holds the exact text, so it checks before writing.
+
+        Same rules as the provider gate: the fact is offered alone and
+        membership decides, so a rewritten string is a rejection (a filter is a
+        gate, not a transformer); and a filter that raises has said nothing
+        about the fact, so it is not written.
+        """
+        if pre_store_filter is None:
+            return True
+        try:
+            allowed = fact in set(pre_store_filter([fact]))
+        except Exception as e:
+            logger.error(
+                "pre_store_filter raised (%s: %s) — %s not written",
+                type(e).__name__,
+                e,
+                kind,
+            )
+            return False
+        if not allowed:
+            logger.info("pre_store_filter stopped the %s write", kind)
+        return allowed
 
     def _get_llm(self) -> Any | None:
         """Lazy-load LLM client from the container."""

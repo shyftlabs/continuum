@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.service_interface import ISessionService
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.observability.decorators import observe
 from continuum.session.exceptions import SessionOwnershipError
 
@@ -195,8 +195,10 @@ class SessionService(ISessionService):
                 saved_count += 1
 
             logger.debug(
-                f"Session {session_id}: saved {saved_count} messages, "
-                f"skipped {skipped_count} (tool-related/system)"
+                "Session %s: saved %s messages, skipped %s (tool-related/system)",
+                log_id(session_id),
+                saved_count,
+                skipped_count,
             )
 
         except SessionOwnershipError:
@@ -212,13 +214,11 @@ class SessionService(ISessionService):
 
             if isinstance(e, SessionNotFoundError):
                 logger.warning(
-                    f"Messages and memory NOT persisted: session {session_id!r} does not "
-                    f"exist (it was never created via get_or_create_session). The runner "
-                    f"does not create sessions — create it first and pass the returned id "
-                    f"into run()."
+                    "Messages and memory NOT persisted: session %r does not exist (it was never created via get_or_create_session). The runner does not create sessions — create it first and pass the returned id into run().",
+                    log_id(session_id),
                 )
             else:
-                logger.warning(f"Failed to save messages to session: {e}")
+                logger.warning("Failed to save messages to session: %s", e)
 
     async def load_tool_context_state(
         self,
@@ -257,8 +257,8 @@ class SessionService(ISessionService):
             if metadata and metadata.custom.get("tool_context"):
                 state = ToolContextState.from_dict(metadata.custom["tool_context"])
                 logger.debug(
-                    f"Loaded tool context state from session: "
-                    f"{len(state.get_all_namespaces())} namespaces"
+                    "Loaded tool context state from session: %s namespaces",
+                    len(state.get_all_namespaces()),
                 )
                 return state
 
@@ -273,7 +273,7 @@ class SessionService(ISessionService):
             # somebody else's session id. Let it reach the caller.
             raise
         except Exception as e:
-            logger.warning(f"Failed to load tool context state: {e}")
+            logger.warning("Failed to load tool context state: %s", e)
             return ToolContextState()
 
     async def save_tool_context_state(
@@ -301,7 +301,7 @@ class SessionService(ISessionService):
             metadata = await self._session_client.get_session_metadata(session_id)
 
             if not metadata:
-                logger.warning(f"Session metadata not found for {session_id}")
+                logger.warning("Session metadata not found for %s", log_id(session_id))
                 return
 
             # Update custom metadata with tool context
@@ -311,8 +311,8 @@ class SessionService(ISessionService):
             await self._session_client.update_session_metadata(session_id, metadata)
 
             logger.debug(
-                f"Saved tool context state to session: "
-                f"{len(context_state.get_all_namespaces())} namespaces"
+                "Saved tool context state to session: %s namespaces",
+                len(context_state.get_all_namespaces()),
             )
 
         except SessionOwnershipError:
@@ -324,7 +324,7 @@ class SessionService(ISessionService):
             # somebody else's session id. Let it reach the caller.
             raise
         except Exception as e:
-            logger.warning(f"Failed to save tool context state: {e}")
+            logger.warning("Failed to save tool context state: %s", e)
 
     async def get_conversation_history(
         self,
@@ -356,7 +356,7 @@ class SessionService(ISessionService):
             # somebody else's session id. Let it reach the caller.
             raise
         except Exception as e:
-            logger.warning(f"Failed to load session history: {e}")
+            logger.warning("Failed to load session history: %s", e)
             return []
 
     def _message_to_dict(self, message: Any) -> dict[str, Any]:

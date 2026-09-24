@@ -56,7 +56,7 @@ class ProviderRegistry:
                     f"Provider '{name}' already registered. Use overwrite=True to replace."
                 )
             self._providers[name] = provider
-            logger.debug(f"Registered observability provider: {name}")
+            logger.debug("Registered observability provider: %s", name)
 
     def unregister(self, name: str) -> ObservabilityProvider | None:
         """
@@ -71,7 +71,7 @@ class ProviderRegistry:
         with self._lock:
             provider = self._providers.pop(name, None)
             if provider:
-                logger.debug(f"Unregistered observability provider: {name}")
+                logger.debug("Unregistered observability provider: %s", name)
             return provider
 
     def get(self, name: str) -> ObservabilityProvider | None:
@@ -121,9 +121,9 @@ class ProviderRegistry:
             for name, provider in self._providers.items():
                 try:
                     provider.shutdown()
-                    logger.debug(f"Shutdown provider: {name}")
+                    logger.debug("Shutdown provider: %s", name)
                 except Exception as e:
-                    logger.warning(f"Error shutting down provider {name}: {e}")
+                    logger.warning("Error shutting down provider %s: %s", name, e)
 
     def flush_all(self) -> None:
         """Flush all registered providers."""
@@ -132,7 +132,7 @@ class ProviderRegistry:
                 try:
                     provider.flush()
                 except Exception as e:
-                    logger.warning(f"Error flushing provider {name}: {e}")
+                    logger.warning("Error flushing provider %s: %s", name, e)
 
 
 def get_provider_registry() -> ProviderRegistry:

@@ -31,7 +31,7 @@ except ImportError:
     Memory = None  # type: ignore
     MEM0_AVAILABLE = False
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.memory.base import BaseMemoryProvider
 from continuum.memory.config import MemoryConfig
 from continuum.memory.exceptions import (
@@ -45,8 +45,24 @@ from continuum.memory.types import (
 )
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
+from continuum.utils.secrets import redact_dict
 
 logger = get_logger(__name__)
+
+
+def _loggable_config(config: dict[str, Any]) -> dict[str, Any]:
+    """The mem0 config with its credentials masked.
+
+    Deliberately not routed through ``log_content()``/``LOG_PROMPT_CONTENT``: a
+    provider key is not a debugging convenience an operator should be able to
+    switch back on, and the rest of the config is exactly what they need to see.
+    ``redact_dict`` recurses, which matters here -- the keys sit two levels down
+    under ``llm.config`` and ``embedder.config``.
+    """
+    try:
+        return redact_dict(config)
+    except Exception:  # a config shape redact_dict cannot walk must not leak
+        return {"_redacted": "config could not be masked"}
 
 
 class Mem0Provider(BaseMemoryProvider):
@@ -125,7 +141,12 @@ class Mem0Provider(BaseMemoryProvider):
             # Build mem0 config from our MemoryConfig
             self._mem0_config = self._config.to_mem0_config()
 
-            logger.debug(f"Initializing mem0 with config: {self._mem0_config}")
+            # redact_dict, not log_content: an operator wants to see which
+            # provider, which model, which host -- only the credentials must go,
+            # and they must go whatever LOG_PROMPT_CONTENT says. to_mem0_config()
+            # embeds the embedder's and the fact-extraction LLM's live API keys,
+            # and this line printed them in full at DEBUG.
+            logger.debug("Initializing mem0 with config: %s", _loggable_config(self._mem0_config))
 
             # Initialize sync client - mem0's Memory.from_config() is synchronous
             # A Memory subclass with the pre_store_filter gate mixed in. Gating
@@ -151,7 +172,7 @@ class Mem0Provider(BaseMemoryProvider):
             )
 
         except Exception as e:
-            logger.error(f"Failed to initialize Mem0Provider: {e}")
+            logger.error("Failed to initialize Mem0Provider: %s", e)
             report_error(e, context="mem0_provider_init")
             raise MemoryConfigurationError(
                 f"Failed to initialize mem0: {e}",
@@ -195,7 +216,7 @@ class Mem0Provider(BaseMemoryProvider):
             vs.list = types.MethodType(_list_strong, vs)
             logger.debug("Patched MilvusDB.list() with consistency_level=Strong")
         except Exception as e:
-            logger.debug(f"Milvus consistency patch skipped: {e}")
+            logger.debug("Milvus consistency patch skipped: %s", e)
 
     def _flush_milvus(self) -> None:
         """Flush Milvus before delete_all so mem0's list() sees all growing segments.
@@ -210,7 +231,7 @@ class Mem0Provider(BaseMemoryProvider):
             if vs is not None and hasattr(vs, "client") and hasattr(vs, "collection_name"):
                 vs.client.flush(vs.collection_name)
         except Exception as e:
-            logger.debug(f"Milvus flush skipped: {e}")
+            logger.debug("Milvus flush skipped: %s", e)
 
     def _ensure_initialized(self) -> None:
         """Ensure provider is initialized and ready."""
@@ -300,7 +321,10 @@ class Mem0Provider(BaseMemoryProvider):
 
         try:
             logger.debug(
-                f"mem0.add() with: user_id={user_id}, agent_id={agent_id}, conversation_id={conversation_id}"
+                "mem0.add() with: user_id=%s, agent_id=%s, conversation_id=%s",
+                log_id(user_id),
+                log_id(agent_id),
+                log_id(conversation_id),
             )
 
             # Run sync memory.add() in thread pool.
@@ -324,11 +348,11 @@ class Mem0Provider(BaseMemoryProvider):
                 logger.info(
                     "🚫 pre_store_filter suppressed %d fact(s) before the write", len(suppressed)
                 )
-            logger.debug(f"mem0.add() result: {result.message}, {len(result.results)} memories")
+            logger.debug("mem0.add() result: %s, %s memories", result.message, len(result.results))
             return result
 
         except Exception as e:
-            logger.error(f"mem0.add() failed: {e}", exc_info=True)
+            logger.error("mem0.add() failed: %s", e, exc_info=True)
             report_error(e, context="memory_add")
             return MemoryAddResult(message="Memory operation failed", results=[])
 
@@ -366,17 +390,17 @@ class Mem0Provider(BaseMemoryProvider):
             kwargs["filters"] = filters
 
         try:
-            logger.debug(f"mem0.search() query='{query[:50]}...', limit={limit}")
+            logger.debug("mem0.search() query='%s', limit=%s", log_content(query), limit)
 
             # Run sync memory.search() in thread pool
             response = await asyncio.to_thread(self._sync_memory.search, **kwargs)
 
             result = MemorySearchResult.from_mem0_response(response, query, limit)
-            logger.debug(f"mem0.search() found {result.total_results} results")
+            logger.debug("mem0.search() found %s results", result.total_results)
             return result
 
         except Exception as e:
-            logger.error(f"mem0.search() failed: {e}", exc_info=True)
+            logger.error("mem0.search() failed: %s", e, exc_info=True)
             report_error(e, context="memory_search")
             return MemorySearchResult(results=[], query=query, limit=limit, total_results=0)
 
@@ -387,7 +411,7 @@ class Mem0Provider(BaseMemoryProvider):
         self._ensure_initialized()
 
         try:
-            logger.debug(f"mem0.get() memory_id={memory_id}")
+            logger.debug("mem0.get() memory_id=%s", log_id(memory_id))
 
             # Run sync memory.get() in thread pool
             response = await asyncio.to_thread(self._sync_memory.get, memory_id=memory_id)
@@ -397,7 +421,7 @@ class Mem0Provider(BaseMemoryProvider):
             return None
 
         except Exception as e:
-            logger.error(f"mem0.get() failed for {memory_id}: {e}", exc_info=True)
+            logger.error("mem0.get() failed for %s: %s", log_id(memory_id), e, exc_info=True)
             report_error(e, context="memory_get")
             return None
 
@@ -420,17 +444,17 @@ class Mem0Provider(BaseMemoryProvider):
             kwargs["limit"] = limit
 
         try:
-            logger.debug(f"mem0.get_all() with: {kwargs}")
+            logger.debug("mem0.get_all() with: %s", log_id(kwargs))
 
             # Run sync memory.get_all() in thread pool
             response = await asyncio.to_thread(self._sync_memory.get_all, **kwargs)
 
             memories = [MemoryEntry.from_mem0_result(m) for m in response.get("results", [])]
-            logger.debug(f"mem0.get_all() returned {len(memories)} memories")
+            logger.debug("mem0.get_all() returned %s memories", len(memories))
             return memories
 
         except Exception as e:
-            logger.error(f"mem0.get_all() failed: {e}", exc_info=True)
+            logger.error("mem0.get_all() failed: %s", e, exc_info=True)
             report_error(e, context="memory_get_all")
             return []
 
@@ -441,16 +465,16 @@ class Mem0Provider(BaseMemoryProvider):
         self._ensure_initialized()
 
         try:
-            logger.debug(f"mem0.delete() memory_id={memory_id}")
+            logger.debug("mem0.delete() memory_id=%s", log_id(memory_id))
 
             # Run sync memory.delete() in thread pool
             await asyncio.to_thread(self._sync_memory.delete, memory_id=memory_id)
 
-            logger.info(f"Memory deleted: {memory_id}")
+            logger.info("Memory deleted: %s", log_id(memory_id))
             return True
 
         except Exception as e:
-            logger.error(f"mem0.delete() failed for {memory_id}: {e}", exc_info=True)
+            logger.error("mem0.delete() failed for %s: %s", log_id(memory_id), e, exc_info=True)
             report_error(e, context="memory_delete")
             return False
 
@@ -469,18 +493,18 @@ class Mem0Provider(BaseMemoryProvider):
         kwargs = self._build_identifiers(user_id, agent_id, conversation_id)
 
         try:
-            logger.debug(f"mem0.delete_all() with: {kwargs}")
+            logger.debug("mem0.delete_all() with: %s", log_id(kwargs))
 
             # Flush so mem0's internal list() sees all growing segments before deleting
             await asyncio.to_thread(self._flush_milvus)
             # Run sync memory.delete_all() in thread pool
             await asyncio.to_thread(self._sync_memory.delete_all, **kwargs)
 
-            logger.info(f"All memories deleted for: {kwargs}")
+            logger.info("All memories deleted for: %s", log_id(kwargs))
             return True
 
         except Exception as e:
-            logger.error(f"mem0.delete_all() failed: {e}", exc_info=True)
+            logger.error("mem0.delete_all() failed: %s", e, exc_info=True)
             report_error(e, context="memory_delete_all")
             return False
 
@@ -519,7 +543,7 @@ class Mem0Provider(BaseMemoryProvider):
             kwargs["prompt"] = custom_prompt
 
         try:
-            logger.debug(f"mem0.update() memory_id={memory_id}")
+            logger.debug("mem0.update() memory_id=%s", log_id(memory_id))
 
             # Run sync memory.update() in thread pool
             response = await asyncio.to_thread(self._sync_memory.update, **kwargs)
@@ -530,13 +554,13 @@ class Mem0Provider(BaseMemoryProvider):
                     memory_id=memory_id,
                 )
 
-            logger.info(f"Memory updated: {memory_id}")
+            logger.info("Memory updated: %s", log_id(memory_id))
             return MemoryEntry.from_mem0_result(response)
 
         except MemoryUpdateError:
             raise
         except Exception as e:
-            logger.error(f"mem0.update() failed for {memory_id}: {e}", exc_info=True)
+            logger.error("mem0.update() failed for %s: %s", log_id(memory_id), e, exc_info=True)
             report_error(e, context="memory_update")
             raise MemoryUpdateError(
                 f"Failed to update memory: {e}",
@@ -553,16 +577,16 @@ class Mem0Provider(BaseMemoryProvider):
         self._ensure_initialized()
 
         try:
-            logger.debug(f"mem0.history() memory_id={memory_id}")
+            logger.debug("mem0.history() memory_id=%s", log_id(memory_id))
 
             # Run sync memory.history() in thread pool
             history = await asyncio.to_thread(self._sync_memory.history, memory_id=memory_id)
 
-            logger.debug(f"mem0.history() returned {len(history)} versions")
+            logger.debug("mem0.history() returned %s versions", len(history))
             return history
 
         except Exception as e:
-            logger.error(f"mem0.history() failed for {memory_id}: {e}", exc_info=True)
+            logger.error("mem0.history() failed for %s: %s", log_id(memory_id), e, exc_info=True)
             report_error(e, context="memory_history")
             return []
 
@@ -584,7 +608,7 @@ class Mem0Provider(BaseMemoryProvider):
             return True
 
         except Exception as e:
-            logger.error(f"mem0.reset() failed: {e}", exc_info=True)
+            logger.error("mem0.reset() failed: %s", e, exc_info=True)
             report_error(e, context="memory_reset")
             return False
 
@@ -629,7 +653,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.add(**kwargs)
             return MemoryAddResult.from_mem0_response(response)
         except Exception as e:
-            logger.error(f"mem0.add() sync failed: {e}", exc_info=True)
+            logger.error("mem0.add() sync failed: %s", e, exc_info=True)
             return MemoryAddResult(message="Memory operation failed", results=[])
 
     def search_sync(
@@ -659,7 +683,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.search(**kwargs)
             return MemorySearchResult.from_mem0_response(response, query, limit)
         except Exception as e:
-            logger.error(f"mem0.search() sync failed: {e}", exc_info=True)
+            logger.error("mem0.search() sync failed: %s", e, exc_info=True)
             return MemorySearchResult(results=[], query=query, limit=limit, total_results=0)
 
     def get_sync(self, memory_id: str) -> MemoryEntry | None:
@@ -672,7 +696,7 @@ class Mem0Provider(BaseMemoryProvider):
                 return MemoryEntry.from_mem0_result(response)
             return None
         except Exception as e:
-            logger.error(f"mem0.get() sync failed for {memory_id}: {e}", exc_info=True)
+            logger.error("mem0.get() sync failed for %s: %s", log_id(memory_id), e, exc_info=True)
             return None
 
     def get_all_sync(
@@ -694,7 +718,7 @@ class Mem0Provider(BaseMemoryProvider):
             response = self._sync_memory.get_all(**kwargs)
             return [MemoryEntry.from_mem0_result(m) for m in response.get("results", [])]
         except Exception as e:
-            logger.error(f"mem0.get_all() sync failed: {e}", exc_info=True)
+            logger.error("mem0.get_all() sync failed: %s", e, exc_info=True)
             return []
 
     def delete_sync(self, memory_id: str) -> bool:
@@ -705,7 +729,9 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.delete(memory_id=memory_id)
             return True
         except Exception as e:
-            logger.error(f"mem0.delete() sync failed for {memory_id}: {e}", exc_info=True)
+            logger.error(
+                "mem0.delete() sync failed for %s: %s", log_id(memory_id), e, exc_info=True
+            )
             return False
 
     def delete_all_sync(
@@ -724,7 +750,7 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.delete_all(**kwargs)
             return True
         except Exception as e:
-            logger.error(f"mem0.delete_all() sync failed: {e}", exc_info=True)
+            logger.error("mem0.delete_all() sync failed: %s", e, exc_info=True)
             return False
 
     def update_sync(
@@ -756,7 +782,9 @@ class Mem0Provider(BaseMemoryProvider):
         except MemoryUpdateError:
             raise
         except Exception as e:
-            logger.error(f"mem0.update() sync failed for {memory_id}: {e}", exc_info=True)
+            logger.error(
+                "mem0.update() sync failed for %s: %s", log_id(memory_id), e, exc_info=True
+            )
             raise MemoryUpdateError(
                 f"Failed to update memory: {e}",
                 memory_id=memory_id,
@@ -770,7 +798,9 @@ class Mem0Provider(BaseMemoryProvider):
         try:
             return self._sync_memory.history(memory_id=memory_id)
         except Exception as e:
-            logger.error(f"mem0.history() sync failed for {memory_id}: {e}", exc_info=True)
+            logger.error(
+                "mem0.history() sync failed for %s: %s", log_id(memory_id), e, exc_info=True
+            )
             return []
 
     def reset_sync(self) -> bool:
@@ -782,5 +812,5 @@ class Mem0Provider(BaseMemoryProvider):
             self._sync_memory.reset()
             return True
         except Exception as e:
-            logger.error(f"mem0.reset() sync failed: {e}", exc_info=True)
+            logger.error("mem0.reset() sync failed: %s", e, exc_info=True)
             return False

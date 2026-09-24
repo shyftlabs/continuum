@@ -332,15 +332,15 @@ class OrchestratorLifecycle:
 
             for err in config_errors:
                 errors.append(str(err))
-                logger.error(f"❌ Config: {err}")
+                logger.error("❌ Config: %s", err)
 
             for warn in config_warnings:
                 warnings.append(str(warn))
-                logger.warning(f"⚠️ Config: {warn}")
+                logger.warning("⚠️ Config: %s", warn)
 
             if config_errors and self._fail_on_unhealthy:
                 self._state = LifecycleState.FAILED
-                logger.error(f"Configuration validation failed: {len(config_errors)} error(s)")
+                logger.error("Configuration validation failed: %s error(s)", len(config_errors))
                 return InitializationResult(
                     success=False,
                     state=self._state,
@@ -366,11 +366,11 @@ class OrchestratorLifecycle:
                     elif check.status == HealthStatus.DEGRADED:
                         warnings.append(f"{check.name}: {check.message}")
                     else:
-                        logger.info(f"✓ {check.name}: {check.message}")
+                        logger.info("✓ %s: %s", check.name, check.message)
 
                 if errors and self._fail_on_unhealthy:
                     self._state = LifecycleState.FAILED
-                    logger.error(f"Initialization failed: {errors}")
+                    logger.error("Initialization failed: %s", errors)
                     return InitializationResult(
                         success=False,
                         state=self._state,
@@ -408,7 +408,7 @@ class OrchestratorLifecycle:
         except Exception as e:
             self._state = LifecycleState.FAILED
             errors.append(f"Initialization error: {str(e)}")
-            logger.error(f"SDK initialization failed: {e}", exc_info=True)
+            logger.error("SDK initialization failed: %s", e, exc_info=True)
             return InitializationResult(
                 success=False,
                 state=self._state,
@@ -430,7 +430,7 @@ class OrchestratorLifecycle:
                     self._initialized_components.append("observability")
                     logger.debug("Observability providers initialized")
         except Exception as e:
-            logger.warning(f"Failed to initialize observability: {e}")
+            logger.warning("Failed to initialize observability: %s", e)
 
         # Initialize Memory client (long-term memory)
         if settings.memory_enabled:
@@ -441,7 +441,7 @@ class OrchestratorLifecycle:
                     self._initialized_components.append("memory")
                     logger.debug("Memory client initialized")
             except Exception as e:
-                logger.warning(f"Failed to initialize Memory client: {e}")
+                logger.warning("Failed to initialize Memory client: %s", e)
 
         # Initialize Session client (short-term memory)
         if settings.session_enabled:
@@ -452,7 +452,7 @@ class OrchestratorLifecycle:
                     self._initialized_components.append("session")
                     logger.debug("Session client initialized")
             except Exception as e:
-                logger.warning(f"Failed to initialize Session client: {e}")
+                logger.warning("Failed to initialize Session client: %s", e)
 
         # Initialize Temporal client (optional)
         if settings.temporal_enabled:
@@ -466,7 +466,7 @@ class OrchestratorLifecycle:
             except ImportError:
                 logger.debug("temporalio not installed, skipping Temporal init")
             except Exception as e:
-                logger.warning(f"Failed to connect to Temporal: {e}")
+                logger.warning("Failed to connect to Temporal: %s", e)
 
     def _log_service_configurations(self) -> None:
         """Log service configurations and modes."""
@@ -485,13 +485,16 @@ class OrchestratorLifecycle:
                     embedder_base = memory_client.config.embedder_api_base
                     embedder_suffix = f" base_url={embedder_base}" if embedder_base else " (direct)"
                     logger.info(
-                        f"  💾 Memory: enabled | isolation={memory_isolation} | "
-                        f"embedder={embedder_provider}/{embedder_model}{embedder_suffix}"
+                        "  💾 Memory: enabled | isolation=%s | embedder=%s/%s%s",
+                        memory_isolation,
+                        embedder_provider,
+                        embedder_model,
+                        embedder_suffix,
                     )
                 else:
                     logger.info("  💾 Memory: disabled or not initialized")
             except Exception as e:
-                logger.debug(f"Could not get memory configuration: {e}")
+                logger.debug("Could not get memory configuration: %s", e)
                 logger.info("  💾 Memory: enabled (configuration unavailable)")
         else:
             logger.info("  💾 Memory: disabled")
@@ -504,11 +507,11 @@ class OrchestratorLifecycle:
                 session_client = get_global_session_client()
                 if session_client and session_client.is_enabled:
                     redis_host = session_client.config.redis_host
-                    logger.info(f"  💬 Session: enabled | redis={redis_host}")
+                    logger.info("  💬 Session: enabled | redis=%s", redis_host)
                 else:
                     logger.info("  💬 Session: disabled or not initialized")
             except Exception as e:
-                logger.debug(f"Could not get session configuration: {e}")
+                logger.debug("Could not get session configuration: %s", e)
                 logger.info("  💬 Session: enabled (configuration unavailable)")
         else:
             logger.info("  💬 Session: disabled")
@@ -520,11 +523,11 @@ class OrchestratorLifecycle:
             manager = get_provider_manager()
             if manager and manager.is_enabled:
                 providers = list(manager._registry.get_enabled().keys())
-                logger.info(f"  📈 Observability: enabled | providers={providers}")
+                logger.info("  📈 Observability: enabled | providers=%s", providers)
             else:
                 logger.info("  📈 Observability: disabled or not configured")
         except Exception as e:
-            logger.debug(f"Could not get observability configuration: {e}")
+            logger.debug("Could not get observability configuration: %s", e)
             logger.info("  📈 Observability: configuration unavailable")
 
         # LLM configuration
@@ -534,11 +537,11 @@ class OrchestratorLifecycle:
             container = get_container()
             if container.llm_client:
                 default_model = settings.default_llm_model or "not set"
-                logger.info(f"  🤖 LLM: enabled | default_model={default_model}")
+                logger.info("  🤖 LLM: enabled | default_model=%s", default_model)
             else:
                 logger.info("  🤖 LLM: not available")
         except Exception as e:
-            logger.debug(f"Could not get LLM configuration: {e}")
+            logger.debug("Could not get LLM configuration: %s", e)
             logger.info("  🤖 LLM: configuration unavailable")
 
     def _setup_signal_handlers(self) -> None:
@@ -562,10 +565,10 @@ class OrchestratorLifecycle:
         """Handle shutdown signal."""
         # Prevent multiple simultaneous shutdown calls
         if self._state in (LifecycleState.SHUTTING_DOWN, LifecycleState.SHUTDOWN):
-            logger.debug(f"Ignoring {sig.name} signal - shutdown already in progress")
+            logger.debug("Ignoring %s signal - shutdown already in progress", sig.name)
             return
 
-        logger.info(f"Received signal {sig.name}, initiating shutdown...")
+        logger.info("Received signal %s, initiating shutdown...", sig.name)
         await self.shutdown()
 
     def _sync_shutdown(self) -> None:
@@ -589,7 +592,7 @@ class OrchestratorLifecycle:
                 finally:
                     loop.close()
         except Exception as e:
-            logger.warning(f"Error during sync shutdown: {e}")
+            logger.warning("Error during sync shutdown: %s", e)
 
     async def shutdown(self) -> None:
         """
@@ -607,7 +610,7 @@ class OrchestratorLifecycle:
                 return
 
             if self._state != LifecycleState.RUNNING:
-                logger.debug(f"Cannot shutdown from state: {self._state}")
+                logger.debug("Cannot shutdown from state: %s", self._state)
                 return
 
             self._state = LifecycleState.SHUTTING_DOWN
@@ -617,7 +620,7 @@ class OrchestratorLifecycle:
         try:
             # Run shutdown callbacks with timeout
             if self._shutdown_callbacks:
-                logger.debug(f"Running {len(self._shutdown_callbacks)} shutdown callbacks...")
+                logger.debug("Running %s shutdown callbacks...", len(self._shutdown_callbacks))
                 callback_tasks = [callback() for callback in self._shutdown_callbacks]
 
                 try:
@@ -626,7 +629,7 @@ class OrchestratorLifecycle:
                         timeout=self._shutdown_timeout,
                     )
                 except TimeoutError:
-                    logger.warning(f"Shutdown callbacks timed out after {self._shutdown_timeout}s")
+                    logger.warning("Shutdown callbacks timed out after %ss", self._shutdown_timeout)
 
             # Shutdown initialized components in reverse order
             await self._shutdown_clients()
@@ -635,7 +638,7 @@ class OrchestratorLifecycle:
             logger.info("Orchestrator SDK shutdown complete")
 
         except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            logger.error("Error during shutdown: %s", e)
             self._state = LifecycleState.SHUTDOWN
 
     async def _shutdown_clients(self) -> None:
@@ -661,7 +664,7 @@ class OrchestratorLifecycle:
                     manager.shutdown()
                     logger.debug("Langfuse client shutdown")
                 except Exception as e:
-                    logger.warning(f"Error shutting down Langfuse: {e}")
+                    logger.warning("Error shutting down Langfuse: %s", e)
             else:
                 logger.debug(
                     "Langfuse is a shared service, skipping all operations (no flush, no shutdown)"
@@ -679,7 +682,7 @@ class OrchestratorLifecycle:
             except ImportError:
                 pass
             except Exception as e:
-                logger.warning(f"Error stopping Temporal worker: {e}")
+                logger.warning("Error stopping Temporal worker: %s", e)
             try:
                 from continuum.temporal import get_temporal_client
 
@@ -690,7 +693,7 @@ class OrchestratorLifecycle:
             except ImportError:
                 pass
             except Exception as e:
-                logger.warning(f"Error disconnecting Temporal client: {e}")
+                logger.warning("Error disconnecting Temporal client: %s", e)
 
         # Container shutdown: memory, session, LLM, etc.
         try:
@@ -699,7 +702,7 @@ class OrchestratorLifecycle:
             container = get_container()
             await container.shutdown()
         except Exception as e:
-            logger.warning(f"Error during container shutdown: {e}")
+            logger.warning("Error during container shutdown: %s", e)
 
         # The lifecycle initialises a *global* memory client via
         # initialize_global_memory() which is independent from the
@@ -717,7 +720,7 @@ class OrchestratorLifecycle:
                     await global_mem.close()
                 reset_global_memory()
             except Exception as e:
-                logger.debug(f"Non-critical: global memory client cleanup: {e}")
+                logger.debug("Non-critical: global memory client cleanup: %s", e)
 
     async def get_health(self) -> OverallHealthResult:
         """

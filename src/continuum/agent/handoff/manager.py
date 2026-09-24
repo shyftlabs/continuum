@@ -26,7 +26,7 @@ from continuum.agent.types import (
     generate_handoff_id,
 )
 from continuum.llm.untrusted_content import fence_untrusted
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.base import BaseAgent
@@ -253,12 +253,16 @@ class HandoffManager:
         )
 
         logger.info(
-            f"Prepared handoff: {from_agent.name} → {to_agent.name}",
+            "Prepared handoff: %s → %s",
+            from_agent.name,
+            to_agent.name,
             extra={
                 "handoff_id": handoff_id,
                 "from_agent": from_agent.name,
                 "to_agent": to_agent.name,
-                "reason": reason,
+                # The handoff tool's argument, written by the model about the user's
+                # request -- free text, whatever the key name suggests.
+                "reason": log_content(reason),
                 "message_count": len(history),
             },
         )
@@ -510,7 +514,7 @@ class HandoffManager:
                 metadata=event_data,
                 level="DEFAULT" if (not result or result.success) else "ERROR",
             )
-            logger.debug(f"Traced handoff event '{event_name}' under trace {trace_id}")
+            logger.debug("Traced handoff event '%s' under trace %s", event_name, trace_id)
 
         except Exception as e:
-            logger.warning(f"Failed to trace handoff: {e}")
+            logger.warning("Failed to trace handoff: %s", e)

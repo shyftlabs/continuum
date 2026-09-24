@@ -136,6 +136,12 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    # G004 specifically, not all of "G": the rest of flake8-logging-format is
+    # style (G201 prefers .exception() over .error(exc_info=True)) and would pull
+    # 26 unrelated sites into a security change. G004 is the one that matters
+    # here -- an f-string message cannot be redacted, because logging receives it
+    # already interpolated.
+    "G004",  # f-string in a logging call
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -152,7 +158,10 @@ known-first-party = ["continuum"]
 # deliberately assert on broad exceptions.
 "tests/**" = ["E402", "C408", "B017"]
 # Playground demos set gateway env vars / sys.path before importing continuum.
-"playground/**" = ["E402"]
+# G004: the demos print their own prompts and tool results on purpose -- showing
+# what the agent saw is what they are for -- and they are not shipped in the
+# package. src/ carries no G004 exemption.
+"playground/**" = ["E402", "G004"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -78,7 +78,8 @@ Same setup as Layer B Test 4 (Milvus running, `MEMORY_ENABLED=true`).
 The only step with no UI: the fence is a property of the prompt sent to the
 model, which the browser never sees. Read `web.py`'s terminal, not the panel.
 
-6. Repeat step 4 and look at the `FINAL PROMPT` log. The labelled row sits
+6. Repeat step 4 with `LOG_PROMPT_CONTENT=true` and look at the `FINAL PROMPT`
+   log — without it the line reads `<1843 chars>`. The labelled row sits
    inside `<recalled_memory untrusted="true">` under a rule that grants factual
    use and withholds instruction authority; the unlabelled row stays above it in
    the plain `User profile` block:
@@ -98,19 +99,26 @@ Worth piping the terminal so this can be searched after the fact, since it
 scrolls past quickly:
 
 ```bash
-MEMORY_ENABLED=true VECTOR_STORE_PROVIDER=milvus python web.py 2>&1 | tee /tmp/t3.log
+LOG_PROMPT_CONTENT=true MEMORY_ENABLED=true VECTOR_STORE_PROVIDER=milvus \
+  python web.py 2>&1 | tee /tmp/t3.log
 grep -B14 -A4 "recalled_memory untrusted" /tmp/t3.log
 ```
 
-> **`LOG_FULL_PROMPT=true` is not needed here,** though this step asked for it
-> for a long time. That flag lifts a **per-message** truncation (2000 chars of
-> content, 200 of each tool schema), and the memory block is appended as its own
-> `system` message rather than merged into the system prompt — it renders at
-> ~807 characters with `<recalled_memory` at offset 117, so it is never near the
-> cutoff. Verified by running this step at plain `LogLevel.INFO` with the flag
-> unset: both the profile block and the fence appear in full. Use the flag when
-> the *system prompt* or the *tool schemas* are what you need to read, which are
-> genuinely truncated; here it only buries the thing you are looking for.
+> **`LOG_PROMPT_CONTENT=true` is required here.** The `FINAL PROMPT` line no
+> longer carries the prompt by default — it reads `<1843 chars>` — because that
+> line was putting the system instructions, the retrieved memories, the session
+> history and the user's input into the log at `INFO`, which is the shipped
+> level. In a clinic that is the whole point of the demo leaking through the
+> back door. The flag turns the content back on for exactly this kind of
+> inspection.
+>
+> This replaces `LOG_FULL_PROMPT=true`, which the step asked for for a long
+> time and did not need: that flag only lifted a **per-message** truncation
+> (2000 chars of content, 200 of each tool schema), and the memory block is
+> appended as its own `system` message rather than merged into the system
+> prompt — it renders at ~807 characters with `<recalled_memory` at offset 117,
+> so it was never near the cutoff. There is no cap any more; there is only the
+> switch.
 
 - **What it proves:** fencing is *selective*. Fencing everything was measured and
   rejected — the envelope alone costs Claude its factual recall (3/3 → 0/3) — so

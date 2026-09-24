@@ -139,7 +139,8 @@ class RunStateManager:
                 return False
             except Exception as e:
                 logger.warning(
-                    f"Failed to connect to Redis for state persistence: {e}",
+                    "Failed to connect to Redis for state persistence: %s",
+                    e,
                     extra={"error": str(e)},
                 )
                 return False
@@ -192,20 +193,14 @@ class RunStateManager:
             await asyncio.to_thread(_sync_save)
 
             logger.debug(
-                f"Saved run state: {state.run_id}",
-                extra={
-                    "run_id": state.run_id,
-                    "status": state.status.value,
-                },
+                "Saved run state: %s",
+                state.run_id,
+                extra={"run_id": state.run_id, "status": state.status.value},
             )
 
         except Exception as e:
             logger.error(
-                f"Failed to save run state: {e}",
-                extra={
-                    "run_id": state.run_id,
-                    "error": str(e),
-                },
+                "Failed to save run state: %s", e, extra={"run_id": state.run_id, "error": str(e)}
             )
             raise RunStatePersistenceError(
                 f"Failed to save run state: {e}",
@@ -244,11 +239,7 @@ class RunStateManager:
 
         except Exception as e:
             logger.error(
-                f"Failed to load run state: {e}",
-                extra={
-                    "run_id": run_id,
-                    "error": str(e),
-                },
+                "Failed to load run state: %s", e, extra={"run_id": run_id, "error": str(e)}
             )
             return None
 
@@ -324,11 +315,7 @@ class RunStateManager:
 
         except Exception as e:
             logger.error(
-                f"Failed to delete run state: {e}",
-                extra={
-                    "run_id": run_id,
-                    "error": str(e),
-                },
+                "Failed to delete run state: %s", e, extra={"run_id": run_id, "error": str(e)}
             )
             return False
 
@@ -414,7 +401,7 @@ class RunStateManager:
             return await asyncio.to_thread(_sync_list_active)
 
         except Exception as e:
-            logger.error(f"Failed to list active states: {e}")
+            logger.error("Failed to list active states: %s", e)
             return []
 
     def close(self) -> None:

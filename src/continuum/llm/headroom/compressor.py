@@ -173,10 +173,10 @@ class HeadroomCompressor:
         except Exception as e:
             if self._fail_open:
                 logger.warning(
-                    f"Headroom compress failed (fail-open, forwarding uncompressed): {e}"
+                    "Headroom compress failed (fail-open, forwarding uncompressed): %s", e
                 )
                 return messages
-            logger.error(f"Headroom compress failed (fail-closed): {e}")
+            logger.error("Headroom compress failed (fail-closed): %s", e)
             raise
 
         self._last_stats = stats
@@ -335,7 +335,7 @@ class HeadroomCompressor:
         text so the agent loop continues.
         """
         if hash_value not in self._issued_hashes:
-            logger.warning(f"headroom: rejected un-issued retrieve hash {hash_value!r}")
+            logger.warning("headroom: rejected un-issued retrieve hash %r", hash_value)
             return (
                 f"[continuum_headroom_retrieve: hash {hash_value!r} was not issued in this "
                 "context. If the data came from a tool, re-run that tool instead.]"
@@ -343,7 +343,7 @@ class HeadroomCompressor:
         try:
             content = await self._client.retrieve(hash_value, query)
         except Exception as e:
-            logger.warning(f"headroom: retrieve failed for {hash_value}: {e}")
+            logger.warning("headroom: retrieve failed for %s: %s", hash_value, e)
             return (
                 "[continuum_headroom_retrieve: retrieval failed (content may have expired). "
                 "If the data came from a tool, re-run that tool instead.]"

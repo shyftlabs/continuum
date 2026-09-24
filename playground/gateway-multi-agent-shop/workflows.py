@@ -53,7 +53,7 @@ from continuum.agent.types import (
     TerminationConfig,
     TerminationType,
 )
-from continuum.agent.workflow.debate import DebateAgent
+from continuum.agent.workflow.debate import DebateAgent, DebateConfig
 from continuum.agent.workflow.loop import LoopAgent
 from continuum.agent.workflow.parallel import ParallelAgent
 from continuum.agent.workflow.planner import PlannerAgent
@@ -633,6 +633,13 @@ class DebateShop(_BaseWorkflow):
             name="debate-shop",
             model=m,
             gateway_mode=gm,
+            # Each side condenses its own argument into bullet points before the
+            # judge sees it. The default instead cuts each side to its first 2000
+            # characters, and a live run's judge got 49% of one argument and 58%
+            # of the other -- missing both conclusions. truncate_chars stays at
+            # 2000, so a side within it reaches the judge verbatim with no extra
+            # call; only a side over it is summarised.
+            debate_config=DebateConfig(summarise_arguments=True),
             pro_agent=BaseAgent(
                 name="pro-premium",
                 instructions=(

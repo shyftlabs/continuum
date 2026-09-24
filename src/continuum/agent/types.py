@@ -275,8 +275,9 @@ class Handoff:
 def _log_missing_timestamp(handoff_id: str) -> datetime:
     """Log a warning and return current time when HandoffData timestamp is missing."""
     _logger.warning(
-        f"HandoffData '{handoff_id}' missing timestamp field during deserialization. "
-        f"Using current time as fallback — this may indicate data loss."
+        "HandoffData '%s' missing timestamp field during deserialization. "
+        "Using current time as fallback — this may indicate data loss.",
+        handoff_id,
     )
     return datetime.now(UTC)
 

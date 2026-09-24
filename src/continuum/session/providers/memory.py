@@ -18,7 +18,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Any
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
 from continuum.session.exceptions import (
@@ -119,7 +119,7 @@ class MemorySessionProvider(BaseSessionProvider):
             return None
         entry["metadata"].session_id = resolved
         self._store[resolved] = entry
-        logger.info(f"Migrated session to keyed id: {resolved}")
+        logger.info("Migrated session to keyed id: %s", log_id(resolved))
         return entry
 
     async def get_or_create_session(

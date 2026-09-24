@@ -81,7 +81,7 @@ one in the repo-root `.env` also works, but note `config.py` loads it with
 | `WEB_POISON` | `1` | `web_lookup` returns a planted instruction ([F6](F6-memory.md)) |
 | `PHARMACY_TRANSPORT` | `streamable-http` (default) · `sse` · `stdio` | how the pharmacy is reached ([namespacing](namespacing.md)) |
 | `CLINIC_PIN_GATE` | `1` | drop drifted tools instead of warning ([F3](F3-server-trust.md)) |
-| `LOG_FULL_PROMPT` | `true` | lift the 2000-char per-message truncation in the `FINAL PROMPT` log |
+| `LOG_PROMPT_CONTENT` | `true` | let the `FINAL PROMPT` log carry the prompt itself; without it the line reads `<1843 chars>` |
 
 ## Offline scripts
 

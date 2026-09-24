@@ -10,9 +10,12 @@ Provides structured logging with support for:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import sys
+from collections.abc import Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
@@ -119,6 +122,229 @@ def clear_log_context() -> None:
     _session_id.set(None)
 
 
+class _Content:
+    """An argument the call site has declared to be user or model content.
+
+    Redacted by ``PromptContentFilter`` whatever its length, which is the part a
+    size threshold cannot do. ``__str__`` returns the *redacted* form so that a
+    handler without the filter -- someone's own, or a bare ``basicConfig`` --
+    fails closed rather than printing the value. The filter unwraps it to the
+    real thing only when content logging is switched on.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return f"<{len(str(self.value))} chars>"
+
+    __repr__ = __str__
+
+
+def log_content(value: Any) -> _Content:
+    """Mark a log argument as content, so the filter can withhold it.
+
+    Use at any site that logs a prompt, a memory, a tool argument or result, or
+    model output::
+
+        logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+
+    Pass the whole value -- no ``[:200]`` slicing. Truncation at the call site
+    both leaks a prefix and throws the rest away; here the operator gets nothing
+    by default and everything when they set ``LOG_PROMPT_CONTENT=true``.
+    """
+    return _Content(value)
+
+
+# Marks a pseudonym, so a reader knows the value stands for an identity rather
+# than being one. Deliberately unlike session identity's "s_" prefix: that marks
+# a *storage key*, this marks a log rendering, and confusing the two would send
+# someone looking in Redis for a key that was never written.
+_ID_PREFIX = "id#"
+
+# 64 bits. A pseudonym only has to be collision-free across a deployment's live
+# ids, which is a far smaller space than the 128 bits a storage key needs.
+_ID_CHARS = 16
+
+
+def _pseudonym(value: Any) -> str:
+    """A stable, opaque stand-in for an identifier.
+
+    Keyed by ``SESSION_ID_SECRET``. Without one, withholds outright rather than
+    falling back to a bare hash: user ids are guessable (an email, a customer
+    number), so an unkeyed digest of one is reversible with a word list -- the
+    known-plaintext problem that made plaintext session ids a finding in the
+    first place. ``identity.py`` states the rule this follows: a control that
+    reports "enabled" while doing nothing is worse than one that is honestly off.
+
+    So with no secret configured, correlation is what degrades, not privacy.
+    """
+    text = str(value)
+    secret = settings.session_id_secret
+    if not secret:
+        return f"<{len(text)} chars>"
+    digest = hmac.new(secret.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{_ID_PREFIX}{digest[:_ID_CHARS]}"
+
+
+class _Id:
+    """An argument the call site has declared to be an identifier.
+
+    Distinct from ``_Content`` because ``<31 chars>`` is the wrong redaction for
+    an id: every session would render identically and an operator could no longer
+    tell whether two lines belong to the same one. A stable pseudonym withholds
+    the identity and keeps the grouping.
+
+    Fails closed the same way -- ``__str__`` is the pseudonym, so a handler this
+    SDK did not install withholds rather than printing the id.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        # A mapping of identifiers -- {"user_id": ..., "agent_id": ...} -- is
+        # pseudonymised value by value. Pseudonymising its repr instead gave a
+        # stand-in for the whole dict that matched nothing else, so the user
+        # inside {'user_id': 'tl'} rendered differently from the same user logged
+        # on its own, and a live log showed one person as three people.
+        if isinstance(self.value, Mapping):
+            inner = ", ".join(
+                f"{key!r}: {'None' if v is None else repr(_pseudonym(v))}"
+                for key, v in self.value.items()
+            )
+            return "{" + inner + "}"
+        return _pseudonym(self.value)
+
+    __repr__ = __str__
+
+
+def log_id(value: Any) -> Any:
+    """Mark a log argument as an identifier, so the filter can pseudonymise it.
+
+    Use for anything that identifies a person or is derived from something that
+    does -- ``user_id``, ``session_id``, ``memory_id``::
+
+        logger.debug("Session ready: %s", log_id(session_id))
+
+    ``session_id`` is the important case: on shipped defaults it is derived in
+    plaintext from the user id, so ``c:conv-1:u:alice@clinic.example`` is a
+    session id, not an opaque handle. Where it can be set, ``SESSION_HASH_IDS=true``
+    is the better fix -- it makes the id opaque at the source, so Redis keys and
+    dashboards benefit too, not only the log.
+
+    ``None`` passes through: a missing id is not a secret, and rendering it as a
+    pseudonym would imply one existed. For the same reason, wrap the value and
+    not a fallback: ``log_id(x) if x else "none"``, never
+    ``log_id(x if x else "none")``, which gives the word "none" a stable id.
+
+    Pass the whole id, never a slice. ``log_id(session_id[:8])`` is a pseudonym
+    of a prefix and matches the full id's pseudonym on no other line.
+
+    A mapping of identifiers is pseudonymised value by value, keeping its keys,
+    so ``log_id({"user_id": u})`` names the same user as ``log_id(u)``.
+    """
+    if value is None:
+        return None
+    return _Id(value)
+
+
+class PromptContentFilter(logging.Filter):
+    """Keeps prompt and tool content out of the log unless asked for.
+
+    Installed on the handlers rather than written into the call sites, so it
+    covers every ``continuum.*`` logger -- including modules written after this,
+    which is how ``tools/executor.py`` came to log a reviewer's free-text
+    approval reason at INFO eleven days after the problem was first reported.
+
+    The contract is one rule, and it is worth stating exactly because the
+    coverage it gives is not automatic:
+
+        an argument wrapped in log_content() is withheld; nothing else is.
+
+    A length threshold sat here too, briefly, on the theory that a long argument
+    is probably data. It was wrong in both directions and is gone: 46 characters
+    of PHI passed it, while a 65-character pasteable `continuum mcp diff` command
+    did not. Guessing from length damages diagnostics and protects nothing that
+    can be relied on. ``tests/unit/test_log_canary.py`` replaces it -- a sentinel
+    driven through the real paths, failing the build by name when a site forgets
+    to declare its content, which is a net that says what is wrong instead of
+    silently hiding the wrong things.
+
+    ``logger.info("FINAL PROMPT [%s]\\n%s", name, prompt)`` keeps the format
+    string and its values apart until the formatter runs, so the literal (the
+    developer's structure) can be kept while the values (the data) go. A value is
+    *replaced* rather than shortened -- the first 200 characters of a patient
+    record are still a patient record.
+
+    An f-string has already collapsed the two by the time the record exists, and
+    nothing here can separate them again. Capping such a message by length was
+    tried and removed: it cannot tell a prompt dump from a thorough operator
+    message, and it destroyed the pasteable ``continuum mcp diff`` command in the
+    tool-trust warnings. So a call site that logs content opts into protection by
+    passing it as an argument -- ``log_content()`` when it knows, which also
+    covers content too short to trip the length backstop.
+    ``tests/unit/test_log_content_redaction.py`` pins every part of that
+    contract, including the unprotected one.
+
+    ``record.exc_info`` is left alone. The leak is the exception text
+    interpolated into a message; the traceback is a separate field, carries no
+    locals, and is the only thing that says where a failure happened.
+
+    The record is mutated in place, so every handler downstream sees the redacted
+    version -- which is the intent, not a side effect.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Withholding needs no work here: _Content renders as "<N chars>" by
+        # itself, which is what makes an unfiltered handler fail closed. The
+        # filter's only job is the opposite one -- unwrapping, when an operator
+        # has asked for content.
+        if not settings.log_prompt_content:
+            return True
+
+        # A mapping (for %(name)s interpolation) is not a shape this codebase
+        # uses, and rewriting it would break the line.
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(
+                arg.value if isinstance(arg, _Content | _Id) else arg for arg in record.args
+            )
+
+        return True
+
+
+# Context fields that identify a person. trace_id and span_id are generated by
+# Continuum, derived from nobody, and are the last correlation thread once these
+# two are pseudonymised -- over-redacting there costs everything and buys nothing.
+_IDENTITY_CONTEXT_FIELDS = ("user_id", "session_id")
+
+
+def _context_for_output() -> dict[str, str | None]:
+    """The log context as a *formatter* should render it.
+
+    ``llm/callbacks.py`` publishes user_id and session_id into the context and
+    ``JSONFormatter`` stamps it onto every structured line -- a channel that never
+    passes through ``record.args``, so ``PromptContentFilter`` cannot reach it.
+
+    Deliberately a separate view rather than a change to ``get_log_context()``:
+    that function is also read by ``llm/callbacks.py`` for trace correlation and
+    by ``observability/error_reporter.py`` to attribute errors, and both need the
+    real values. Redact at the exit, not at the source -- the same reasoning that
+    puts the filter on handlers rather than on loggers.
+    """
+    context = get_log_context()
+    if settings.log_prompt_content:
+        return context
+    return {
+        key: (_pseudonym(value) if key in _IDENTITY_CONTEXT_FIELDS and value else value)
+        for key, value in context.items()
+    }
+
+
 class JSONFormatter(logging.Formatter):
     """
     JSON formatter for production logging.
@@ -139,7 +365,7 @@ class JSONFormatter(logging.Formatter):
         }
 
         # Add context from context vars
-        context = get_log_context()
+        context = _context_for_output()
         for key, value in context.items():
             if value:
                 log_data[key] = value
@@ -186,7 +412,7 @@ class DevelopmentFormatter(logging.Formatter):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Build context string
-        context = get_log_context()
+        context = _context_for_output()
         context_parts = []
         if context.get("trace_id"):
             context_parts.append(f"trace={context['trace_id'][:8]}")
@@ -390,12 +616,18 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(log_level)
+    # On the handler, not the logger: every module logs through a child logger
+    # (continuum.agent.execution.message_builder), whose records reach us by
+    # propagation. Propagation runs the ancestors' *handlers* and skips their
+    # filters, so a logger-level filter here would see almost nothing.
+    console_handler.addFilter(PromptContentFilter())
     root_logger.addHandler(console_handler)
 
     # Langfuse handler for errors
     if enable_langfuse_handler:
         langfuse_handler = LangfuseHandler(min_level=logging.ERROR)
         langfuse_handler.setFormatter(formatter)
+        langfuse_handler.addFilter(PromptContentFilter())
         root_logger.addHandler(langfuse_handler)
 
     # Prevent propagation to root logger

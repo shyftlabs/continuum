@@ -244,7 +244,7 @@ All importable from `continuum.agent`.
 | `handoff` | `HandoffConfig` | default | |
 | `context_management` | `ContextManagementConfig \| None` | `None` | Per-agent compression override |
 | `input_sanitization` | `bool` | `True` | Strip control chars from input |
-| `injection_detection` | `bool` | `False` | Log suspected prompt-injection patterns |
+| `injection_detection` | `bool` | `False` | **Advisory only** — logs suspected prompt-injection patterns and nothing acts on the result. Six literal patterns that paraphrase defeats; treat it as telemetry, not a control. `input_scanners` is what refuses |
 | `strict_security` | `bool` | `False` | If `True`, agent construction raises `AgentConfigurationError` when it has side-effectful tools but no `policy_store`. If `False`, the same case logs a warning. See [Security](#security-posture) |
 | `output_type` | `Literal["text","json","structured"]` | `"text"` | |
 | `reasoning_mode` | `bool` | `False` | Silent think-first pass before main loop |
@@ -254,7 +254,7 @@ All importable from `continuum.agent`.
 | `retrieval_top_k` | `int \| None` | `None` | RAG hook |
 | `rerank_enabled` | `bool \| None` | `None` | RAG hook |
 | `rag_context` | `str \| None` | `None` | Inject as a "PROVIDED CONTEXT" system message |
-| `input_scanners` | `list[Callable]` | `[]` | `(text) -> (text, is_safe, reason)` |
+| `input_scanners` | `list[Callable]` | `[]` | `(text) -> (text, is_safe, reason)`. The only input control that can refuse. `is_safe=False` raises `InputBlockedError`; **a scanner that raises also blocks** (fail-closed — a crashed scanner has not approved anything). To accept that risk, catch inside your scanner and return `(text, True, None)` |
 | `output_scanners` | `list[Callable]` | `[]` | Same shape, applied to model output |
 | `trace_all_turns` | `bool` | `True` | |
 | `log_to_session` | `bool` | `True` | Persist tool summaries into session metadata |
@@ -584,6 +584,34 @@ debate = create_debate_agent(
 ```
 
 Pro and con run in parallel; the judge synthesizes a verdict.
+
+The judge receives an excerpt of each side, not necessarily the whole
+argument, and `truncate_chars` sets the limit. What happens to a side
+over the limit depends on `summarise_arguments`:
+
+| `summarise_arguments` | a side over `truncate_chars` | cost |
+|---|---|---|
+| `False` (default) | cut to its first `truncate_chars` characters | none |
+| `True` | condensed by its own side into 3-5 bullet points | one LLM call per side over the limit, run in parallel |
+
+A side within the limit reaches the judge verbatim in both modes, and
+`truncate_chars=None` removes the limit (with `summarise_arguments=True`,
+it summarises every side).
+
+The default cut is a plain character slice, so it drops the *end* of each
+argument, which is usually where a case lands its conclusion. In a live
+run the judge saw 49% of one side and 58% of the other. When the cut
+removes anything it is logged at `INFO`:
+
+```
+DebateAgent 'debate': judge sees pro 2000 of 4056 chars, con 2000 of 3436 chars (truncate_chars=2000; ...)
+```
+
+When the verdict matters, use `summarise_arguments=True`: each side keeps
+what it considers its strongest points, rather than whatever fits in the
+first 2000 characters. `summarise_model` picks a cheaper model for it,
+and defaults to the debate's own. With no LLM client available it falls
+back to the cut, and logs a warning.
 
 ### `ScatterAgent`
 

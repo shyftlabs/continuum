@@ -8,6 +8,7 @@ the o-series reasoning models, and Azure OpenAI.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from copy import deepcopy
 from typing import Any
 
 import openai
@@ -241,7 +242,10 @@ class OpenAIProvider(BaseProvider):
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
         if config.extra_body is not None:
-            kwargs["extra_body"] = config.extra_body
+            # deepcopy: this handed the SDK the config's own dict, and one
+            # LLMConfig serves many calls. Same treatment as the Gemini provider,
+            # which speaks the same wire protocol.
+            kwargs["extra_body"] = deepcopy(config.extra_body)
 
         return kwargs
 

@@ -15,7 +15,7 @@ from continuum.agent.config import ReflectionConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -151,8 +151,10 @@ class ReflectionAgent(BaseAgent):
 
         for attempt in range(start_attempt, self.reflection_config.max_reflections + 1):
             logger.info(
-                f"ReflectionAgent '{self.name}': attempt {attempt + 1} / "
-                f"{self.reflection_config.max_reflections + 1}"
+                "ReflectionAgent '%s': attempt %s / %s",
+                self.name,
+                attempt + 1,
+                self.reflection_config.max_reflections + 1,
             )
 
             # Decision trace: mark the start of this reflection attempt (0-based stage).
@@ -199,13 +201,14 @@ class ReflectionAgent(BaseAgent):
 
             if critique["verdict"].startswith("PASS"):
                 logger.info(
-                    f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}"
+                    "ReflectionAgent '%s': critique passed on attempt %s", self.name, attempt + 1
                 )
                 break
 
             logger.info(
-                f"ReflectionAgent '{self.name}': critique says NEEDS IMPROVEMENT — retrying. "
-                f"Reason: {critique['verdict']}"
+                "ReflectionAgent '%s': critique says NEEDS IMPROVEMENT — retrying. Reason: %s",
+                self.name,
+                log_content(critique["verdict"]),
             )
             current_input = (
                 f"{original_input}\n\nPrevious attempt:\n{response.content}\n\n"
@@ -306,11 +309,17 @@ class ReflectionAgent(BaseAgent):
             {"role": "user", "content": self.reflection_config.critique_prompt},
         ]
 
+        # response_content is the model's own answer about the user. The critique
+        # prompt is operator-written, like agent.instructions, and gets the same
+        # treatment: operator prompts routinely embed customer names and worked
+        # examples. The [:500] slice is gone -- truncating here leaked a prefix and
+        # discarded the rest; log_content gives nothing by default and all of it
+        # when an operator asks.
         logger.info(
             "===== CRITIQUE PROMPT [%s] =====\n%s\n%s\n=========================",
             self.name,
-            response_content[:500],
-            self.reflection_config.critique_prompt,
+            log_content(response_content),
+            log_content(self.reflection_config.critique_prompt),
         )
 
         try:
@@ -329,15 +338,22 @@ class ReflectionAgent(BaseAgent):
                 )
 
             verdict = (llm_response.content or "PASS").strip()
+            # The outcome is the SDK's own classification -- the same
+            # startswith("PASS") rule that decides whether to retry -- so it is a
+            # label and prints. The rest is the critique model writing about the
+            # draft, i.e. content: a live run printed it in full on this line,
+            # one line above the retry line that withheld the same text.
             logger.info(
-                "===== CRITIQUE VERDICT [%s] =====\n%s\n=========================",
+                "===== CRITIQUE VERDICT [%s] =====\noutcome=%s reason=%s\n"
+                "=========================",
                 self.name,
-                verdict,
+                "PASS" if verdict.startswith("PASS") else "NEEDS IMPROVEMENT",
+                log_content(verdict),
             )
             return {"verdict": verdict, "usage": usage}
 
         except Exception as e:
-            logger.warning(f"ReflectionAgent critique call failed: {e}")
+            logger.warning("ReflectionAgent critique call failed: %s", e)
             return {"verdict": "PASS", "usage": TokenUsage()}
 
     def to_dict(self) -> dict[str, Any]:
@@ -424,7 +440,7 @@ async def generate_critique_prompt(
         )
         return (response.content or "").strip()
     except Exception as e:
-        logger.warning(f"generate_critique_prompt failed: {e} — using default")
+        logger.warning("generate_critique_prompt failed: %s — using default", e)
         return ReflectionConfig().critique_prompt
 
 

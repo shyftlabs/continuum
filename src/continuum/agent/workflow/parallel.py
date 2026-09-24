@@ -31,7 +31,7 @@ from continuum.agent.workflow._forkable import (
     resumed_input,
     segment_by_markers,
 )
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -161,7 +161,7 @@ class ParallelAgent(BaseAgent):
                     results[agent.name] = TimeoutError("Task timed out")
 
         except Exception as e:
-            logger.error(f"Parallel execution failed: {e}")
+            logger.error("Parallel execution failed: %s", e)
             raise ParallelWorkflowError(
                 f"Parallel execution failed: {e}",
                 run_id=context.run_id,
@@ -355,7 +355,7 @@ class ParallelAgent(BaseAgent):
                 context=context,
             )
         except Exception as e:
-            logger.error(f"Agent {agent.name} failed: {e}")
+            logger.error("Agent %s failed: %s", agent.name, e)
             raise
 
     async def _merge_results(
@@ -403,10 +403,11 @@ Here are their responses:
 
 Please synthesize these responses into a single coherent answer that captures the key information from all sources."""
 
+            # Carries every branch's full output, plus the original request.
             logger.info(
                 "===== FINAL PROMPT [%s/merge] =====\n[user] %s\n========================",
                 self.name,
-                prompt,
+                log_content(prompt),
             )
             try:
                 from continuum.llm.config import LLMConfig
@@ -420,7 +421,7 @@ Please synthesize these responses into a single coherent answer that captures th
                 )
                 return response.content
             except Exception as e:
-                logger.warning(f"LLM merge failed: {e}, falling back to concatenation")
+                logger.warning("LLM merge failed: %s, falling back to concatenation", e)
                 return self._concatenate_results(results)
 
         # Default: concatenate

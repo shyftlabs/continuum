@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.tools.tool_attention.config import ToolAttentionConfig
 from continuum.tools.tool_attention.registry import ToolSummaryRegistry
 
@@ -194,7 +194,7 @@ class ToolAttentionRouter:
             "tool-attention: %d/%d tools promoted — query=%r routed=%s always=%s",
             len(result),
             total,
-            query[:60],
+            log_content(query),
             sorted(routed),
             sorted(always),
         )
@@ -234,7 +234,7 @@ async def apply_tool_attention(
     try:
         filtered = await asyncio.to_thread(router.route, messages, all_tools, context)
     except Exception as e:
-        logger.warning(f"tool-attention routing error (using all tools): {e}")
+        logger.warning("tool-attention routing error (using all tools): %s", e)
         return None
 
     # Phase 1: build summary message so the LLM sees all tool names each turn.

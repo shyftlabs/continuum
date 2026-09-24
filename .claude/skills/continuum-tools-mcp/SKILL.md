@@ -126,10 +126,17 @@ ctx_cfg = ToolContextConfig(
     ],
     auto_capture_common=True,                    # session_id, auth_token, user_id, …
     namespace=None,                              # defaults to MCP server name
-    inject_into_system_prompt=True,
+    inject_into_system_prompt=True,              # False: model isn't shown the values
 )
 server = MCPServerStreamableHttp({"url": "..."}, context_config=ctx_cfg)
 ```
+
+Captured values are also listed to the model in a system message
+("Current tool context …", "A session already exists …"), but only for
+agents with regular tools. Tool-less and handoff-only agents never see
+it. `inject_into_system_prompt=False` hides one server's values from the
+model, while still capturing them and injecting them into tool
+arguments. Use it when injection alone supplies every value.
 
 ---
 

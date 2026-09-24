@@ -423,7 +423,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                     filtered_tools.append(tool)
             except Exception as e:
                 logger.error(
-                    f"Error applying tool filter to tool '{tool.name}' on server '{self.name}': {e}"
+                    "Error applying tool filter to tool '%s' on server '%s': %s",
+                    tool.name,
+                    self.name,
+                    e,
                 )
                 # On error, exclude the tool for safety
                 continue
@@ -449,12 +452,12 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             notification = getattr(message, "root", None)
             if isinstance(notification, ToolListChangedNotification):
                 logger.info(
-                    f"MCP server '{self.name}' announced a tool-list change; "
-                    f"the catalogue will be re-fetched and re-checked."
+                    "MCP server '%s' announced a tool-list change; the catalogue will be re-fetched and re-checked.",
+                    self.name,
                 )
                 self._cache_dirty = True
         except Exception as e:  # noqa: BLE001 - never let bookkeeping break the session
-            logger.warning(f"Could not inspect MCP session message from '{self.name}': {e}")
+            logger.warning("Could not inspect MCP session message from '%s': %s", self.name, e)
 
         if self._caller_message_handler is not None:
             await self._caller_message_handler(message)
@@ -549,8 +552,9 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             save_pins(path, existing)
         except OSError as e:
             logger.warning(
-                f"Could not write MCP tool-record file {path}: {e}. Drift across process "
-                f"restarts will not be reported; enforcement is unaffected."
+                "Could not write MCP tool-record file %s: %s. Drift across process restarts will not be reported; enforcement is unaffected.",
+                path,
+                e,
             )
 
     def _detect_renames(
@@ -647,24 +651,22 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
 
         if event.changed:
             logger.warning(
-                f"MCP server '{self.name}' changed the description or schema of "
-                f"{event.changed} since they were last seen. If you did not update "
-                f"this server, treat it as untrusted: a tool description reaches the "
-                f"model's prompt verbatim and can instruct it. Re-recording the new "
-                f"values (drift from what was last served, NOT a verification)."
+                "MCP server '%s' changed the description or schema of %s since they were last seen. If you did not update this server, treat it as untrusted: a tool description reaches the model's prompt verbatim and can instruct it. Re-recording the new values (drift from what was last served, NOT a verification).",
+                self.name,
+                event.changed,
             )
         if renames:
             logger.warning(
-                f"MCP server '{self.name}' appears to have RENAMED "
-                f"{[f'{old} -> {new}' for old, new in renames]}: each pair has an "
-                f"identical schema but a different name, so the description change "
-                f"rides in as an add plus a remove rather than as an edit. Treat it "
-                f"as untrusted unless you renamed these yourself."
+                "MCP server '%s' appears to have RENAMED %s: each pair has an identical schema but a different name, so the description change rides in as an add plus a remove rather than as an edit. Treat it as untrusted unless you renamed these yourself.",
+                self.name,
+                [f"{old} -> {new}" for old, new in renames],
             )
         if event.added or event.removed:
             logger.info(
-                f"MCP server '{self.name}' tool catalogue changed shape: "
-                f"added={event.added} removed={event.removed}"
+                "MCP server '%s' tool catalogue changed shape: added=%s removed=%s",
+                self.name,
+                event.added,
+                event.removed,
             )
 
         self._save_tool_digests(current, tools)
@@ -708,10 +710,8 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 # never opted in, about something they did not choose.
                 self._warned_inert_policy = True
                 logger.warning(
-                    f"MCP server '{self.name}' has on_unreviewed='block' but no "
-                    f"pin_path, so there is nowhere to record an approval and nothing "
-                    f"is enforced. Set ToolTrustConfig(pin_path=...) and approve the "
-                    f"catalogue with `continuum mcp inspect`."
+                    "MCP server '%s' has on_unreviewed='block' but no pin_path, so there is nowhere to record an approval and nothing is enforced. Set ToolTrustConfig(pin_path=...) and approve the catalogue with `continuum mcp inspect`.",
+                    self.name,
                 )
             return tools
 
@@ -754,18 +754,19 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
         )
         if unreviewed and cfg.on_unreviewed != "allow":
             logger.warning(
-                f"MCP server '{self.name}': {sorted(unreviewed)} "
-                f"{'were dropped -- they are' if cfg.on_unreviewed == 'block' else 'are'} "
-                f"not in the approved catalogue. Review with `{review}`."
+                "MCP server '%s': %s %s not in the approved catalogue. Review with `%s`.",
+                self.name,
+                sorted(unreviewed),
+                "were dropped -- they are" if cfg.on_unreviewed == "block" else "are",
+                review,
             )
         if drifted and cfg.on_drift != "allow":
             logger.warning(
-                f"MCP server '{self.name}': {sorted(drifted)} no longer match the "
-                f"approved description or schema"
-                f"{' and were dropped' if cfg.on_drift == 'block' else ''}. A tool "
-                f"description reaches the model's prompt verbatim and can instruct "
-                f"it; if you did not change this server, treat it as untrusted. "
-                f"Review with `{review}`."
+                "MCP server '%s': %s no longer match the approved description or schema%s. A tool description reaches the model's prompt verbatim and can instruct it; if you did not change this server, treat it as untrusted. Review with `%s`.",
+                self.name,
+                sorted(drifted),
+                " and were dropped" if cfg.on_drift == "block" else "",
+                review,
             )
         return kept
 
@@ -790,7 +791,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
                 if count:
                     metrics.increment(f"mcp.tool_catalog.{field_name}", count)
         except Exception as e:  # noqa: BLE001 - reporting must not break a fetch
-            logger.debug(f"Could not record MCP tool-catalogue metrics: {e}")
+            logger.debug("Could not record MCP tool-catalogue metrics: %s", e)
 
         callback = self._trust_config.on_change
         if callback is None:
@@ -799,8 +800,9 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             callback(event)
         except Exception as e:  # noqa: BLE001 - an application's hook is not ours to trust
             logger.warning(
-                f"on_change callback for MCP server '{self.name}' raised {e!r}. The "
-                f"catalogue change was still applied; fix the callback."
+                "on_change callback for MCP server '%s' raised %r. The catalogue change was still applied; fix the callback.",
+                self.name,
+                e,
             )
 
     def _find_prior_approval(self, raw_tools: list[MCPTool] | None) -> str | None:
@@ -1053,7 +1055,7 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             await self.cleanup()
             raise
         except (Exception, asyncio.CancelledError) as e:
-            logger.error(f"Error initializing MCP server: {e}")
+            logger.error("Error initializing MCP server: %s", e)
             await self.cleanup()
             raise MCPConnectionError(
                 f"Failed to connect to MCP server: {e}",
@@ -1143,7 +1145,10 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             if is_json_error:
                 error_msg = str(e)
                 logger.error(
-                    f"❌ MCP server '{self.name}' returned invalid JSON response for tool '{tool_name}': {error_msg}",
+                    "❌ MCP server '%s' returned invalid JSON response for tool '%s': %s",
+                    self.name,
+                    tool_name,
+                    error_msg,
                     extra={
                         "tool_name": tool_name,
                         "server_name": self.name,
@@ -1230,15 +1235,17 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             # Orla-style: drain → close → signal done.
             if self._active_calls > 0:
                 logger.debug(
-                    f"MCP cleanup: waiting for {self._active_calls} in-flight "
-                    f"call(s) to complete on server '{self.name}'"
+                    "MCP cleanup: waiting for %s in-flight call(s) to complete on server '%s'",
+                    self._active_calls,
+                    self.name,
                 )
                 try:
                     await asyncio.wait_for(self._no_active_calls.wait(), timeout=30.0)
                 except TimeoutError:
                     logger.warning(
-                        f"MCP cleanup: timed out waiting for in-flight calls to drain "
-                        f"on server '{self.name}' ({self._active_calls} still active)"
+                        "MCP cleanup: timed out waiting for in-flight calls to drain on server '%s' (%s still active)",
+                        self.name,
+                        self._active_calls,
                     )
 
             try:
@@ -1257,16 +1264,16 @@ class _MCPServerWithClientSession(MCPServer, abc.ABC):
             except RuntimeError as e:
                 msg = str(e).lower()
                 if "cancel scope" in msg or "different task" in msg or "already running" in msg:
-                    logger.debug(f"MCP cleanup cross-task error (expected during shutdown): {e}")
+                    logger.debug("MCP cleanup cross-task error (expected during shutdown): %s", e)
                 else:
-                    logger.error(f"Error cleaning up server: {e}")
+                    logger.error("Error cleaning up server: %s", e)
             except Exception as e:
                 # anyio.WouldBlock and similar errors during cross-task shutdown
                 type_name = type(e).__name__
                 if "WouldBlock" in type_name or "Busy" in type_name:
-                    logger.debug(f"MCP cleanup blocked (expected during shutdown): {e}")
+                    logger.debug("MCP cleanup blocked (expected during shutdown): %s", e)
                 else:
-                    logger.error(f"Error cleaning up server: {e}")
+                    logger.error("Error cleaning up server: %s", e)
             finally:
                 # Always clear session reference
                 self.session = None
@@ -1868,14 +1875,9 @@ def _schema_from_function(fn: Callable[..., Any]) -> dict[str, Any]:
         # fabricated value for a guaranteed TypeError. So the developer is the
         # one told, at registration, while it is still cheap to fix.
         logger.warning(
-            f"Tool '{getattr(fn, '__name__', 'unknown')}': "
-            f"required parameter(s) {', '.join(unexpressible)} have no type hint this "
-            f"schema generator can express, so the model is shown an open {{}} schema and "
-            f"asked to invent a value. Either annotate them with a type the model can "
-            f"satisfy (str/int/float/bool/list/dict), or -- if they hold process-local "
-            f"state such as a connection or a client -- keep them out of the model's "
-            f"reach entirely by binding them before registration (functools.partial, a "
-            f"closure) or supplying them via ToolContextConfig capture/inject."
+            "Tool '%s': required parameter(s) %s have no type hint this schema generator can express, so the model is shown an open {} schema and asked to invent a value. Either annotate them with a type the model can satisfy (str/int/float/bool/list/dict), or -- if they hold process-local state such as a connection or a client -- keep them out of the model's reach entirely by binding them before registration (functools.partial, a closure) or supplying them via ToolContextConfig capture/inject.",
+            getattr(fn, "__name__", "unknown"),
+            ", ".join(unexpressible),
         )
 
     return schema

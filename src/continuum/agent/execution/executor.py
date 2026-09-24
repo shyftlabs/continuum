@@ -38,7 +38,7 @@ from continuum.llm.structured_output import (
     schema_prompt,
     to_openai_response_format,
 )
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 from continuum.tools.tool_attention.router import _tool_name
@@ -284,8 +284,9 @@ class Executor(IExecutor):
             )
             total_usage = total_usage.add(reasoning_usage)
             logger.info(
-                f"🧠 Reasoning pass completed for agent {agent.name} "
-                f"({reasoning_usage.total_tokens} tokens)"
+                "🧠 Reasoning pass completed for agent %s (%s tokens)",
+                agent.name,
+                reasoning_usage.total_tokens,
             )
 
         while turn < context.max_turns:
@@ -343,17 +344,17 @@ class Executor(IExecutor):
                         else:
                             json_mode_info += " (simple json_object mode)"
                         logger.info(
-                            f"📋 JSON mode {json_mode_info} for agent {agent.name}",
+                            "📋 JSON mode %s for agent %s",
+                            json_mode_info,
+                            agent.name,
                             extra={
                                 "agent_name": agent.name,
                                 "json_mode": True,
-                                "json_schema": (
-                                    agent.json_schema.__name__
-                                    if isinstance(agent.json_schema, type)
-                                    else "dict"
-                                    if isinstance(agent.json_schema, dict)
-                                    else None
-                                ),
+                                "json_schema": agent.json_schema.__name__
+                                if isinstance(agent.json_schema, type)
+                                else "dict"
+                                if isinstance(agent.json_schema, dict)
+                                else None,
                             },
                         )
 
@@ -493,9 +494,11 @@ class Executor(IExecutor):
                     logger.info("🎯 Gateway selected model: %s", response.model)
                 if not response.tool_calls:
                     logger.debug(
-                        f"💬 LLM response (no tool calls) on turn {turn}: "
-                        f"content_preview={(response.content or '')[:150]}, "
-                        f"messages_in_context={len(messages)}"
+                        "💬 LLM response (no tool calls) on turn %s: "
+                        "content=%s, messages_in_context=%s",
+                        turn,
+                        log_content(response.content or ""),
+                        len(messages),
                     )
                 else:
                     tool_names = [
@@ -505,7 +508,10 @@ class Executor(IExecutor):
                         for tc in response.tool_calls
                     ]
                     logger.info(
-                        f"🔧 LLM response (with {len(response.tool_calls)} tool calls) on turn {turn}: {', '.join(tool_names)}"
+                        "🔧 LLM response (with %s tool calls) on turn %s: %s",
+                        len(response.tool_calls),
+                        turn,
+                        ", ".join(tool_names),
                     )
 
                 # Handle tool calls
@@ -518,7 +524,9 @@ class Executor(IExecutor):
                     ]
                     turn_span.add_metadata("tool_calls", called_tool_names)
                     logger.info(
-                        f"🤖 LLM requesting {len(response.tool_calls)} tool(s): {', '.join(called_tool_names)}"
+                        "🤖 LLM requesting %s tool(s): %s",
+                        len(response.tool_calls),
+                        ", ".join(called_tool_names),
                     )
 
                     # Separate handoffs from regular tools
@@ -572,7 +580,7 @@ class Executor(IExecutor):
                             thought = _json.loads(args_str).get("thought", "")
                         except Exception:
                             thought = str(args_str)
-                        logger.info(f"💭 Agent thought: {thought}")
+                        logger.info("💭 Agent thought: %s", log_content(thought))
                         if recorder is not None:
                             recorder.record_reasoning(
                                 agent.name,
@@ -772,8 +780,11 @@ class Executor(IExecutor):
                                         }
                                     )
                                     logger.info(
-                                        f"🔁 RETURN TO PARENT [{agent.name}] ← [{target}]\n"
-                                        f"[tool] {executor_content[:500]}\n" + "=" * 30
+                                        "🔁 RETURN TO PARENT [%s] ← [%s]\n[tool] %s\n%s",
+                                        agent.name,
+                                        target,
+                                        log_content(executor_content),
+                                        "=" * 30,
                                     )
                                     # Child-run usage is a full TokenUsage whose
                                     # model_usage the child's own executor loop
@@ -796,13 +807,16 @@ class Executor(IExecutor):
                                         }
                                     )
                                     logger.info(
-                                        f"===== RETURN TURN PROMPT [{agent.name}] =====\n"
-                                        + "\n".join(
-                                            f"[{m.get('role', '?')}] {str(m.get('content', '') or '')[:300]}"
-                                            for m in messages
-                                        )
-                                        + "\n"
-                                        + "=" * 30
+                                        "===== RETURN TURN PROMPT [%s] =====\n%s\n%s",
+                                        agent.name,
+                                        log_content(
+                                            "\n".join(
+                                                f"[{m.get('role', '?')}] "
+                                                f"{str(m.get('content', '') or '')}"
+                                                for m in messages
+                                            )
+                                        ),
+                                        "=" * 30,
                                     )
                                     continue
                                 else:
@@ -897,8 +911,9 @@ class Executor(IExecutor):
                     )
                     if structured_output is not None:
                         logger.info(
-                            f"✅ structured_output ready for agent {agent.name} "
-                            f"({agent.output_schema.__name__})",
+                            "✅ structured_output ready for agent %s (%s)",
+                            agent.name,
+                            agent.output_schema.__name__,
                             extra={"agent_name": agent.name},
                         )
                     elif agent.output_schema_strict:
@@ -911,13 +926,18 @@ class Executor(IExecutor):
                         )
                     else:
                         # Soft failure: visible (warning + error field), not silent.
+                        # log_content: a pydantic validation error quotes the value that failed
+                        # ("input_value='...'"), which here is the model's own answer.
                         logger.warning(
-                            f"⚠️ structured_output unavailable for agent {agent.name}: "
-                            f"{structured_output_error}",
+                            "⚠️ structured_output unavailable for agent %s: %s",
+                            agent.name,
+                            log_content(structured_output_error),
                             extra={
                                 "agent_name": agent.name,
                                 "output_schema": agent.output_schema.__name__,
-                                "error": structured_output_error,
+                                # Same value as the message argument, through the
+                                # channel a third-party handler serialises.
+                                "error": log_content(structured_output_error),
                             },
                         )
                 elif agent.enable_json_mode and response.content:
@@ -926,8 +946,8 @@ class Executor(IExecutor):
                     # they are not worth a warning.
                     if not looks_like_json(response.content):
                         logger.warning(
-                            f"⚠️ JSON mode enabled but response is not valid JSON for "
-                            f"agent {agent.name}"
+                            "⚠️ JSON mode enabled but response is not valid JSON for agent %s",
+                            agent.name,
                         )
 
                 # No tool calls, we're done
@@ -1051,7 +1071,7 @@ class Executor(IExecutor):
             content = response.content or ""
             action, action_input, final_answer = self._parse_react_action(content)
 
-            logger.info(f"🔄 ReAct turn {turn}: action={action!r}")
+            logger.info("🔄 ReAct turn %s: action=%r", turn, action)
 
             # Final Answer — stop the loop
             if final_answer is not None:
@@ -1096,7 +1116,7 @@ class Executor(IExecutor):
                 context=context,
             )
 
-            logger.info(f"✅ ReAct observation for '{action}': {observation[:200]}")
+            logger.info("✅ ReAct observation for '%s': %s", action, log_content(observation))
 
             # Inject the real observation so the LLM sees it on the next turn
             messages.append({"role": "user", "content": f"Observation: {observation}"})
@@ -1189,7 +1209,7 @@ class Executor(IExecutor):
                 if results:
                     return str(results[0].get("content", "No result"))
             except Exception as e:
-                logger.warning(f"ReAct tool '{tool_name}' failed: {e}")
+                logger.warning("ReAct tool '%s' failed: %s", tool_name, e)
                 return f"Error executing '{tool_name}': {e}"
 
         return f"Tool '{tool_name}' is not available"
@@ -1231,7 +1251,7 @@ class Executor(IExecutor):
                 )
             except Exception as e:  # provider rejected the request, etc.
                 logger.warning(
-                    f"structured-output formatting call failed for agent {agent.name}: {e}"
+                    "structured-output formatting call failed for agent %s: %s", agent.name, e
                 )
                 last_err = f"formatting call failed: {e}"
                 break

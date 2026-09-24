@@ -143,10 +143,29 @@ class AgentWorkflow:
             # a signal handler that has to remain callable without a workflow
             # event loop, which workflow.logger requires. Determinism is
             # unaffected -- logging is not part of replayed state.
+            # The one log line in the SDK that names a person on purpose, and
+            # the one place log_id() is deliberately not used.
+            #
+            # The actor is named because identifying them is what this line is
+            # for. Pseudonymising it was tried and reverted: the only route back
+            # to the real name is LOG_PROMPT_CONTENT, which reveals every prompt
+            # and memory in the deployment, so nobody turns it on mid-incident to
+            # answer one question -- and with no SESSION_ID_SECRET configured it
+            # degraded to "<38 chars>", which cannot even tell two attempts apart.
+            #
+            # The allow-list is withheld for a different reason, not privacy:
+            # printing the roster on every failed attempt publishes the exact
+            # list of people to impersonate or phish, on the line that fires
+            # precisely when someone is probing the approval gate. The count is
+            # kept, because an empty approver list and a list of six are
+            # different problems.
             _logger.warning(
-                f"Unauthorized tool-approval attempt by '{decision.decided_by}' for "
-                f"request '{decision.request_id}': not in approvers {entry['approvers']}. "
-                "Discarded; the request stays pending."
+                "Unauthorized tool-approval attempt by '%s' for request '%s': "
+                "not one of the %d configured approvers. "
+                "Discarded; the request stays pending.",
+                decision.decided_by,
+                decision.request_id,
+                len(entry["approvers"]),
             )
             return True  # handled: it was ours, and it was refused
 
