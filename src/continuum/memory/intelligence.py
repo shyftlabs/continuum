@@ -70,6 +70,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# The profile keys the extraction prompt asks for, and the only ones the stored
+# summary renders -- which is what pre_store_filter is shown.
+_PROFILE_KEYS = frozenset(
+    {"preferences", "employer", "expertise_level", "communication_style", "last_topics"}
+)
+
 
 # =============================================================================
 # Configuration
@@ -185,12 +191,17 @@ class IntelligentMemoryClient(MemoryClient):
         )
 
         # 3. Entity extraction (stored as tagged memories in same collection)
-        if self._intel.enable_entity_memory and user_id and llm:
-            await self._extract_and_store_entities(text, user_id, llm)
-
         # 4. User profile update
+        #
+        # Both are writes of their own, so both take the filter. They used to be
+        # called without it, and a fact the filter stopped on the write above
+        # was stored here instead -- with nothing behind it, since the caller's
+        # delete-after-write fallback only ever sees `result`.
+        if self._intel.enable_entity_memory and user_id and llm:
+            await self._extract_and_store_entities(text, user_id, llm, pre_store_filter)
+
         if self._intel.enable_user_profiles and user_id and llm:
-            await self._update_user_profile(user_id, text, llm)
+            await self._update_user_profile(user_id, text, llm, pre_store_filter)
 
         return result
 
@@ -496,6 +507,7 @@ class IntelligentMemoryClient(MemoryClient):
         text: str,
         user_id: str,
         llm: Any,
+        pre_store_filter: Any | None = None,
     ) -> None:
         """
         Extract named entities from text and store each as a tagged memory.
@@ -554,11 +566,15 @@ class IntelligentMemoryClient(MemoryClient):
             }
             entity_meta.update(attrs)
 
+            if not self._passes_filter(pre_store_filter, memory_text, "entity"):
+                continue
+
             try:
                 await super().add(
                     memory_text,
                     user_id=user_id,
                     metadata=entity_meta,
+                    pre_store_filter=pre_store_filter,
                 )
             except Exception as e:
                 logger.debug("Failed to store entity '%s': %s", name, e)
@@ -568,6 +584,7 @@ class IntelligentMemoryClient(MemoryClient):
         user_id: str,
         text: str,
         llm: Any,
+        pre_store_filter: Any | None = None,
     ) -> None:
         """
         Extract user facts from conversation text and merge into the user profile.
@@ -614,8 +631,15 @@ class IntelligentMemoryClient(MemoryClient):
                 return
             logger.debug("User profile raw response: %s", log_content(raw))
             parsed = self._extract_json(raw)
-            # Only accept a dict — reject arrays or other types from partial parses
-            delta = parsed if isinstance(parsed, dict) else {}
+            # Only accept a dict — reject arrays or other types from partial parses.
+            # And only the documented keys: the filter is offered the summary
+            # text built from them below, never profile_json itself, so a key
+            # the summary does not render would be stored without being checked.
+            delta = (
+                {k: v for k, v in parsed.items() if k in _PROFILE_KEYS}
+                if isinstance(parsed, dict)
+                else {}
+            )
         except Exception as e:
             logger.debug("User profile update failed: %s", e)
             return
@@ -668,6 +692,9 @@ class IntelligentMemoryClient(MemoryClient):
             "; ".join(summary_parts) if summary_parts else "updated"
         )
 
+        if not self._passes_filter(pre_store_filter, profile_summary, "user profile"):
+            return
+
         try:
             # infer=False bypasses mem0's LLM fact extraction so the profile
             # summary is stored verbatim with our metadata (including profile_json).
@@ -678,10 +705,40 @@ class IntelligentMemoryClient(MemoryClient):
                 user_id=user_id,
                 metadata=profile_meta,
                 infer=False,
+                pre_store_filter=pre_store_filter,
             )
             logger.debug("User profile updated for '%s'", log_id(user_id))
         except Exception as e:
             logger.debug("Failed to store user profile for '%s': %s", log_id(user_id), e)
+
+    @staticmethod
+    def _passes_filter(pre_store_filter: Any | None, fact: str, kind: str) -> bool:
+        """Check text this class is about to write against ``pre_store_filter``.
+
+        The provider gate also receives the filter, but it sees only what mem0
+        extracts, and a provider without the gate sees nothing at all. This
+        class already holds the exact text, so it checks before writing.
+
+        Same rules as the provider gate: the fact is offered alone and
+        membership decides, so a rewritten string is a rejection (a filter is a
+        gate, not a transformer); and a filter that raises has said nothing
+        about the fact, so it is not written.
+        """
+        if pre_store_filter is None:
+            return True
+        try:
+            allowed = fact in set(pre_store_filter([fact]))
+        except Exception as e:
+            logger.error(
+                "pre_store_filter raised (%s: %s) — %s not written",
+                type(e).__name__,
+                e,
+                kind,
+            )
+            return False
+        if not allowed:
+            logger.info("pre_store_filter stopped the %s write", kind)
+        return allowed
 
     def _get_llm(self) -> Any | None:
         """Lazy-load LLM client from the container."""
