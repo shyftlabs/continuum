@@ -797,6 +797,7 @@ class TestApproverIdentity:
     """
 
     def _attempt(self, monkeypatch, actor: str, approvers: list[str]):
+        pytest.importorskip("temporalio", reason="the temporal extra is not installed")
         from continuum.config import settings
         from continuum.temporal.types import ApprovalDecision
         from continuum.temporal.workflows.agent_workflow import AgentWorkflow
