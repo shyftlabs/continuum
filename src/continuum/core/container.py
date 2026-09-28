@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from continuum.config import settings
 from continuum.core.background_tasks import BackgroundTaskRegistry
 from continuum.logging import get_logger
-from continuum.protocols import ILLMClient, IMemoryClient, ISessionClient
+from continuum.protocols import ILLMClient, IMemoryClient, ISessionClient, ISystemOneClassifier
 
 if TYPE_CHECKING:
     from continuum.llm import LLMClient
@@ -129,6 +129,10 @@ class Container:
         self._langfuse_initialized = False
         self._tracing_initialized = False
         self._tool_initialized = False
+
+        # System One classifier (continuum.system_one). Never cached as None:
+        # a SYSTEM_ONE_BACKEND set after first access must still take effect.
+        self._system_one_classifier: ISystemOneClassifier | None = None
 
     # =========================================================================
     # LLM Client
@@ -430,6 +434,37 @@ class Container:
         return self._tool_executor is not None
 
     # =========================================================================
+    # System One classifier
+    # =========================================================================
+
+    @property
+    def system_one_classifier(self) -> ISystemOneClassifier | None:
+        """The default System One backend for seams that opted in, or None.
+
+        Built from ``SYSTEM_ONE_BACKEND`` on first access when none was set.
+        Having one enables nothing: each seam still opts in on its own.
+        """
+        if self._system_one_classifier is None and self._config.auto_initialize:
+            spec = settings.system_one_backend
+            if spec:
+                from continuum.system_one.registry import resolve_classifier
+
+                built = resolve_classifier(spec)
+                with self._lock:
+                    if self._system_one_classifier is None:
+                        self._system_one_classifier = built
+        return self._system_one_classifier
+
+    def set_system_one_classifier(self, classifier: ISystemOneClassifier | None) -> None:
+        """Set the default System One backend (any ISystemOneClassifier)."""
+        with self._lock:
+            self._system_one_classifier = classifier
+
+    def has_system_one_classifier(self) -> bool:
+        """Is a backend already set or built? Builds nothing."""
+        return self._system_one_classifier is not None
+
+    # =========================================================================
     # Lifecycle
     # =========================================================================
 
@@ -447,6 +482,7 @@ class Container:
             self._langfuse_client = None
             self._tracing_manager = None
             self._tool_executor = None
+            self._system_one_classifier = None
             self._background_tasks = BackgroundTaskRegistry(name="container")
 
             self._llm_initialized = False

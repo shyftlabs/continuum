@@ -60,7 +60,7 @@ class FakeClassifier:
         return SystemOneRawResult(
             distributions={qid: self._answer(qid, q) for qid, q in questions.items()},
             raw_confidence=(
-                {qid: self._raw_confidence for qid in questions}
+                dict.fromkeys(questions, self._raw_confidence)
                 if self._raw_confidence is not None
                 else {}
             ),
@@ -77,7 +77,7 @@ def _default_answer(qid: str, q: Any) -> dict[Any, float]:
         rest = 0.4 / (len(labels) - 1)
         return {label: (0.6 if i == 0 else rest) for i, label in enumerate(labels)}
     levels = len(q.levels)
-    return {i: 1.0 / levels for i in range(levels)}
+    return dict.fromkeys(range(levels), 1.0 / levels)
 
 
 @pytest.fixture

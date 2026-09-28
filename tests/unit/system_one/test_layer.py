@@ -21,7 +21,7 @@ def _binary(text: str = "Is it urgent?"):
 def _choice(labels=("billing", "technical", "none")):
     from continuum.system_one import ChoiceQuestion
 
-    return ChoiceQuestion(instructions="Which team?", labels={label: None for label in labels})
+    return ChoiceQuestion(instructions="Which team?", labels=dict.fromkeys(labels))
 
 
 def _score(levels=("calm", "concerned", "angry")):
@@ -106,9 +106,7 @@ class TestAnswers:
             2: pytest.approx(0.35),
         }
 
-    async def test_a_distribution_that_does_not_sum_to_one_is_normalised(
-        self, fake_classifier_cls
-    ):
+    async def test_a_distribution_that_does_not_sum_to_one_is_normalised(self, fake_classifier_cls):
         from continuum.system_one import classify
 
         backend = fake_classifier_cls(

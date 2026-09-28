@@ -49,9 +49,7 @@ class TestBackendsAreChosenByPrefix:
         register_backend("fakeprefix", lambda model: fake_classifier_cls(model=model))
         assert resolve_classifier("fakeprefix:m") is resolve_classifier("fakeprefix:m")
 
-    def test_third_party_backends_load_through_entry_points(
-        self, fake_classifier_cls, monkeypatch
-    ):
+    def test_third_party_backends_load_through_entry_points(self, fake_classifier_cls, monkeypatch):
         """An open-source project plugs in without a change to the SDK."""
         import continuum.system_one.registry as registry
 
