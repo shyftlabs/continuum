@@ -407,11 +407,17 @@ If the request doesn't clearly fit any specialist, respond with "none".
         (or ``NoRouteFoundError``); switching to the LLM here would put a second,
         unrequested decision-maker behind the one the operator chose.
         """
+        # Plain statements, because some backends see nothing else: an NLI model
+        # judges premise + hypothesis only, so "The request is about: <list>" or
+        # "fits none of the listed agents" (a list it never sees) cannot be
+        # judged -- live, both sent a pancake recipe to billing.
         labels = {
-            route.agent_name: f"The request is about: {route.description or route.agent_name}"
+            route.agent_name: (
+                f"This request is about {(route.description or route.agent_name).rstrip('. ')}."
+            )
             for route in self.routes
         }
-        labels.setdefault("none", "The request fits none of the listed agents.")
+        labels.setdefault("none", "This request is about something else.")
         question = ChoiceQuestion(
             instructions="Which agent should handle this request?", labels=labels
         )
