@@ -116,6 +116,22 @@ class TestRouting:
         assert "Billing, payments" in question.labels["billing-agent"]
         assert state == "My card was charged twice"
 
+    async def test_labels_are_statements_an_nli_backend_can_test(self):
+        """Found in the live run against cross-encoder/nli-deberta-v3-{small,base}.
+        An NLI backend sees only premise + hypothesis. "The request is about:
+        <list>" and "fits none of the listed agents" (a list it never sees) sent
+        a pancake recipe to billing on both models. Plain sentences -- "This
+        request is about X." / "... something else." -- routed all three probes
+        correctly on the base model."""
+        backend = _use(_backend({"billing-agent": 0.8, "technical-agent": 0.1, "none": 0.1}))
+        await _router().route("x")
+
+        (question,) = backend.calls[0][1].values()
+        assert question.labels["billing-agent"] == (
+            "This request is about Billing, payments, invoices, refunds."
+        )
+        assert question.labels["none"] == "This request is about something else."
+
     async def test_none_means_no_route(self):
         backend = _use(_backend({"billing-agent": 0.1, "technical-agent": 0.1, "none": 0.8}))
         assert await _router().route("What's the weather?") is None
