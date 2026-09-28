@@ -37,7 +37,7 @@ class FakeCrossEncoder:
         for _premise, hypothesis in pairs:
             c, e, n = self._scores.get(hypothesis, (0.2, 0.5, 0.3))
             by_name = {"contradiction": c, "entailment": e, "neutral": n}
-            out.append([by_name[name] for name in order])
+            out.append([by_name[name.lower()] for name in order])
         return out
 
 
@@ -56,7 +56,11 @@ class TestHypotheses:
         ce = FakeCrossEncoder()
         await _local(ce).classify(
             "Here is the final report.",
-            {"done": BinaryQuestion(instructions="Is it done?", true_criteria="The task is complete.")},
+            {
+                "done": BinaryQuestion(
+                    instructions="Is it done?", true_criteria="The task is complete."
+                )
+            },
         )
         assert ce.calls[0] == [("Here is the final report.", "The task is complete.")]
 
@@ -112,7 +116,8 @@ class TestProbabilities:
 
         ce = FakeCrossEncoder({"X holds.": (0.1, 0.6, 0.3), "Y holds.": (0.5, 0.2, 0.3)})
         raw = await _local(ce).classify(
-            "s", {"q": ChoiceQuestion(instructions="Pick", labels={"x": "X holds.", "y": "Y holds."})}
+            "s",
+            {"q": ChoiceQuestion(instructions="Pick", labels={"x": "X holds.", "y": "Y holds."})},
         )
         assert raw.distributions["q"] == {"x": pytest.approx(0.75), "y": pytest.approx(0.25)}
 
