@@ -147,11 +147,23 @@ class TestTheDecision:
         await _check(_loop(), llm=llm)
         llm.chat.assert_not_called()
 
-    async def test_the_decision_is_logged_with_its_source(self, caplog):
-        _use(0.8)
-        with caplog.at_level(logging.INFO, logger="continuum.agent.workflow.loop"):
+    async def test_the_decision_is_logged_with_its_source(self):
+        # caplog cannot see these: the "continuum" logger sets propagate=False.
+        messages: list[str] = []
+
+        class Collector(logging.Handler):
+            def emit(self, record):
+                messages.append(record.getMessage())
+
+        handler = Collector()
+        target = logging.getLogger("continuum.agent.workflow.loop")
+        target.addHandler(handler)
+        try:
+            _use(0.8)
             await _check(_loop())
-        assert any("decided_by=system_one" in r.getMessage() for r in caplog.records)
+        finally:
+            target.removeHandler(handler)
+        assert any("decided_by=system_one" in m for m in messages)
 
 
 class TestFallbacks:

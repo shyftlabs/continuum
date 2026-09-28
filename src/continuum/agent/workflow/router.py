@@ -22,6 +22,13 @@ from continuum.config import settings
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
+from continuum.system_one import (
+    ChoiceQuestion,
+    SystemOneError,
+    classify,
+    require_backend,
+    system_one_disabled,
+)
 
 if TYPE_CHECKING:
     from continuum.llm import LLMClient
@@ -91,6 +98,13 @@ class RouterAgent(BaseAgent):
     def __post_init__(self) -> None:
         """Initialize router agent."""
         super().__post_init__()
+
+        if self.router_config.routing_strategy == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the LLM route at run time.
+            require_backend(
+                self.router_config.system_one_backend, seam=f"RouterAgent '{self.name}'"
+            )
 
         if self.router_config.routing_strategy == "model_tier":
             if not (self.instructions or "").strip():
@@ -283,6 +297,12 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 "routing_strategy=model_tier but smart_layer_enabled=false; using llm routing instead"
             )
             strategy = "llm"
+        # The kill switch sends an opted-in router back to the LLM route it had
+        # before opting in; the trace records that the old path decided.
+        killed = strategy == "system_one_classifier" and system_one_disabled()
+        if killed:
+            logger.info("SYSTEM_ONE_DISABLED is set; router '%s' uses llm routing", self.name)
+            strategy = "llm"
 
         # Create span for routing decision
         async with SpanScope(
@@ -313,7 +333,15 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 return result
             elif strategy == "llm":
                 result = await self._llm_route(input_text, llm_client)
-                span.set_output({"selected_route": result, "method": "llm"})
+                output: dict[str, Any] = {"selected_route": result, "method": "llm"}
+                if killed:
+                    output["decided_by"] = "legacy"
+                span.set_output(output)
+                self._stamp_priority(result, context)
+                return result
+            elif strategy == "system_one_classifier":
+                result, output = await self._system_one_route(input_text)
+                span.set_output(output)
                 self._stamp_priority(result, context)
                 return result
             elif strategy == "hybrid":
@@ -369,6 +397,53 @@ If the request doesn't clearly fit any specialist, respond with "none".
                     return route.agent_name
 
         return None
+
+    async def _system_one_route(self, input_text: str) -> tuple[str | None, dict[str, Any]]:
+        """Route with a System One Choice over the route names plus "none".
+
+        Nothing is parsed: the answer is one of the offered labels. A classifier
+        that cannot answer -- down, timed out, or denied by the run's egress
+        policy -- means "no route", so the request reaches ``fallback_agent_name``
+        (or ``NoRouteFoundError``); switching to the LLM here would put a second,
+        unrequested decision-maker behind the one the operator chose.
+        """
+        labels = {
+            route.agent_name: f"The request is about: {route.description or route.agent_name}"
+            for route in self.routes
+        }
+        labels.setdefault("none", "The request fits none of the listed agents.")
+        question = ChoiceQuestion(
+            instructions="Which agent should handle this request?", labels=labels
+        )
+        base = {"method": "system_one_classifier"}
+        try:
+            resp = await classify(
+                input_text, {"route": question}, spec=self.router_config.system_one_backend
+            )
+        except SystemOneError as e:
+            logger.warning(
+                "System One routing failed for router '%s' (%s); treating it as no route",
+                self.name,
+                type(e).__name__,
+            )
+            return None, {
+                **base,
+                "selected_route": None,
+                "decided_by": "fallback",
+                "error": type(e).__name__,
+            }
+
+        answer = resp.choice("route")
+        selected = None if answer.label == "none" else answer.label
+        return selected, {
+            **base,
+            "selected_route": selected,
+            "decided_by": "system_one",
+            "backend": resp.provenance.backend,
+            "model": resp.provenance.model,
+            "confidence": answer.confidence,
+            "probabilities": answer.probabilities,
+        }
 
     async def _llm_route(
         self,
@@ -457,7 +532,9 @@ def create_router_agent(
     routes: list[tuple[str, str]],  # List of (agent_name, description)
     *,
     fallback: str | None = None,
-    strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "hybrid",
+    strategy: Literal[
+        "llm", "rule_based", "hybrid", "model_tier", "system_one_classifier"
+    ] = "hybrid",
     model: str | None = None,
 ) -> RouterAgent:
     """

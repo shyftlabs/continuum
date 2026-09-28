@@ -27,6 +27,13 @@ from continuum.agent.types import (
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.logging import get_logger
+from continuum.system_one import (
+    BinaryQuestion,
+    SystemOneError,
+    classify,
+    require_backend,
+    system_one_disabled,
+)
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -97,6 +104,11 @@ class LoopAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("LoopAgent requires an agent to execute")
+
+        if self.termination.type == TerminationType.SYSTEM_ONE_CLASSIFIER:
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the LLM check at run time.
+            require_backend(self.termination.system_one_backend, seam=f"LoopAgent '{self.name}'")
 
     @publish_active_policy
     async def execute(
@@ -216,6 +228,7 @@ class LoopAgent(BaseAgent):
                     iteration=iteration,
                     history=iteration_history,
                     llm_client=llm_client,
+                    original_input=original_input,
                 )
 
                 if should_terminate:
@@ -313,9 +326,30 @@ class LoopAgent(BaseAgent):
         iteration: int,
         history: list[dict[str, Any]],
         llm_client: LLMClient | None,
+        original_input: str | None = None,
     ) -> bool:
         """Check if loop should terminate."""
         term_type = self.termination.type
+
+        if term_type == TerminationType.SYSTEM_ONE_CLASSIFIER:
+            if system_one_disabled():
+                logger.info(
+                    "Loop termination decided_by=legacy (SYSTEM_ONE_DISABLED) for '%s'", self.name
+                )
+                return await self._llm_termination_check(
+                    response=response, history=history, llm_client=llm_client
+                )
+            try:
+                return await self._system_one_termination_check(response, original_input)
+            except SystemOneError as e:
+                logger.warning(
+                    "System One termination check failed for '%s' (%s); using the LLM check",
+                    self.name,
+                    type(e).__name__,
+                )
+                return await self._llm_termination_check(
+                    response=response, history=history, llm_client=llm_client
+                )
 
         if term_type == TerminationType.LLM_DECISION:
             return await self._llm_termination_check(
@@ -350,6 +384,37 @@ class LoopAgent(BaseAgent):
             return False
 
         return False
+
+    async def _system_one_termination_check(
+        self, response: AgentResponse, original_input: str | None
+    ) -> bool:
+        """Stop when P(complete) reaches ``termination.system_one_threshold``.
+
+        The true-criterion is a statement, not a question, so a local NLI backend
+        has something a premise can entail.
+        """
+        question = BinaryQuestion(
+            instructions=(
+                "Judging by `latest_output`, is the task described in `task` complete, "
+                "so that no further iteration is needed?"
+            ),
+            true_criteria="The latest output fully completes the task.",
+            false_criteria="The latest output is unfinished or needs more work.",
+        )
+        state = {"task": original_input or "", "latest_output": response.content or ""}
+        resp = await classify(
+            state, {"complete": question}, spec=self.termination.system_one_backend
+        )
+        p_complete = resp.binary("complete").probability
+        done = p_complete >= self.termination.system_one_threshold
+        logger.info(
+            "Loop termination decided_by=system_one backend=%s p_complete=%.3f threshold=%s -> %s",
+            resp.provenance.backend,
+            p_complete,
+            self.termination.system_one_threshold,
+            "stop" if done else "continue",
+        )
+        return done
 
     async def _llm_termination_check(
         self,

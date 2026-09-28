@@ -547,10 +547,18 @@ TierClassifierMode = Literal["light_only", "heavy_only", "gpt_4o_mini", "qwen", 
 class RouterConfig:
     """Configuration for router agent."""
 
-    routing_strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "llm"
+    routing_strategy: Literal[
+        "llm", "rule_based", "hybrid", "model_tier", "system_one_classifier"
+    ] = "llm"
     routing_model: str | None = None  # Model for LLM routing (default: agent's model)
     routing_prompt: str | None = None  # Custom prompt for routing decision
     routing_temperature: float | None = 0.1  # Temperature for the LLM routing call (None omits it)
+    # routing_strategy="system_one_classifier": a System One classifier answers a
+    # Choice over the route names plus "none" (continuum.system_one). This
+    # router's own backend spec, e.g. "local:cross-encoder/nli-deberta-v3-small";
+    # None uses the container / SYSTEM_ONE_BACKEND default. Unrelated to the
+    # tier_classifier fields below, which belong to the model_tier smart layer.
+    system_one_backend: str | None = None
 
     # --- Smart layer (model_tier) -------------------------------------------------
     tier_classifier: TierClassifierMode = "gpt_4o_mini"
@@ -591,6 +599,7 @@ class RouterConfig:
             "routing_model": self.routing_model,
             "routing_prompt": self.routing_prompt,
             "routing_temperature": self.routing_temperature,
+            "system_one_backend": self.system_one_backend,
             "tier_classifier": self.tier_classifier,
             "tier_classifier_llm_model": self.tier_classifier_llm_model,
             "tier_classifier_max_tokens": self.tier_classifier_max_tokens,

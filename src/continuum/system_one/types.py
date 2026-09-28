@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, TypeVar
 
 QuestionKind = Literal["binary", "choice", "score"]
 
@@ -174,6 +174,7 @@ class ScoreAnswer:
 
 
 Answer = BinaryAnswer | ChoiceAnswer | ScoreAnswer
+_A = TypeVar("_A", BinaryAnswer, ChoiceAnswer, ScoreAnswer)
 
 
 @dataclass(frozen=True)
@@ -190,3 +191,21 @@ class Provenance:
 class SystemOneResponse:
     answers: dict[str, Answer]
     provenance: Provenance
+
+    # Typed accessors, so a seam reads ``resp.choice("route").label`` without
+    # narrowing the Answer union itself.
+
+    def binary(self, qid: str) -> BinaryAnswer:
+        return self._typed(qid, BinaryAnswer)
+
+    def choice(self, qid: str) -> ChoiceAnswer:
+        return self._typed(qid, ChoiceAnswer)
+
+    def score(self, qid: str) -> ScoreAnswer:
+        return self._typed(qid, ScoreAnswer)
+
+    def _typed(self, qid: str, cls: type[_A]) -> _A:
+        answer = self.answers[qid]
+        if not isinstance(answer, cls):
+            raise TypeError(f"Answer '{qid}' is a {answer.kind} answer, not {cls.kind}.")
+        return answer

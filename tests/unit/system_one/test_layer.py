@@ -424,3 +424,22 @@ class TestTheEgressCheck:
                 await classify(
                     "s", {"q": _binary()}, classifier=fake_classifier_cls(model="fake-7")
                 )
+
+
+class TestTypedAccessors:
+    async def test_each_kind_has_an_accessor(self, fake_classifier_cls):
+        from continuum.system_one import classify
+
+        resp = await classify(
+            "s", {"b": _binary(), "c": _choice(), "s": _score()}, classifier=fake_classifier_cls()
+        )
+        assert resp.binary("b").kind == "binary"
+        assert resp.choice("c").kind == "choice"
+        assert resp.score("s").kind == "score"
+
+    async def test_asking_for_the_wrong_kind_is_an_error(self, fake_classifier_cls):
+        from continuum.system_one import classify
+
+        resp = await classify("s", {"b": _binary()}, classifier=fake_classifier_cls())
+        with pytest.raises(TypeError):
+            resp.choice("b")
