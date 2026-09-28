@@ -269,9 +269,17 @@ class TestThroughTheRealGate:
         assert invoked.await_count == 1
 
     async def test_a_risky_call_with_no_human_does_not_run(self, monkeypatch):
+        """Refused at the gate: the executor raises ToolApprovalDeniedError (the
+        tool service turns it into a tool result) and the tool never runs."""
+        from continuum.agent.exceptions import ToolApprovalDeniedError
+
         _use(0.8)
         invoked = AsyncMock(return_value=("sent", None))
         monkeypatch.setattr("continuum.tools.util.MCPUtil.invoke_mcp_tool_with_artifact", invoked)
 
-        await self._executor().execute_tool_call(self._call(), approval=self._settings(_handler()))
+        with pytest.raises(ToolApprovalDeniedError) as exc:
+            await self._executor().execute_tool_call(
+                self._call(), approval=self._settings(_handler())
+            )
+        assert "P(risky)=0.80" in str(exc.value)
         assert invoked.await_count == 0
