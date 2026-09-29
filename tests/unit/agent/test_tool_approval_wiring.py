@@ -86,14 +86,36 @@ class TestSettingsAreBuiltFromConfig:
 
 class TestTheRunnerPassesThemDown:
     async def test_the_run_path_passes_approval(self):
+        """The agent's own executor -- the path most deployments take.
+
+        This used to read the harness's last call, and with an agent executor
+        the global fallback runs after it (the fake returns no result), so it
+        was checking the SECOND site. Dropping approval at this site passed
+        every test here, the source count included (it counts the text
+        ``approval=``, not the value).
+        """
         from continuum.agent.services.tool_service import ToolService
 
         captured = await _run_tool_service(ToolService, streaming=False)
-        assert captured.get("approval") is not None, (
-            "the non-streaming path does not pass approval settings — declared "
-            "tools would run unapproved"
+        first = captured["_calls"][0]
+        assert first.get("approval") is not None, (
+            "the agent-executor call site does not pass approval settings — "
+            "declared tools would run unapproved"
         )
-        assert captured["approval"].tools == frozenset({"send_referral_email"})
+        assert first["approval"].tools == frozenset({"send_referral_email"})
+
+    async def test_the_global_fallback_passes_approval(self):
+        """The second site: an agent with no executor of its own."""
+        from continuum.agent.services.tool_service import ToolService
+
+        captured = await _run_tool_service(ToolService, streaming=False, agent_executor=False)
+        assert len(captured["_calls"]) == 1, "only the global executor should run"
+        only = captured["_calls"][0]
+        assert only.get("approval") is not None, (
+            "the global-executor call site does not pass approval settings — "
+            "declared tools would run unapproved on the fallback path"
+        )
+        assert only["approval"].tools == frozenset({"send_referral_email"})
 
     async def test_both_call_sites_pass_approval(self):
         """Two sites call execute_tool_calls. One wired and one not is
