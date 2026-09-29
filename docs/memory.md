@@ -303,8 +303,22 @@ IntelligenceConfig(
     decay_weight=0.1,
     intelligence_model=None,         # defaults to MemoryConfig.memory_llm_model
     prune_threshold=0.15,
+    importance_max_tokens=None,      # max_tokens per LLM call; None = DEFAULT_LLM_MAX_TOKENS
+    entity_max_tokens=None,
+    profile_max_tokens=None,
 )
 ```
+
+The three `*_max_tokens` settings cap the scoring, entity-extraction and
+profile calls. On a reasoning model the hidden reasoning is counted
+against the cap, so a small one returns an empty or cut reply. Measured
+on `gemini-2.5-flash`, a cap of 1000 kept 1 of 29 entities.
+
+An importance score is stored only when the reply names exactly one
+label: `trivial`, `low`, `medium`, `high` or `critical`. If the call
+fails, or the reply names no label or several, the memory is stored
+without `importance` and a `WARNING` is logged. Search re-ranking and
+`prune()` treat a missing score as 0.5.
 
 ### Extra methods (over `MemoryClient`)
 

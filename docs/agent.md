@@ -498,6 +498,33 @@ iterate = create_loop_agent(
 )
 ```
 
+The `LLM_DECISION` check is shown the original task, the last three
+iterations and the current output. It stops only when the reply opens
+with the word `COMPLETE` (markdown or a bullet before it is fine);
+`INCOMPLETE`, `NOT COMPLETE` or anything else runs another iteration, up
+to `max_iterations`. Its `max_tokens` is set on `TerminationConfig`:
+
+```python
+from continuum.agent import LoopAgent, TerminationConfig, TerminationType
+
+iterate = LoopAgent(
+    name="iterate-until-done",
+    agent=worker,
+    termination=TerminationConfig(
+        type=TerminationType.LLM_DECISION,
+        max_iterations=10,
+        decision_max_tokens=None,             # None = DEFAULT_LLM_MAX_TOKENS
+    ),
+)
+```
+
+> **Judging calls and `max_tokens`.** Every judging call in these
+> workflows (loop check, critique, supervisor score, LLM route) defaults to
+> `DEFAULT_LLM_MAX_TOKENS`. On a reasoning model the hidden reasoning is
+> counted against `max_tokens`, and a small cap returns an empty or cut
+> reply: measured on `gemini-2.5-flash`, a cap of 20 left the loop check
+> empty every time. If you set a cap, leave room for the reasoning.
+
 ### `ReflectionAgent`
 
 Run, critique, retry — until a critic agent passes the output.
@@ -514,8 +541,30 @@ self_improving = create_reflection_agent(
 )
 ```
 
-`generate_critique_prompt(user_query, llm_client, model=None)` produces
-a query-specific critique prompt programmatically.
+The critic is sent the original request, then the draft, then the
+critique prompt. A reply that opens with `PASS` passes; anything else is
+treated as `NEEDS IMPROVEMENT` and retried with the feedback. If the
+critique call fails or comes back empty, the draft is returned
+unverified, with a `WARNING`, and not retried.
+
+The critique call's `max_tokens` is set on `ReflectionConfig`:
+
+```python
+from continuum.agent import ReflectionAgent, ReflectionConfig
+
+self_improving = ReflectionAgent(
+    name="self-improving",
+    agent=writer,
+    reflection_config=ReflectionConfig(
+        max_reflections=2,
+        reflection_max_tokens=None,           # None = DEFAULT_LLM_MAX_TOKENS
+    ),
+)
+```
+
+`generate_critique_prompt(user_query, llm_client, model=None,
+temperature=None, max_tokens=None)` produces a query-specific critique
+prompt programmatically. `max_tokens=None` uses `DEFAULT_LLM_MAX_TOKENS`.
 
 ### `RouterAgent`
 
@@ -534,6 +583,32 @@ router = create_router_agent(
     fallback="general-agent",
     strategy="hybrid",                        # "llm" | "rule_based" | "hybrid"
     model=None,
+)
+```
+
+With `"llm"` or `"hybrid"`, the LLM's reply selects a route only when it
+names exactly one route by its whole name. Markdown, quotes and a short
+explanation around the name are fine. A plain `none` selects no route.
+An empty reply, a fragment such as `technical`, or a reply naming
+several routes also selects no route, and logs a `WARNING`. With no
+route, the request goes to `fallback`.
+
+The routing call's `max_tokens` is set on `RouterConfig`:
+
+```python
+from continuum.agent import Route, RouterAgent, RouterConfig
+
+router = RouterAgent(
+    name="triage",
+    routes=[
+        Route(agent_name="billing-agent", description="Billing & payment issues"),
+        Route(agent_name="technical-agent", description="Technical support"),
+    ],
+    fallback_agent_name="general-agent",
+    router_config=RouterConfig(
+        routing_strategy="hybrid",
+        routing_max_tokens=None,              # None = DEFAULT_LLM_MAX_TOKENS
+    ),
 )
 ```
 
@@ -647,6 +722,29 @@ supervised = create_supervised_agent(
     max_retries=2,
     supervisor_model=None,
     pass_full_history=False,
+)
+```
+
+If the supervisor can't score a step (the call fails, there's no LLM
+client, or the reply has no readable `SCORE`), the output is kept and
+not retried. It's logged as unscored at `WARNING`, and the step span
+records `scored: False`. `Score: 0.8`, `**SCORE:** 0.8` and similar
+formats are all read.
+
+The scoring call's `max_tokens` is set on `SupervisedConfig`:
+
+```python
+from continuum.agent.workflow import SupervisedSequentialAgent
+from continuum.agent.workflow.supervised import SupervisedConfig
+
+supervised = SupervisedSequentialAgent(
+    name="supervised",
+    agents=[step1, step2, step3],
+    supervised_config=SupervisedConfig(
+        quality_threshold=0.7,
+        max_retries=2,
+        supervisor_max_tokens=None,           # None = DEFAULT_LLM_MAX_TOKENS
+    ),
 )
 ```
 
