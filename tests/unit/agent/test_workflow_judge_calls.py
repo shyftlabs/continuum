@@ -171,3 +171,72 @@ class TestTheCriticSeesTheRequest:
         messages = llm.chat.await_args.kwargs["messages"]
         assert len(messages) == 2
         assert messages[0]["content"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# 3. the same cap bug in the router and loop decision calls
+# ---------------------------------------------------------------------------
+# Measured live on gemini/gemini-2.5-flash (2026-09-29), 5 calls each:
+# * LoopAgent's completion check (max_tokens=20): 5/5 empty replies
+#   (finish_reason=length, 17 hidden reasoning tokens), so every check read as
+#   CONTINUE -- an LLM_DECISION loop could never stop before max_iterations.
+# * RouterAgent's LLM route (max_tokens=50): 5/5 routed correctly but ended
+#   finish_reason=length with 43 of 50 tokens spent on hidden reasoning.
+
+
+class TestTheRoutingCallIsNotStarvedOfTokens:
+    async def _max_tokens(self, **config):
+        from continuum.agent.config import RouterConfig
+        from continuum.agent.types import Route
+        from continuum.agent.workflow.router import RouterAgent
+
+        router = RouterAgent(
+            name="r",
+            instructions="route",
+            routes=[Route(agent_name="billing-agent", description="Billing")],
+            router_config=RouterConfig(**config),
+        )
+        llm = _recording_llm("billing-agent")
+        assert await router._llm_route("refund me", llm) == "billing-agent"
+        return llm.chat.await_args.kwargs["config"].max_tokens
+
+    async def test_by_default_it_uses_the_normal_llm_default(self):
+        from continuum.config import settings
+
+        assert await self._max_tokens() == settings.default_llm_max_tokens
+
+    async def test_a_cap_can_still_be_set(self):
+        assert await self._max_tokens(routing_max_tokens=64) == 64
+
+    def test_the_setting_is_serialised(self):
+        from continuum.agent.config import RouterConfig
+
+        assert RouterConfig(routing_max_tokens=64).to_dict()["routing_max_tokens"] == 64
+        assert RouterConfig().routing_max_tokens is None
+
+
+class TestTheLoopCompletionCheckIsNotStarvedOfTokens:
+    async def _max_tokens(self, **config):
+        from continuum.agent.types import TerminationConfig
+        from continuum.agent.workflow.loop import LoopAgent
+
+        loop = LoopAgent(name="l", agent=_agent(), termination=TerminationConfig(**config))
+        llm = _recording_llm("COMPLETE")
+        done = await loop._llm_termination_check(
+            AgentResponse(content="Paris."), [{"iteration": 1, "output": "Paris."}], llm
+        )
+        assert done is True
+        return llm.chat.await_args.kwargs["config"].max_tokens
+
+    async def test_by_default_it_uses_the_normal_llm_default(self):
+        from continuum.config import settings
+
+        assert await self._max_tokens() == settings.default_llm_max_tokens
+
+    async def test_a_cap_can_still_be_set(self):
+        assert await self._max_tokens(decision_max_tokens=32) == 32
+
+    def test_the_default_is_none(self):
+        from continuum.agent.types import TerminationConfig
+
+        assert TerminationConfig().decision_max_tokens is None
