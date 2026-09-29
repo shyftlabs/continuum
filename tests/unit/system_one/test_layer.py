@@ -443,3 +443,36 @@ class TestTypedAccessors:
         resp = await classify("s", {"b": _binary()}, classifier=fake_classifier_cls())
         with pytest.raises(TypeError):
             resp.choice("b")
+
+
+class TestUsageFlagsSurviveTheLayer:
+    """Found in the Laya live run: the adapter set usage['truncated'] = True
+    and the response said 1. _merge_usage summed usage across batches, and
+    True is an int in Python. A flag must stay a flag -- True if any batch set
+    it -- while token counts still add up."""
+
+    async def test_a_boolean_flag_stays_a_boolean(self, fake_classifier_cls):
+        from continuum.system_one import classify
+
+        backend = fake_classifier_cls(usage={"input_tokens": 512, "truncated": True})
+        resp = await classify("s", {"q": _binary()}, classifier=backend)
+        assert resp.provenance.usage["truncated"] is True
+
+    async def test_a_flag_from_any_batch_is_kept(self, fake_classifier_cls):
+        from continuum.system_one import classify
+
+        class Mixed(fake_classifier_cls):
+            async def classify(self, state, questions):
+                raw = await super().classify(state, questions)
+                raw.usage = (
+                    {"input_tokens": 10, "truncated": True}
+                    if "a" in questions
+                    else {"input_tokens": 5, "truncated": False}
+                )
+                return raw
+
+        resp = await classify(
+            "s", {"a": _binary(), "b": _binary()}, classifier=Mixed(max_questions=1)
+        )
+        assert resp.provenance.usage["truncated"] is True
+        assert resp.provenance.usage["input_tokens"] == 15
