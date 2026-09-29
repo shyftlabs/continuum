@@ -228,6 +228,7 @@ class TestShortTermSessionMemory:
         from continuum.agent.base import BaseAgent
         from continuum.agent.config import AgentConfig, AgentMemoryConfig
         from continuum.agent.runner import AgentRunner
+        from continuum.session import bind_principal
         from continuum.session.client import SessionClient
 
         agent = BaseAgent(
@@ -242,46 +243,50 @@ class TestShortTermSessionMemory:
 
         runner = AgentRunner()
 
-        # Create session explicitly
-        session_client = SessionClient()
-        session_client.initialize()
-        sid = await session_client.get_or_create_session(
-            session_id=f"e2e-stm-{uuid.uuid4().hex[:8]}",
-            user_id="stm-user",
-        )
-
-        try:
-            # Turn 1
-            resp1 = await runner.run(
-                agent,
-                "My cat's name is Whiskers and she is 3 years old.",
-                session_id=sid,
+        # The verified caller, as an app binds it at its auth boundary. Without it
+        # SESSION_REQUIRE_PRINCIPAL=true refuses every call on the owned session
+        # (user_id= is a claim, not an identity) -- cleanup included.
+        with bind_principal("stm-user"):
+            # Create session explicitly
+            session_client = SessionClient()
+            session_client.initialize()
+            sid = await session_client.get_or_create_session(
+                session_id=f"e2e-stm-{uuid.uuid4().hex[:8]}",
                 user_id="stm-user",
             )
-            assert resp1.status.value == "success"
 
-            # Turn 2 — same session
-            resp2 = await runner.run(
-                agent,
-                "What is my cat's name?",
-                session_id=sid,
-                user_id="stm-user",
-            )
-            assert resp2.content is not None
-            assert "whiskers" in resp2.content.lower()
+            try:
+                # Turn 1
+                resp1 = await runner.run(
+                    agent,
+                    "My cat's name is Whiskers and she is 3 years old.",
+                    session_id=sid,
+                    user_id="stm-user",
+                )
+                assert resp1.status.value == "success"
 
-            # Turn 3 — ask about age too
-            resp3 = await runner.run(
-                agent,
-                "How old is my cat?",
-                session_id=sid,
-                user_id="stm-user",
-            )
-            assert resp3.content is not None
-            assert "3" in resp3.content
+                # Turn 2 — same session
+                resp2 = await runner.run(
+                    agent,
+                    "What is my cat's name?",
+                    session_id=sid,
+                    user_id="stm-user",
+                )
+                assert resp2.content is not None
+                assert "whiskers" in resp2.content.lower()
 
-        finally:
-            await _cleanup_session(sid)
+                # Turn 3 — ask about age too
+                resp3 = await runner.run(
+                    agent,
+                    "How old is my cat?",
+                    session_id=sid,
+                    user_id="stm-user",
+                )
+                assert resp3.content is not None
+                assert "3" in resp3.content
+
+            finally:
+                await _cleanup_session(sid)
 
     @_skip_on_api_error
     async def test_session_history_turns_drops_old_messages(self):
@@ -291,6 +296,7 @@ class TestShortTermSessionMemory:
         from continuum.agent.base import BaseAgent
         from continuum.agent.config import AgentConfig, AgentMemoryConfig
         from continuum.agent.runner import AgentRunner
+        from continuum.session import bind_principal
         from continuum.session.client import SessionClient
 
         agent = BaseAgent(
@@ -309,43 +315,47 @@ class TestShortTermSessionMemory:
 
         runner = AgentRunner()
 
-        session_client = SessionClient()
-        session_client.initialize()
-        sid = await session_client.get_or_create_session(
-            session_id=f"e2e-limit-{uuid.uuid4().hex[:8]}",
-            user_id="limit-user",
-        )
-
-        try:
-            # Fill up session with many turns to push out early messages
-            await runner.run(
-                agent, "My secret code is ALPHA-7.", session_id=sid, user_id="limit-user"
-            )
-            await runner.run(agent, "What is 2+2?", session_id=sid, user_id="limit-user")
-            await runner.run(agent, "Tell me a joke.", session_id=sid, user_id="limit-user")
-            await runner.run(
-                agent, "What's the weather like?", session_id=sid, user_id="limit-user"
-            )
-            await runner.run(
-                agent, "Name a famous scientist.", session_id=sid, user_id="limit-user"
-            )
-
-            # Now ask about the secret code — it should have been pushed out
-            resp = await runner.run(
-                agent,
-                "What was my secret code from earlier?",
-                session_id=sid,
+        # The verified caller, as an app binds it at its auth boundary. Without it
+        # SESSION_REQUIRE_PRINCIPAL=true refuses every call on the owned session
+        # (user_id= is a claim, not an identity) -- cleanup included.
+        with bind_principal("limit-user"):
+            session_client = SessionClient()
+            session_client.initialize()
+            sid = await session_client.get_or_create_session(
+                session_id=f"e2e-limit-{uuid.uuid4().hex[:8]}",
                 user_id="limit-user",
             )
-            assert resp.content is not None
-            # With only 4 messages in history, the secret code should be gone
-            content_lower = resp.content.lower()
-            # Either doesn't recall OR somehow still has it (LLM might infer)
-            # The key test: the system doesn't crash with limited history
-            assert len(content_lower) > 0
 
-        finally:
-            await _cleanup_session(sid)
+            try:
+                # Fill up session with many turns to push out early messages
+                await runner.run(
+                    agent, "My secret code is ALPHA-7.", session_id=sid, user_id="limit-user"
+                )
+                await runner.run(agent, "What is 2+2?", session_id=sid, user_id="limit-user")
+                await runner.run(agent, "Tell me a joke.", session_id=sid, user_id="limit-user")
+                await runner.run(
+                    agent, "What's the weather like?", session_id=sid, user_id="limit-user"
+                )
+                await runner.run(
+                    agent, "Name a famous scientist.", session_id=sid, user_id="limit-user"
+                )
+
+                # Now ask about the secret code — it should have been pushed out
+                resp = await runner.run(
+                    agent,
+                    "What was my secret code from earlier?",
+                    session_id=sid,
+                    user_id="limit-user",
+                )
+                assert resp.content is not None
+                # With only 4 messages in history, the secret code should be gone
+                content_lower = resp.content.lower()
+                # Either doesn't recall OR somehow still has it (LLM might infer)
+                # The key test: the system doesn't crash with limited history
+                assert len(content_lower) > 0
+
+            finally:
+                await _cleanup_session(sid)
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +439,7 @@ class TestCombinedMemory:
         from continuum.agent.runner import AgentRunner
         from continuum.agent.types import MemoryScope
         from continuum.memory.client import MemoryClient
+        from continuum.session import bind_principal
         from continuum.session.client import SessionClient
 
         uid = _uid()
@@ -459,44 +470,50 @@ class TestCombinedMemory:
 
         runner = AgentRunner()
 
-        session_client = SessionClient()
-        session_client.initialize()
-        sid = await session_client.get_or_create_session(
-            session_id=f"e2e-combined-{uuid.uuid4().hex[:8]}",
-            user_id=uid,
-        )
-
-        try:
-            # Session turn 1: Tell something new (goes to session history)
-            await runner.run(
-                agent,
-                "I'm planning a trip to Rome next month.",
-                session_id=sid,
+        # The verified caller, as an app binds it at its auth boundary. Without it
+        # SESSION_REQUIRE_PRINCIPAL=true refuses every call on the owned session
+        # (user_id= is a claim, not an identity) -- cleanup included.
+        with bind_principal(uid):
+            session_client = SessionClient()
+            session_client.initialize()
+            sid = await session_client.get_or_create_session(
+                session_id=f"e2e-combined-{uuid.uuid4().hex[:8]}",
                 user_id=uid,
             )
 
-            # Session turn 2: Ask about both (should use session + long-term)
-            resp = await runner.run(
-                agent,
-                "Given what you know about me, suggest a dinner plan for my trip.",
-                session_id=sid,
-                user_id=uid,
-            )
+            try:
+                # Session turn 1: Tell something new (goes to session history)
+                await runner.run(
+                    agent,
+                    "I'm planning a trip to Rome next month.",
+                    session_id=sid,
+                    user_id=uid,
+                )
 
-            assert resp.content is not None
-            content_lower = resp.content.lower()
-            # Should reference Rome (from session) and/or Italian food (from memory)
-            has_rome = "rome" in content_lower
-            has_italian = (
-                "italian" in content_lower or "pasta" in content_lower or "pizza" in content_lower
-            )
-            assert has_rome or has_italian, (
-                f"Expected references to Rome or Italian food, got: {resp.content[:200]}"
-            )
+                # Session turn 2: Ask about both (should use session + long-term)
+                resp = await runner.run(
+                    agent,
+                    "Given what you know about me, suggest a dinner plan for my trip.",
+                    session_id=sid,
+                    user_id=uid,
+                )
 
-        finally:
-            await _cleanup_memory(uid)
-            await _cleanup_session(sid)
+                assert resp.content is not None
+                content_lower = resp.content.lower()
+                # Should reference Rome (from session) and/or Italian food (from memory)
+                has_rome = "rome" in content_lower
+                has_italian = (
+                    "italian" in content_lower
+                    or "pasta" in content_lower
+                    or "pizza" in content_lower
+                )
+                assert has_rome or has_italian, (
+                    f"Expected references to Rome or Italian food, got: {resp.content[:200]}"
+                )
+
+            finally:
+                await _cleanup_memory(uid)
+                await _cleanup_session(sid)
 
 
 # ---------------------------------------------------------------------------

@@ -270,6 +270,7 @@ class TestSessionPersistence:
         from continuum.agent.base import BaseAgent
         from continuum.agent.config import AgentConfig, AgentMemoryConfig
         from continuum.agent.runner import AgentRunner
+        from continuum.session import bind_principal
         from continuum.session.client import SessionClient
 
         agent = BaseAgent(
@@ -281,40 +282,44 @@ class TestSessionPersistence:
 
         runner = AgentRunner()
 
-        # Create a session explicitly so messages can be stored and retrieved
-        session_client = SessionClient()
-        session_client.initialize()
-        raw_session_id = f"e2e-session-{uuid.uuid4().hex[:8]}"
-        session_id = await session_client.get_or_create_session(
-            session_id=raw_session_id,
-            user_id="test-user-1",
-        )
+        # The verified caller, as an app binds it at its auth boundary. Without it
+        # SESSION_REQUIRE_PRINCIPAL=true refuses every call on the owned session
+        # (user_id= is a claim, not an identity) -- cleanup included.
+        with bind_principal("test-user-1"):
+            # Create a session explicitly so messages can be stored and retrieved
+            session_client = SessionClient()
+            session_client.initialize()
+            raw_session_id = f"e2e-session-{uuid.uuid4().hex[:8]}"
+            session_id = await session_client.get_or_create_session(
+                session_id=raw_session_id,
+                user_id="test-user-1",
+            )
 
-        # Turn 1: Tell the agent something
-        try:
-            resp1 = await runner.run(
+            # Turn 1: Tell the agent something
+            try:
+                resp1 = await runner.run(
+                    agent,
+                    "My favorite color is blue. Remember that.",
+                    session_id=session_id,
+                    user_id="test-user-1",
+                )
+            except Exception as e:
+                if "expired" in str(e).lower() or "api_key" in str(e).lower():
+                    pytest.skip(f"API key issue on turn 1: {type(e).__name__}")
+                raise
+            assert resp1.content is not None
+            if resp1.status.value != "success":
+                pytest.skip("First run did not succeed — cannot test session persistence")
+
+            # Turn 2: Ask about it (same session)
+            resp2 = await runner.run(
                 agent,
-                "My favorite color is blue. Remember that.",
+                "What is my favorite color?",
                 session_id=session_id,
                 user_id="test-user-1",
             )
-        except Exception as e:
-            if "expired" in str(e).lower() or "api_key" in str(e).lower():
-                pytest.skip(f"API key issue on turn 1: {type(e).__name__}")
-            raise
-        assert resp1.content is not None
-        if resp1.status.value != "success":
-            pytest.skip("First run did not succeed — cannot test session persistence")
-
-        # Turn 2: Ask about it (same session)
-        resp2 = await runner.run(
-            agent,
-            "What is my favorite color?",
-            session_id=session_id,
-            user_id="test-user-1",
-        )
-        assert resp2.content is not None
-        assert "blue" in resp2.content.lower()
+            assert resp2.content is not None
+            assert "blue" in resp2.content.lower()
 
     @_skip_on_api_error
     async def test_different_sessions_are_isolated(self):
