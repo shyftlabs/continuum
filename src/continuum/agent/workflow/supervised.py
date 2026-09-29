@@ -39,9 +39,15 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._quality_gate import (
+    VerdictMode,
+    system_one_approves,
+    validate_gate_settings,
+)
 from continuum.config import settings
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
+from continuum.system_one import require_backend
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -84,6 +90,17 @@ class SupervisedConfig:
     pass_full_history: bool = False  # Pass full history vs just last output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     pipeline_context_max_chars: int | None = 300  # None = no truncation
+    # "system_one_classifier": a System One classifier is asked first and may
+    # only approve -- P(pass) >= system_one_pass_threshold accepts the step with
+    # no supervisor call; anything else, a backend error or SYSTEM_ONE_DISABLED
+    # goes to the supervisor as before. system_one_backend is this agent's own
+    # spec; None uses the container / SYSTEM_ONE_BACKEND default.
+    verdict_mode: VerdictMode = "llm"
+    system_one_backend: str | None = None
+    system_one_pass_threshold: float = 0.9
+
+    def __post_init__(self) -> None:
+        validate_gate_settings(self.verdict_mode, self.system_one_pass_threshold)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +112,9 @@ class SupervisedConfig:
             "pass_full_history": self.pass_full_history,
             "fail_strategy": self.fail_strategy.value,
             "pipeline_context_max_chars": self.pipeline_context_max_chars,
+            "verdict_mode": self.verdict_mode,
+            "system_one_backend": self.system_one_backend,
+            "system_one_pass_threshold": self.system_one_pass_threshold,
         }
 
 
@@ -141,6 +161,14 @@ class SupervisedSequentialAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("SupervisedSequentialAgent requires at least one agent")
+
+        if self.supervised_config.verdict_mode == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the supervisor at run time.
+            require_backend(
+                self.supervised_config.system_one_backend,
+                seam=f"SupervisedSequentialAgent '{self.name}'",
+            )
 
     @publish_active_policy
     async def execute(
@@ -270,6 +298,28 @@ class SupervisedSequentialAgent(BaseAgent):
                                     response.error or response.content or "step failed"
                                 )
                             total_usage = total_usage.add(response.usage)
+
+                            # A confident System One pass accepts the step with no
+                            # supervisor call; anything else is scored as before.
+                            if self.supervised_config.verdict_mode == "system_one_classifier":
+                                p_pass = await system_one_approves(
+                                    seam=f"SupervisedSequentialAgent '{self.name}' step {step_num}",
+                                    request=current_input,
+                                    draft=response.content or "",
+                                    backend=self.supervised_config.system_one_backend,
+                                    threshold=self.supervised_config.system_one_pass_threshold,
+                                )
+                                if p_pass is not None:
+                                    best_response = response
+                                    step_span.set_output(
+                                        {
+                                            "success": True,
+                                            "decided_by": "system_one",
+                                            "p_pass": p_pass,
+                                            "attempts": attempt + 1,
+                                        }
+                                    )
+                                    break
 
                             # Score the output
                             score, feedback, score_usage = await self._score_output(

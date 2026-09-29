@@ -199,16 +199,19 @@ class HandoffConfig:
 # =============================================================================
 
 
+DEFAULT_CRITIQUE_PROMPT = (
+    "Review the response above. Reply ONLY 'PASS' if it fully answers the request, "
+    "or 'NEEDS IMPROVEMENT: <reason>' if not."
+)
+
+
 @dataclass
 class ReflectionConfig:
     """
     Configuration for ReflectionAgent self-critique behavior.
     """
 
-    critique_prompt: str = (
-        "Review the response above. Reply ONLY 'PASS' if it fully answers the request, "
-        "or 'NEEDS IMPROVEMENT: <reason>' if not."
-    )
+    critique_prompt: str = DEFAULT_CRITIQUE_PROMPT
     max_reflections: int = 2
     reflection_model: str | None = None  # defaults to the inner agent's model
     # Temperature for the critique LLM call. None = inherit the inner agent's
@@ -220,6 +223,19 @@ class ReflectionConfig:
     # models (e.g. Gemini 2.5) hidden reasoning counts against it: measured live,
     # the visible verdict was cut short, rejecting a correct answer.
     reflection_max_tokens: int | None = None
+    # "system_one_classifier": a System One classifier is asked first and may
+    # only approve -- P(pass) >= system_one_pass_threshold passes the draft with
+    # no critique call; anything else, a backend error or SYSTEM_ONE_DISABLED goes
+    # to the critic as before. system_one_backend is this agent's own spec; None
+    # uses the container / SYSTEM_ONE_BACKEND default.
+    verdict_mode: Literal["llm", "system_one_classifier"] = "llm"
+    system_one_backend: str | None = None
+    system_one_pass_threshold: float = 0.9
+
+    def __post_init__(self) -> None:
+        from continuum.agent.workflow._quality_gate import validate_gate_settings
+
+        validate_gate_settings(self.verdict_mode, self.system_one_pass_threshold)
 
 
 # =============================================================================

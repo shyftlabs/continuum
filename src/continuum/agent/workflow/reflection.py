@@ -12,11 +12,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.base import BaseAgent
-from continuum.agent.config import ReflectionConfig
+from continuum.agent.config import DEFAULT_CRITIQUE_PROMPT, ReflectionConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._quality_gate import system_one_approves
 from continuum.config import settings
 from continuum.logging import get_logger, log_content
+from continuum.system_one import require_backend
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
@@ -87,6 +89,13 @@ class ReflectionAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("ReflectionAgent requires an inner agent to execute")
+
+        if self.reflection_config.verdict_mode == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the critic at run time.
+            require_backend(
+                self.reflection_config.system_one_backend, seam=f"ReflectionAgent '{self.name}'"
+            )
 
     @publish_active_policy
     async def execute(
@@ -210,6 +219,25 @@ class ReflectionAgent(BaseAgent):
             if attempt == self.reflection_config.max_reflections:
                 break
 
+            if self.reflection_config.verdict_mode == "system_one_classifier":
+                p_pass = await system_one_approves(
+                    seam=f"ReflectionAgent '{self.name}'",
+                    request=original_input,
+                    draft=response.content or "",
+                    backend=self.reflection_config.system_one_backend,
+                    threshold=self.reflection_config.system_one_pass_threshold,
+                    review_criteria=self._review_criteria(),
+                )
+                if p_pass is not None:
+                    logger.info(
+                        "ReflectionAgent '%s': passed by the System One classifier on "
+                        "attempt %s (p_pass=%.3f)",
+                        self.name,
+                        attempt + 1,
+                        p_pass,
+                    )
+                    break
+
             critique = await self._critique(
                 response_content=response.content,
                 llm_client=llm_client,
@@ -307,6 +335,13 @@ class ReflectionAgent(BaseAgent):
             return result
         finally:
             self.agent.config.session_history_turns = _orig_hist
+
+    def _review_criteria(self) -> str | None:
+        """A custom critique prompt (e.g. from generate_critique_prompt) is what
+        "good enough" means for this agent, so the classifier is shown it. The
+        default prompt is only reply-format instructions, so it is not."""
+        prompt = self.reflection_config.critique_prompt
+        return None if prompt == DEFAULT_CRITIQUE_PROMPT else prompt
 
     async def _critique(
         self,
@@ -425,6 +460,9 @@ class ReflectionAgent(BaseAgent):
                     "max_reflections": self.reflection_config.max_reflections,
                     "reflection_model": self.reflection_config.reflection_model,
                     "reflection_max_tokens": self.reflection_config.reflection_max_tokens,
+                    "verdict_mode": self.reflection_config.verdict_mode,
+                    "system_one_backend": self.reflection_config.system_one_backend,
+                    "system_one_pass_threshold": self.reflection_config.system_one_pass_threshold,
                 },
                 "workflow_type": "reflection",
             }
