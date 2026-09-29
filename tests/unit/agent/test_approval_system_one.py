@@ -72,8 +72,18 @@ def _human(approved=True, deferred=False, reviewer="alice"):
 
 
 def _handler(**kwargs):
+    """The classifier path in isolation: every tool eligible, label rule off.
+
+    The two rules in front of the classifier -- the allow-list and the taint
+    rule -- are opened up here so these tests keep checking the threshold, the
+    escalation and the failure paths. The rules' own defaults are tested
+    directly, in TestOnlyAllowListedToolsAreAutoApproved and
+    TestATaintedRunIsNeverAutoApproved.
+    """
     from continuum.agent.system_one_approval import system_one_approval_handler
 
+    kwargs.setdefault("auto_approve_tools", {"*"})
+    kwargs.setdefault("no_auto_approve_with_labels", ())
     return system_one_approval_handler(**kwargs)
 
 
@@ -283,3 +293,281 @@ class TestThroughTheRealGate:
             )
         assert "P(risky)=0.80" in str(exc.value)
         assert invoked.await_count == 0
+
+
+def _raw_handler(**kwargs):
+    """The handler with its real defaults -- no opening-up."""
+    from continuum.agent.system_one_approval import system_one_approval_handler
+
+    return system_one_approval_handler(**kwargs)
+
+
+def _clean_request(**overrides):
+    overrides.setdefault("data_labels", frozenset())
+    return _request(**overrides)
+
+
+class TestOnlyAllowListedToolsAreAutoApproved:
+    """Rule 2. A fooled or context-blind classifier can then auto-approve at
+    worst a tool the operator named as safe to auto-approve -- never a
+    forward_email or a transfer."""
+
+    def test_the_allow_list_is_required(self):
+        """No default: 'every declared tool' would leave the gap open by
+        default, and 'none' would make the handler pointless. The operator
+        decides, the way tool_approval itself has no default list."""
+        _use(0.0)
+        with pytest.raises(TypeError):
+            _raw_handler()
+
+    async def test_a_tool_not_on_the_list_goes_to_a_person_without_asking(self):
+        backend = _use(0.0)
+        human = _human()
+        handler = _raw_handler(auto_approve_tools={"get_*"}, escalate_to=human)
+
+        await handler(_clean_request(tool_name="forward_email"))
+        human.assert_awaited_once()
+        assert backend.calls == [], "the classifier must not decide for an unlisted tool"
+
+    async def test_a_tool_not_on_the_list_with_no_human_is_refused(self):
+        _use(0.0)
+        decision = await _raw_handler(auto_approve_tools={"get_*"})(
+            _clean_request(tool_name="forward_email")
+        )
+        assert decision.approved is False
+        assert "forward_email" in (decision.reason or "")
+        assert "auto_approve_tools" in (decision.reason or "")
+
+    async def test_a_listed_tool_can_be_auto_approved(self):
+        _use(0.02)
+        decision = await _raw_handler(auto_approve_tools={"get_*"})(
+            _clean_request(tool_name="get_weather")
+        )
+        assert decision.approved is True
+
+    async def test_an_empty_list_auto_approves_nothing(self):
+        backend = _use(0.0)
+        decision = await _raw_handler(auto_approve_tools=set())(_clean_request(tool_name="get_x"))
+        assert decision.approved is False
+        assert backend.calls == []
+
+
+class TestATaintedRunIsNeverAutoApproved:
+    """Rule 1. A run that has read untrusted content can be carrying an
+    injected instruction; the classifier cannot see the conversation, so it
+    cannot tell a requested call from an injected one. Label membership is
+    checked instead -- text in an email cannot argue with a set."""
+
+    async def test_by_default_any_label_blocks_auto_approval(self):
+        backend = _use(0.0)
+        human = _human()
+        handler = _raw_handler(auto_approve_tools={"*"}, escalate_to=human)
+
+        await handler(_request(tool_name="get_weather", data_labels=frozenset({"untrusted"})))
+        human.assert_awaited_once()
+        assert backend.calls == []
+
+    async def test_a_clean_run_can_still_be_auto_approved(self):
+        _use(0.02)
+        decision = await _raw_handler(auto_approve_tools={"*"})(_clean_request())
+        assert decision.approved is True
+
+    async def test_the_labels_can_be_narrowed(self):
+        _use(0.02)
+        handler = _raw_handler(auto_approve_tools={"*"}, no_auto_approve_with_labels={"untrusted"})
+
+        pii = await handler(_request(data_labels=frozenset({"pii"})))
+        untrusted = await handler(_request(data_labels=frozenset({"untrusted", "pii"})))
+        assert pii.approved is True
+        assert untrusted.approved is False
+
+    async def test_labels_are_globs(self):
+        _use(0.02)
+        handler = _raw_handler(auto_approve_tools={"*"}, no_auto_approve_with_labels={"web_*"})
+        decision = await handler(_request(data_labels=frozenset({"web_page"})))
+        assert decision.approved is False
+
+    async def test_the_refusal_names_the_label(self):
+        _use(0.0)
+        decision = await _raw_handler(auto_approve_tools={"*"})(
+            _request(data_labels=frozenset({"untrusted"}))
+        )
+        assert "untrusted" in (decision.reason or "")
+
+    async def test_the_email_scenario_end_to_end(self, monkeypatch):
+        """The case that motivated the rule, through the real ToolService and
+        ToolExecutor, with NO policy store (the configuration whose labels were
+        dropped before 66afb0b). read_email taints the run; the injected
+        forward_email that follows is not auto-approved, although the
+        classifier scores it harmless."""
+        from continuum.agent.approval import ToolApprovalRequest
+        from continuum.agent.config import AgentConfig
+        from continuum.agent.exceptions import ToolApprovalDeniedError
+        from continuum.agent.services.tool_service import ToolService
+        from continuum.agent.types import RunContext
+
+        backend = _use(0.0)  # the classifier would wave it through
+        asked: list[ToolApprovalRequest] = []
+        human = AsyncMock(side_effect=lambda req: asked.append(req) or _refusal())
+
+        cfg = AgentConfig()
+        cfg.tool_data_labels = {"read_email": {"untrusted"}}
+        cfg.tool_approval = {"forward_email"}
+        cfg.approval_handler = _raw_handler(auto_approve_tools={"*"}, escalate_to=human)
+        agent = SimpleNamespace(
+            name="mail",
+            config=cfg,
+            policy_store=None,
+            tool_executor=_real_executor(("read_email", "forward_email")),
+            on_tool_call=None,
+            on_tool_result=None,
+        )
+        monkeypatch.setattr(
+            "continuum.tools.util.MCPUtil.invoke_mcp_tool_with_artifact",
+            AsyncMock(return_value=("ok", None)),
+        )
+        svc = ToolService.__new__(ToolService)
+        svc._tool_executor = None
+        svc._message_to_dict = lambda m: {"content": ""}
+        context = RunContext(run_id="r1")
+
+        await svc.execute_tool_call(agent, _tc("read_email", "{}"), context)
+        assert "untrusted" in context.data_labels, "read_email did not taint the run"
+
+        try:
+            await svc.execute_tool_call(agent, _tc("forward_email", '{"email_id": 17}'), context)
+        except ToolApprovalDeniedError:
+            pass
+        assert asked, "the injected forward went through without a person"
+        assert asked[0].data_labels == frozenset({"untrusted"})
+        assert backend.calls == []
+
+
+def _refusal():
+    from continuum.agent.approval import ToolApprovalDecision
+
+    return ToolApprovalDecision(approved=False, reviewer="alice")
+
+
+def _tc(name, arguments):
+    return {"id": f"c-{name}", "function": {"name": name, "arguments": arguments}}
+
+
+def _real_executor(tool_names):
+    from continuum.tools.executor import ToolExecutor
+
+    ex = ToolExecutor.__new__(ToolExecutor)
+    registry = {}
+    for name in tool_names:
+        server, tool = MagicMock(), MagicMock()
+        server.name = "mail"
+        tool.name = name
+        registry[name] = (server, tool)
+    ex.tool_registry = registry
+    ex._rate_limiter = MagicMock()
+    ex._rate_limiter.acquire = AsyncMock()
+    ex._semaphore = MagicMock()
+    ex._semaphore.__aenter__ = AsyncMock()
+    ex._semaphore.__aexit__ = AsyncMock(return_value=False)
+    ex._inject_context_variables = lambda _s, _t, args: args
+    ex._config = SimpleNamespace(timeout_seconds=30)
+    ex._run_artifacts = MagicMock()
+    ex._context_state = MagicMock()
+    ex._on_tool_result = lambda *a, **k: None
+    ex._capture_context_variables = lambda *a, **k: None
+    return ex
+
+
+class TestAWarningWhenTheTaintRuleHasNothingToReadFrom:
+    """Rule 1 reads labels the integrator declares; the SDK ships no detector.
+    An agent that declares none gets a rule that never fires -- configured and
+    wired to nothing -- so it is said once, like warn_if_approval_unwired."""
+
+    def _messages(self):
+        import logging
+
+        messages: list[str] = []
+
+        class Collector(logging.Handler):
+            def emit(self, record):
+                messages.append(record.getMessage())
+
+        handler = Collector()
+        logging.getLogger("continuum.agent.approval").addHandler(handler)
+        return messages, handler
+
+    def _agent(self, name, handler, *, tool_labels=None, scope_labels=None):
+        from continuum.agent.config import AgentConfig, AgentMemoryConfig
+
+        cfg = AgentConfig()
+        cfg.tool_approval = {"forward_email"}
+        cfg.approval_handler = handler
+        cfg.tool_data_labels = tool_labels or {}
+        memory = AgentMemoryConfig()
+        memory.scope_data_labels = scope_labels or {}
+        return SimpleNamespace(name=name, config=cfg, memory_config=memory)
+
+    def test_it_warns_once_when_no_labels_are_declared(self):
+        import logging
+
+        from continuum.agent.approval import build_approval_settings
+
+        _use(0.0)
+        messages, h = self._messages()
+        try:
+            agent = self._agent("warn-once-agent", _raw_handler(auto_approve_tools={"*"}))
+            build_approval_settings(agent)
+            build_approval_settings(agent)
+        finally:
+            logging.getLogger("continuum.agent.approval").removeHandler(h)
+        hits = [m for m in messages if "warn-once-agent" in m and "data label" in m]
+        assert len(hits) == 1
+
+    def test_declared_tool_labels_silence_it(self):
+        import logging
+
+        from continuum.agent.approval import build_approval_settings
+
+        _use(0.0)
+        messages, h = self._messages()
+        try:
+            build_approval_settings(
+                self._agent(
+                    "labelled-agent",
+                    _raw_handler(auto_approve_tools={"*"}),
+                    tool_labels={"read_email": {"untrusted"}},
+                )
+            )
+        finally:
+            logging.getLogger("continuum.agent.approval").removeHandler(h)
+        assert not [m for m in messages if "labelled-agent" in m]
+
+    def test_a_disabled_rule_does_not_warn(self):
+        import logging
+
+        from continuum.agent.approval import build_approval_settings
+
+        _use(0.0)
+        messages, h = self._messages()
+        try:
+            build_approval_settings(
+                self._agent(
+                    "rule-off-agent",
+                    _raw_handler(auto_approve_tools={"*"}, no_auto_approve_with_labels=()),
+                )
+            )
+        finally:
+            logging.getLogger("continuum.agent.approval").removeHandler(h)
+        assert not [m for m in messages if "rule-off-agent" in m]
+
+    def test_a_plain_human_handler_does_not_warn(self):
+        import logging
+
+        from continuum.agent.approval import build_approval_settings
+
+        messages, h = self._messages()
+        try:
+            build_approval_settings(self._agent("human-agent", _human()))
+        finally:
+            logging.getLogger("continuum.agent.approval").removeHandler(h)
+        assert not [m for m in messages if "human-agent" in m]
