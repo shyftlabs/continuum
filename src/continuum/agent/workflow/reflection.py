@@ -199,6 +199,19 @@ class ReflectionAgent(BaseAgent):
             )
             total_usage = total_usage.add(critique["usage"])
 
+            # No verdict (the critique call failed or came back empty) is not a
+            # PASS: nothing checked this draft. It is returned as it is, reported
+            # as unverified, and not retried -- a retry would have no feedback to
+            # improve on.
+            if critique["verdict"] is None:
+                logger.warning(
+                    "ReflectionAgent '%s': critique unavailable on attempt %s; returning "
+                    "the current draft unverified (not treated as PASS)",
+                    self.name,
+                    attempt + 1,
+                )
+                break
+
             if critique["verdict"].startswith("PASS"):
                 logger.info(
                     "ReflectionAgent '%s': critique passed on attempt %s", self.name, attempt + 1
@@ -285,7 +298,11 @@ class ReflectionAgent(BaseAgent):
         """
         Call the LLM to evaluate the inner agent's response.
 
-        Returns a dict with ``verdict`` (str) and ``usage`` (TokenUsage).
+        Returns a dict with ``verdict`` and ``usage`` (TokenUsage). ``verdict`` is
+        the critique text, or ``None`` when there is no verdict to act on: the call
+        raised, or the reply was empty. ``None`` is deliberately not ``"PASS"`` --
+        treating "the critic did not answer" as approval let a broken critic pass
+        every draft while the logs said each one had been checked.
         """
         from continuum.llm.config import LLMConfig
 
@@ -337,7 +354,10 @@ class ReflectionAgent(BaseAgent):
                     total_tokens=llm_response.usage.total_tokens or 0,
                 )
 
-            verdict = (llm_response.content or "PASS").strip()
+            verdict = (llm_response.content or "").strip()
+            if not verdict:
+                logger.warning("ReflectionAgent '%s': critique reply was empty", self.name)
+                return {"verdict": None, "usage": usage}
             # The outcome is the SDK's own classification -- the same
             # startswith("PASS") rule that decides whether to retry -- so it is a
             # label and prints. The rest is the critique model writing about the
@@ -353,8 +373,10 @@ class ReflectionAgent(BaseAgent):
             return {"verdict": verdict, "usage": usage}
 
         except Exception as e:
-            logger.warning("ReflectionAgent critique call failed: %s", e)
-            return {"verdict": "PASS", "usage": TokenUsage()}
+            logger.warning(
+                "ReflectionAgent '%s': critique call failed (%s)", self.name, type(e).__name__
+            )
+            return {"verdict": None, "usage": TokenUsage()}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""

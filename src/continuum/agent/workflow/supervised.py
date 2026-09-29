@@ -260,6 +260,29 @@ class SupervisedSequentialAgent(BaseAgent):
                             )
                             total_usage = total_usage.add(score_usage)
 
+                            # No score (the supervisor could not be asked, failed,
+                            # or gave no readable SCORE) is not a low score. The
+                            # output is kept and reported as unscored; retrying
+                            # would have no feedback to act on.
+                            if score is None:
+                                logger.warning(
+                                    "SupervisedSequential step %s '%s': supervisor could not "
+                                    "score the output (%s); keeping it unscored",
+                                    step_num,
+                                    agent.name,
+                                    feedback,
+                                )
+                                best_response = response
+                                step_span.set_output(
+                                    {
+                                        "success": True,
+                                        "scored": False,
+                                        "reason": feedback,
+                                        "attempts": attempt + 1,
+                                    }
+                                )
+                                break
+
                             logger.info(
                                 "SupervisedSequential step %s '%s' score=%s (threshold=%s)",
                                 step_num,
@@ -457,15 +480,21 @@ class SupervisedSequentialAgent(BaseAgent):
         original_input: str,
         output: str,
         llm_client: Any | None,
-    ) -> tuple[float, str, TokenUsage]:
+    ) -> tuple[float | None, str, TokenUsage]:
         """
         Ask the supervisor LLM to score the output (0.0–1.0).
 
         Returns:
-            (score, feedback, token_usage)
+            (score, feedback, token_usage). ``score`` is ``None`` when there is no
+            score to act on -- no LLM client, the call failed, or the reply had no
+            readable ``SCORE:`` line -- and ``feedback`` then says why, in fixed
+            words (never the exception text, which could reach the worker's
+            prompt). An empty output is a real verdict: 0.0.
         """
-        if not llm_client or not output.strip():
-            return 0.5, "No supervisor available — defaulting to pass", TokenUsage()
+        if not output.strip():
+            return 0.0, "The output was empty.", TokenUsage()
+        if not llm_client:
+            return None, "no supervisor LLM is available", TokenUsage()
 
         from continuum.llm.config import LLMConfig
 
@@ -504,7 +533,7 @@ class SupervisedSequentialAgent(BaseAgent):
                 )
 
             content = (response.content or "").strip()
-            score = 0.5
+            score: float | None = None
             feedback = "No feedback provided"
 
             for line in content.splitlines():
@@ -516,11 +545,15 @@ class SupervisedSequentialAgent(BaseAgent):
                 elif line.startswith("FEEDBACK:"):
                     feedback = line.split(":", 1)[1].strip()
 
+            if score is None:
+                return None, "the supervisor reply had no readable SCORE", usage
             return score, feedback, usage
 
         except Exception as e:
-            logger.debug("Supervisor scoring failed: %s — defaulting to 0.5", e)
-            return 0.5, f"Scoring error: {e}", TokenUsage()
+            logger.warning(
+                "Supervisor scoring call failed for step %s (%s)", step_num, type(e).__name__
+            )
+            return None, f"the supervisor call failed ({type(e).__name__})", TokenUsage()
 
     def _get_llm(self) -> Any | None:
         try:
