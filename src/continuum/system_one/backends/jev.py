@@ -4,11 +4,8 @@ Calls ``POST {TYPESAFE_BASE_URL}/v1/systemone`` directly over httpx -- the same
 native-SDK stance that removed LiteLLM; LangChain's ``langchain-typesafe`` is a
 reference for the wire format, not a dependency.
 
-Translation, both ways:
-
-    BinaryQuestion  <->  noul    {"true": p, "false": 1-p}   <-  {"noul": p}
-    ChoiceQuestion  <->  choice  labels -> probabilities      <-  {"probabilities", "confidence"}
-    ScoreQuestion   <->  score   levels -> probabilities      <-  {"probabilities": {"0": p}}
+The question/answer translation is the typed-decision wire format in
+``typed_wire``, shared with the Laya backend, which speaks the same format.
 
 Failures: one retry on 408/429/5xx and connection errors, honouring
 ``Retry-After``/``retry-after-ms`` but never sleeping past the call's timeout; a
@@ -29,18 +26,15 @@ import httpx
 
 from continuum.config import settings
 from continuum.logging import get_logger
+from continuum.system_one.backends.typed_wire import parse_answers, to_wire
 from continuum.system_one.exceptions import (
     SystemOneBackendError,
-    SystemOneCapabilityError,
     SystemOneNotConfiguredError,
     SystemOneResponseError,
     SystemOneTimeoutError,
 )
 from continuum.system_one.types import (
-    BinaryQuestion,
-    ChoiceQuestion,
     Question,
-    ScoreQuestion,
     SystemOneCapabilities,
     SystemOneRawResult,
 )
@@ -48,7 +42,6 @@ from continuum.system_one.types import (
 logger = get_logger(__name__)
 
 _RETRYABLE = frozenset({408, 429, 500, 502, 503, 504, 529})
-_WIRE_TYPE = {"binary": "noul", "choice": "choice", "score": "score"}
 
 
 def _user_agent() -> str:
@@ -101,10 +94,10 @@ class JevClassifier:
         payload = {
             "model": self.model,
             "state": state,
-            "questions": {qid: _wire_question(qid, q) for qid, q in questions.items()},
+            "questions": {qid: to_wire(qid, q, vendor="Jev") for qid, q in questions.items()},
         }
         body = await self._post(payload)
-        return _parse(body, questions, self.model)
+        return parse_answers(body, questions, self.model, vendor="Jev")
 
     async def _post(self, payload: dict[str, Any]) -> Any:
         deadline = time.monotonic() + self._timeout
@@ -159,57 +152,6 @@ class JevClassifier:
     @staticmethod
     def _can_wait(delay: float, deadline: float) -> bool:
         return delay + 0.1 < deadline - time.monotonic()
-
-
-def _wire_question(qid: str, question: Question) -> dict[str, Any]:
-    if question.kind not in _WIRE_TYPE:
-        raise SystemOneCapabilityError(f"Jev cannot answer a {question.kind} question ('{qid}').")
-    wire: dict[str, Any] = {
-        "type": _WIRE_TYPE[question.kind],
-        "instructions": question.instructions,
-    }
-    if isinstance(question, BinaryQuestion):
-        if question.true_criteria is not None or question.false_criteria is not None:
-            wire["criteria"] = {"true": question.true_criteria, "false": question.false_criteria}
-    elif isinstance(question, ChoiceQuestion):
-        wire["criteria"] = dict(question.labels)
-    elif isinstance(question, ScoreQuestion):
-        wire["criteria"] = list(question.levels)
-    return wire
-
-
-def _parse(body: Any, questions: dict[str, Question], model: str) -> SystemOneRawResult:
-    if not isinstance(body, dict) or not isinstance(body.get("answers"), dict):
-        raise SystemOneResponseError("Jev's response has no answers object.")
-    answers = body["answers"]
-    distributions: dict[str, dict[Any, float]] = {}
-    raw_confidence: dict[str, float] = {}
-    for qid, question in questions.items():
-        answer = answers.get(qid)
-        expected = _WIRE_TYPE[question.kind]
-        if not isinstance(answer, dict) or answer.get("type") != expected:
-            raise SystemOneResponseError(f"Jev returned no {expected} answer for '{qid}'.")
-        try:
-            if isinstance(question, BinaryQuestion):
-                p = float(answer["noul"])
-                distributions[qid] = {"true": p, "false": 1.0 - p}
-            elif isinstance(question, ChoiceQuestion):
-                distributions[qid] = {str(k): float(v) for k, v in answer["probabilities"].items()}
-            else:
-                distributions[qid] = {int(k): float(v) for k, v in answer["probabilities"].items()}
-        except (KeyError, TypeError, ValueError, AttributeError) as e:
-            raise SystemOneResponseError(f"Jev's answer for '{qid}' is malformed.") from e
-        conf = answer.get("confidence")
-        if isinstance(conf, int | float) and math.isfinite(conf):
-            raw_confidence[qid] = float(conf)
-    raw_usage = body.get("usage")
-    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
-    return SystemOneRawResult(
-        distributions=distributions,
-        raw_confidence=raw_confidence,
-        model=str(body.get("model") or model),
-        usage={k: v for k, v in usage.items() if v is not None},
-    )
 
 
 def _request_id(response: httpx.Response) -> str:
