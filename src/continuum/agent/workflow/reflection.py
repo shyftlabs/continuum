@@ -437,6 +437,7 @@ async def generate_critique_prompt(
     llm_client: Any,
     model: str | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Generate a critique prompt tailored to the user's query.
@@ -451,6 +452,9 @@ async def generate_critique_prompt(
         model: Model to use (defaults to the configured default)
         temperature: Temperature for the generation call. None inherits the
             default LLM temperature; pass a float to override.
+        max_tokens: Cap for the generation call. None uses the normal LLM
+            default (DEFAULT_LLM_MAX_TOKENS); on a reasoning model hidden
+            reasoning counts against it, and a small cap returns a stub.
 
     Returns:
         A critique prompt string ready for use in ReflectionConfig
@@ -471,7 +475,10 @@ async def generate_critique_prompt(
     from continuum.llm.config import LLMConfig
 
     _model = model or settings.default_llm_model
-    config = LLMConfig(model=_model, max_tokens=300)
+    config = LLMConfig(
+        model=_model,
+        max_tokens=settings.default_llm_max_tokens if max_tokens is None else max_tokens,
+    )
     if temperature is not None:
         config = config.with_overrides(temperature=temperature)
 

@@ -105,8 +105,12 @@ class IntelligenceConfig:
 
     # max_tokens for the importance-scoring call. None = the normal LLM default
     # (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden reasoning counts
-    # against the cap, and a small one leaves an empty reply (scored 0.5).
+    # against the cap, and a small one leaves an empty reply (stored unscored).
     importance_max_tokens: int | None = None
+
+    # max_tokens for the user-profile call, same reasoning. A small cap cuts the
+    # reply inside the JSON, keeping only the first key or two.
+    profile_max_tokens: int | None = None
 
     # Pruning: memories where importance + decay < threshold are deleted
     prune_threshold: float = 0.15
@@ -174,7 +178,12 @@ class IntelligentMemoryClient(MemoryClient):
         # 1. Importance scoring
         if self._intel.enable_scoring and llm:
             importance = await self._score_importance(text, llm)
-            enriched_meta["importance"] = importance
+            if importance is None:
+                # Stored without a score rather than a made-up 0.5: re-ranking
+                # and pruning read a missing score as 0.5 anyway.
+                logger.warning("Importance scoring gave no label; storing the memory unscored")
+            else:
+                enriched_meta["importance"] = importance
 
         # 2. Base store (fact extraction via mem0)
         result = await super().add(
@@ -463,13 +472,16 @@ class IntelligentMemoryClient(MemoryClient):
         else:
             return -0.2
 
-    async def _score_importance(self, text: str, llm: Any) -> float:
+    async def _score_importance(self, text: str, llm: Any) -> float | None:
         """
         LLM call to assign importance score 0.0–1.0.
 
         Low (0.0–0.3):  trivial, casual, or transient facts
         Medium (0.4–0.6): useful context
         High (0.7–1.0): key facts, decisions, relationships, critical events
+
+        None when there is no score: the call failed, or the reply does not name
+        exactly one label as a whole word ("not high, just medium", "highly").
         """
         from continuum.config import settings
         from continuum.llm.config import LLMConfig
@@ -502,15 +514,12 @@ class IntelligentMemoryClient(MemoryClient):
                 ),
                 auto_session=False,
             )
-            label = (response.content or "").strip().lower()
-            # Match any of the known labels (handles extra punctuation/whitespace)
-            for key, val in _label_map.items():
-                if key in label:
-                    return val
-            return 0.5
+            reply = (response.content or "").lower()
+            named = [key for key in _label_map if re.search(rf"\b{key}\b", reply)]
+            return _label_map[named[0]] if len(named) == 1 else None
         except Exception as e:
             logger.debug("Importance scoring failed: %s", e)
-            return 0.5
+            return None
 
     async def _extract_and_store_entities(
         self,
@@ -603,6 +612,7 @@ class IntelligentMemoryClient(MemoryClient):
         Each update fetches the latest profile, merges new facts, and stores
         the updated version.
         """
+        from continuum.config import settings
         from continuum.llm.config import LLMConfig
 
         existing = await self.get_user_profile(user_id)
@@ -631,7 +641,11 @@ class IntelligentMemoryClient(MemoryClient):
                 config=LLMConfig(
                     model=model,
                     temperature=self._intel.intelligence_temperature,
-                    max_tokens=300,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self._intel.profile_max_tokens is None
+                        else self._intel.profile_max_tokens
+                    ),
                 ),
                 auto_session=False,
             )

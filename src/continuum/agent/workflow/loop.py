@@ -41,6 +41,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# The completion check's reply must open with the word COMPLETE, after any
+# markdown emphasis, quote marker or bullet (as the critic's PASS is read).
+# A substring test stopped on "INCOMPLETE" and "NOT COMPLETE".
+_LEADING_NOISE = re.compile(r"^[\s>*_#`\-]+")
+_COMPLETE_WORD = re.compile(r"COMPLETE\b", re.IGNORECASE)
+
 
 @dataclass
 class LoopAgent(BaseAgent):
@@ -474,8 +480,8 @@ Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
                 ),
             )
 
-            result = (llm_response.content or "").strip().upper()
-            return "COMPLETE" in result
+            reply = _LEADING_NOISE.sub("", llm_response.content or "")
+            return bool(_COMPLETE_WORD.match(reply))
 
         except Exception as e:
             logger.warning("LLM termination check failed: %s", e)
