@@ -337,7 +337,10 @@ class LoopAgent(BaseAgent):
                     "Loop termination decided_by=legacy (SYSTEM_ONE_DISABLED) for '%s'", self.name
                 )
                 return await self._llm_termination_check(
-                    response=response, history=history, llm_client=llm_client
+                    response=response,
+                    history=history,
+                    llm_client=llm_client,
+                    original_input=original_input,
                 )
             try:
                 return await self._system_one_termination_check(response, original_input)
@@ -348,7 +351,10 @@ class LoopAgent(BaseAgent):
                     type(e).__name__,
                 )
                 return await self._llm_termination_check(
-                    response=response, history=history, llm_client=llm_client
+                    response=response,
+                    history=history,
+                    llm_client=llm_client,
+                    original_input=original_input,
                 )
 
         if term_type == TerminationType.LLM_DECISION:
@@ -356,6 +362,7 @@ class LoopAgent(BaseAgent):
                 response=response,
                 history=history,
                 llm_client=llm_client,
+                original_input=original_input,
             )
 
         elif term_type == TerminationType.TOOL_CALL:
@@ -421,8 +428,13 @@ class LoopAgent(BaseAgent):
         response: AgentResponse,
         history: list[dict[str, Any]],
         llm_client: LLMClient | None,
+        original_input: str | None = None,
     ) -> bool:
-        """Use LLM to decide if task is complete."""
+        """Use LLM to decide if task is complete.
+
+        ``original_input`` is the user's request: without it "is the task
+        complete?" has nothing to be complete against.
+        """
         if llm_client is None:
             from continuum.core.container import get_container
 
@@ -434,9 +446,11 @@ class LoopAgent(BaseAgent):
             for h in history[-3:]  # Last 3 iterations
         )
 
+        task_text = f"Original task:\n{original_input}\n\n" if original_input else ""
+
         prompt = f"""{self.termination.decision_prompt}
 
-Recent iterations:
+{task_text}Recent iterations:
 {history_text}
 
 Current output:

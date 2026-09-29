@@ -490,6 +490,11 @@ Agent name:"""
 
             # Parse response
             result = (response.content or "").strip().lower()
+            if not result:
+                # "" is a substring of every route name: without this an empty
+                # (e.g. truncated) reply would select the first route.
+                logger.warning("LLM routing got an empty reply; selecting no route")
+                return None
 
             # Find matching agent
             for route in self.routes:
