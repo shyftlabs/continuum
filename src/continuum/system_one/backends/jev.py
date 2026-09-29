@@ -178,11 +178,12 @@ class JevOpenRouterClassifier(JevClassifier):
     the endpoint and key is shared with :class:`JevClassifier`, and an
     OpenRouter key (``OPENROUTER_API_KEY``) replaces a TypeSafe one.
 
-    Two differences are handled here. The documented schema requires a yes/no
-    question's criteria to carry both ``true`` and ``false``; a question without
-    them gets neutral ones ("Yes." / "No.") that add no meaning. And OpenRouter
-    answers with a dated snapshot (``typesafe/jev-1.13-20260917``), which is
-    reported as the model, along with ``usage.cost``.
+    Questions go out exactly as they would to TypeSafe direct. OpenRouter's
+    documented schema marks yes/no criteria as required, but the live API accepts
+    a yes/no question without them (checked 2026-09-29), and filler criteria would
+    change what Jev is asked. OpenRouter answers with a dated snapshot
+    (``typesafe/jev-1.13-20260917``), which is reported as the model, along with
+    ``usage.cost``.
 
     The route is alpha: if OpenRouter moves it, ``OPENROUTER_BASE_URL`` and this
     class's ``_path`` are what change.
@@ -195,16 +196,6 @@ class JevOpenRouterClassifier(JevClassifier):
     _base_url_setting = "openrouter_base_url"
     _path = "/alpha/decisions"
     _vendor = "OpenRouter"
-
-    def _wire(self, qid: str, question: Question) -> dict[str, Any]:
-        wire = super()._wire(qid, question)
-        if wire["type"] == "noul":
-            given = wire.get("criteria") or {}
-            wire["criteria"] = {
-                "true": "Yes." if given.get("true") is None else given["true"],
-                "false": "No." if given.get("false") is None else given["false"],
-            }
-        return wire
 
 
 def _status_hint(status: int) -> str:
