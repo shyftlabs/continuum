@@ -69,3 +69,32 @@ async def test_the_profile_cap_can_still_be_set():
 
 def test_the_profile_cap_default_is_none():
     assert IntelligenceConfig().profile_max_tokens is None
+
+
+# And the entity-extraction call at max_tokens=1000: live (gemini-2.5-flash,
+# 2026-09-29) on a paragraph naming about a dozen people, companies and places,
+# 3/3 replies ended finish_reason=length after ~956 hidden reasoning tokens,
+# and one entity was stored.
+
+
+async def _entity_max_tokens(**config):
+    client = object.__new__(IntelligentMemoryClient)
+    client._intel = IntelligenceConfig(**config)
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content='{"entities": []}', usage=None))
+    await client._extract_and_store_entities("Maria works at Stripe.", "u1", llm)
+    return llm.chat.await_args.kwargs["config"].max_tokens
+
+
+async def test_the_entity_call_uses_the_normal_llm_default():
+    from continuum.config import settings
+
+    assert await _entity_max_tokens() == settings.default_llm_max_tokens
+
+
+async def test_the_entity_cap_can_still_be_set():
+    assert await _entity_max_tokens(entity_max_tokens=1500) == 1500
+
+
+def test_the_entity_cap_default_is_none():
+    assert IntelligenceConfig().entity_max_tokens is None
