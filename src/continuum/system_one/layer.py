@@ -203,8 +203,15 @@ def _batches(wire: dict[str, Question], max_questions: int | None) -> list[dict[
 
 
 def _merge_usage(total: dict[str, Any], part: dict[str, Any]) -> None:
+    """Add counts across batches; keep flags as flags, true if any batch set one.
+
+    ``bool`` is checked first because it is an ``int`` in Python: summing it
+    turned a backend's ``truncated: True`` into ``truncated: 1``.
+    """
     for key, value in part.items():
-        if isinstance(value, int | float) and isinstance(total.get(key, 0), int | float):
+        if isinstance(value, bool):
+            total[key] = bool(total.get(key, False)) or value
+        elif isinstance(value, int | float) and isinstance(total.get(key, 0), int | float):
             total[key] = total.get(key, 0) + value
         else:
             total[key] = value
