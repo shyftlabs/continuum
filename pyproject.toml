@@ -99,6 +99,19 @@ headroom-local-ml = [
     "transformers>=4.30.0,<6.0",
 ]
 
+# System One backends (continuum.system_one). Upper bounds are deliberate: the
+# adapter reads Laya's answer format and usage fields (backends/laya.py) --
+# bump only after re-running the contract suite and the live probes.
+# Laya: Convai's open-weight typed-decision model (Apache-2.0 code and weights),
+# CPU/CUDA/MPS/XPU via torch. First use downloads the checkpoint (~1 GB).
+laya = [
+    "laya>=0.3.21,<0.4",
+]
+# The MLX port of Laya -- Apple Silicon Macs only; elsewhere use [laya].
+laya-mlx = [
+    "laya-mlx>=0.2,<0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
 [project.scripts]
 continuum = "continuum.cli:main"
 

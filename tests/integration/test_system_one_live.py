@@ -1,10 +1,13 @@
-"""Live System One backends: the real local NLI model, and Jev when a key is set.
+"""Live System One backends: local NLI, Laya, and Jev when a key is set.
 
-Opt-in, because each needs something unit tests must not: the local run
-downloads a ~180 MB model on first use, and the Jev run spends API credit.
+Opt-in, because each needs something unit tests must not: the local runs
+download a model on first use (NLI ~0.5 GB, Laya ~1 GB) and the Jev run spends
+API credit.
 
-    SYSTEM_ONE_LIVE_LOCAL=1 pytest tests/integration/test_system_one_live.py -m integration
-    TYPESAFE_API_KEY=...    pytest tests/integration/test_system_one_live.py -m integration
+    SYSTEM_ONE_LIVE_LOCAL=1     pytest tests/integration/test_system_one_live.py -m integration
+    SYSTEM_ONE_LIVE_LAYA=1      pytest ... (needs the [laya] extra)
+    SYSTEM_ONE_LIVE_LAYA_MLX=1  pytest ... (needs [laya-mlx]: Apple Silicon only)
+    TYPESAFE_API_KEY=...        pytest tests/integration/test_system_one_live.py -m integration
 
 Each backend runs the shipped contract suite for real (including its latency
 budget, which is what "System One" is supposed to mean), plus a few judgements
@@ -32,7 +35,27 @@ requires_jev = pytest.mark.skipif(
     not os.getenv("TYPESAFE_API_KEY"), reason="set TYPESAFE_API_KEY to call Jev"
 )
 
+requires_laya = pytest.mark.skipif(
+    os.getenv("SYSTEM_ONE_LIVE_LAYA") != "1",
+    reason="set SYSTEM_ONE_LIVE_LAYA=1 (and install [laya]) to run the Laya model",
+)
+requires_laya_mlx = pytest.mark.skipif(
+    os.getenv("SYSTEM_ONE_LIVE_LAYA_MLX") != "1",
+    reason="set SYSTEM_ONE_LIVE_LAYA_MLX=1 (Apple Silicon, [laya-mlx]) to run Laya on MLX",
+)
+
 _local_backend = None
+_laya_backends: dict[str, object] = {}
+
+
+def _laya(kind: str):
+    """One loaded model per kind for the whole module (see _local)."""
+    if kind not in _laya_backends:
+        from continuum.system_one.backends.laya import LayaClassifier, LayaMLXClassifier
+
+        cls = LayaMLXClassifier if kind == "mlx" else LayaClassifier
+        _laya_backends[kind] = cls()
+    return _laya_backends[kind]
 
 
 def _local():
@@ -100,6 +123,36 @@ class TestLocalNLILive(SystemOneContract):
 
     async def test_judgements_whose_answer_is_not_in_doubt(self):
         await _judgements(_local())
+
+
+@requires_laya
+class TestLayaLive(SystemOneContract):
+    latency_budget_ms = 1000.0  # local torch; MPS/CUDA far faster than CPU
+
+    def make_classifier(self):
+        return _laya("upstream")
+
+    async def test_meets_its_latency_budget(self):
+        await self._ask(_laya("upstream"))  # warm: the budget is for answering
+        await super().test_meets_its_latency_budget()
+
+    async def test_judgements_whose_answer_is_not_in_doubt(self):
+        await _judgements(_laya("upstream"))
+
+
+@requires_laya_mlx
+class TestLayaMLXLive(SystemOneContract):
+    latency_budget_ms = 500.0
+
+    def make_classifier(self):
+        return _laya("mlx")
+
+    async def test_meets_its_latency_budget(self):
+        await self._ask(_laya("mlx"))
+        await super().test_meets_its_latency_budget()
+
+    async def test_judgements_whose_answer_is_not_in_doubt(self):
+        await _judgements(_laya("mlx"))
 
 
 @requires_jev
