@@ -112,6 +112,10 @@ class IntelligenceConfig:
     # reply inside the JSON, keeping only the first key or two.
     profile_max_tokens: int | None = None
 
+    # max_tokens for the entity-extraction call, same reasoning. A small cap
+    # cuts the JSON after the first entity or two.
+    entity_max_tokens: int | None = None
+
     # Pruning: memories where importance + decay < threshold are deleted
     prune_threshold: float = 0.15
 
@@ -535,6 +539,7 @@ class IntelligentMemoryClient(MemoryClient):
         entity_name, entity_type, and any extracted attributes in metadata.
         They are stored with importance=0.8 (entities are always high-value).
         """
+        from continuum.config import settings
         from continuum.llm.config import LLMConfig
 
         model = self._intel.intelligence_model or self._get_default_model()
@@ -553,7 +558,11 @@ class IntelligentMemoryClient(MemoryClient):
                 config=LLMConfig(
                     model=model,
                     temperature=self._intel.intelligence_temperature,
-                    max_tokens=1000,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self._intel.entity_max_tokens is None
+                        else self._intel.entity_max_tokens
+                    ),
                 ),
                 auto_session=False,
             )
