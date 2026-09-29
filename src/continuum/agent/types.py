@@ -742,6 +742,12 @@ class TerminationConfig:
     # For LLM_DECISION: temperature for the completion-check call (None omits it)
     decision_temperature: float | None = 0.1
 
+    # For LLM_DECISION: max_tokens for the completion-check call. None = the
+    # normal LLM default (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden
+    # reasoning counts against the cap, and a small one leaves an empty reply,
+    # read as CONTINUE.
+    decision_max_tokens: int | None = None
+
     # For TOOL_CALL: Tool name that triggers termination
     tool_name: str | None = None
 

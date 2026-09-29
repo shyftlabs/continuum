@@ -479,7 +479,11 @@ Agent name:"""
                 config=LLMConfig(
                     model=self.router_config.routing_model or self.model,
                     temperature=self.router_config.routing_temperature,
-                    max_tokens=50,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.router_config.routing_max_tokens is None
+                        else self.router_config.routing_max_tokens
+                    ),
                 ),
                 auto_session=False,
             )

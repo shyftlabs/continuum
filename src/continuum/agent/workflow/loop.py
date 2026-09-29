@@ -452,7 +452,11 @@ Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
                 config=LLMConfig(
                     model=self.agent.model if self.agent else settings.default_llm_model,
                     temperature=self.termination.decision_temperature,
-                    max_tokens=20,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.termination.decision_max_tokens is None
+                        else self.termination.decision_max_tokens
+                    ),
                 ),
             )
 

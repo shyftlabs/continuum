@@ -103,6 +103,11 @@ class IntelligenceConfig:
     # Temperature for scoring/extraction/profile LLM calls (None omits it)
     intelligence_temperature: float | None = 0.1
 
+    # max_tokens for the importance-scoring call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden reasoning counts
+    # against the cap, and a small one leaves an empty reply (scored 0.5).
+    importance_max_tokens: int | None = None
+
     # Pruning: memories where importance + decay < threshold are deleted
     prune_threshold: float = 0.15
 
@@ -466,6 +471,7 @@ class IntelligentMemoryClient(MemoryClient):
         Medium (0.4–0.6): useful context
         High (0.7–1.0): key facts, decisions, relationships, critical events
         """
+        from continuum.config import settings
         from continuum.llm.config import LLMConfig
 
         _label_map = {"trivial": 0.1, "low": 0.25, "medium": 0.5, "high": 0.8, "critical": 0.95}
@@ -488,7 +494,11 @@ class IntelligentMemoryClient(MemoryClient):
                 config=LLMConfig(
                     model=model,
                     temperature=self._intel.intelligence_temperature,
-                    max_tokens=16,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self._intel.importance_max_tokens is None
+                        else self._intel.importance_max_tokens
+                    ),
                 ),
                 auto_session=False,
             )

@@ -558,6 +558,10 @@ class RouterConfig:
     routing_model: str | None = None  # Model for LLM routing (default: agent's model)
     routing_prompt: str | None = None  # Custom prompt for routing decision
     routing_temperature: float | None = 0.1  # Temperature for the LLM routing call (None omits it)
+    # max_tokens for the LLM routing call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden reasoning counts
+    # against the cap, and a small one leaves no visible route name.
+    routing_max_tokens: int | None = None
     # routing_strategy="system_one_classifier": a System One classifier answers a
     # Choice over the route names plus "none" (continuum.system_one). This
     # router's own backend spec, e.g. "local:cross-encoder/nli-deberta-v3-small";
@@ -604,6 +608,7 @@ class RouterConfig:
             "routing_model": self.routing_model,
             "routing_prompt": self.routing_prompt,
             "routing_temperature": self.routing_temperature,
+            "routing_max_tokens": self.routing_max_tokens,
             "system_one_backend": self.system_one_backend,
             "tier_classifier": self.tier_classifier,
             "tier_classifier_llm_model": self.tier_classifier_llm_model,
