@@ -7,8 +7,9 @@ match the documented example: answers in Jev's format, ``model`` as a dated
 snapshot ("typesafe/jev-1.13-20260917"), ``provider``, and ``usage.cost``.
 
 What differs from TypeSafe direct, and is checked here: the URL and key, the
-default model id, 402 (insufficient credits) and 524 (upstream timeout), and that
-a yes/no question always carries criteria -- the documented schema requires them.
+default model id, and 402 (insufficient credits) and 524 (upstream timeout). The
+documented schema marks noul criteria as required; the live API does not enforce
+it, so questions go out exactly as they would to TypeSafe direct.
 """
 
 from __future__ import annotations
@@ -129,17 +130,18 @@ class TestTheRequest:
         }
         assert payload["questions"]["severity"]["criteria"] == ["low", "mid", "high"]
 
-    async def test_a_yes_no_question_without_criteria_gets_neutral_ones(self):
-        """The documented schema requires noul criteria with true and false. A
-        question with none gets neutral ones that add no meaning -- the same
-        judgement as asking without criteria on TypeSafe direct."""
+    async def test_a_yes_no_question_without_criteria_is_sent_without_them(self):
+        """OpenRouter's documented schema lists noul criteria as required, but the
+        live API accepts a noul without them (200, checked 2026-09-29). So nothing
+        is invented: the question goes out exactly as it would to TypeSafe direct,
+        where filler criteria would change what Jev is asked."""
         from continuum.system_one import BinaryQuestion
 
         rec = Recorder()
         await _or(rec).classify("s", {"q": BinaryQuestion(instructions="Is it spam?")})
-        assert rec.payloads[0]["questions"]["q"]["criteria"] == {"true": "Yes.", "false": "No."}
+        assert "criteria" not in rec.payloads[0]["questions"]["q"]
 
-    async def test_one_given_criterion_is_kept_and_the_other_filled(self):
+    async def test_criteria_that_were_given_are_sent_unchanged(self):
         from continuum.system_one import BinaryQuestion
 
         rec = Recorder()
@@ -148,7 +150,7 @@ class TestTheRequest:
         )
         assert rec.payloads[0]["questions"]["q"]["criteria"] == {
             "true": "Unsolicited ad.",
-            "false": "No.",
+            "false": None,
         }
 
 
