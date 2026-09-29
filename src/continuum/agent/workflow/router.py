@@ -9,6 +9,7 @@ NOTE: Workflow agents now include Langfuse span tracing for full observability.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -20,7 +21,7 @@ from continuum.agent.types import Route, RunContext
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.llm.config import LLMConfig
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
 from continuum.system_one import (
     ChoiceQuestion,
@@ -34,6 +35,11 @@ if TYPE_CHECKING:
     from continuum.llm import LLMClient
 
 logger = get_logger(__name__)
+
+
+def _names(text: str, name: str) -> bool:
+    """``name`` appears in ``text`` whole: not as part of a longer word or name."""
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text) is not None
 
 
 @dataclass
@@ -496,14 +502,22 @@ Agent name:"""
                 logger.warning("LLM routing got an empty reply; selecting no route")
                 return None
 
-            # Find matching agent
-            for route in self.routes:
-                if route.agent_name.lower() in result or result in route.agent_name.lower():
-                    return route.agent_name
-
-            if "none" in result:
+            # A route is selected only by exactly one whole route name. A
+            # fragment, several names, or "none" plus a name is no route.
+            named = [r.agent_name for r in self.routes if _names(result, r.agent_name.lower())]
+            # "billing agent" also contains the route "billing"; that is one name.
+            named = [
+                n for n in named if not any(o != n and _names(o.lower(), n.lower()) for o in named)
+            ]
+            said_none = _names(result, "none")
+            if len(named) == 1 and not said_none:
+                return named[0]
+            if not named and said_none:
                 return None
-
+            logger.warning(
+                "LLM routing reply names no single route (%s); selecting no route",
+                log_content(result),
+            )
             return None
 
         except Exception as e:
