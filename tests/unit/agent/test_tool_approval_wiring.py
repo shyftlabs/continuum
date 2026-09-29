@@ -127,7 +127,11 @@ class TestTheRunTaintReachesTheApprovalRequest:
         from continuum.agent.services.tool_service import ToolService
 
         captured = await _run_tool_service(ToolService, streaming=False, labels={"untrusted"})
-        assert captured.get("data_labels") == {"untrusted"}
+        # The fake agent executor returns no result, so ToolService then falls
+        # back to the global executor as well: the FIRST call is the agent's site.
+        first = captured["_calls"][0]
+        assert first["policy_store"] is None
+        assert first["data_labels"] == {"untrusted"}
 
     async def test_the_global_executor_site_passes_labels_without_a_policy_store(self):
         from continuum.agent.services.tool_service import ToolService
@@ -135,7 +139,8 @@ class TestTheRunTaintReachesTheApprovalRequest:
         captured = await _run_tool_service(
             ToolService, streaming=False, labels={"untrusted"}, agent_executor=False
         )
-        assert captured.get("data_labels") == {"untrusted"}
+        assert len(captured["_calls"]) == 1, "only the global executor should run"
+        assert captured["_calls"][0]["data_labels"] == {"untrusted"}
 
     async def test_the_policy_subject_still_needs_a_policy_store(self):
         """Only the labels change. With no store there is no policy check, so
@@ -206,12 +211,16 @@ async def _run_tool_service(
 ):
     """Drive ToolService far enough to capture what reaches execute_tool_calls.
 
-    ``agent_executor=False`` takes the second call site: the agent has no
-    executor of its own, so ToolService falls back to the global one.
+    ``captured`` holds the LAST call's kwargs (what the older tests read) and
+    ``captured["_calls"]`` every call in order. The fake returns no results, so
+    with an agent executor BOTH sites run -- the agent's, then the global
+    fallback -- and a test about the first site must read ``_calls[0]``.
+    ``agent_executor=False`` takes only the second site.
     """
-    captured: dict = {}
+    captured: dict = {"_calls": []}
 
     async def fake_execute(**kwargs):
+        captured["_calls"].append(dict(kwargs))
         captured.update(kwargs)
         return []
 
