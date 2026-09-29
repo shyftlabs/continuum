@@ -128,6 +128,9 @@ class TestCritiqueVerdictFormats:
         )
         runner = MagicMock()
         runner.run = AsyncMock(side_effect=[AgentResponse(content=f"draft {i}") for i in (1, 2, 3)])
+        runner.ensure_recorder = MagicMock(return_value=False)
+        runner.save_turn = AsyncMock()
+        runner.persist_decision_trace = AsyncMock()
         result = await ReflectionAgent(name="r", agent=worker).execute(
             "Summarise.", runner, RunContext(run_id="r"), llm_client=_llm("**PASS**")
         )

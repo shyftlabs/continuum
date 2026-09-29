@@ -25,6 +25,7 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +46,13 @@ if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
 
 logger = get_logger(__name__)
+
+# "SCORE: 0.8" as models actually write it: any case, markdown emphasis or a
+# bullet around the name, ":" or "=", words after the number ("0.9 (good)").
+# The field must be the word "score" -- "Scoreboard: 3" is not a score.
+_FIELD = r"^[\s>*_#`\-]*{name}[\s*_`]*[:=][\s*_`]*"
+_SCORE_FIELD = re.compile(_FIELD.format(name="score") + r"(\d*\.?\d+)", re.IGNORECASE)
+_FEEDBACK_FIELD = re.compile(_FIELD.format(name="feedback") + r"(.+)$", re.IGNORECASE)
 
 
 # =============================================================================
@@ -537,13 +545,10 @@ class SupervisedSequentialAgent(BaseAgent):
             feedback = "No feedback provided"
 
             for line in content.splitlines():
-                if line.startswith("SCORE:"):
-                    try:
-                        score = max(0.0, min(1.0, float(line.split(":", 1)[1].strip())))
-                    except ValueError:
-                        pass
-                elif line.startswith("FEEDBACK:"):
-                    feedback = line.split(":", 1)[1].strip()
+                if score is None and (m := _SCORE_FIELD.match(line)):
+                    score = max(0.0, min(1.0, float(m.group(1))))
+                elif m := _FEEDBACK_FIELD.match(line):
+                    feedback = m.group(1).strip()
 
             if score is None:
                 return None, "the supervisor reply had no readable SCORE", usage

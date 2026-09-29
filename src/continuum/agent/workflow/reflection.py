@@ -7,6 +7,7 @@ up to ``max_reflections`` times if the critique says "NEEDS IMPROVEMENT".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,22 @@ if TYPE_CHECKING:
     from continuum.agent.types import RunContext
 
 logger = get_logger(__name__)
+
+# Leading markdown/quote/bullet noise before the verdict word: "**PASS**", "> PASS".
+_LEADING_NOISE = re.compile(r"^[\s>*_#`\-]+")
+_PASS_WORD = re.compile(r"PASS(?:ED)?\b", re.IGNORECASE)
+
+
+def is_pass_verdict(verdict: str) -> bool:
+    """Does a critique reply say PASS, however the model formatted it?
+
+    The reply must open with the word PASS (or PASSED), in any case and after any
+    markdown emphasis, quote marker or bullet: "PASS", "Pass.", "**PASS**",
+    "PASS - all points covered". Anything else -- "NEEDS IMPROVEMENT: ...",
+    "Passable, but ...", free text -- is not a pass, so it is treated as
+    needing improvement, as before.
+    """
+    return bool(_PASS_WORD.match(_LEADING_NOISE.sub("", verdict)))
 
 
 @dataclass
@@ -212,7 +229,7 @@ class ReflectionAgent(BaseAgent):
                 )
                 break
 
-            if critique["verdict"].startswith("PASS"):
+            if is_pass_verdict(critique["verdict"]):
                 logger.info(
                     "ReflectionAgent '%s': critique passed on attempt %s", self.name, attempt + 1
                 )
@@ -367,7 +384,7 @@ class ReflectionAgent(BaseAgent):
                 "===== CRITIQUE VERDICT [%s] =====\noutcome=%s reason=%s\n"
                 "=========================",
                 self.name,
-                "PASS" if verdict.startswith("PASS") else "NEEDS IMPROVEMENT",
+                "PASS" if is_pass_verdict(verdict) else "NEEDS IMPROVEMENT",
                 log_content(verdict),
             )
             return {"verdict": verdict, "usage": usage}
