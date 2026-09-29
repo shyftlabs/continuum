@@ -215,6 +215,11 @@ class ReflectionConfig:
     # temperature (which may itself be None to omit the parameter); a float
     # overrides it for the critique call only.
     reflection_temperature: float | None = None
+    # max_tokens for the critique call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS). It used to be a hard-coded 256, and on reasoning
+    # models (e.g. Gemini 2.5) hidden reasoning counts against it: measured live,
+    # the visible verdict was cut short, rejecting a correct answer.
+    reflection_max_tokens: int | None = None
 
 
 # =============================================================================

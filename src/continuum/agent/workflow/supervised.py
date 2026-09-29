@@ -39,6 +39,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.config import settings
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
 
@@ -46,6 +47,12 @@ if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
 
 logger = get_logger(__name__)
+
+
+def _max_tokens(configured: int | None) -> int:
+    """The configured cap, else the normal LLM default (DEFAULT_LLM_MAX_TOKENS)."""
+    return settings.default_llm_max_tokens if configured is None else configured
+
 
 # "SCORE: 0.8" as models actually write it: any case, markdown emphasis or a
 # bullet around the name, ":" or "=", words after the number ("0.9 (good)").
@@ -69,6 +76,11 @@ class SupervisedConfig:
     supervisor_model: str | None = None  # Model for quality scoring (default: agent model)
     # Temperature for the supervisor scoring call (None omits it)
     supervisor_temperature: float | None = 0.1
+    # max_tokens for the supervisor scoring call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS). It used to be a hard-coded 200; on reasoning models
+    # hidden reasoning counts against it, and measured live 5/5 calls were cut
+    # before the FEEDBACK line -- a longer trace leaves no SCORE at all.
+    supervisor_max_tokens: int | None = None
     pass_full_history: bool = False  # Pass full history vs just last output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     pipeline_context_max_chars: int | None = 300  # None = no truncation
@@ -79,6 +91,7 @@ class SupervisedConfig:
             "max_retries": self.max_retries,
             "supervisor_model": self.supervisor_model,
             "supervisor_temperature": self.supervisor_temperature,
+            "supervisor_max_tokens": self.supervisor_max_tokens,
             "pass_full_history": self.pass_full_history,
             "fail_strategy": self.fail_strategy.value,
             "pipeline_context_max_chars": self.pipeline_context_max_chars,
@@ -527,7 +540,7 @@ class SupervisedSequentialAgent(BaseAgent):
                 config=LLMConfig(
                     model=model,
                     temperature=self.supervised_config.supervisor_temperature,
-                    max_tokens=200,
+                    max_tokens=_max_tokens(self.supervised_config.supervisor_max_tokens),
                 ),
                 auto_session=False,
             )

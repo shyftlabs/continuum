@@ -213,6 +213,7 @@ class ReflectionAgent(BaseAgent):
             critique = await self._critique(
                 response_content=response.content,
                 llm_client=llm_client,
+                request=original_input,
             )
             total_usage = total_usage.add(critique["usage"])
 
@@ -311,9 +312,17 @@ class ReflectionAgent(BaseAgent):
         self,
         response_content: str,
         llm_client: Any,
+        request: str | None = None,
     ) -> dict[str, Any]:
         """
         Call the LLM to evaluate the inner agent's response.
+
+        ``request`` is what the user originally asked -- the critique prompt asks
+        whether the draft "fully answers the request", so without it the critic
+        is judging blind (measured live: a correct answer rejected 2 times in 6
+        for "the original request was not provided"). It is always the original
+        request, never a retry's refinement input. Without it, the messages are
+        as before.
 
         Returns a dict with ``verdict`` and ``usage`` (TokenUsage). ``verdict`` is
         the critique text, or ``None`` when there is no verdict to act on: the call
@@ -342,6 +351,8 @@ class ReflectionAgent(BaseAgent):
             {"role": "user", "content": response_content},
             {"role": "user", "content": self.reflection_config.critique_prompt},
         ]
+        if request:
+            messages.insert(0, {"role": "user", "content": f"The request:\n{request}"})
 
         # response_content is the model's own answer about the user. The critique
         # prompt is operator-written, like agent.instructions, and gets the same
@@ -359,7 +370,15 @@ class ReflectionAgent(BaseAgent):
         try:
             llm_response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=temperature, max_tokens=256),
+                config=LLMConfig(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.reflection_config.reflection_max_tokens is None
+                        else self.reflection_config.reflection_max_tokens
+                    ),
+                ),
                 auto_session=False,
             )
 
@@ -405,6 +424,7 @@ class ReflectionAgent(BaseAgent):
                     "critique_prompt": self.reflection_config.critique_prompt,
                     "max_reflections": self.reflection_config.max_reflections,
                     "reflection_model": self.reflection_config.reflection_model,
+                    "reflection_max_tokens": self.reflection_config.reflection_max_tokens,
                 },
                 "workflow_type": "reflection",
             }
