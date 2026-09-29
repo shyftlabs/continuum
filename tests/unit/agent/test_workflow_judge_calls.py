@@ -383,3 +383,79 @@ class TestAnEmptyRoutingReplyIsNotARoute:
     )
     async def test_real_answers_still_route(self, reply, route):
         assert await _router()._llm_route("x", _recording_llm(reply)) == route
+
+
+# ---------------------------------------------------------------------------
+# 6. a route is selected only by its whole name
+# ---------------------------------------------------------------------------
+# _llm_route matched `name in reply or reply in name`: a fragment ("agent"), a
+# truncated name ("technical"), or a reply naming several routes selected
+# whichever matching route was listed first; "none of these ... billing-agent"
+# selected billing-agent; and with routes "billing" and "billing-agent", the
+# reply "billing-agent" selected "billing". Real replies (gemini-2.5-flash and
+# gpt-4o-mini, 2026-09-29, 16/16) are the bare route name or "none", so
+# requiring exactly one whole route name costs nothing on normal answers.
+
+
+class TestARouteIsSelectedOnlyByItsWholeName:
+    @pytest.mark.parametrize(
+        ("reply", "route"),
+        [
+            ("Billing-Agent", "billing-agent"),
+            ("**technical-agent**", "technical-agent"),
+            ("`technical-agent`.", "technical-agent"),
+            ('"technical-agent"', "technical-agent"),
+            ("Agent name: technical-agent", "technical-agent"),
+            ("technical-agent - handles crashes and errors", "technical-agent"),
+        ],
+    )
+    async def test_formatting_around_one_whole_name_is_tolerated(self, reply, route):
+        assert await _router()._llm_route("x", _recording_llm(reply)) == route
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "agent",
+            "technical",
+            "billing",
+            "technical-agents",
+            "billing-agent or technical-agent",
+            "None of these fit, maybe billing-agent",
+            "I cannot decide.",
+        ],
+    )
+    async def test_anything_else_selects_no_route(self, reply):
+        assert await _router()._llm_route("x", _recording_llm(reply)) is None
+
+    @pytest.mark.parametrize("reply", ["technical", "billing-agent or technical-agent"])
+    async def test_an_unmatched_reply_is_logged(self, reply):
+        from tests.unit.agent.test_workflow_check_failures import _Logs
+
+        with _Logs("continuum.agent.workflow.router") as logs:
+            await _router()._llm_route("x", _recording_llm(reply))
+        assert logs.messages(logging.WARNING)
+
+    @pytest.mark.parametrize("reply", ["none", "None.", "None of these fit."])
+    async def test_a_plain_none_is_no_route_without_a_warning(self, reply):
+        from tests.unit.agent.test_workflow_check_failures import _Logs
+
+        with _Logs("continuum.agent.workflow.router") as logs:
+            assert await _router()._llm_route("x", _recording_llm(reply)) is None
+        assert not logs.messages(logging.WARNING)
+
+    @pytest.mark.parametrize(
+        ("reply", "route"), [("billing-agent", "billing-agent"), ("billing", "billing")]
+    )
+    async def test_a_name_inside_a_longer_name_is_not_a_match(self, reply, route):
+        from continuum.agent.types import Route
+        from continuum.agent.workflow.router import RouterAgent
+
+        router = RouterAgent(
+            name="r",
+            instructions="route",
+            routes=[
+                Route(agent_name="billing", description="Billing"),
+                Route(agent_name="billing-agent", description="Billing escalations"),
+            ],
+        )
+        assert await router._llm_route("x", _recording_llm(reply)) == route
