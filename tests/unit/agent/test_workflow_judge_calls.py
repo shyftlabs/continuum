@@ -477,3 +477,80 @@ class TestARouteIsSelectedOnlyByItsWholeName:
             ],
         )
         assert await router._llm_route("x", _recording_llm(reply)) == route
+
+
+# ---------------------------------------------------------------------------
+# 7. the loop reads its verdict from the reply's opening word
+# ---------------------------------------------------------------------------
+# _llm_termination_check stopped on `"COMPLETE" in reply`, and "INCOMPLETE" and
+# "NOT COMPLETE" contain it. Live (gpt-4o-mini, 2026-09-29) with a user-written
+# decision_prompt "Grade the output as COMPLETE or INCOMPLETE ...", an output
+# listing 2 of 5 requested items got "INCOMPLETE" 3/3 -- and the loop stopped.
+# Now the reply must open with the word COMPLETE (after markdown, a bullet or a
+# quote marker), as the critic's PASS is read; anything else continues.
+
+
+class TestTheLoopVerdictIsReadFromTheOpeningWord:
+    async def _stops(self, reply):
+        return await _loop()._llm_termination_check(
+            AgentResponse(content="x"), [{"iteration": 1, "output": "x"}], _recording_llm(reply)
+        )
+
+    @pytest.mark.parametrize(
+        "reply",
+        ["COMPLETE", "Complete.", "complete", "**COMPLETE**", "> COMPLETE", "COMPLETE - all five"],
+    )
+    async def test_these_stop(self, reply):
+        assert await self._stops(reply) is True
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "INCOMPLETE",
+            "Incomplete: 2 of 5 items",
+            "NOT COMPLETE",
+            "**Not complete**",
+            "CONTINUE",
+            "The task is not complete.",
+            "COMPLETED? No.",
+            "",
+        ],
+    )
+    async def test_these_continue(self, reply):
+        assert await self._stops(reply) is False
+
+    async def test_an_incomplete_verdict_keeps_the_loop_running(self):
+        runner = _runner("a", "b", "c")
+        await _loop(max_iterations=3).execute(
+            "List five fruits.",
+            runner,
+            RunContext(run_id="r"),
+            llm_client=_recording_llm("INCOMPLETE"),
+        )
+        assert runner.run.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# 8. generate_critique_prompt is not starved of tokens
+# ---------------------------------------------------------------------------
+# Capped at max_tokens=300. Live (gemini-2.5-flash, 2026-09-29) 3/3 replies were
+# cut at 42-46 characters -- a stub with no PASS / NEEDS IMPROVEMENT
+# instructions, returned as the critique prompt. Now the cap is a parameter
+# defaulting to the normal LLM default (DEFAULT_LLM_MAX_TOKENS).
+
+
+class TestGenerateCritiquePromptIsNotStarvedOfTokens:
+    async def _max_tokens(self, **kwargs):
+        from continuum.agent.workflow.reflection import generate_critique_prompt
+
+        llm = _recording_llm("Reply ONLY 'PASS' if ...")
+        await generate_critique_prompt("Compare A and B.", llm, **kwargs)
+        return llm.chat.await_args.kwargs["config"].max_tokens
+
+    async def test_by_default_it_uses_the_normal_llm_default(self):
+        from continuum.config import settings
+
+        assert await self._max_tokens() == settings.default_llm_max_tokens
+
+    async def test_a_cap_can_still_be_set(self):
+        assert await self._max_tokens(max_tokens=800) == 800
