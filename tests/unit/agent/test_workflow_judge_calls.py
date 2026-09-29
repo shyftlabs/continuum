@@ -459,3 +459,21 @@ class TestARouteIsSelectedOnlyByItsWholeName:
             ],
         )
         assert await router._llm_route("x", _recording_llm(reply)) == route
+
+    @pytest.mark.parametrize(
+        ("reply", "route"), [("billing agent", "billing agent"), ("billing", "billing")]
+    )
+    async def test_a_spaced_name_containing_another_route_is_one_match(self, reply, route):
+        """'billing agent' contains the whole word 'billing', but names one route."""
+        from continuum.agent.types import Route
+        from continuum.agent.workflow.router import RouterAgent
+
+        router = RouterAgent(
+            name="r",
+            instructions="route",
+            routes=[
+                Route(agent_name="billing", description="Billing"),
+                Route(agent_name="billing agent", description="Billing escalations"),
+            ],
+        )
+        assert await router._llm_route("x", _recording_llm(reply)) == route
