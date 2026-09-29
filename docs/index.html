@@ -1802,7 +1802,7 @@ parallel = <span class="fn">create_parallel_agent</span>(
   <h4>Loop Workflow</h4>
   <p>Iterates an agent until a termination condition is satisfied.</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">LoopAgent</span>
-<span class="kw">from</span> continuum.agent.config <span class="kw">import</span> <span class="cls">TerminationConfig</span>, <span class="cls">TerminationType</span>
+<span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">TerminationConfig</span>, <span class="cls">TerminationType</span>
 
 loop = <span class="cls">LoopAgent</span>(
     name=<span class="str">"refinement-loop"</span>,
@@ -1811,17 +1811,21 @@ loop = <span class="cls">LoopAgent</span>(
     termination=<span class="cls">TerminationConfig</span>(
         type=<span class="cls">TerminationType</span>.LLM_DECISION,  <span class="cm"># LLM decides when done</span>
         max_iterations=<span class="num">5</span>,
+        decision_max_tokens=<span class="cls">None</span>,         <span class="cm"># None = DEFAULT_LLM_MAX_TOKENS</span>
     ),
 )</pre></div>
 
   <table>
     <tr><th>TerminationType</th><th>When it stops</th></tr>
-    <tr><td><code>LLM_DECISION</code></td><td>The inner agent's LLM signals completion</td></tr>
+    <tr><td><code>LLM_DECISION</code></td><td>A separate LLM check, shown the task and the recent outputs, replies <code>COMPLETE</code>. The reply must open with that word, so <code>INCOMPLETE</code> or <code>NOT COMPLETE</code> runs another iteration.</td></tr>
     <tr><td><code>TOOL_CALL</code></td><td>A specific tool name is called</td></tr>
     <tr><td><code>OUTPUT_MATCH</code></td><td>Output matches a regex pattern</td></tr>
-    <tr><td><code>MAX_ITERATIONS</code></td><td>Always run exactly N times</td></tr>
     <tr><td><code>CUSTOM</code></td><td>User-supplied callable returns <code>True</code></td></tr>
   </table>
+
+  <div class="callout callout-info">
+    <strong>Judging calls and <code>max_tokens</code>:</strong> every judging call in these workflows (loop check, critique, supervisor score, LLM route) defaults to <code>DEFAULT_LLM_MAX_TOKENS</code>. On a reasoning model the hidden reasoning is counted against <code>max_tokens</code>, and a small cap returns an empty or cut reply. Measured on <code>gemini-2.5-flash</code>, a cap of 20 left the loop check empty every time. If you set a cap, leave room for the reasoning.
+  </div>
 
   <p>Factory shorthand with <code>OUTPUT_MATCH</code>:</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> create_loop_agent
@@ -1847,14 +1851,17 @@ reflective = <span class="cls">ReflectionAgent</span>(
     agent=writer_agent,
     reflection_config=<span class="cls">ReflectionConfig</span>(
         max_reflections=<span class="num">3</span>,
-        critique_prompt=<span class="str">"Is this response accurate and complete? Reply APPROVED or NEEDS IMPROVEMENT."</span>,
+        critique_prompt=<span class="str">"Is this response accurate and complete? Reply PASS, or NEEDS IMPROVEMENT: &lt;what is missing&gt;."</span>,
+        reflection_max_tokens=<span class="cls">None</span>,       <span class="cm"># None = DEFAULT_LLM_MAX_TOKENS</span>
     ),
 )</pre></div>
+
+  <p>The critic is sent the original request, then the draft, then the critique prompt. A reply that opens with <code>PASS</code> passes; anything else is treated as <code>NEEDS IMPROVEMENT</code> and retried with the feedback. If the critique call fails or comes back empty, the draft is returned unverified, with a <code>WARNING</code>, and not retried. <code>generate_critique_prompt(user_query, llm_client, model=None, temperature=None, max_tokens=None)</code> writes a query-specific critique prompt for you.</p>
 
   <a class="anchor" id="build-router"></a>
   <h4>Router Workflow</h4>
   <p>Routes requests to specialist agents based on content. Three strategies: LLM, rule-based, or hybrid.</p>
-<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent.workflow <span class="kw">import</span> <span class="cls">RouterAgent</span>, <span class="cls">Route</span>
+<div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">RouterAgent</span>, <span class="cls">RouterConfig</span>, <span class="cls">Route</span>
 
 router = <span class="cls">RouterAgent</span>(
     name=<span class="str">"triage"</span>,
@@ -1865,7 +1872,13 @@ router = <span class="cls">RouterAgent</span>(
         <span class="cls">Route</span>(agent_name=<span class="str">"sales-agent"</span>,   description=<span class="str">"Pricing and upgrades"</span>),
     ],
     fallback_agent_name=<span class="str">"general-agent"</span>,
+    router_config=<span class="cls">RouterConfig</span>(
+        routing_strategy=<span class="str">"hybrid"</span>,
+        routing_max_tokens=<span class="cls">None</span>,          <span class="cm"># None = DEFAULT_LLM_MAX_TOKENS</span>
+    ),
 )</pre></div>
+
+  <p>With <code>"llm"</code> or <code>"hybrid"</code>, the LLM's reply selects a route only when it names exactly one route by its whole name. Markdown, quotes and a short explanation around the name are fine. A plain <code>none</code> selects no route. An empty reply, a fragment such as <code>tech</code>, or a reply naming several routes also selects no route, and logs a <code>WARNING</code>. With no route, the request goes to <code>fallback_agent_name</code>.</p>
 
   <p>Or use the factory with tuple-based routes (recommended — the old <code>Route(target=...)</code> API is removed):</p>
 <div class="code-wrapper"><button class="copy-btn" onclick="copyCode(this)">copy</button><pre><span class="kw">from</span> continuum.agent <span class="kw">import</span> <span class="cls">BaseAgent</span>, <span class="cls">AgentRunner</span>, create_router_agent
@@ -1926,6 +1939,8 @@ planner = <span class="cls">PlannerAgent</span>(
       <div class="wf-desc">Dependency-aware parallel execution. Steps with dependencies wait; independent steps run together.</div>
     </div>
   </div>
+
+  <p>If the <code>SupervisedSequential</code> supervisor can't score a step (the call fails, there's no LLM client, or the reply has no readable <code>SCORE</code>), the output is kept and not retried. It's logged as unscored at <code>WARNING</code>, and the step span records <code>scored: False</code>. <code>Score: 0.8</code>, <code>**SCORE:** 0.8</code> and similar formats are all read. The scoring call's cap is <code>SupervisedConfig(supervisor_max_tokens=None)</code>, where <code>None</code> means <code>DEFAULT_LLM_MAX_TOKENS</code>.</p>
 
   <a class="anchor" id="build-handoffs"></a>
   <h3>Handoffs</h3>
@@ -2161,6 +2176,7 @@ agent = <span class="cls">BaseAgent</span>(
     config=<span class="cls">AgentConfig</span>(
         context_management=<span class="cls">ContextManagementConfig</span>(
             compression_strategy=<span class="cls">CompressionStrategy</span>.SMART,  <span class="cm"># SMART / SUMMARIZE_OLD / TRUNCATE_OLDEST</span>
+            summarization_max_tokens=<span class="cls">None</span>,                <span class="cm"># None = DEFAULT_LLM_MAX_TOKENS</span>
         )
     ),
 )</pre></div>
@@ -3104,6 +3120,9 @@ memory = <span class="cls">IntelligentMemoryClient</span>(
         enable_scoring=<span class="cls">True</span>,       <span class="cm"># LLM scores each memory at store time</span>
         enable_decay=<span class="cls">True</span>,         <span class="cm"># recent memories get a relevance boost</span>
         prune_threshold=<span class="num">0.15</span>,      <span class="cm"># delete memories below this score</span>
+        importance_max_tokens=<span class="cls">None</span>,   <span class="cm"># max_tokens per LLM call; None = DEFAULT_LLM_MAX_TOKENS</span>
+        entity_max_tokens=<span class="cls">None</span>,
+        profile_max_tokens=<span class="cls">None</span>,
     )
 )
 
@@ -3114,6 +3133,10 @@ memory = <span class="cls">IntelligentMemoryClient</span>(
 )
 
 results = <span class="kw">await</span> memory.search(<span class="str">"user preferences"</span>, user_id=<span class="str">"user-123"</span>)</pre></div>
+
+  <div class="callout callout-tip">
+    <strong>Importance is stored only when it's real:</strong> the score is kept only when the LLM names exactly one label (<code>trivial</code>, <code>low</code>, <code>medium</code>, <code>high</code> or <code>critical</code>). If the call fails, or the reply names no label or several, the memory is stored without <code>importance</code> and a <code>WARNING</code> is logged. Search re-ranking and <code>prune()</code> treat a missing score as 0.5. On a reasoning model the hidden reasoning is counted against the three <code>*_max_tokens</code> caps, so a small one returns an empty or cut reply. Measured on <code>gemini-2.5-flash</code>, a cap of 1000 kept 1 of 29 entities.
+  </div>
 
   <div class="callout callout-tip">
     <strong><code>add()</code> accepts three forms:</strong> a plain string, a list of strings, or a list of <code>{"role", "content"}</code> message dicts. The messages-style form is recommended because it gives mem0 more context for fact extraction.

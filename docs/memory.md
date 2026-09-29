@@ -301,7 +301,7 @@ IntelligenceConfig(
     semantic_weight=0.6,
     importance_weight=0.3,
     decay_weight=0.1,
-    intelligence_model=None,         # defaults to MemoryConfig.memory_llm_model
+    intelligence_model=None,         # defaults to DEFAULT_LLM_MODEL
     prune_threshold=0.15,
     importance_max_tokens=None,      # max_tokens per LLM call; None = DEFAULT_LLM_MAX_TOKENS
     entity_max_tokens=None,
