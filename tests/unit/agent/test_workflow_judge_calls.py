@@ -22,7 +22,10 @@ Two defects, both measured live on gemini/gemini-2.5-flash (2026-09-29):
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from continuum.agent.types import AgentResponse, RunContext
 
@@ -240,3 +243,143 @@ class TestTheLoopCompletionCheckIsNotStarvedOfTokens:
         from continuum.agent.types import TerminationConfig
 
         assert TerminationConfig().decision_max_tokens is None
+
+
+# ---------------------------------------------------------------------------
+# 4. the loop's completion check sees the task
+# ---------------------------------------------------------------------------
+# Once the cap was fixed, the check answered -- but judged "Paris is the capital
+# of France." CONTINUE 5 times in 10 (gemini-2.5-flash, 2026-09-29): its prompt
+# carried the recent outputs and never the task, so "is the task complete?" had
+# nothing to be complete against. The same defect the critic had (section 2).
+
+
+def _loop(**termination):
+    from continuum.agent.types import TerminationConfig
+    from continuum.agent.workflow.loop import LoopAgent
+
+    return LoopAgent(name="l", agent=_agent(), termination=TerminationConfig(**termination))
+
+
+def _prompt(llm, call=-1):
+    return llm.chat.await_args_list[call].kwargs["messages"][0]["content"]
+
+
+class TestTheLoopCompletionCheckSeesTheTask:
+    async def test_execute_sends_the_original_task(self):
+        llm = _recording_llm("COMPLETE")
+        await _loop().execute(
+            "What is the capital of France?",
+            _runner("Paris is the capital of France."),
+            RunContext(run_id="r"),
+            llm_client=llm,
+        )
+        prompt = _prompt(llm)
+        assert "What is the capital of France?" in prompt
+        assert prompt.index("What is the capital of France?") < prompt.index("Current output")
+
+    async def test_a_later_iteration_still_judges_against_the_original_task(self):
+        """Iteration 2's input is the refinement prompt; the check must be shown
+        what the user asked, not that."""
+        llm = MagicMock()
+        llm.chat = AsyncMock(
+            side_effect=[
+                MagicMock(content="CONTINUE", usage=None),
+                MagicMock(content="COMPLETE", usage=None),
+            ]
+        )
+        await _loop().execute(
+            "What is the capital of France?",
+            _runner("Paris.", "Paris is the capital of France."),
+            RunContext(run_id="r"),
+            llm_client=llm,
+        )
+        task_block = _prompt(llm, 1).split("Recent iterations")[0]
+        assert "What is the capital of France?" in task_block
+        assert "Previous output" not in task_block
+
+    @pytest.mark.parametrize("path", ["kill_switch", "backend_error"])
+    async def test_the_system_one_fallbacks_send_the_task_too(self, path):
+        from continuum.agent.types import TerminationType
+        from continuum.system_one import SystemOneError
+
+        loop = _loop(type=TerminationType.SYSTEM_ONE_CLASSIFIER)
+        llm = _recording_llm("COMPLETE")
+        with (
+            patch(
+                "continuum.agent.workflow.loop.system_one_disabled",
+                return_value=path == "kill_switch",
+            ),
+            patch.object(
+                type(loop),
+                "_system_one_termination_check",
+                AsyncMock(side_effect=SystemOneError("backend down")),
+            ),
+        ):
+            done = await loop._check_termination(
+                response=AgentResponse(content="Paris."),
+                iteration=1,
+                history=[{"iteration": 1, "output": "Paris."}],
+                llm_client=llm,
+                original_input="What is the capital of France?",
+            )
+        assert done is True
+        assert "What is the capital of France?" in _prompt(llm)
+
+    async def test_without_a_task_the_prompt_is_unchanged(self):
+        llm = _recording_llm("COMPLETE")
+        await _loop()._llm_termination_check(
+            AgentResponse(content="Paris."), [{"iteration": 1, "output": "Paris."}], llm
+        )
+        prompt = _prompt(llm)
+        assert "Original task" not in prompt
+        assert prompt.startswith(
+            "Is the task complete? Respond with 'COMPLETE' if done, or 'CONTINUE'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 5. an empty routing reply is not a route
+# ---------------------------------------------------------------------------
+# _llm_route matched with `result in route.agent_name.lower()`; for an empty
+# reply ("" is a substring of every string) that is true for the first route, so
+# a blank or truncated reply silently dispatched to whichever agent was listed
+# first instead of falling back.
+
+
+def _router():
+    from continuum.agent.types import Route
+    from continuum.agent.workflow.router import RouterAgent
+
+    return RouterAgent(
+        name="r",
+        instructions="route",
+        routes=[
+            Route(agent_name="billing-agent", description="Billing"),
+            Route(agent_name="technical-agent", description="Technical issues"),
+        ],
+    )
+
+
+class TestAnEmptyRoutingReplyIsNotARoute:
+    @pytest.mark.parametrize("reply", ["", "   \n", None], ids=["empty", "whitespace", "none"])
+    async def test_it_selects_no_route(self, reply):
+        assert await _router()._llm_route("my app crashes", _recording_llm(reply)) is None
+
+    async def test_it_is_logged(self):
+        from tests.unit.agent.test_workflow_check_failures import _Logs
+
+        with _Logs("continuum.agent.workflow.router") as logs:
+            await _router()._llm_route("my app crashes", _recording_llm(""))
+        assert any("empty" in m for m in logs.messages(logging.WARNING))
+
+    @pytest.mark.parametrize(
+        ("reply", "route"),
+        [
+            ("technical-agent", "technical-agent"),
+            ("billing-agent", "billing-agent"),
+            ("none", None),
+        ],
+    )
+    async def test_real_answers_still_route(self, reply, route):
+        assert await _router()._llm_route("x", _recording_llm(reply)) == route
