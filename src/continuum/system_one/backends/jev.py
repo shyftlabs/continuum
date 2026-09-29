@@ -41,7 +41,8 @@ from continuum.system_one.types import (
 
 logger = get_logger(__name__)
 
-_RETRYABLE = frozenset({408, 429, 500, 502, 503, 504, 529})
+# 524: an upstream timeout reported by OpenRouter's edge.
+_RETRYABLE = frozenset({408, 429, 500, 502, 503, 504, 524, 529})
 
 
 def _user_agent() -> str:
@@ -64,40 +65,54 @@ class JevClassifier:
     # Delay before the single retry when the server gives no Retry-After.
     retry_backoff_s = 0.25
 
+    # Where and how this backend is reached; the OpenRouter subclass overrides these.
+    _default_model = "jev-latest"
+    _key_setting = "typesafe_api_key"
+    _key_env = "TYPESAFE_API_KEY"
+    _base_url_setting = "typesafe_base_url"
+    _path = "/v1/systemone"
+    _vendor = "Jev"
+
     def __init__(
         self,
-        model: str = "jev-latest",
+        model: str | None = None,
         *,
         api_key: str | None = None,
         base_url: str | None = None,
         timeout: float | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        key = api_key or settings.typesafe_api_key
+        # Each backend reads only its own key: a TypeSafe key sent to OpenRouter,
+        # or the reverse, would hand one vendor's credential to the other.
+        key = api_key or getattr(settings, self._key_setting, None)
         if not key or not key.strip():
             raise SystemOneNotConfiguredError(
-                "The Jev backend needs a TypeSafe API key: set TYPESAFE_API_KEY or pass api_key.",
-                config_key="typesafe_api_key",
+                f"The {self.name} backend needs an API key: set {self._key_env} or pass api_key.",
+                config_key=self._key_setting,
             )
-        self.model = model
+        self.model = model or self._default_model
         self._api_key = key.strip()
-        self._endpoint = f"{(base_url or settings.typesafe_base_url).rstrip('/')}/v1/systemone"
+        base = base_url or getattr(settings, self._base_url_setting)
+        self._endpoint = f"{base.rstrip('/')}{self._path}"
         self._timeout = float(timeout or settings.system_one_timeout_seconds)
         # Injected clients are used as-is (tests, custom transports); the
         # default one is long-lived so connections are pooled.
         self._client = client or httpx.AsyncClient(timeout=self._timeout)
 
     def __repr__(self) -> str:
-        return f"JevClassifier(model={self.model!r}, endpoint={self._endpoint!r})"
+        return f"{type(self).__name__}(model={self.model!r}, endpoint={self._endpoint!r})"
 
     async def classify(self, state: Any, questions: dict[str, Question]) -> SystemOneRawResult:
         payload = {
             "model": self.model,
             "state": state,
-            "questions": {qid: to_wire(qid, q, vendor="Jev") for qid, q in questions.items()},
+            "questions": {qid: self._wire(qid, q) for qid, q in questions.items()},
         }
         body = await self._post(payload)
-        return parse_answers(body, questions, self.model, vendor="Jev")
+        return parse_answers(body, questions, self.model, vendor=self._vendor)
+
+    def _wire(self, qid: str, question: Question) -> dict[str, Any]:
+        return to_wire(qid, question, vendor=self._vendor)
 
     async def _post(self, payload: dict[str, Any]) -> Any:
         deadline = time.monotonic() + self._timeout
@@ -140,8 +155,9 @@ class JevClassifier:
                     await asyncio.sleep(delay)
                     continue
             raise SystemOneBackendError(
-                f"Jev returned HTTP {response.status_code}"
+                f"{self._vendor} returned HTTP {response.status_code}"
                 + _request_id(response)
+                + _status_hint(response.status_code)
                 + ".",  # the body is deliberately never included
                 backend=self.name,
                 status=response.status_code,
@@ -152,6 +168,51 @@ class JevClassifier:
     @staticmethod
     def _can_wait(delay: float, deadline: float) -> bool:
         return delay + 0.1 < deadline - time.monotonic()
+
+
+class JevOpenRouterClassifier(JevClassifier):
+    """Jev through OpenRouter's Decisions API: ``openrouter:typesafe/jev-1.13``.
+
+    OpenRouter serves Jev on an alpha route, ``POST /api/alpha/decisions``, in the
+    same typed-decision format as TypeSafe's ``/v1/systemone``. So everything but
+    the endpoint and key is shared with :class:`JevClassifier`, and an
+    OpenRouter key (``OPENROUTER_API_KEY``) replaces a TypeSafe one.
+
+    Two differences are handled here. The documented schema requires a yes/no
+    question's criteria to carry both ``true`` and ``false``; a question without
+    them gets neutral ones ("Yes." / "No.") that add no meaning. And OpenRouter
+    answers with a dated snapshot (``typesafe/jev-1.13-20260917``), which is
+    reported as the model, along with ``usage.cost``.
+
+    The route is alpha: if OpenRouter moves it, ``OPENROUTER_BASE_URL`` and this
+    class's ``_path`` are what change.
+    """
+
+    name = "openrouter"
+    _default_model = "typesafe/jev-1.13"
+    _key_setting = "openrouter_api_key"
+    _key_env = "OPENROUTER_API_KEY"
+    _base_url_setting = "openrouter_base_url"
+    _path = "/alpha/decisions"
+    _vendor = "OpenRouter"
+
+    def _wire(self, qid: str, question: Question) -> dict[str, Any]:
+        wire = super()._wire(qid, question)
+        if wire["type"] == "noul":
+            given = wire.get("criteria") or {}
+            wire["criteria"] = {
+                "true": "Yes." if given.get("true") is None else given["true"],
+                "false": "No." if given.get("false") is None else given["false"],
+            }
+        return wire
+
+
+def _status_hint(status: int) -> str:
+    """A fixed hint for statuses whose fix is on the caller's side (never the body)."""
+    return {
+        401: " (the API key was not accepted)",
+        402: " (insufficient credits on the account)",
+    }.get(status, "")
 
 
 def _request_id(response: httpx.Response) -> str:

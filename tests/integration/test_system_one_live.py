@@ -8,6 +8,7 @@ API credit.
     SYSTEM_ONE_LIVE_LAYA=1      pytest ... (needs the [laya] extra)
     SYSTEM_ONE_LIVE_LAYA_MLX=1  pytest ... (needs [laya-mlx]: Apple Silicon only)
     TYPESAFE_API_KEY=...        pytest tests/integration/test_system_one_live.py -m integration
+    OPENROUTER_API_KEY=...      pytest ... (Jev through OpenRouter's Decisions API)
 
 Each backend runs the shipped contract suite for real (including its latency
 budget, which is what "System One" is supposed to mean), plus a few judgements
@@ -35,6 +36,9 @@ requires_jev = pytest.mark.skipif(
     not os.getenv("TYPESAFE_API_KEY"), reason="set TYPESAFE_API_KEY to call Jev"
 )
 
+requires_openrouter = pytest.mark.skipif(
+    not os.getenv("OPENROUTER_API_KEY"), reason="set OPENROUTER_API_KEY to call Jev via OpenRouter"
+)
 requires_laya = pytest.mark.skipif(
     os.getenv("SYSTEM_ONE_LIVE_LAYA") != "1",
     reason="set SYSTEM_ONE_LIVE_LAYA=1 (and install [laya]) to run the Laya model",
@@ -163,6 +167,21 @@ class TestJevLive(SystemOneContract):
         from continuum.system_one.backends.jev import JevClassifier
 
         return JevClassifier(model=os.getenv("SYSTEM_ONE_LIVE_JEV_MODEL", "jev-latest"))
+
+    async def test_judgements_whose_answer_is_not_in_doubt(self):
+        await _judgements(self.make_classifier())
+
+
+@requires_openrouter
+class TestJevOpenRouterLive(SystemOneContract):
+    latency_budget_ms = 3000.0  # remote, through OpenRouter's edge
+
+    def make_classifier(self):
+        from continuum.system_one.backends.jev import JevOpenRouterClassifier
+
+        return JevOpenRouterClassifier(
+            model=os.getenv("SYSTEM_ONE_LIVE_OPENROUTER_MODEL", "typesafe/jev-1.13")
+        )
 
     async def test_judgements_whose_answer_is_not_in_doubt(self):
         await _judgements(self.make_classifier())

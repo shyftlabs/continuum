@@ -53,6 +53,7 @@ def _builtin(module: str, cls: str) -> BackendFactory:
 _BUILTIN: dict[str, BackendFactory] = {
     "jev": _builtin("jev", "JevClassifier"),
     "local": _builtin("local_nli", "LocalNLIClassifier"),
+    "openrouter": _builtin("jev", "JevOpenRouterClassifier"),
     "laya": _builtin("laya", "LayaClassifier"),
     "laya-mlx": _builtin("laya", "LayaMLXClassifier"),
 }

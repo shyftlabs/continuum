@@ -215,6 +215,9 @@ class Settings(BaseSettings):
     system_one_timeout_seconds: float = 10.0  # SYSTEM_ONE_TIMEOUT_SECONDS (per backend call)
     typesafe_api_key: str | None = None  # TYPESAFE_API_KEY — Jev backend
     typesafe_base_url: str = "https://api.typesafe.ai"  # TYPESAFE_BASE_URL
+    # Jev through OpenRouter's (alpha) Decisions API: the openrouter:<model> backend.
+    openrouter_api_key: str | None = None  # OPENROUTER_API_KEY
+    openrouter_base_url: str = "https://openrouter.ai/api"  # OPENROUTER_BASE_URL
 
     # -------------------------------------------------------------------------
     # Smart layer (model_tier routing + tier classifiers)
