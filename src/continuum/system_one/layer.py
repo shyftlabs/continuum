@@ -14,10 +14,11 @@ two, this module does the work no backend should have to get right on its own:
    binary question per label. Done once here, flagged ``filled_in``, because a
    derived distribution may be less well calibrated than a native one.
 4. **State.** A text-only backend receives JSON state as JSON text.
-5. **Validation and confidence.** Every distribution is checked (right outcome
-   keys, finite, non-negative, not all zero) and normalised. Confidence is
-   ``1 - normalised entropy``, computed here, so it means the same whichever
-   backend answered; the backend's own confidence is kept as ``raw_confidence``.
+5. **Validation.** Every distribution is checked (right outcome keys, finite,
+   non-negative, not all zero) and normalised. An answer's ``confidence`` is the
+   backend's own, passed through -- None when it reports none, or when the
+   answer was filled in here (the backend's per-question figures do not describe
+   the combined answer). Continuum computes no confidence of its own.
 """
 
 from __future__ import annotations
@@ -218,7 +219,7 @@ def _merge_usage(total: dict[str, Any], part: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Answers: validate, normalise, compute confidence
+# Answers: validate, normalise, pass the backend's confidence through
 # ---------------------------------------------------------------------------
 
 
@@ -236,8 +237,7 @@ def _answer(
         dist = _normalise(qid, _get(qid, distributions), {"true", "false"})
         return BinaryAnswer(
             probability=dist["true"],
-            confidence=_confidence(dist),
-            raw_confidence=raw_conf,
+            confidence=raw_conf,
         )
 
     if isinstance(question, ChoiceQuestion):
@@ -245,8 +245,7 @@ def _answer(
         return ChoiceAnswer(
             label=max(dist, key=lambda label: dist[label]),
             probabilities=dist,
-            confidence=_confidence(dist),
-            raw_confidence=raw_conf,
+            confidence=raw_conf,
             filled_in=filled,
         )
 
@@ -260,8 +259,7 @@ def _answer(
     return ScoreAnswer(
         expected=sum(level * p for level, p in by_level.items()),
         probabilities=by_level,
-        confidence=_confidence(by_level),
-        raw_confidence=raw_conf,
+        confidence=raw_conf,
         filled_in=filled,
     )
 
@@ -312,12 +310,3 @@ def _normalise(qid: str, dist: dict[Any, float], expected: set[Any]) -> dict[Any
     if total <= 0:
         raise SystemOneResponseError(f"The answer for '{qid}' is all zeros.")
     return {k: v / total for k, v in dist.items()}
-
-
-def _confidence(dist: dict[Any, float]) -> float:
-    """1 - normalised Shannon entropy: 0 for an even split, 1 for certainty."""
-    n = len(dist)
-    if n < 2:
-        return 1.0
-    entropy = -sum(p * math.log(p) for p in dist.values() if p > 0)
-    return max(0.0, min(1.0, 1.0 - entropy / math.log(n)))

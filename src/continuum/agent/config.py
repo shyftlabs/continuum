@@ -586,9 +586,9 @@ class RouterConfig:
     system_one_backend: str | None = None
     # "The answer tells you what; confidence tells you whether to act" (TypeSafe):
     # below this floor the top route is not acted on and the request goes to
-    # fallback_agent_name, as for "none". Read from the backend's own confidence
-    # (raw_confidence) -- published thresholds belong to the backend's definition;
-    # a backend that reports none gets no route. None = act on the top route.
+    # fallback_agent_name, as for "none". The answer's confidence is the backend's
+    # own, so the floor belongs to the backend it was set for; a backend that
+    # reports none (the local NLI adapter) gets no route. None = act on the top route.
     system_one_min_confidence: float | None = None
 
     # --- Smart layer (model_tier) -------------------------------------------------

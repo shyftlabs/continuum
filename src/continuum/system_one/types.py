@@ -17,10 +17,13 @@ Two layers of result exist on purpose:
   reports.
 * :class:`SystemOneResponse` is what a seam receives from
   :func:`continuum.system_one.classify`: validated, normalised distributions,
-  a confidence Continuum computed itself, and provenance.
+  the backend's own confidence where it reports one, and provenance.
 
-A backend therefore never has to get normalisation or confidence right, and a
-seam never sees a distribution that was not checked.
+A backend therefore never has to get normalisation right, and a seam never sees a
+distribution that was not checked. Continuum computes no confidence of its own:
+backends are calibrated differently, so a shared formula would not make equal
+numbers mean equal certainty. A seam that gates on confidence uses the backend's,
+with a threshold set for that backend; ``probabilities`` stay for any other measure.
 """
 
 from __future__ import annotations
@@ -128,7 +131,7 @@ class SystemOneRawResult:
     ``distributions`` maps each question ID to its outcomes: ``{"true", "false"}``
     for a binary question, the labels for a choice, the integer levels for a
     score. ``raw_confidence`` is the backend's own confidence where it reports
-    one; it is kept, never trusted as Continuum's.
+    one; it becomes the answer's ``confidence``.
     """
 
     distributions: dict[str, dict[Any, float]]
@@ -140,8 +143,7 @@ class SystemOneRawResult:
 @dataclass(frozen=True)
 class BinaryAnswer:
     probability: float
-    confidence: float
-    raw_confidence: float | None = None
+    confidence: float | None = None  # the backend's own; None if it reports none
     filled_in: bool = False
 
     kind: ClassVar[QuestionKind] = "binary"
@@ -155,8 +157,7 @@ class BinaryAnswer:
 class ChoiceAnswer:
     label: str
     probabilities: dict[str, float]
-    confidence: float
-    raw_confidence: float | None = None
+    confidence: float | None = None  # the backend's own; None if it reports none
     filled_in: bool = False
 
     kind: ClassVar[QuestionKind] = "choice"
@@ -166,8 +167,7 @@ class ChoiceAnswer:
 class ScoreAnswer:
     expected: float
     probabilities: dict[int, float]
-    confidence: float
-    raw_confidence: float | None = None
+    confidence: float | None = None  # the backend's own; None if it reports none
     filled_in: bool = False
 
     kind: ClassVar[QuestionKind] = "score"

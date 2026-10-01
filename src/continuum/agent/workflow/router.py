@@ -449,13 +449,13 @@ If the request doesn't clearly fit any specialist, respond with "none".
         selected = None if answer.label == "none" else answer.label
 
         # Below the floor the top route is not acted on: no route, so the
-        # request reaches fallback_agent_name as for "none". The backend's own
-        # confidence, because published thresholds belong to its definition.
+        # request reaches fallback_agent_name as for "none". The answer's
+        # confidence is the backend's own: a threshold belongs to the backend.
         floor = self.router_config.system_one_min_confidence
-        raw = answer.raw_confidence
+        conf = answer.confidence
         low_confidence = False
         if floor is not None and selected is not None:
-            if raw is None:
+            if conf is None:
                 logger.warning(
                     "Router '%s': backend %s reports no confidence, so "
                     "system_one_min_confidence=%s cannot be met; selecting no route",
@@ -464,7 +464,7 @@ If the request doesn't clearly fit any specialist, respond with "none".
                     floor,
                 )
                 low_confidence = True
-            elif raw < floor:
+            elif conf < floor:
                 low_confidence = True
             if low_confidence:
                 selected = None
@@ -475,7 +475,7 @@ If the request doesn't clearly fit any specialist, respond with "none".
             resp.provenance.backend,
             answer.label,
             answer.probabilities.get(answer.label, 0.0),
-            "n/a" if raw is None else f"{raw:.3f}",
+            "n/a" if conf is None else f"{conf:.3f}",
             f" -> below min_confidence={floor}, no route" if low_confidence else "",
         )
         return selected, {
@@ -484,8 +484,7 @@ If the request doesn't clearly fit any specialist, respond with "none".
             "decided_by": "system_one",
             "backend": resp.provenance.backend,
             "model": resp.provenance.model,
-            "confidence": answer.confidence,
-            "raw_confidence": raw,
+            "confidence": conf,
             "low_confidence": low_confidence,
             "probabilities": answer.probabilities,
         }
