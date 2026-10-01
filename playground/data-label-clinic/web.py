@@ -16,6 +16,7 @@ gate decision. Extra buttons demonstrate the telemetry-redaction and
 memory-write gates directly.
 """
 
+import html
 import json
 import os
 import sys
@@ -26,7 +27,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from agent import ClinicAgent
-from config import PHI, default_config
+from config import PHI, default_config, system_one_status
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -83,6 +84,9 @@ class ChatRequest(BaseModel):
     # Output scanner: ON = sanitized, per-turn (no token typing); OFF = live
     # token deltas (visible typing, unredacted). The two are mutually exclusive.
     scanner_on: bool = True
+    # System One (Jev) tool approval for this turn; offered only when .env names
+    # a backend in SYSTEM_ONE_BACKEND. Off = approval exactly as CLINIC_APPROVAL.
+    system_one: bool = False
 
 
 class MemWriteRequest(BaseModel):
@@ -116,13 +120,51 @@ class MemClearRequest(BaseModel):
     user_id: str = "u1"
 
 
+def _system_one_refusal(req: ChatRequest) -> dict | None:
+    """Turned on with no backend in .env: say what to set, run nothing."""
+    if not req.system_one or system_one_status()["configured"]:
+        return None
+    return {
+        "response": (
+            "System One approval needs a backend: set SYSTEM_ONE_BACKEND in .env "
+            "(e.g. SYSTEM_ONE_BACKEND=openrouter:typesafe/jev-1.13 with OPENROUTER_API_KEY) "
+            "and restart, or turn the toggle off."
+        ),
+        "taint": [],
+        "model_used": None,
+        "gate_events": [],
+        "tools_called": [],
+    }
+
+
+def _system_one_toggle() -> str:
+    """The header checkbox: enabled only when .env names a backend."""
+    st = system_one_status()
+    if st["configured"]:
+        title = (
+            f"Tool approval by System One ({st['backend']}) first: a call it scores below "
+            "P(risky) 0.1 is auto-approved; a labelled (e.g. PHI) run, or anything riskier, "
+            "goes to a person. Off = CLINIC_APPROVAL as before."
+        )
+        label, disabled = f"System One approval ({st['backend'].rsplit('/', 1)[-1]})", ""
+    else:
+        title = "Set SYSTEM_ONE_BACKEND in .env to enable System One tool approval."
+        label, disabled = "System One approval", " disabled"
+    return (
+        f'<label id="s1-label" title="{html.escape(title)}">'
+        f'<input type="checkbox" id="s1-toggle"{disabled}> {html.escape(label)}</label>'
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return HTML_PAGE
+    return HTML_PAGE.replace("__S1_TOGGLE__", _system_one_toggle())
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    if refusal := _system_one_refusal(req):
+        return refusal
     if not _agent or not _agent._initialized:
         return {
             "response": f"Agent unavailable. {_init_error or 'Start both MCP servers: python server.py and python pharmacy_server.py'}",
@@ -151,6 +193,7 @@ async def chat(req: ChatRequest):
                 user_id=req.user_id,
                 conversation_id=req.conversation_id,
                 scanner_on=req.scanner_on,
+                system_one_on=req.system_one,
             )
     except Exception as e:
         # Answer in the shape the UI parses. Letting this escape gives FastAPI's
@@ -180,6 +223,12 @@ async def chat_stream(req: ChatRequest):
     """Server-Sent Events twin of /chat: the same run, streamed. Each line is
     `data: {json}` — token/message (chat bubble), reroute (cloud→on-prem), and a
     final `done` carrying the full glassbox payload that fills the side panels."""
+    if refusal := _system_one_refusal(req):
+
+        async def _refuse():
+            yield f"data: {json.dumps({'type': 'done', **refusal})}\n\n"
+
+        return StreamingResponse(_refuse(), media_type="text/event-stream")
     if not _agent or not _agent._initialized:
 
         async def _err():
@@ -206,6 +255,7 @@ async def chat_stream(req: ChatRequest):
                     user_id=req.user_id,
                     conversation_id=req.conversation_id,
                     scanner_on=req.scanner_on,
+                    system_one_on=req.system_one,
                 ):
                     yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:
@@ -430,6 +480,7 @@ async def status():
         "tools": [t.function.name for t in (_agent.tools if _agent else [])],
         "cloud_model": default_config.cloud_model,
         "onprem_model": default_config.onprem_model,
+        "system_one": system_one_status(),
     }
 
 
@@ -526,6 +577,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <input id="input" placeholder="Type a message…" autofocus>
       <label id="stream-label" title="Stream the run live (SSE). Same gates; cloud→on-prem reroute shown inline."><input type="checkbox" id="stream-toggle"> stream</label>
       <label id="scanner-label" title="Output scanner. ON = sanitized, per-turn (no typing). OFF = live token typing, unredacted. Mutually exclusive with token streaming."><input type="checkbox" id="scanner-toggle" checked> scanner</label>
+      __S1_TOGGLE__
       <button id="send">Send</button>
     </div>
   </div>
@@ -592,6 +644,7 @@ fetch('/status').then(r=>r.json()).then(s=>{
 });
 
 function scannerOn(){ return document.getElementById('scanner-toggle').checked; }
+function s1On(){ const t = document.getElementById('s1-toggle'); return !!(t && t.checked && !t.disabled); }
 function add(cls, text){ const d=document.createElement('div'); d.className=cls+' msg'; d.textContent=text; chat.appendChild(d); chat.scrollTop=chat.scrollHeight; return d; }
 function suggest(t){ input.value=t; sendMsg(); }
 
@@ -644,7 +697,7 @@ async function sendMsg(){
   const stopPolling=pollApprovals();
   try{
     const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text,user_id:USER_ID,conversation_id:currentConversationId,scanner_on:scannerOn()})});
+      body:JSON.stringify({message:text,user_id:USER_ID,conversation_id:currentConversationId,scanner_on:scannerOn(),system_one:s1On()})});
     const d=await r.json();
     thinking.remove();
     add('assistant', d.response);
@@ -730,7 +783,7 @@ async function sendMsgStream(text){
   let bubble=add('assistant',''); let acc='';
   try{
     const r=await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text,user_id:USER_ID,conversation_id:currentConversationId,scanner_on:scannerOn()})});
+      body:JSON.stringify({message:text,user_id:USER_ID,conversation_id:currentConversationId,scanner_on:scannerOn(),system_one:s1On()})});
     const reader=r.body.getReader(); const dec=new TextDecoder(); let buf='';
     while(true){
       const {value,done}=await reader.read(); if(done) break;
