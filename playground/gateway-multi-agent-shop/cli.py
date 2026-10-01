@@ -16,25 +16,35 @@ import uuid
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "src"))
 
 from config import default_config
-from workflows import MODES, create_workflow
+from workflows import MODES, create_workflow, system_one_status, system_one_unavailable
 
 from continuum import LogLevel, setup_logging
 from continuum.session import bind_principal
 
+EXAMPLES = {
+    "sequential": ["buy dog food", "get me a cat toy", "I need a dog leash"],
+    "parallel": ["what's available for dogs and cats?", "show me all pet products"],
+    "loop": ["find me something under $10", "find a dog toy under $15"],
+    "scatter": ["compare p1 p2 and p5", "which of these is best value?"],
+    "supervised": ["write a buying guide for a new puppy", "create a pet care guide"],
+    "planner": ["set up for a new puppy", "I just got a cat, what do I need?"],
+    "debate": ["should I buy premium or budget dog food?", "premium vs budget cat food"],
+    "reflection": ["write a recommendation email for my friend", "draft a product review"],
+    "router": [
+        "show me dog toys",
+        "add p5 to my cart",
+        "how often should I feed my cat?",
+        "my puppy keeps chewing shoes, find a toy for that and add it to my cart",
+    ],
+    "handoff": ["show me dog toys", "add p3 to my cart", "what's in my cart?", "checkout"],
+}
+# The System One modes take the same queries as the workflow they opt in.
+for _m in ("router", "loop", "reflection", "supervised"):
+    EXAMPLES[f"{_m}-system-one"] = EXAMPLES[_m]
+
 
 def print_help(mode: str) -> None:
-    examples = {
-        "sequential": ["buy dog food", "get me a cat toy", "I need a dog leash"],
-        "parallel": ["what's available for dogs and cats?", "show me all pet products"],
-        "loop": ["find me something under $10", "find a dog toy under $15"],
-        "scatter": ["compare p1 p2 and p5", "which of these is best value?"],
-        "supervised": ["write a buying guide for a new puppy", "create a pet care guide"],
-        "planner": ["set up for a new puppy", "I just got a cat, what do I need?"],
-        "debate": ["should I buy premium or budget dog food?", "premium vs budget cat food"],
-        "reflection": ["write a recommendation email for my friend", "draft a product review"],
-        "router": ["show me dog toys", "add p5 to my cart", "how often should I feed my cat?"],
-        "handoff": ["show me dog toys", "add p3 to my cart", "what's in my cart?", "checkout"],
-    }
+    examples = EXAMPLES
     print(f"""
 Commands:
   /mode     - Show current workflow mode
@@ -69,8 +79,15 @@ async def main() -> None:
     print(f"  Gateway Multi-Agent Shop  —  mode: {mode.upper()}")
     print(f"  {description}")
     print(f"  gateway: {os.environ.get('SMART_GATEWAY_URL', 'NOT SET')}")
+    if getattr(MODES[mode], "system_one", False):
+        print(f"  System One: {system_one_status()['backend'] or 'NOT SET'}")
     print("=" * 64)
     print()
+
+    unavailable = system_one_unavailable(mode)
+    if unavailable:
+        print(unavailable)
+        return
     print("Make sure the MCP server is running:")
     print("  python server.py   (in another terminal)")
     print()

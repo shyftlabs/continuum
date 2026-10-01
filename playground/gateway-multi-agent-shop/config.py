@@ -65,6 +65,14 @@ class WorkflowShopConfig:
             "reflection": "write a recommendation email — self-critique until PASS",
             "router": "triage: route to search, cart, or support based on intent",
             "handoff": "orchestrator plans, hands off to executor which calls MCP tools",
+            "router-system-one": "router, with System One (SYSTEM_ONE_BACKEND) picking the route",
+            "loop-system-one": "loop, with System One deciding when the search is complete",
+            "reflection-system-one": (
+                "reflection, with System One approving a confident draft before the critic"
+            ),
+            "supervised-system-one": (
+                "supervised, with System One approving a confident step before the supervisor"
+            ),
         }
     )
 

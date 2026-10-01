@@ -10,6 +10,7 @@ Gateway URL is read from SMART_GATEWAY_URL in the root .env (omit for direct pro
 """
 
 import asyncio
+import html
 import os
 import sys
 
@@ -22,7 +23,13 @@ from config import default_config
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from workflows import MODES, _BaseWorkflow, create_workflow
+from workflows import (
+    MODES,
+    _BaseWorkflow,
+    create_workflow,
+    system_one_status,
+    system_one_unavailable,
+)
 
 from continuum import LogLevel, setup_logging
 from continuum.session import bind_principal
@@ -63,22 +70,40 @@ async def get_workflow(mode: str) -> tuple[_BaseWorkflow | None, str | None]:
             await wf.initialize()
             _workflows[mode] = wf
         except Exception as e:
-            _init_errors[mode] = str(e)
-            return None, str(e)
+            # Some failures (an MCP ConnectTimeout) carry no message; name the type.
+            _init_errors[mode] = str(e) or type(e).__name__
+            return None, _init_errors[mode]
     return _workflows[mode], None
+
+
+SYSTEM_ONE_MODES = [m for m, cls in MODES.items() if getattr(cls, "system_one", False)]
+
+
+def _system_one_options() -> str:
+    """The System One modes, enabled only when .env names a backend."""
+    st = system_one_status()
+    if st["configured"]:
+        label, disabled = f"System One · {st['backend']}", ""
+    else:
+        label, disabled = "System One · set SYSTEM_ONE_BACKEND in .env to enable", " disabled"
+    options = "".join(f'<option value="{m}"{disabled}>{m}</option>' for m in SYSTEM_ONE_MODES)
+    return f'<optgroup label="{html.escape(label)}">{options}</optgroup>'
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return HTML_PAGE
+    return HTML_PAGE.replace("__SYSTEM_ONE_OPTIONS__", _system_one_options())
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
     if req.mode not in MODES:
         return {"response": f"Unknown mode '{req.mode}'. Choose from: {', '.join(MODES)}"}
+    unavailable = system_one_unavailable(req.mode)
+    if unavailable:
+        return {"response": unavailable}
     wf, error = await get_workflow(req.mode)
-    if error:
+    if wf is None:
         return {
             "response": f"Failed to initialize '{req.mode}' mode: {error}. Is the MCP server running?"
         }
@@ -109,6 +134,7 @@ async def status():
         "errors": _init_errors,
         "mcp_url": default_config.mcp_url,
         "gateway_mode": default_config.gateway_mode,
+        "system_one": system_one_status(),
     }
 
 
@@ -207,6 +233,7 @@ HTML_PAGE = (
     <option value="reflection">reflection</option>
     <option value="router">router</option>
     <option value="handoff">handoff</option>
+    __SYSTEM_ONE_OPTIONS__
   </select>
   <span id="mode-desc"></span>
 </div>
@@ -234,9 +261,13 @@ const MODE_SUGGESTIONS = {
   planner:     ["set up for a new puppy", "I just got a cat, what do I need?"],
   debate:      ["should I buy premium or budget dog food?", "premium vs budget cat food"],
   reflection:  ["write a recommendation email for my friend", "draft a product review"],
-  router:      ["show me dog toys", "add p5 to my cart", "how often should I feed my cat?"],
+  router:      ["show me dog toys", "add p5 to my cart", "how often should I feed my cat?", "my puppy keeps chewing shoes, find a toy for that and add it to my cart"],
   handoff:     ["show me dog toys", "add p3 to my cart", "what's in my cart?", "checkout"],
 };
+// The System One modes take the same queries as the workflow they opt in.
+for (const m of ["router", "loop", "reflection", "supervised"]) {
+  MODE_SUGGESTIONS[m + "-system-one"] = MODE_SUGGESTIONS[m];
+}
 
 let currentUserId = null;
 let currentConversationId = null;
