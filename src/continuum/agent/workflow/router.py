@@ -447,6 +447,13 @@ If the request doesn't clearly fit any specialist, respond with "none".
 
         answer = resp.choice("route")
         selected = None if answer.label == "none" else answer.label
+        logger.info(
+            "Router '%s' decided_by=system_one backend=%s route=%s p=%.3f",
+            self.name,
+            resp.provenance.backend,
+            answer.label,
+            answer.probabilities.get(answer.label, 0.0),
+        )
         return selected, {
             **base,
             "selected_route": selected,
