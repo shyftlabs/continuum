@@ -143,6 +143,27 @@ class TestAvailability:
         status = _load("config").system_one_status()
         assert status["configured"] is True and status["backend"] == JEV
 
+    def test_a_backend_without_its_key_is_not_ready(self, backend, monkeypatch):
+        """A backend named in .env but missing its API key cannot answer: every
+        gated call would escalate, while the UI claimed System One was deciding."""
+        from continuum.config import settings
+
+        backend(JEV)
+        monkeypatch.setattr(settings, "openrouter_api_key", None)
+        status = _load("config").system_one_status()
+        assert status["ready"] is False
+        assert "OPENROUTER_API_KEY" in status["problem"]
+
+    def test_a_backend_with_its_key_is_ready(self, backend):
+        backend(JEV)
+        status = _load("config").system_one_status()
+        assert status["ready"] is True and status["problem"] is None
+
+    def test_without_a_backend_it_is_not_ready(self, backend):
+        status = _load("config").system_one_status()
+        assert status["ready"] is False
+        assert "SYSTEM_ONE_BACKEND" in status["problem"]
+
     def test_the_handler_cannot_be_built_without_a_backend(self, backend):
         from continuum.system_one import SystemOneNotConfiguredError
 
@@ -318,6 +339,32 @@ class TestTheWebUI:
         page = asyncio.run(self._web().index())
         assert 'id="s1-toggle" disabled' in page
         assert "SYSTEM_ONE_BACKEND" in page
+
+    def test_without_the_key_it_is_shown_disabled_naming_the_key(self, backend, monkeypatch):
+        from continuum.config import settings
+
+        backend(JEV)
+        monkeypatch.setattr(settings, "openrouter_api_key", None)
+        page = asyncio.run(self._web().index())
+        assert 'id="s1-toggle" disabled' in page
+        assert "OPENROUTER_API_KEY" in page
+
+    def test_chat_refuses_it_without_the_key(self, backend, monkeypatch):
+        from continuum.config import settings
+
+        backend(JEV)
+        monkeypatch.setattr(settings, "openrouter_api_key", None)
+        web = self._web()
+        web._agent = MagicMock()
+        web._agent.chat = AsyncMock(side_effect=AssertionError("must not run"))
+        out = asyncio.run(web.chat(web.ChatRequest(message="hi", system_one=True)))
+        assert "OPENROUTER_API_KEY" in out["response"]
+
+    def test_there_is_a_chip_for_a_risky_clean_call(self, backend):
+        """Way 2: a clean run (no patient lookup) sending mail outside the clinic,
+        which Jev escalates while the harmless interaction check is auto-approved."""
+        page = asyncio.run(self._web().index())
+        assert "Email our clinic hours to my.friend@gmail.com" in page
 
     def test_chat_refuses_it_without_a_backend(self, backend):
         web = self._web()

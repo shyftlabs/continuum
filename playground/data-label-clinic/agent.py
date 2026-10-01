@@ -342,7 +342,7 @@ class ClinicAgent:
         # Built once, used by turns that switch the header toggle on. None when
         # .env names no backend: the toggle is then not offered.
         self._system_one_handler = None
-        if system_one_status()["configured"]:
+        if system_one_status()["ready"]:
             try:
                 self._system_one_handler = build_system_one_approval_handler()
             except Exception as e:  # a misconfigured backend: report, keep the clinic up

@@ -295,12 +295,33 @@ SYSTEM_ONE_APPROVAL_TOOLS = frozenset(
 
 
 def system_one_status() -> dict:
-    """What .env says about System One, for the UI and /status."""
+    """What .env says about System One, for the UI and /status.
+
+    ``configured`` is only that a backend is named; ``ready`` is that it can be
+    built -- a backend missing its API key is named but cannot answer, and the
+    toggle would claim System One decides while every call goes to a person.
+    Building it sends nothing (the instance is cached for the calls that do).
+    """
     from continuum.config import settings
+    from continuum.system_one import SystemOneError
+    from continuum.system_one.registry import resolve_classifier
 
     backend = getattr(settings, "system_one_backend", None) or None
+    problem = None
+    if backend is None:
+        problem = "Set SYSTEM_ONE_BACKEND in .env to enable System One tool approval."
+    else:
+        try:
+            resolve_classifier(backend)
+        except SystemOneError as exc:
+            from continuum.utils.secrets import redact_sensitive_values
+
+            # The message alone: str(exc) adds the error code and context.
+            problem = redact_sensitive_values(exc.message)
     return {
         "configured": backend is not None,
+        "ready": problem is None,
+        "problem": problem,
         "backend": backend,
         "disabled": bool(getattr(settings, "system_one_disabled", False)),
     }
@@ -312,7 +333,7 @@ def system_one_resource() -> str | None:
     usable backend (then nothing System One is allowed, and every gated call
     escalates)."""
     status = system_one_status()
-    if not status["configured"]:
+    if not status["ready"]:
         return None
     from continuum.system_one import SystemOneError
     from continuum.system_one.layer import egress_resource
