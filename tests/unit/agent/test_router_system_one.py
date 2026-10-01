@@ -319,3 +319,97 @@ class TestTheDecisionIsLogged:
             self._detach(handler)
         line = next(r.getMessage() for r in records if "decided_by=system_one" in r.getMessage())
         assert "route=none" in line
+
+
+class TestAMinimumConfidence:
+    """TypeSafe's confidence-gated / intent routing: "the answer tells you what;
+    confidence tells you whether to act" -- below a floor, don't act on the top
+    route. Opt-in: RouterConfig.system_one_min_confidence (None = act on the top
+    route, as before). It reads the backend's own confidence (raw_confidence),
+    because published thresholds belong to the backend's definition: live, Jev
+    gave 0.45 where the SDK's entropy-based figure was 0.42, and for a 0.7/0.1/
+    0.1/0.1 split the two are 0.60 and 0.32. Below the floor the request gets no
+    route -- fallback_agent_name, the same path as "none" or a failure."""
+
+    def _backend(self, dist, raw):
+        return _use(_backend(dist, raw_confidence=raw))
+
+    async def test_by_default_low_confidence_still_routes(self):
+        self._backend({"billing-agent": 0.4, "technical-agent": 0.35, "none": 0.25}, raw=0.1)
+        assert await _router().route("x") == "billing-agent"
+
+    async def test_below_the_floor_there_is_no_route(self):
+        self._backend({"billing-agent": 0.59, "technical-agent": 0.3, "none": 0.11}, raw=0.45)
+        llm = _llm()
+        assert await _router(system_one_min_confidence=0.5).route("x", llm_client=llm) is None
+        llm.chat.assert_not_called()
+
+    async def test_at_or_above_the_floor_it_routes(self):
+        self._backend({"billing-agent": 0.65, "technical-agent": 0.25, "none": 0.1}, raw=0.5)
+        assert await _router(system_one_min_confidence=0.5).route("x") == "billing-agent"
+
+    async def test_it_reads_the_backends_confidence_not_the_sdks(self):
+        """0.7/0.15/0.15 here: the SDK's entropy figure is ~0.25, the backend's 0.6."""
+        self._backend({"billing-agent": 0.7, "technical-agent": 0.15, "none": 0.15}, raw=0.6)
+        assert await _router(system_one_min_confidence=0.5).route("x") == "billing-agent"
+
+    async def test_a_backend_that_reports_no_confidence_gets_no_route(self):
+        """Opting in to a floor the backend cannot meet is not a silent pass."""
+        import logging
+
+        self._backend({"billing-agent": 0.9, "technical-agent": 0.05, "none": 0.05}, raw=None)
+        records, handler = TestTheDecisionIsLogged()._logs()
+        try:
+            assert await _router(system_one_min_confidence=0.5).route("x") is None
+        finally:
+            TestTheDecisionIsLogged()._detach(handler)
+        warnings = [r.getMessage() for r in records if r.levelno >= logging.WARNING]
+        assert any("reports no confidence" in m for m in warnings)
+
+    async def test_none_is_still_no_route(self):
+        self._backend({"billing-agent": 0.05, "technical-agent": 0.05, "none": 0.9}, raw=0.95)
+        assert await _router(system_one_min_confidence=0.5).route("x") is None
+
+    async def test_the_log_line_and_trace_say_why(self):
+        self._backend({"billing-agent": 0.59, "technical-agent": 0.3, "none": 0.11}, raw=0.45)
+        records, handler = TestTheDecisionIsLogged()._logs()
+        span = TestProvenance()._span()
+        try:
+            with patch("continuum.agent.workflow.router.SpanScope", return_value=span):
+                await _router(system_one_min_confidence=0.5).route("x")
+        finally:
+            TestTheDecisionIsLogged()._detach(handler)
+        line = next(r.getMessage() for r in records if "decided_by=system_one" in r.getMessage())
+        assert "route=billing-agent" in line
+        assert "confidence=0.450" in line
+        assert "below min_confidence=0.5" in line
+        out = span.set_output.call_args.args[0]
+        assert out["selected_route"] is None
+        assert out["low_confidence"] is True
+        assert out["raw_confidence"] == pytest.approx(0.45)
+
+    async def test_execute_hands_a_low_confidence_request_to_the_fallback(self):
+        from continuum.agent.types import AgentResponse
+
+        self._backend({"billing-agent": 0.59, "technical-agent": 0.3, "none": 0.11}, raw=0.45)
+        runner = MagicMock()
+        runner.llm_client = _llm()
+        runner.get_agent = MagicMock(side_effect=lambda name: MagicMock(name=name))
+        runner.run = AsyncMock(return_value=AgentResponse(content="ok"))
+        await _router(system_one_min_confidence=0.5).execute("x", runner)
+        assert runner.get_agent.call_args.args[0] == "general-agent"
+
+    @pytest.mark.parametrize("bad", [0.0, -0.1, 1.5])
+    def test_the_floor_must_be_a_probability(self, bad):
+        from continuum.agent.config import RouterConfig
+
+        with pytest.raises(ValueError):
+            RouterConfig(system_one_min_confidence=bad)
+
+    def test_the_floor_is_serialised(self):
+        from continuum.agent.config import RouterConfig
+
+        assert RouterConfig(system_one_min_confidence=0.5).to_dict()[
+            "system_one_min_confidence"
+        ] == pytest.approx(0.5)
+        assert RouterConfig().system_one_min_confidence is None
