@@ -584,6 +584,12 @@ class RouterConfig:
     # None uses the container / SYSTEM_ONE_BACKEND default. Unrelated to the
     # tier_classifier fields below, which belong to the model_tier smart layer.
     system_one_backend: str | None = None
+    # "The answer tells you what; confidence tells you whether to act" (TypeSafe):
+    # below this floor the top route is not acted on and the request goes to
+    # fallback_agent_name, as for "none". Read from the backend's own confidence
+    # (raw_confidence) -- published thresholds belong to the backend's definition;
+    # a backend that reports none gets no route. None = act on the top route.
+    system_one_min_confidence: float | None = None
 
     # --- Smart layer (model_tier) -------------------------------------------------
     tier_classifier: TierClassifierMode = "gpt_4o_mini"
@@ -618,6 +624,11 @@ class RouterConfig:
     tier_heavy_temperature: float = 0.3  # specialist, frontier
     tier_completion_max_tokens: int = 4096
 
+    def __post_init__(self) -> None:
+        floor = self.system_one_min_confidence
+        if floor is not None and not 0.0 < floor <= 1.0:
+            raise ValueError(f"system_one_min_confidence must be in (0, 1], got {floor}")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "routing_strategy": self.routing_strategy,
@@ -626,6 +637,7 @@ class RouterConfig:
             "routing_temperature": self.routing_temperature,
             "routing_max_tokens": self.routing_max_tokens,
             "system_one_backend": self.system_one_backend,
+            "system_one_min_confidence": self.system_one_min_confidence,
             "tier_classifier": self.tier_classifier,
             "tier_classifier_llm_model": self.tier_classifier_llm_model,
             "tier_classifier_max_tokens": self.tier_classifier_max_tokens,

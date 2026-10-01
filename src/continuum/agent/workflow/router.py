@@ -447,12 +447,36 @@ If the request doesn't clearly fit any specialist, respond with "none".
 
         answer = resp.choice("route")
         selected = None if answer.label == "none" else answer.label
+
+        # Below the floor the top route is not acted on: no route, so the
+        # request reaches fallback_agent_name as for "none". The backend's own
+        # confidence, because published thresholds belong to its definition.
+        floor = self.router_config.system_one_min_confidence
+        raw = answer.raw_confidence
+        low_confidence = False
+        if floor is not None and selected is not None:
+            if raw is None:
+                logger.warning(
+                    "Router '%s': backend %s reports no confidence, so "
+                    "system_one_min_confidence=%s cannot be met; selecting no route",
+                    self.name,
+                    resp.provenance.backend,
+                    floor,
+                )
+                low_confidence = True
+            elif raw < floor:
+                low_confidence = True
+            if low_confidence:
+                selected = None
+
         logger.info(
-            "Router '%s' decided_by=system_one backend=%s route=%s p=%.3f",
+            "Router '%s' decided_by=system_one backend=%s route=%s p=%.3f confidence=%s%s",
             self.name,
             resp.provenance.backend,
             answer.label,
             answer.probabilities.get(answer.label, 0.0),
+            "n/a" if raw is None else f"{raw:.3f}",
+            f" -> below min_confidence={floor}, no route" if low_confidence else "",
         )
         return selected, {
             **base,
@@ -461,6 +485,8 @@ If the request doesn't clearly fit any specialist, respond with "none".
             "backend": resp.provenance.backend,
             "model": resp.provenance.model,
             "confidence": answer.confidence,
+            "raw_confidence": raw,
+            "low_confidence": low_confidence,
             "probabilities": answer.probabilities,
         }
 
