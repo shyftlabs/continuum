@@ -266,3 +266,56 @@ class TestTheFactory:
             "triage", [("billing", "Billing")], strategy="system_one_classifier"
         )
         assert router.router_config.routing_strategy == "system_one_classifier"
+
+
+class TestTheDecisionIsLogged:
+    """The loop and the quality gates log a ``decided_by=system_one`` line for
+    every decision; the router logged only the kill switch and failures, so an
+    application could not show which route the classifier picked, or how sure
+    it was, without reaching into the trace span. The line carries the route
+    *name* (configuration) and the probability, never the request text."""
+
+    def _logs(self):
+        import logging
+
+        records = []
+
+        class H(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        handler = H()
+        logging.getLogger("continuum.agent.workflow.router").addHandler(handler)
+        return records, handler
+
+    def _detach(self, handler):
+        import logging
+
+        logging.getLogger("continuum.agent.workflow.router").removeHandler(handler)
+
+    async def test_a_route_decision_is_logged_with_backend_and_confidence(self):
+        import logging
+
+        _use(_backend({"billing-agent": 0.1, "technical-agent": 0.8, "none": 0.1}))
+        records, handler = self._logs()
+        try:
+            await _router().route("Production is down")
+        finally:
+            self._detach(handler)
+        lines = [r.getMessage() for r in records if r.levelno == logging.INFO]
+        line = next(m for m in lines if "decided_by=system_one" in m)
+        assert "triage" in line
+        assert "backend=fake" in line
+        assert "route=technical-agent" in line
+        assert "p=0.800" in line
+        assert "Production is down" not in line
+
+    async def test_none_is_logged_as_no_route(self):
+        _use(_backend({"billing-agent": 0.1, "technical-agent": 0.1, "none": 0.8}))
+        records, handler = self._logs()
+        try:
+            await _router().route("What's the weather?")
+        finally:
+            self._detach(handler)
+        line = next(r.getMessage() for r in records if "decided_by=system_one" in r.getMessage())
+        assert "route=none" in line
