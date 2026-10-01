@@ -325,11 +325,10 @@ class TestAMinimumConfidence:
     """TypeSafe's confidence-gated / intent routing: "the answer tells you what;
     confidence tells you whether to act" -- below a floor, don't act on the top
     route. Opt-in: RouterConfig.system_one_min_confidence (None = act on the top
-    route, as before). It reads the backend's own confidence (raw_confidence),
-    because published thresholds belong to the backend's definition: live, Jev
-    gave 0.45 where the SDK's entropy-based figure was 0.42, and for a 0.7/0.1/
-    0.1/0.1 split the two are 0.60 and 0.32. Below the floor the request gets no
-    route -- fallback_agent_name, the same path as "none" or a failure."""
+    route, as before). It reads the answer's confidence, which is the backend's
+    own (Continuum computes none), because a threshold belongs to the backend it
+    was set for. Below the floor the request gets no route -- fallback_agent_name,
+    the same path as "none" or a failure."""
 
     def _backend(self, dist, raw):
         return _use(_backend(dist, raw_confidence=raw))
@@ -348,10 +347,11 @@ class TestAMinimumConfidence:
         self._backend({"billing-agent": 0.65, "technical-agent": 0.25, "none": 0.1}, raw=0.5)
         assert await _router(system_one_min_confidence=0.5).route("x") == "billing-agent"
 
-    async def test_it_reads_the_backends_confidence_not_the_sdks(self):
-        """0.7/0.15/0.15 here: the SDK's entropy figure is ~0.25, the backend's 0.6."""
-        self._backend({"billing-agent": 0.7, "technical-agent": 0.15, "none": 0.15}, raw=0.6)
-        assert await _router(system_one_min_confidence=0.5).route("x") == "billing-agent"
+    async def test_it_reads_the_backends_confidence_not_the_distribution(self):
+        """A peaked 0.7/0.15/0.15 split with a low backend confidence: the
+        backend's figure decides, not anything derived from the split."""
+        self._backend({"billing-agent": 0.7, "technical-agent": 0.15, "none": 0.15}, raw=0.3)
+        assert await _router(system_one_min_confidence=0.5).route("x") is None
 
     async def test_a_backend_that_reports_no_confidence_gets_no_route(self):
         """Opting in to a floor the backend cannot meet is not a silent pass."""
@@ -386,7 +386,8 @@ class TestAMinimumConfidence:
         out = span.set_output.call_args.args[0]
         assert out["selected_route"] is None
         assert out["low_confidence"] is True
-        assert out["raw_confidence"] == pytest.approx(0.45)
+        assert out["confidence"] == pytest.approx(0.45)
+        assert "raw_confidence" not in out, "one confidence, the backend's"
 
     async def test_execute_hands_a_low_confidence_request_to_the_fallback(self):
         from continuum.agent.types import AgentResponse

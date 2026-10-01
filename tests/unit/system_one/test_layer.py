@@ -119,41 +119,61 @@ class TestAnswers:
         assert probs["technical"] == pytest.approx(0.6)
 
 
-class TestConfidenceMeansTheSameOnEveryBackend:
-    async def test_an_even_split_has_zero_confidence(self, fake_classifier_cls):
+class TestConfidenceIsTheBackendsOwn:
+    """Continuum does not compute a confidence of its own. It used to (1 minus
+    normalised entropy), meaning to make confidence "mean the same on every
+    backend" -- but the backends are calibrated differently, so an equal number
+    never meant equal certainty, nothing decided on it, and two numbers both
+    called confidence, on different scales, sat side by side. Now an answer's
+    ``confidence`` is the backend's own (Jev's and Laya's for the types they
+    report), or None; ``probabilities`` stay for anyone who wants another measure.
+    A seam that gates on confidence uses it with a threshold set for that backend."""
+
+    @pytest.mark.parametrize("make", [_binary, _choice, _score])
+    async def test_the_backends_confidence_is_passed_through(self, fake_classifier_cls, make):
         from continuum.system_one import classify
 
-        backend = fake_classifier_cls(answer=lambda qid, q: {"true": 0.5, "false": 0.5})
-        resp = await classify("s", {"q": _binary()}, classifier=backend)
-        assert resp.answers["q"].confidence == pytest.approx(0.0)
+        backend = fake_classifier_cls(raw_confidence=0.93)
+        resp = await classify("s", {"q": make()}, classifier=backend)
+        assert resp.answers["q"].confidence == pytest.approx(0.93)
 
-    async def test_a_certain_answer_has_full_confidence(self, fake_classifier_cls):
+    @pytest.mark.parametrize("make", [_binary, _choice, _score])
+    async def test_without_one_it_is_none(self, fake_classifier_cls, make):
+        """Not a number Continuum made up -- whatever the distribution looks like."""
         from continuum.system_one import classify
 
-        backend = fake_classifier_cls(answer=lambda qid, q: {"true": 1.0, "false": 0.0})
-        resp = await classify("s", {"q": _binary()}, classifier=backend)
-        assert resp.answers["q"].confidence == pytest.approx(1.0)
+        backend = fake_classifier_cls()
+        resp = await classify("s", {"q": make()}, classifier=backend)
+        assert resp.answers["q"].confidence is None
 
-    async def test_confidence_is_one_minus_normalised_entropy(self, fake_classifier_cls):
-        from continuum.system_one import classify
-
-        dist = {"billing": 0.7, "technical": 0.2, "none": 0.1}
-        backend = fake_classifier_cls(answer=lambda qid, q: dist)
-        resp = await classify("s", {"q": _choice()}, classifier=backend)
-
-        entropy = -sum(p * math.log(p) for p in dist.values())
-        assert resp.answers["q"].confidence == pytest.approx(1 - entropy / math.log(3))
-
-    async def test_the_backends_own_confidence_is_kept_separately(self, fake_classifier_cls):
-        """Opaque and vendor-specific, so it never replaces Continuum's own."""
+    async def test_an_even_split_still_reports_the_backends_figure(self, fake_classifier_cls):
+        """Even a 50/50 answer: the field is the backend's, not recomputed."""
         from continuum.system_one import classify
 
         backend = fake_classifier_cls(
             answer=lambda qid, q: {"true": 0.5, "false": 0.5}, raw_confidence=0.93
         )
         resp = await classify("s", {"q": _binary()}, classifier=backend)
-        assert resp.answers["q"].raw_confidence == pytest.approx(0.93)
-        assert resp.answers["q"].confidence == pytest.approx(0.0)
+        assert resp.answers["q"].confidence == pytest.approx(0.93)
+
+    async def test_an_answer_continuum_built_has_none(self, fake_classifier_cls):
+        """A Choice asked as several binary questions: the backend's per-question
+        figures do not describe the combined answer, so none is reported."""
+        from continuum.system_one import classify
+
+        backend = fake_classifier_cls(kinds=frozenset({"binary"}), raw_confidence=0.9)
+        resp = await classify("s", {"q": _choice()}, classifier=backend)
+        assert resp.answers["q"].filled_in is True
+        assert resp.answers["q"].confidence is None
+
+    @pytest.mark.parametrize("make", [_binary, _choice, _score])
+    async def test_there_is_no_second_confidence(self, fake_classifier_cls, make):
+        from continuum.system_one import classify
+
+        resp = await classify(
+            "s", {"q": make()}, classifier=fake_classifier_cls(raw_confidence=0.5)
+        )
+        assert not hasattr(resp.answers["q"], "raw_confidence")
 
 
 class TestABackendAnswerThatCannotBeTrustedIsRefused:
