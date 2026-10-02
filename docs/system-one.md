@@ -460,3 +460,17 @@ restart — and refuses in `classify()` too.
 
 Local backends need their extra: `pip install "shyftlabs-continuum[laya]"`,
 `"[laya-mlx]"` (Apple Silicon only) or `"[embeddings]"` for `local:`.
+
+---
+
+## 8 · Examples
+
+Two playground projects show System One working end to end, each with a
+browser UI where you can switch it on and off and watch every decision. Both
+read `SYSTEM_ONE_BACKEND` and its key from the project-root `.env`; without a
+usable backend their System One controls are greyed out with the reason.
+
+| Project | Shows | Turn it on |
+|---|---|---|
+| [`playground/gateway-multi-agent-shop`](../playground/gateway-multi-agent-shop) | The **router, loop, reflection and supervised** seams on a pet shop: each System One mode is the plain workflow with System One switched on, and every reply ends with what System One decided for it — route and confidence, P(complete) per round, P(pass) per draft next to the critic's or supervisor's verdict. | Pick `router-system-one`, `loop-system-one`, `reflection-system-one` or `supervised-system-one` in the mode dropdown. |
+| [`playground/data-label-clinic`](../playground/data-label-clinic) | **Tool approval** on a clinic agent: a harmless interaction check auto-approved, an email to an outside address sent to a person, and a patient-data run sent to a person without the classifier being asked. Each decision appears in the gate panel. | Tick **System One approval** next to Send. The three ways to watch it work are in [docs/system-one-approval.md](../playground/data-label-clinic/docs/system-one-approval.md). |
