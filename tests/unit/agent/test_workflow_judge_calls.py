@@ -303,7 +303,12 @@ class TestTheLoopCompletionCheckSeesTheTask:
         from continuum.agent.types import TerminationType
         from continuum.system_one import SystemOneError
 
-        loop = _loop(type=TerminationType.SYSTEM_ONE_CLASSIFIER)
+        # The loop's own spec, so the test does not depend on SYSTEM_ONE_BACKEND
+        # in the environment (CI has none). Nothing is built: the check is mocked.
+        loop = _loop(
+            type=TerminationType.SYSTEM_ONE_CLASSIFIER,
+            system_one_backend="openrouter:typesafe/jev-1.13",
+        )
         llm = _recording_llm("COMPLETE")
         with (
             patch(
