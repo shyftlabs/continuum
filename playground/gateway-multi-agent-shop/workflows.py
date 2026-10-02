@@ -923,12 +923,33 @@ for _name in _SYSTEM_ONE_LOGGERS:
 
 
 def system_one_status() -> dict[str, Any]:
-    """What .env says about System One, for the UI and /status."""
+    """What .env says about System One, for the UI and /status.
+
+    ``configured`` is only that a backend is named; ``ready`` is that it can be
+    built -- a backend missing its API key is named but cannot answer, and the
+    modes would be offered while every System One decision failed and fell
+    back. Building it sends nothing (the instance is cached for the calls that
+    do).
+    """
     from continuum.config import settings
+    from continuum.system_one import SystemOneError
+    from continuum.system_one.registry import resolve_classifier
+    from continuum.utils.secrets import redact_sensitive_values
 
     backend = getattr(settings, "system_one_backend", None) or None
+    problem = None
+    if backend is None:
+        problem = "Set SYSTEM_ONE_BACKEND in .env to enable the System One modes."
+    else:
+        try:
+            resolve_classifier(backend)
+        except SystemOneError as exc:
+            # The message alone: str(exc) adds the error code and context.
+            problem = redact_sensitive_values(exc.message)
     return {
         "configured": backend is not None,
+        "ready": problem is None,
+        "problem": problem,
         "backend": backend,
         "disabled": bool(getattr(settings, "system_one_disabled", False)),
     }
@@ -939,12 +960,19 @@ def system_one_unavailable(mode: str) -> str | None:
     cls = MODES.get(mode)
     if cls is None or not getattr(cls, "system_one", False):
         return None
-    if system_one_status()["configured"]:
+    status = system_one_status()
+    if status["ready"]:
         return None
+    original = mode.removesuffix("-system-one")
+    if not status["configured"]:
+        return (
+            f"'{mode}' uses System One, but no backend is configured. Set SYSTEM_ONE_BACKEND "
+            "in .env (e.g. SYSTEM_ONE_BACKEND=openrouter:typesafe/jev-1.13 with "
+            f"OPENROUTER_API_KEY) and restart, or use '{original}'."
+        )
     return (
-        f"'{mode}' uses System One, but no backend is configured. Set SYSTEM_ONE_BACKEND "
-        "in .env (e.g. SYSTEM_ONE_BACKEND=openrouter:typesafe/jev-1.13 with "
-        f"OPENROUTER_API_KEY) and restart, or use '{mode.removesuffix('-system-one')}'."
+        f"'{mode}' uses System One, but {status['backend']} cannot be used: "
+        f"{status['problem'].rstrip('.')}. Fix .env and restart, or use '{original}'."
     )
 
 

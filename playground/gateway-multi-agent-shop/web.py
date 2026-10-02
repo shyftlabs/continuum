@@ -80,12 +80,16 @@ SYSTEM_ONE_MODES = [m for m, cls in MODES.items() if getattr(cls, "system_one", 
 
 
 def _system_one_options() -> str:
-    """The System One modes, enabled only when .env names a backend."""
+    """The System One modes, enabled only when .env names a backend that can be
+    built (named and with its key)."""
     st = system_one_status()
-    if st["configured"]:
+    if st["ready"]:
         label, disabled = f"System One · {st['backend']}", ""
-    else:
+    elif not st["configured"]:
         label, disabled = "System One · set SYSTEM_ONE_BACKEND in .env to enable", " disabled"
+    else:
+        label = f"System One · not ready: {st['problem']}"
+        disabled = " disabled"
     options = "".join(f'<option value="{m}"{disabled}>{m}</option>' for m in SYSTEM_ONE_MODES)
     return f'<optgroup label="{html.escape(label)}">{options}</optgroup>'
 

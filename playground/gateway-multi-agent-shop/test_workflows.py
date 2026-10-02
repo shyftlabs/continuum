@@ -123,15 +123,30 @@ def backend(monkeypatch):
     """Like SYSTEM_ONE_BACKEND set in .env. Returns a setter; None means unset."""
     from continuum.config import settings
     from continuum.core.container import reset_container
+    from continuum.system_one.registry import clear_classifier_cache
 
     def set_backend(spec):
         monkeypatch.setattr(settings, "system_one_backend", spec)
         reset_container()
+        clear_classifier_cache()
 
+    # The backend's key, so "configured" does not depend on the real .env.
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
     monkeypatch.setattr(settings, "system_one_disabled", False)
     set_backend(None)
     yield set_backend
+    clear_classifier_cache()
     reset_container()
+
+
+@pytest.fixture
+def no_key(monkeypatch):
+    """The backend is named in .env but its API key is not (commented out)."""
+    from continuum.config import settings
+    from continuum.system_one.registry import clear_classifier_cache
+
+    monkeypatch.setattr(settings, "openrouter_api_key", None)
+    clear_classifier_cache()
 
 
 def _shop(mode):
@@ -319,6 +334,47 @@ class TestWithoutABackendInEnv:
             from workflows import system_one_status
         status = system_one_status()
         assert status["configured"] is True and status["backend"] == JEV
+
+
+class TestWithABackendButNoKey:
+    """SYSTEM_ONE_BACKEND set but its key commented out: the backend cannot be
+    built, so every System One decision would fail and fall back while the
+    dropdown offered the modes as working."""
+
+    def test_status_is_configured_but_not_ready(self, backend, no_key):
+        backend(JEV)
+        with _this_playground():
+            from workflows import system_one_status
+        status = system_one_status()
+        assert status["configured"] is True
+        assert status["ready"] is False
+        assert "OPENROUTER_API_KEY" in status["problem"]
+
+    def test_with_the_key_it_is_ready(self, backend):
+        backend(JEV)
+        with _this_playground():
+            from workflows import system_one_status
+        status = system_one_status()
+        assert status["ready"] is True and status["problem"] is None
+
+    def test_the_system_one_modes_name_the_missing_key(self, backend, no_key):
+        backend(JEV)
+        with _this_playground():
+            from workflows import system_one_unavailable
+        for mode in SYSTEM_ONE_MODES:
+            msg = system_one_unavailable(mode)
+            assert msg and "OPENROUTER_API_KEY" in msg
+        for original in SYSTEM_ONE_MODES.values():
+            assert system_one_unavailable(original) is None
+
+    def test_the_page_shows_them_disabled_naming_the_key(self, backend, no_key):
+        backend(JEV)
+        with _this_playground():
+            import web
+        page = asyncio.run(web.index())
+        for mode in SYSTEM_ONE_MODES:
+            assert f'value="{mode}" disabled' in page
+        assert "OPENROUTER_API_KEY" in page
 
 
 class TestTheReplyShowsWhatSystemOneDid:
