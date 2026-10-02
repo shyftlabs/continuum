@@ -93,6 +93,8 @@ Optional extras (declared but not installed by default):
 | `[eval]` | `deepeval`, `ragas` | Evaluation framework |
 | `[headroom-local]` | `headroom-ai` | In-process Headroom compression (logs / tables / search) |
 | `[headroom-local-ml]` | `headroom-ai`, `onnxruntime`, `transformers` | Adds in-process prose compression (Kompress ML) |
+| `[laya]` | `laya` | The `laya:` System One backend, in-process ([system-one.md](system-one.md)) |
+| `[laya-mlx]` | `laya-mlx` (Apple Silicon only) | The `laya-mlx:` System One backend |
 | `[dev]` | `pytest`, `ruff`, `mypy`, `respx`, `fakeredis` | Tests & linting |
 
 Install on demand:
@@ -227,6 +229,22 @@ its trigger via `HEADROOM_CONTEXT_THRESHOLD`). See `docs/index.html`
 The CCR store (local mode) is configured via headroom-ai's own env vars:
 `HEADROOM_CCR_BACKEND` (`memory` default; set `sqlite` for multi-worker)
 and `HEADROOM_CCR_SQLITE_PATH`.
+
+### System One *(optional)*
+
+A fast typed-decision classifier that routing, loop termination, quality gates
+and tool approval can opt into. Setting a backend enables nothing by itself.
+See [system-one.md](system-one.md).
+
+| Variable | Default | Description |
+|---|---|---|
+| `SYSTEM_ONE_BACKEND` | unset | Default backend spec, e.g. `openrouter:typesafe/jev-1.13` |
+| `SYSTEM_ONE_DISABLED` | `false` | Kill switch: every opted-in seam returns to its previous behaviour |
+| `SYSTEM_ONE_TIMEOUT_SECONDS` | `10.0` | Per backend call |
+| `TYPESAFE_API_KEY` | unset | The `jev:` backend |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | |
+| `OPENROUTER_API_KEY` | unset | The `openrouter:` backend |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api` | |
 
 ### Temporal *(optional, requires `[temporal]` extra)*
 

@@ -372,7 +372,7 @@ class FailStrategy(str, Enum):
     FAIL_FAST / CONTINUE_ON_ERROR / REQUIRE_ALL
 
 class TerminationType(str, Enum):
-    LLM_DECISION / TOOL_CALL / OUTPUT_MATCH / CUSTOM
+    LLM_DECISION / TOOL_CALL / OUTPUT_MATCH / CUSTOM / SYSTEM_ONE_CLASSIFIER
 
 class HistorySummarizationMode(str, Enum):
     FULL / SUMMARY / RECENT_N / HYBRID
@@ -518,6 +518,11 @@ iterate = LoopAgent(
 )
 ```
 
+With `TerminationType.SYSTEM_ONE_CLASSIFIER`, a System One classifier is
+asked instead whether the task is complete, and the loop stops at
+P(complete) ≥ `system_one_threshold` (default 0.5). See
+[system-one.md §5.2](system-one.md#52--loopagent).
+
 > **Judging calls and `max_tokens`.** Every judging call in these
 > workflows (loop check, critique, supervisor score, LLM route) defaults to
 > `DEFAULT_LLM_MAX_TOKENS`. On a reasoning model the hidden reasoning is
@@ -562,6 +567,11 @@ self_improving = ReflectionAgent(
 )
 ```
 
+With `ReflectionConfig(verdict_mode="system_one_classifier")`, a System
+One classifier is asked first and may only pass a draft, at P(pass) ≥
+`system_one_pass_threshold` (default 0.9); anything else goes to the
+critic as before. See [system-one.md §5.3](system-one.md#53--reflectionagent-and-supervisedsequentialagent).
+
 `generate_critique_prompt(user_query, llm_client, model=None,
 temperature=None, max_tokens=None)` produces a query-specific critique
 prompt programmatically. `max_tokens=None` uses `DEFAULT_LLM_MAX_TOKENS`.
@@ -581,7 +591,7 @@ router = create_router_agent(
         ("sales-agent", "Sales / pricing inquiries"),
     ],
     fallback="general-agent",
-    strategy="hybrid",                        # "llm" | "rule_based" | "hybrid"
+    strategy="hybrid",                        # "llm" | "rule_based" | "hybrid" | "system_one_classifier"
     model=None,
 )
 ```
@@ -611,6 +621,11 @@ router = RouterAgent(
     ),
 )
 ```
+
+With `routing_strategy="system_one_classifier"`, a System One classifier
+picks the route instead of the LLM; `system_one_min_confidence` sends a
+low-confidence route to `fallback_agent_name`. See
+[system-one.md §5.1](system-one.md#51--routeragent).
 
 `router.add_route(Route(...))` / `router.remove_route("billing-agent")`
 manage routes at runtime. You can also pass `custom_router=callable` to
@@ -747,6 +762,11 @@ supervised = SupervisedSequentialAgent(
     ),
 )
 ```
+
+`SupervisedConfig(verdict_mode="system_one_classifier")` adds the same
+System One fast path as `ReflectionAgent`: a step is accepted without a
+supervisor call at P(pass) ≥ `system_one_pass_threshold` (default 0.9),
+and scored by the supervisor otherwise.
 
 ---
 
