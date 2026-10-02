@@ -27,33 +27,106 @@ What this module gives you:
 
 ---
 
-## 1 · Quick start
+## 1 · Getting started
+
+Three steps: pick a backend, put two lines in `.env`, and switch System One on
+in code where you want it.
+
+### 1.1 · Pick a backend
+
+| You want | `SYSTEM_ONE_BACKEND` | Install |
+|---|---|---|
+| Jev, hosted (best results in our tests) | `openrouter:typesafe/jev-1.13`, or `jev:jev-latest` direct from TypeSafe | nothing extra |
+| everything on your own machine | `laya:convaiinnovations/laya` | `pip install "shyftlabs-continuum[laya]"` |
+| on your own machine, Apple Silicon | `laya-mlx:aac6fef/laya-mlx` | `pip install "shyftlabs-continuum[laya-mlx]"` |
+| a small local model | `local:cross-encoder/nli-deberta-v3-small` | `pip install "shyftlabs-continuum[embeddings]"` |
+
+### 1.2 · Set it in `.env`
+
+One required line, plus the key for that backend — and only that one.
+Everything else is optional.
 
 ```bash
-# .env
+# Required: the backend. Setting it switches nothing on by itself.
 SYSTEM_ONE_BACKEND=openrouter:typesafe/jev-1.13
-OPENROUTER_API_KEY=sk-or-...
+
+# The key for that backend:
+OPENROUTER_API_KEY=sk-or-...          # openrouter:...
+# TYPESAFE_API_KEY=...                # jev:...
+# local:, laya: and laya-mlx: need no key
+
+# Optional:
+# SYSTEM_ONE_TIMEOUT_SECONDS=10       # per backend call
+# SYSTEM_ONE_DISABLED=true            # kill switch: seams go back to the LLM / a person
+# OPENROUTER_BASE_URL=...             # only to override the endpoint
+# TYPESAFE_BASE_URL=...               # only to override the endpoint
 ```
 
-```python
-from continuum.agent import Route, RouterAgent, RouterConfig
+### 1.3 · Switch it on in code
 
+Each seam opts in on its own; turn on only the ones you want. The backend comes
+from `SYSTEM_ONE_BACKEND` unless a seam names its own.
+
+```python
+from continuum.agent import (
+    AgentConfig, LoopAgent, ReflectionConfig, Route, RouterAgent,
+    RouterConfig, TerminationConfig, TerminationType,
+)
+from continuum.agent.system_one_approval import system_one_approval_handler
+from continuum.agent.workflow.supervised import SupervisedConfig
+
+# Router: the classifier picks the route. Below the floor, the request goes to the fallback,
+# so make the fallback an agent that asks the user what they meant.
 router = RouterAgent(
     name="triage",
     routes=[
         Route(agent_name="billing-agent", description="payments, invoices and refunds"),
         Route(agent_name="technical-agent", description="software errors, bugs and outages"),
     ],
-    fallback_agent_name="general-agent",
-    router_config=RouterConfig(routing_strategy="system_one_classifier"),
+    fallback_agent_name="clarify-agent",
+    router_config=RouterConfig(
+        routing_strategy="system_one_classifier",
+        system_one_min_confidence=0.5,     # optional; measured for Jev
+    ),
+)
+
+# Loop: stop when P(complete) >= 0.5
+loop = LoopAgent(
+    name="refine",
+    agent=writer,
+    termination=TerminationConfig(type=TerminationType.SYSTEM_ONE_CLASSIFIER, max_iterations=5),
+)
+
+# Reflection / supervised: a confident pass skips the critic or supervisor call
+ReflectionConfig(verdict_mode="system_one_classifier")
+SupervisedConfig(verdict_mode="system_one_classifier")
+
+# Tool approval: clearly low-risk calls to listed tools are approved; everything else asks a person
+AgentConfig(
+    tool_approval={"get_*", "send_*"},
+    approval_handler=system_one_approval_handler(
+        auto_approve_tools={"get_*"},
+        escalate_to=your_reviewer,
+    ),
 )
 ```
 
-The router now asks the backend instead of the LLM. Every decision is logged:
+### 1.4 · Is it working?
 
-```
-Router 'triage' decided_by=system_one backend=openrouter route=billing-agent p=0.990 confidence=0.990
-```
+| You see | It means |
+|---|---|
+| One log line per decision with `decided_by=system_one`, e.g. `Router 'triage' decided_by=system_one backend=openrouter route=billing-agent p=0.990 confidence=0.990`, `Loop termination decided_by=system_one … p_complete=0.920 threshold=0.5 -> stop`, `Tool 'get_balance' auto-approved by system_one:… (P(risky)=0.040 < 0.1)` | Working |
+| `SystemOneNotConfiguredError` raised when the agent is built | No backend: set `SYSTEM_ONE_BACKEND` |
+| The agent builds, but every decision logs a `WARNING` such as `System One routing failed … (SystemOneNotConfiguredError)` | The backend cannot be built — usually its key or its pip extra is missing. Each seam falls back (§5) |
+| A `WARNING` naming `SystemOneTimeoutError` or `SystemOneBackendError` | The backend is slow or down; each seam falls back the same way |
+| A log line naming `SYSTEM_ONE_DISABLED`, e.g. `Loop termination decided_by=legacy (SYSTEM_ONE_DISABLED)` | The kill switch is on. Tool approval logs nothing extra: every gated call simply goes to the person |
+
+> **Three things that catch newcomers.** (1) `SYSTEM_ONE_BACKEND` alone changes
+> nothing — a seam must also be switched on in code. (2) A local backend's first
+> call is slow: it loads the model once. (3) Thresholds do not carry over between
+> backends: the router floor of 0.5 suits Jev but sends most Laya requests to the
+> fallback, and local NLI reports no confidence at all, so with a floor it never
+> routes.
 
 ---
 
@@ -70,8 +143,10 @@ A backend is named by a spec, `<prefix>:<model>`.
 | `laya-mlx:` | Laya on Apple Silicon MLX (`laya-mlx:aac6fef/laya-mlx`) | this process | binary, choice, score | `[laya-mlx]` extra |
 
 - **Each backend reads only its own key.** A TypeSafe key is never sent to
-  OpenRouter, or the reverse. A backend without its key raises
-  `SystemOneNotConfiguredError` when it is built, naming the variable to set.
+  OpenRouter, or the reverse. A backend without its key (or a local backend
+  without its package) raises `SystemOneNotConfiguredError`, naming what to set,
+  when it is first built — at the first decision, not when the agent is built —
+  and each seam treats that as a failure (§5).
 - **Remote backends retry once** on 408, 429, 500, 502–504, 524 and 529, honouring
   `Retry-After` but never past the call's timeout. Cost and token usage are in
   `provenance.usage`.
