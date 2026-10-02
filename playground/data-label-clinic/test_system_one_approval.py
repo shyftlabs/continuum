@@ -3,8 +3,8 @@
 Like gateway-multi-agent-shop's System One modes: available only when .env names
 a backend in SYSTEM_ONE_BACKEND, off by default, and with it off the clinic is
 exactly as before (approval per CLINIC_APPROVAL). With it on, a gated tool call
-goes to system_one_approval_handler first: rule 1 (the tool is eligible) and
-rule 2 (the run carries no data label) are checked before anything is sent, and
+goes to system_one_approval_handler first: rule 2 (the tool is eligible) and
+rule 1 (the run carries no data label) are checked before anything is sent, and
 only a call Jev scores below P(risky) 0.1 is auto-approved. Everything else goes
 to the person CLINIC_APPROVAL names -- the browser prompt when that is "off".
 
@@ -15,7 +15,7 @@ Two things the clinic needed that the shop did not:
   did not allow, so Jev could never be reached: every gated call would escalate
   with "the risk classifier could not answer". The exact resource is now allowed
   (no glob, the clinic's rule), and PHI runs are denied every system_one
-  resource -- a second line behind rule 2, so PHI never reaches Jev even if the
+  resource -- a second line behind rule 1, so PHI never reaches Jev even if the
   label rule were switched off.
 * Only one tool was gated, and a harmless one. With the toggle on,
   send_referral_email is gated too, so a risky call (mail to an outside address)
@@ -193,7 +193,7 @@ class TestThePolicyLetsJevBeReached:
         assert store.check([AGENT], "system_one:remote:jev:jev-latest").allowed is False
 
     def test_a_phi_run_is_denied_every_system_one_resource(self, backend):
-        """The second line behind rule 2."""
+        """The second line behind rule 1."""
         backend(JEV)
         config = _load("config")
         store = config.build_policy_store()

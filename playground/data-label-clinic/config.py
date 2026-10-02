@@ -261,7 +261,7 @@ def build_policy_store() -> PolicyStore:
     )
 
     # 6. SYSTEM ONE — a PHI run may not be sent to any System One classifier. A
-    #    second line behind the approval handler's rule 2 (a labelled run never
+    #    second line behind the approval handler's rule 1 (a labelled run never
     #    reaches the classifier at all): even with that rule switched off, PHI
     #    stays on this host. A glob is right for a DENY: it covers backends added
     #    later.
@@ -282,8 +282,8 @@ def build_policy_store() -> PolicyStore:
 #
 # Available only when .env names a backend in SYSTEM_ONE_BACKEND; off by
 # default, and with it off the clinic is exactly as before. With it on, a gated
-# call goes to the SDK's system_one_approval_handler first: rule 1 (the tool is
-# eligible) and rule 2 (the run carries no data label) are checked before
+# call goes to the SDK's system_one_approval_handler first: rule 2 (the tool is
+# eligible) and rule 1 (the run carries no data label) are checked before
 # anything is sent, and only a call scored below P(risky) 0.1 is auto-approved.
 # Everything else goes to the person CLINIC_APPROVAL names.
 
