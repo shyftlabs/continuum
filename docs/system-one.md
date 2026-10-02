@@ -134,13 +134,13 @@ AgentConfig(
 
 A backend is named by a spec, `<prefix>:<model>`.
 
-| Prefix | Backend | Runs | Question types | Needs |
-|---|---|---|---|---|
-| `jev:` | TypeSafe's Jev, direct (`jev:jev-latest`) | remote | binary, choice, score | `TYPESAFE_API_KEY` |
-| `openrouter:` | Jev through OpenRouter's Decisions API (`openrouter:typesafe/jev-1.13`) | remote | binary, choice, score | `OPENROUTER_API_KEY` |
-| `local:` | an NLI cross-encoder (`local:cross-encoder/nli-deberta-v3-small`) | this process | binary, choice | `[embeddings]` extra |
-| `laya:` | Convai's open-weight Laya (`laya:convaiinnovations/laya`) | this process | binary, choice, score | `[laya]` extra |
-| `laya-mlx:` | Laya on Apple Silicon MLX (`laya-mlx:aac6fef/laya-mlx`) | this process | binary, choice, score | `[laya-mlx]` extra |
+| Prefix | Backend | Example spec | Runs | Question types | Needs |
+|---|---|---|---|---|---|
+| `jev:` | TypeSafe's Jev, direct | `jev:jev-latest` | remote | binary, choice, score | `TYPESAFE_API_KEY` |
+| `openrouter:` | Jev through OpenRouter's Decisions API | `openrouter:typesafe/jev-1.13` | remote | binary, choice, score | `OPENROUTER_API_KEY` |
+| `local:` | an NLI cross-encoder | `local:cross-encoder/nli-deberta-v3-small` | this process | binary, choice | `[embeddings]` extra |
+| `laya:` | Convai's open-weight Laya | `laya:convaiinnovations/laya` | this process | binary, choice, score | `[laya]` extra |
+| `laya-mlx:` | Laya on Apple Silicon MLX | `laya-mlx:aac6fef/laya-mlx` | this process | binary, choice, score | `[laya-mlx]` extra |
 
 - **Each backend reads only its own key.** A TypeSafe key is never sent to
   OpenRouter, or the reverse. A backend without its key (or a local backend

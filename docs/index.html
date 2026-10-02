@@ -2300,12 +2300,12 @@ loop = <span class="cls">LoopAgent</span>(
   <h3>Backends</h3>
   <p>A backend is named by a spec, <code>&lt;prefix&gt;:&lt;model&gt;</code>.</p>
   <table>
-    <tr><th>Prefix</th><th>Backend</th><th>Runs</th><th>Question types</th><th>Needs</th></tr>
-    <tr><td><code>jev:</code></td><td>TypeSafe's Jev, direct (<code>jev:jev-latest</code>)</td><td>remote</td><td>binary, choice, score</td><td><code>TYPESAFE_API_KEY</code></td></tr>
-    <tr><td><code>openrouter:</code></td><td>Jev through OpenRouter's Decisions API (<code>openrouter:typesafe/jev-1.13</code>)</td><td>remote</td><td>binary, choice, score</td><td><code>OPENROUTER_API_KEY</code></td></tr>
-    <tr><td><code>local:</code></td><td>an NLI cross-encoder (<code>local:cross-encoder/nli-deberta-v3-small</code>)</td><td>this process</td><td>binary, choice</td><td><code>[embeddings]</code> extra</td></tr>
-    <tr><td><code>laya:</code></td><td>Convai's open-weight Laya (<code>laya:convaiinnovations/laya</code>)</td><td>this process</td><td>binary, choice, score</td><td><code>[laya]</code> extra</td></tr>
-    <tr><td><code>laya-mlx:</code></td><td>Laya on Apple Silicon MLX (<code>laya-mlx:aac6fef/laya-mlx</code>)</td><td>this process</td><td>binary, choice, score</td><td><code>[laya-mlx]</code> extra</td></tr>
+    <tr><th>Prefix</th><th>Backend</th><th>Example spec</th><th>Runs</th><th>Question types</th><th>Needs</th></tr>
+    <tr><td><code>jev:</code></td><td>TypeSafe's Jev, direct</td><td><code style="white-space:nowrap">jev:jev-latest</code></td><td>remote</td><td>binary, choice, score</td><td><code>TYPESAFE_API_KEY</code></td></tr>
+    <tr><td><code>openrouter:</code></td><td>Jev through OpenRouter's Decisions API</td><td><code style="white-space:nowrap">openrouter:typesafe/jev-1.13</code></td><td>remote</td><td>binary, choice, score</td><td><code>OPENROUTER_API_KEY</code></td></tr>
+    <tr><td><code>local:</code></td><td>an NLI cross-encoder</td><td><code style="white-space:nowrap">local:cross-encoder/nli-deberta-v3-small</code></td><td>this process</td><td>binary, choice</td><td><code>[embeddings]</code> extra</td></tr>
+    <tr><td><code>laya:</code></td><td>Convai's open-weight Laya</td><td><code style="white-space:nowrap">laya:convaiinnovations/laya</code></td><td>this process</td><td>binary, choice, score</td><td><code>[laya]</code> extra</td></tr>
+    <tr><td><code>laya-mlx:</code></td><td>Laya on Apple Silicon MLX</td><td><code style="white-space:nowrap">laya-mlx:aac6fef/laya-mlx</code></td><td>this process</td><td>binary, choice, score</td><td><code>[laya-mlx]</code> extra</td></tr>
   </table>
   <ul>
     <li><strong>Each backend reads only its own key</strong> — a TypeSafe key is never sent to OpenRouter, or the reverse. A backend without its key (or a local backend without its package) raises <code>SystemOneNotConfiguredError</code>, naming what to set, when it is first built — at the first decision, not when the agent is built — and each seam treats that as a failure.</li>
