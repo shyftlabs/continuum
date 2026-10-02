@@ -135,6 +135,10 @@ def build_policy_store() -> PolicyStore:
                 "tool:clinic__web_lookup",
                 "tool:pharmacy__lookup_patient",
                 "tool:pharmacy__check_interactions",
+                # System One: the exact backend .env names, when it names one.
+                # Every classify() call is checked against this resource, so
+                # without it a fail-closed store refuses Jev on every run.
+                *([resource] if (resource := system_one_resource()) else []),
             ],
             effect="allow",
         )
@@ -256,7 +260,111 @@ def build_policy_store() -> PolicyStore:
         )
     )
 
+    # 6. SYSTEM ONE — a PHI run may not be sent to any System One classifier. A
+    #    second line behind the approval handler's rule 1 (a labelled run never
+    #    reaches the classifier at all): even with that rule switched off, PHI
+    #    stays on this host. A glob is right for a DENY: it covers backends added
+    #    later.
+    store.add_policy(
+        AccessPolicy(
+            name="phi-no-system-one",
+            subjects=[PHI],
+            resources=["system_one:*"],
+            effect="deny",
+            denial_message="PHI may not be sent to a System One classifier.",
+        )
+    )
+
     return store
+
+
+# --- System One (Jev) tool approval, behind the header toggle -------------- #
+#
+# Available only when .env names a backend in SYSTEM_ONE_BACKEND; off by
+# default, and with it off the clinic is exactly as before. With it on, a gated
+# call goes to the SDK's system_one_approval_handler first: rule 2 (the tool is
+# eligible) and rule 1 (the run carries no data label) are checked before
+# anything is sent, and only a call scored below P(risky) 0.1 is auto-approved.
+# Everything else goes to the person CLINIC_APPROVAL names.
+
+# Gated while the toggle is on. send_referral_email too, so a risky call (mail to
+# an outside address) can be seen going to a person, not only an approval.
+SYSTEM_ONE_APPROVAL_TOOLS = frozenset(
+    {"pharmacy__check_interactions", "clinic__send_referral_email"}
+)
+
+
+def system_one_status() -> dict:
+    """What .env says about System One, for the UI and /status.
+
+    ``configured`` is only that a backend is named; ``ready`` is that it can be
+    built -- a backend missing its API key is named but cannot answer, and the
+    toggle would claim System One decides while every call goes to a person.
+    Building it sends nothing (the instance is cached for the calls that do).
+    """
+    from continuum.config import settings
+    from continuum.system_one import SystemOneError
+    from continuum.system_one.registry import resolve_classifier
+
+    backend = getattr(settings, "system_one_backend", None) or None
+    problem = None
+    if backend is None:
+        problem = "Set SYSTEM_ONE_BACKEND in .env to enable System One tool approval."
+    else:
+        try:
+            resolve_classifier(backend)
+        except SystemOneError as exc:
+            from continuum.utils.secrets import redact_sensitive_values
+
+            # The message alone: str(exc) adds the error code and context.
+            problem = redact_sensitive_values(exc.message)
+    return {
+        "configured": backend is not None,
+        "ready": problem is None,
+        "problem": problem,
+        "backend": backend,
+        "disabled": bool(getattr(settings, "system_one_disabled", False)),
+    }
+
+
+def system_one_resource() -> str | None:
+    """The policy resource a call to the configured backend is checked against,
+    e.g. ``system_one:remote:openrouter:typesafe/jev-1.13``; None if there is no
+    usable backend (then nothing System One is allowed, and every gated call
+    escalates)."""
+    status = system_one_status()
+    if not status["ready"]:
+        return None
+    from continuum.system_one import SystemOneError
+    from continuum.system_one.layer import egress_resource
+    from continuum.system_one.registry import resolve_classifier
+
+    try:
+        return egress_resource(resolve_classifier(status["backend"]))
+    except SystemOneError:
+        return None
+
+
+def system_one_escalation_target():
+    """Who decides what Jev does not auto-approve: the handler CLINIC_APPROVAL
+    names, or the browser prompt when it names none ("off")."""
+    handler = build_approval_handler()
+    if handler is not None:
+        return handler
+    from approval_ui import ui_approval_handler
+
+    return ui_approval_handler
+
+
+def build_system_one_approval_handler(escalate_to=None):
+    """The SDK handler with the clinic's tools and reviewer. Raises
+    SystemOneNotConfiguredError when no backend is configured."""
+    from continuum.agent.system_one_approval import system_one_approval_handler
+
+    return system_one_approval_handler(
+        auto_approve_tools=SYSTEM_ONE_APPROVAL_TOOLS,
+        escalate_to=escalate_to or system_one_escalation_target(),
+    )
 
 
 # --- output scanner (the SDK's output_scanners hook) ---------------------- #

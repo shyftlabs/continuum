@@ -129,6 +129,9 @@ class TerminationType(str, Enum):
     TOOL_CALL = "tool_call"  # Terminates on specific tool call
     OUTPUT_MATCH = "output_match"  # Terminates when output matches pattern
     CUSTOM = "custom"  # Custom callable condition
+    # A System One classifier answers "is the task complete?" as a probability
+    # (continuum.system_one); stops at TerminationConfig.system_one_threshold.
+    SYSTEM_ONE_CLASSIFIER = "system_one_classifier"
 
 
 class HistorySummarizationMode(str, Enum):
@@ -739,6 +742,12 @@ class TerminationConfig:
     # For LLM_DECISION: temperature for the completion-check call (None omits it)
     decision_temperature: float | None = 0.1
 
+    # For LLM_DECISION: max_tokens for the completion-check call. None = the
+    # normal LLM default (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden
+    # reasoning counts against the cap, and a small one leaves an empty reply,
+    # read as CONTINUE.
+    decision_max_tokens: int | None = None
+
     # For TOOL_CALL: Tool name that triggers termination
     tool_name: str | None = None
 
@@ -748,8 +757,21 @@ class TerminationConfig:
     # For CUSTOM: Callable that returns True when done
     condition: Callable[[str, list[dict[str, Any]]], bool] | None = None
 
+    # For SYSTEM_ONE_CLASSIFIER: this loop's own backend spec (None uses the
+    # container / SYSTEM_ONE_BACKEND default), and the P(complete) at which the
+    # loop stops. 0.5 is "more likely done than not"; a miscalibrated backend
+    # costs at most extra or missing iterations, still capped by max_iterations.
+    system_one_backend: str | None = None
+    system_one_threshold: float = 0.5
+
     # Max iterations (safety limit)
     max_iterations: int = 10
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.system_one_threshold <= 1.0:
+            raise ValueError(
+                f"system_one_threshold must be in (0, 1], got {self.system_one_threshold}"
+            )
 
 
 # =============================================================================
