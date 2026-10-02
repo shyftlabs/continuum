@@ -174,23 +174,9 @@ classifier was deciding when nothing was.
 
 ### Third-party backends
 
-```toml
-[project.entry-points."continuum.system_one"]
-mybackend = "my_package:make_classifier"   # called as make_classifier(model)
-```
-
-`mybackend:<model>` then resolves with no change to the SDK.
-`register_backend(prefix, factory)` does the same at runtime. A backend
-implements `ISystemOneClassifier` (`continuum.protocols`) and should pass the
-contract suite:
-
-```python
-from continuum.system_one.testing import SystemOneContract
-
-class TestMyBackend(SystemOneContract):
-    def make_classifier(self):
-        return MyClassifier(model="my-model")
-```
+A backend Continuum does not ship can be added in its own package, with no
+change to the SDK: once installed, its spec (`mybackend:<model>`) works
+anywhere a built-in one does. See §9.
 
 ---
 
@@ -474,3 +460,303 @@ usable backend their System One controls are greyed out with the reason.
 |---|---|---|
 | [`playground/gateway-multi-agent-shop`](../playground/gateway-multi-agent-shop) | The **router, loop, reflection and supervised** seams on a pet shop: each System One mode is the plain workflow with System One switched on, and every reply ends with what System One decided for it — route and confidence, P(complete) per round, P(pass) per draft next to the critic's or supervisor's verdict. | Pick `router-system-one`, `loop-system-one`, `reflection-system-one` or `supervised-system-one` in the mode dropdown. |
 | [`playground/data-label-clinic`](../playground/data-label-clinic) | **Tool approval** on a clinic agent: a harmless interaction check auto-approved, an email to an outside address sent to a person, and a patient-data run sent to a person without the classifier being asked. Each decision appears in the gate panel. | Tick **System One approval** next to Send. The three ways to watch it work are in [docs/system-one-approval.md](../playground/data-label-clinic/docs/system-one-approval.md). |
+
+---
+
+## 9 · Adding a backend
+
+A backend Continuum does not ship — **local** (a model running in your
+process, like Laya) or **remote** (a service you call, like Jev) — can live in
+its own installable Python package, with no change to the SDK. Four steps:
+write a class, register it, name it in a spec, and run the contract suite
+against it. The backend only turns questions into **raw** probabilities; the
+SDK does the rest — the kill switch, the policy check, validation and
+normalisation, and filling in question types the backend does not answer
+natively. The steps are the same for both; a remote backend also has to
+handle the network (§9.4).
+
+### 9.1 · The class
+
+| Member | What it is |
+|---|---|
+| `name` | the spec prefix, e.g. `"coinflip"` for `coinflip:<model>` |
+| `model` | the model this instance answers with |
+| `capabilities` | `SystemOneCapabilities(question_types=..., egress=...)`: the kinds it answers natively (`"binary"`, `"choice"`, `"score"`), and `"local"` or `"remote"` |
+| `async classify(state, questions)` | returns `SystemOneRawResult` |
+
+`SystemOneRawResult(distributions=..., raw_confidence=..., model=..., usage=...)`:
+
+- `distributions` — one per question ID: `{"true": p, "false": 1 - p}` for a
+  binary question, `{label: p}` for a choice, `{level_index: p}` for a score;
+- `raw_confidence` — the backend's own confidence per question ID, if it has one.
+  It becomes the answer's `confidence` (§4); leave it out otherwise;
+- `usage` — cost or token counts, shown in `provenance.usage`.
+
+Two rules the contract suite checks:
+
+- **refuse a question type you did not declare** with `SystemOneCapabilityError`.
+  The SDK fills in undeclared types before they reach you, so one arriving is a
+  bug;
+- **every failure is a `SystemOneError` subclass.** The seams fall back only on
+  those (§5); any other exception escapes them.
+
+A minimal local backend:
+
+```python
+from continuum.system_one import (
+    BinaryQuestion,
+    ChoiceQuestion,
+    SystemOneBackendError,
+    SystemOneCapabilities,
+    SystemOneCapabilityError,
+    SystemOneRawResult,
+)
+
+
+class CoinFlipClassifier:
+    name = "coinflip"  # the spec prefix: coinflip:<model>
+    capabilities = SystemOneCapabilities(
+        question_types=frozenset({"binary", "choice"}),  # score is filled in by the SDK
+        egress="local",  # "remote" if it calls a service
+    )
+
+    def __init__(self, model: str = "v1") -> None:
+        self.model = model
+
+    async def classify(self, state, questions):
+        for qid, q in questions.items():  # refuse kinds you did not declare
+            if q.kind not in self.capabilities.question_types:
+                raise SystemOneCapabilityError(
+                    f"coinflip cannot answer a {q.kind} question ('{qid}')"
+                )
+        try:
+            dists = {}
+            for qid, q in questions.items():
+                if isinstance(q, BinaryQuestion):
+                    dists[qid] = {"true": 0.5, "false": 0.5}
+                elif isinstance(q, ChoiceQuestion):
+                    dists[qid] = {label: 1 / len(q.labels) for label in q.labels}
+            return SystemOneRawResult(distributions=dists, model=self.model)
+        except Exception as e:  # every failure -> a SystemOneError
+            raise SystemOneBackendError(
+                f"coinflip failed ({type(e).__name__})", backend=self.name
+            ) from e
+
+
+def make_classifier(model: str) -> CoinFlipClassifier:  # what the entry point names
+    return CoinFlipClassifier(model=model)
+```
+
+### 9.2 · Register it, and use it
+
+In the backend package's `pyproject.toml`, so `pip install` is all a user needs:
+
+```toml
+[project.entry-points."continuum.system_one"]
+coinflip = "my_package:make_classifier"   # called as make_classifier(model)
+```
+
+Or at runtime, in a test or a single app: `register_backend("coinflip", make_classifier)`.
+
+Then use it like any built-in backend: `SYSTEM_ONE_BACKEND=coinflip:v1`, or a
+seam's own `system_one_backend=` / `backend=`. The backend is built on first
+use, so a constructor that raises `SystemOneNotConfiguredError` (a missing key)
+surfaces at the first decision, and each seam falls back.
+
+A policy store that denies by default must allow the new resource,
+`system_one:<egress>:coinflip:<model>` — `egress_resource(classifier)` returns it.
+
+### 9.3 · Test it with the contract suite
+
+```python
+from continuum.system_one.testing import SystemOneContract
+
+from my_backend import CoinFlipClassifier
+
+
+class TestCoinFlip(SystemOneContract):
+    def make_classifier(self):
+        return CoinFlipClassifier()
+```
+
+It checks that the backend declares its capabilities and names itself, that
+answer keys match the question IDs, that probabilities are in range and sum to
+one, that undeclared kinds are refused, that failures are `SystemOneError`s,
+and that it answers within `latency_budget_ms` (500 ms at p95 by default;
+override it on the test class for a slower service).
+
+- **The tests are async.** Run them with pytest-asyncio in auto mode
+  (`asyncio_mode = "auto"` in the package's pytest config, or
+  `-o asyncio_mode=auto`); without it most of them fail with *async def
+  functions are not natively supported*.
+- **Implement `make_failing_classifier()`.** Without it the failure test is
+  skipped silently, and a backend that leaks a raw `httpx` error passes.
+
+### 9.4 · A remote backend
+
+Everything above applies, plus what calling a service over the network needs:
+
+| Concern | What to do |
+|---|---|
+| **`egress="remote"`** | The policy resource becomes `system_one:remote:<prefix>:<model>`, so a rule denying `system_one:remote:*` to a `phi` run covers the new backend. A remote backend declaring `"local"` would send that data out; the SDK cannot detect it. |
+| **Its own key** | Continuum's settings know only its built-in keys, so read yours yourself (an environment variable or a constructor argument), and raise `SystemOneNotConfiguredError` naming the variable when it is missing. Never put the key or the response body in an error or a log line. |
+| **Its own timeout** | `classify()` does not time the backend; a hung service would hang the router, loop or approval gate. Set one deadline per call — `SYSTEM_ONE_TIMEOUT_SECONDS` is the setting users expect — and give every request only what remains. |
+| **The right error** | no answer in time → `SystemOneTimeoutError`; connection failure or HTTP error → `SystemOneBackendError` (with `status=`); a body that is not JSON or an answer missing or malformed → `SystemOneResponseError`. |
+| **Retries, if any** | Inside the deadline only; never retry a timeout — its budget is spent. |
+| **Confidence and usage** | Pass the service's own figures through `raw_confidence` and `usage`. |
+| **An injectable HTTP client** | So tests run against a fake service instead of the network: the latency test alone would make five paid calls per run. |
+
+```python
+import os
+import time
+
+import httpx
+from continuum.config import settings
+from continuum.system_one import (
+    BinaryQuestion,
+    SystemOneBackendError,
+    SystemOneCapabilities,
+    SystemOneCapabilityError,
+    SystemOneNotConfiguredError,
+    SystemOneRawResult,
+    SystemOneResponseError,
+    SystemOneTimeoutError,
+)
+
+
+class AcmeClassifier:
+    """acme:<model> -- a hosted typed-decision service."""
+
+    name = "acme"
+    capabilities = SystemOneCapabilities(
+        question_types=frozenset({"binary", "choice"}),
+        egress="remote",  # state leaves the process: policy sees system_one:remote:acme:<model>
+    )
+
+    def __init__(
+        self,
+        model="acme-1",
+        *,
+        api_key=None,
+        base_url="https://api.acme.example",
+        timeout=None,
+        client=None,
+    ):
+        key = api_key or os.environ.get("ACME_API_KEY")
+        if not key:
+            raise SystemOneNotConfiguredError(
+                "The acme backend needs an API key: set ACME_API_KEY."
+            )
+        self.model = model
+        self._key = key
+        self._url = f"{base_url.rstrip('/')}/v1/decide"
+        self._timeout = float(timeout or settings.system_one_timeout_seconds)
+        self._client = client or httpx.AsyncClient()  # injected in tests
+
+    async def classify(self, state, questions):
+        for qid, q in questions.items():
+            if q.kind not in self.capabilities.question_types:
+                raise SystemOneCapabilityError(f"acme cannot answer a {q.kind} question ('{qid}')")
+        payload = {
+            "model": self.model,
+            "state": state,
+            "questions": {qid: self._wire(q) for qid, q in questions.items()},
+        }
+        body = await self._post(payload)
+        return self._parse(body, questions)
+
+    def _wire(self, q):
+        if isinstance(q, BinaryQuestion):
+            return {"type": "yes_no", "text": q.instructions}
+        return {"type": "pick_one", "text": q.instructions, "options": list(q.labels)}
+
+    async def _post(self, payload):
+        deadline = time.monotonic() + self._timeout  # the SDK does not time the call: you must
+        try:
+            r = await self._client.post(
+                self._url,
+                json=payload,
+                timeout=deadline - time.monotonic(),
+                headers={"Authorization": f"Bearer {self._key}"},
+            )
+        except httpx.TimeoutException as e:
+            raise SystemOneTimeoutError(
+                f"acme did not answer within {self._timeout}s.", backend=self.name
+            ) from e
+        except httpx.HTTPError as e:
+            raise SystemOneBackendError(
+                f"Could not reach acme ({type(e).__name__}).", backend=self.name
+            ) from e
+        if not r.is_success:  # status only: never the body, never the key
+            raise SystemOneBackendError(
+                f"acme returned HTTP {r.status_code}.", backend=self.name, status=r.status_code
+            )
+        try:
+            return r.json()
+        except ValueError as e:
+            raise SystemOneResponseError("acme returned a body that is not JSON.") from e
+
+    def _parse(self, body, questions):
+        dists, confidence = {}, {}
+        try:
+            for qid, q in questions.items():
+                a = body["answers"][qid]
+                if isinstance(q, BinaryQuestion):
+                    dists[qid] = {"true": float(a["p_yes"]), "false": 1.0 - float(a["p_yes"])}
+                else:
+                    dists[qid] = {label: float(a["scores"][label]) for label in q.labels}
+                if "confidence" in a:
+                    confidence[qid] = float(a["confidence"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise SystemOneResponseError(f"acme's answer is malformed ({type(e).__name__}).") from e
+        return SystemOneRawResult(
+            distributions=dists,
+            raw_confidence=confidence,
+            model=body.get("model", self.model),
+            usage=body.get("usage", {}),
+        )
+
+
+def make_classifier(model):
+    return AcmeClassifier(model=model)
+```
+
+Its contract test runs against a fake service, and against one that fails:
+
+```python
+import json
+
+import httpx
+from continuum.system_one.testing import SystemOneContract
+
+from acme_backend import AcmeClassifier
+
+
+def fake_acme(request):
+    """Answers like the real service, without the network."""
+    asked = json.loads(request.content)["questions"]
+    answers = {
+        qid: {"p_yes": 0.2, "confidence": 0.9}
+        if q["type"] == "yes_no"
+        else {"scores": {o: 1 / len(q["options"]) for o in q["options"]}, "confidence": 0.8}
+        for qid, q in asked.items()
+    }
+    body = {"model": "acme-1", "answers": answers, "usage": {"cost": 0.0001}}
+    return httpx.Response(200, json=body)
+
+
+class TestAcme(SystemOneContract):
+    def make_classifier(self):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(fake_acme))
+        return AcmeClassifier(api_key="test-key", client=client)
+
+    def make_failing_classifier(self):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+        return AcmeClassifier(api_key="test-key", client=client)
+```
+
+If the service speaks the same typed-decision format as Jev, the SDK's
+`JevOpenRouterClassifier` shows a backend that differs from Jev only in its
+name, key, base URL and path. Subclassing it relies on internal names
+(`_key_setting`, `_path`, `backends.typed_wire`), though, so a package outside
+the SDK is safer with its own class.
