@@ -12,6 +12,7 @@ past 900 lines that did not concern them.
 | [F3 — MCP server trust](F3-server-trust.md) | rug pulls, pinning, drift, the pin gate | ~375 |
 | [F7 — approval](F7-approval.md) | a human-in-the-loop gate before a declared tool call |  ~210 |
 | [Namespacing](namespacing.md) | two servers, one colliding tool name; transports | ~495 |
+| [System One approval](system-one-approval.md) | Jev approves tool calls first: three ways to see it work | ~190 |
 
 > Commands in this guide run from `playground/data-label-clinic/`, one level
 > up from this file.

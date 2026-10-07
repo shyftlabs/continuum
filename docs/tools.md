@@ -1155,6 +1155,27 @@ Approvals are **not remembered**: a retried run asks again. `run_id` and
 needs; the SDK does not pick one, because half-built idempotency looks like
 protection while quietly authorising repeats.
 
+### Letting a System One classifier answer first
+
+`system_one_approval_handler` is an `approval_handler` that auto-approves only
+clearly low-risk calls (P(risky) < 0.1 by default) and sends everything else to
+the reviewer you pass as `escalate_to`. Two fixed rules run before the
+classifier is asked: the tool must be in `auto_approve_tools`, and the run must
+carry no data label. Any failure goes to the person. See
+[system-one.md §5.4](system-one.md#54--tool-approval-system_one_approval_handler).
+
+```python
+from continuum.agent.system_one_approval import system_one_approval_handler
+
+AgentConfig(
+    tool_approval={"get_*", "send_*"},
+    approval_handler=system_one_approval_handler(
+        auto_approve_tools={"get_*"},
+        escalate_to=approve,
+    ),
+)
+```
+
 ### A reviewer who answers in an hour
 
 A blocking handler holds the caller's connection open. For a reviewer who is not

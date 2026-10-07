@@ -91,6 +91,11 @@ class ContextManagementConfig:
     summarization_max_retries: int = field(
         default_factory=lambda: settings.context_summarization_max_retries
     )
+    # max_tokens for the summary call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden reasoning counts
+    # against the cap, and a small one cuts the summary mid-sentence. The
+    # prompt asks for a concise summary; this is a guard, not the length control.
+    summarization_max_tokens: int | None = None
 
     # Compression settings
     keep_recent_messages: int = field(default_factory=lambda: settings.context_keep_recent_messages)
@@ -109,6 +114,7 @@ class ContextManagementConfig:
             "summarization_temperature": self.summarization_temperature,
             "summarization_timeout": self.summarization_timeout,
             "summarization_max_retries": self.summarization_max_retries,
+            "summarization_max_tokens": self.summarization_max_tokens,
             "keep_recent_messages": self.keep_recent_messages,
             "compression_strategy": self.compression_strategy.value,
             "enable_caching": self.enable_caching,
@@ -730,7 +736,11 @@ SUMMARY:"""
                 summary_llm_config = LLMConfig(
                     model=config.summarization_model,
                     temperature=config.summarization_temperature,
-                    max_tokens=1000,  # Limit summary length
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if config.summarization_max_tokens is None
+                        else config.summarization_max_tokens
+                    ),
                 )
 
                 summary_response = await asyncio.wait_for(

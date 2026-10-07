@@ -25,6 +25,7 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -38,13 +39,33 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._quality_gate import (
+    VerdictMode,
+    system_one_approves,
+    validate_gate_settings,
+)
+from continuum.config import settings
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
+from continuum.system_one import require_backend
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
 
 logger = get_logger(__name__)
+
+
+def _max_tokens(configured: int | None) -> int:
+    """The configured cap, else the normal LLM default (DEFAULT_LLM_MAX_TOKENS)."""
+    return settings.default_llm_max_tokens if configured is None else configured
+
+
+# "SCORE: 0.8" as models actually write it: any case, markdown emphasis or a
+# bullet around the name, ":" or "=", words after the number ("0.9 (good)").
+# The field must be the word "score" -- "Scoreboard: 3" is not a score.
+_FIELD = r"^[\s>*_#`\-]*{name}[\s*_`]*[:=][\s*_`]*"
+_SCORE_FIELD = re.compile(_FIELD.format(name="score") + r"(\d*\.?\d+)", re.IGNORECASE)
+_FEEDBACK_FIELD = re.compile(_FIELD.format(name="feedback") + r"(.+)$", re.IGNORECASE)
 
 
 # =============================================================================
@@ -61,9 +82,25 @@ class SupervisedConfig:
     supervisor_model: str | None = None  # Model for quality scoring (default: agent model)
     # Temperature for the supervisor scoring call (None omits it)
     supervisor_temperature: float | None = 0.1
+    # max_tokens for the supervisor scoring call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS). It used to be a hard-coded 200; on reasoning models
+    # hidden reasoning counts against it, and measured live 5/5 calls were cut
+    # before the FEEDBACK line -- a longer trace leaves no SCORE at all.
+    supervisor_max_tokens: int | None = None
     pass_full_history: bool = False  # Pass full history vs just last output
     fail_strategy: FailStrategy = FailStrategy.FAIL_FAST
     pipeline_context_max_chars: int | None = 300  # None = no truncation
+    # "system_one_classifier": a System One classifier is asked first and may
+    # only approve -- P(pass) >= system_one_pass_threshold accepts the step with
+    # no supervisor call; anything else, a backend error or SYSTEM_ONE_DISABLED
+    # goes to the supervisor as before. system_one_backend is this agent's own
+    # spec; None uses the container / SYSTEM_ONE_BACKEND default.
+    verdict_mode: VerdictMode = "llm"
+    system_one_backend: str | None = None
+    system_one_pass_threshold: float = 0.9
+
+    def __post_init__(self) -> None:
+        validate_gate_settings(self.verdict_mode, self.system_one_pass_threshold)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,9 +108,13 @@ class SupervisedConfig:
             "max_retries": self.max_retries,
             "supervisor_model": self.supervisor_model,
             "supervisor_temperature": self.supervisor_temperature,
+            "supervisor_max_tokens": self.supervisor_max_tokens,
             "pass_full_history": self.pass_full_history,
             "fail_strategy": self.fail_strategy.value,
             "pipeline_context_max_chars": self.pipeline_context_max_chars,
+            "verdict_mode": self.verdict_mode,
+            "system_one_backend": self.system_one_backend,
+            "system_one_pass_threshold": self.system_one_pass_threshold,
         }
 
 
@@ -120,6 +161,14 @@ class SupervisedSequentialAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("SupervisedSequentialAgent requires at least one agent")
+
+        if self.supervised_config.verdict_mode == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the supervisor at run time.
+            require_backend(
+                self.supervised_config.system_one_backend,
+                seam=f"SupervisedSequentialAgent '{self.name}'",
+            )
 
     @publish_active_policy
     async def execute(
@@ -250,6 +299,28 @@ class SupervisedSequentialAgent(BaseAgent):
                                 )
                             total_usage = total_usage.add(response.usage)
 
+                            # A confident System One pass accepts the step with no
+                            # supervisor call; anything else is scored as before.
+                            if self.supervised_config.verdict_mode == "system_one_classifier":
+                                p_pass = await system_one_approves(
+                                    seam=f"SupervisedSequentialAgent '{self.name}' step {step_num}",
+                                    request=current_input,
+                                    draft=response.content or "",
+                                    backend=self.supervised_config.system_one_backend,
+                                    threshold=self.supervised_config.system_one_pass_threshold,
+                                )
+                                if p_pass is not None:
+                                    best_response = response
+                                    step_span.set_output(
+                                        {
+                                            "success": True,
+                                            "decided_by": "system_one",
+                                            "p_pass": p_pass,
+                                            "attempts": attempt + 1,
+                                        }
+                                    )
+                                    break
+
                             # Score the output
                             score, feedback, score_usage = await self._score_output(
                                 step_num=step_num,
@@ -259,6 +330,29 @@ class SupervisedSequentialAgent(BaseAgent):
                                 llm_client=llm_client,
                             )
                             total_usage = total_usage.add(score_usage)
+
+                            # No score (the supervisor could not be asked, failed,
+                            # or gave no readable SCORE) is not a low score. The
+                            # output is kept and reported as unscored; retrying
+                            # would have no feedback to act on.
+                            if score is None:
+                                logger.warning(
+                                    "SupervisedSequential step %s '%s': supervisor could not "
+                                    "score the output (%s); keeping it unscored",
+                                    step_num,
+                                    agent.name,
+                                    feedback,
+                                )
+                                best_response = response
+                                step_span.set_output(
+                                    {
+                                        "success": True,
+                                        "scored": False,
+                                        "reason": feedback,
+                                        "attempts": attempt + 1,
+                                    }
+                                )
+                                break
 
                             logger.info(
                                 "SupervisedSequential step %s '%s' score=%s (threshold=%s)",
@@ -457,15 +551,21 @@ class SupervisedSequentialAgent(BaseAgent):
         original_input: str,
         output: str,
         llm_client: Any | None,
-    ) -> tuple[float, str, TokenUsage]:
+    ) -> tuple[float | None, str, TokenUsage]:
         """
         Ask the supervisor LLM to score the output (0.0–1.0).
 
         Returns:
-            (score, feedback, token_usage)
+            (score, feedback, token_usage). ``score`` is ``None`` when there is no
+            score to act on -- no LLM client, the call failed, or the reply had no
+            readable ``SCORE:`` line -- and ``feedback`` then says why, in fixed
+            words (never the exception text, which could reach the worker's
+            prompt). An empty output is a real verdict: 0.0.
         """
-        if not llm_client or not output.strip():
-            return 0.5, "No supervisor available — defaulting to pass", TokenUsage()
+        if not output.strip():
+            return 0.0, "The output was empty.", TokenUsage()
+        if not llm_client:
+            return None, "no supervisor LLM is available", TokenUsage()
 
         from continuum.llm.config import LLMConfig
 
@@ -490,7 +590,7 @@ class SupervisedSequentialAgent(BaseAgent):
                 config=LLMConfig(
                     model=model,
                     temperature=self.supervised_config.supervisor_temperature,
-                    max_tokens=200,
+                    max_tokens=_max_tokens(self.supervised_config.supervisor_max_tokens),
                 ),
                 auto_session=False,
             )
@@ -504,23 +604,24 @@ class SupervisedSequentialAgent(BaseAgent):
                 )
 
             content = (response.content or "").strip()
-            score = 0.5
+            score: float | None = None
             feedback = "No feedback provided"
 
             for line in content.splitlines():
-                if line.startswith("SCORE:"):
-                    try:
-                        score = max(0.0, min(1.0, float(line.split(":", 1)[1].strip())))
-                    except ValueError:
-                        pass
-                elif line.startswith("FEEDBACK:"):
-                    feedback = line.split(":", 1)[1].strip()
+                if score is None and (m := _SCORE_FIELD.match(line)):
+                    score = max(0.0, min(1.0, float(m.group(1))))
+                elif m := _FEEDBACK_FIELD.match(line):
+                    feedback = m.group(1).strip()
 
+            if score is None:
+                return None, "the supervisor reply had no readable SCORE", usage
             return score, feedback, usage
 
         except Exception as e:
-            logger.debug("Supervisor scoring failed: %s — defaulting to 0.5", e)
-            return 0.5, f"Scoring error: {e}", TokenUsage()
+            logger.warning(
+                "Supervisor scoring call failed for step %s (%s)", step_num, type(e).__name__
+            )
+            return None, f"the supervisor call failed ({type(e).__name__})", TokenUsage()
 
     def _get_llm(self) -> Any | None:
         try:

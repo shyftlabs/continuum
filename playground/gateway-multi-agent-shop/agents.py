@@ -131,6 +131,36 @@ def make_writer_agent(model: str, gateway_mode: str | None = None) -> BaseAgent:
     )
 
 
+def make_clarify_agent(model: str, gateway_mode: str | None = None) -> BaseAgent:
+    """Where an unsure router sends a request: ask, don't guess.
+
+    Used by router-system-one as its fallback, so a request the router could not
+    place with confidence (or one about something else entirely) gets a question
+    back instead of a confident answer from the wrong specialist. No tools: it
+    asks, it does not act.
+    """
+    return BaseAgent(
+        name="clarify-agent",
+        instructions=(
+            "You are the pet shop's front desk. The shop's router could not tell with "
+            "confidence what this request needs, so do not try to answer or fulfil it. "
+            "Ask one short clarifying question instead. First say in a few words what you "
+            "think the user wants. Then say what the shop can do: search for products, "
+            "manage the cart (add, view, checkout), or give pet-care advice. If the request "
+            "needs more than one of these, for example finding a toy and then adding it to "
+            "the cart, suggest doing them one at a time, search first. Each message is "
+            "routed on its own, so ask the user to reply with one concrete request and "
+            "suggest the exact wording, such as 'find a chew toy for my puppy'. If the "
+            "request has nothing to do with pets or the shop, say so politely and offer "
+            "what the shop can do. Keep it to two or three sentences."
+        ),
+        model=model,
+        gateway_mode=gateway_mode,
+        memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
+        config=AgentConfig(log_to_session=True),
+    )
+
+
 def make_support_agent(model: str, gateway_mode: str | None = None) -> BaseAgent:
     return BaseAgent(
         name="support-agent",

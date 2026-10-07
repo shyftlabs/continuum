@@ -304,7 +304,11 @@ class ToolService(IToolService):
                         trace_id=context.trace_id,
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
-                        data_labels=context.data_labels if agent_policy_store else None,
+                        # Always passed, policy store or not. The policy check
+                        # reads them only when a store exists; the approval
+                        # request reads them regardless, so a reviewer is told
+                        # a tainted run is tainted.
+                        data_labels=context.data_labels,
                         # Independent of the policy store: an app may want a
                         # person on one tool without writing any policy at all.
                         approval=build_approval_settings(agent),
@@ -372,7 +376,11 @@ class ToolService(IToolService):
                         trace_id=context.trace_id,
                         policy_store=agent_policy_store,
                         subject=agent.name if agent_policy_store else None,
-                        data_labels=context.data_labels if agent_policy_store else None,
+                        # Always passed, policy store or not. The policy check
+                        # reads them only when a store exists; the approval
+                        # request reads them regardless, so a reviewer is told
+                        # a tainted run is tainted.
+                        data_labels=context.data_labels,
                         # Independent of the policy store: an app may want a
                         # person on one tool without writing any policy at all.
                         approval=build_approval_settings(agent),

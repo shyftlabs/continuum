@@ -49,10 +49,10 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 
 | Agent                       | Pattern                                                                                                             |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `RouterAgent`               | LLM, rule-based, or hybrid routing to one of N target agents                                                        |
+| `RouterAgent`               | LLM, rule-based, hybrid, or System One routing to one of N target agents                                            |
 | `SequentialAgent`           | Pipeline: each agent's output is the next agent's input                                                             |
 | `ParallelAgent`             | Same input to all agents concurrently; merge strategies: concatenate, LLM summarize, structured dict, first-success |
-| `LoopAgent`                 | Iterates until a termination condition: LLM decision, tool call, regex match, or custom callable                    |
+| `LoopAgent`                 | Iterates until a termination condition: LLM decision, System One, tool call, regex match, or custom callable        |
 | `ReflectionAgent`           | Inner agent + critic loop; retries until critic approves or `max_reflections` reached                               |
 | `PlannerAgent`              | LLM generates a step-by-step plan, executes each step; re-plans on failure                                          |
 | `DAGAgent`                  | Dependency-aware workflow; independent stages run in parallel automatically                                         |
@@ -108,6 +108,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | AccessPolicy            | Resource families: `llm:<model>`, `tool:<name>`, `memory:<scope>`, `telemetry`, `session` (glob or exact). **MCP** tools are namespaced by default, so their resource is `tool:<server>__<name>` — write `tool:*__delete_*`, or `tool:*delete_*` to cover local function tools too. Local function tools keep bare names. See [tools.md §6.5](tools.md) |
 | strict_security         | `AgentConfig(strict_security=True)` raises at construction if an agent has side-effectful tools but no `policy_store` (otherwise a warning is logged). Makes the fail-open default visible |
 | ToolAccessDeniedError   | Policy denial surfaced to the LLM with a configurable message                            |
+| System One approval     | `system_one_approval_handler`: a classifier auto-approves only clearly low-risk tool calls, behind a tool allow-list and a data-label rule; everything else goes to a person. Each System One call is checked against `system_one:<egress>:<backend>:<model>`. See [system-one.md](system-one.md) |
 | Data sensitivity labels | Taint labels (e.g. `pii`, `phi`) on `RunContext.data_labels` propagate forward through a run and are matched as extra policy subjects by `PolicyStore`. They gate access only when you configure a policy — add a **deny** `AccessPolicy` for the label as subject; with no policy store configured they have no effect. Enforced **end-to-end** across six sinks: model routing (`llm:<model>`), tool calls (`tool:<name>`), long-term memory (`memory:<scope>`), telemetry, session persistence, and the decision trace. Labels come only from declared producers (`tool_data_labels`, memory `scope_data_labels`, run-level `data_labels`, or `ctx.taint()`) — the SDK ships no PII detector. |
 | Input sanitization      | Injection detection at the system boundary                                               |
 | Secret utilities        | Utilities for safe handling of secrets and credentials                                   |
@@ -234,6 +235,7 @@ Requires `pip install shyftlabs-continuum[temporal]`.
 | Tool execution             | `src/continuum/tools/`                |
 | Tool attention             | `src/continuum/tools/tool_attention/` |
 | Security & access control  | `src/continuum/security/`             |
+| System One classifiers     | `src/continuum/system_one/`           |
 | Memory                     | `src/continuum/memory/`               |
 | Session                    | `src/continuum/session/`              |
 | Observability              | `src/continuum/observability/`        |

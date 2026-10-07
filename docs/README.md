@@ -41,6 +41,7 @@ If you've never used Continuum before, read in this order:
 | `continuum.memory` | [memory.md](memory.md) | mem0 + Qdrant long-term memory; `IntelligentMemoryClient` |
 | `continuum.session` | [session.md](session.md) | Redis-backed conversation history |
 | `continuum.tools` | [tools.md](tools.md) | MCP servers (Stdio/SSE/StreamableHTTP), `ToolExecutor`, artifacts |
+| `continuum.system_one` | [system-one.md](system-one.md) | Typed-decision classifiers (Jev, Laya, local NLI) that routing, loops, quality gates and tool approval can opt into |
 | `continuum.observability` | [observability.md](observability.md) | Langfuse tracing, metrics, error reporter |
 | `continuum.core` | [core.md](core.md) | `Container`, `OrchestratorLifecycle`, health checks |
 | `continuum.temporal` | [temporal/](temporal/) | Durable workflows, approval gates |

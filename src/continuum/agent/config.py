@@ -199,22 +199,43 @@ class HandoffConfig:
 # =============================================================================
 
 
+DEFAULT_CRITIQUE_PROMPT = (
+    "Review the response above. Reply ONLY 'PASS' if it fully answers the request, "
+    "or 'NEEDS IMPROVEMENT: <reason>' if not."
+)
+
+
 @dataclass
 class ReflectionConfig:
     """
     Configuration for ReflectionAgent self-critique behavior.
     """
 
-    critique_prompt: str = (
-        "Review the response above. Reply ONLY 'PASS' if it fully answers the request, "
-        "or 'NEEDS IMPROVEMENT: <reason>' if not."
-    )
+    critique_prompt: str = DEFAULT_CRITIQUE_PROMPT
     max_reflections: int = 2
     reflection_model: str | None = None  # defaults to the inner agent's model
     # Temperature for the critique LLM call. None = inherit the inner agent's
     # temperature (which may itself be None to omit the parameter); a float
     # overrides it for the critique call only.
     reflection_temperature: float | None = None
+    # max_tokens for the critique call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS). It used to be a hard-coded 256, and on reasoning
+    # models (e.g. Gemini 2.5) hidden reasoning counts against it: measured live,
+    # the visible verdict was cut short, rejecting a correct answer.
+    reflection_max_tokens: int | None = None
+    # "system_one_classifier": a System One classifier is asked first and may
+    # only approve -- P(pass) >= system_one_pass_threshold passes the draft with
+    # no critique call; anything else, a backend error or SYSTEM_ONE_DISABLED goes
+    # to the critic as before. system_one_backend is this agent's own spec; None
+    # uses the container / SYSTEM_ONE_BACKEND default.
+    verdict_mode: Literal["llm", "system_one_classifier"] = "llm"
+    system_one_backend: str | None = None
+    system_one_pass_threshold: float = 0.9
+
+    def __post_init__(self) -> None:
+        from continuum.agent.workflow._quality_gate import validate_gate_settings
+
+        validate_gate_settings(self.verdict_mode, self.system_one_pass_threshold)
 
 
 # =============================================================================
@@ -547,10 +568,28 @@ TierClassifierMode = Literal["light_only", "heavy_only", "gpt_4o_mini", "qwen", 
 class RouterConfig:
     """Configuration for router agent."""
 
-    routing_strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "llm"
+    routing_strategy: Literal[
+        "llm", "rule_based", "hybrid", "model_tier", "system_one_classifier"
+    ] = "llm"
     routing_model: str | None = None  # Model for LLM routing (default: agent's model)
     routing_prompt: str | None = None  # Custom prompt for routing decision
     routing_temperature: float | None = 0.1  # Temperature for the LLM routing call (None omits it)
+    # max_tokens for the LLM routing call. None = the normal LLM default
+    # (DEFAULT_LLM_MAX_TOKENS): on a reasoning model hidden reasoning counts
+    # against the cap, and a small one leaves no visible route name.
+    routing_max_tokens: int | None = None
+    # routing_strategy="system_one_classifier": a System One classifier answers a
+    # Choice over the route names plus "none" (continuum.system_one). This
+    # router's own backend spec, e.g. "local:cross-encoder/nli-deberta-v3-small";
+    # None uses the container / SYSTEM_ONE_BACKEND default. Unrelated to the
+    # tier_classifier fields below, which belong to the model_tier smart layer.
+    system_one_backend: str | None = None
+    # "The answer tells you what; confidence tells you whether to act" (TypeSafe):
+    # below this floor the top route is not acted on and the request goes to
+    # fallback_agent_name, as for "none". The answer's confidence is the backend's
+    # own, so the floor belongs to the backend it was set for; a backend that
+    # reports none (the local NLI adapter) gets no route. None = act on the top route.
+    system_one_min_confidence: float | None = None
 
     # --- Smart layer (model_tier) -------------------------------------------------
     tier_classifier: TierClassifierMode = "gpt_4o_mini"
@@ -585,12 +624,20 @@ class RouterConfig:
     tier_heavy_temperature: float = 0.3  # specialist, frontier
     tier_completion_max_tokens: int = 4096
 
+    def __post_init__(self) -> None:
+        floor = self.system_one_min_confidence
+        if floor is not None and not 0.0 < floor <= 1.0:
+            raise ValueError(f"system_one_min_confidence must be in (0, 1], got {floor}")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "routing_strategy": self.routing_strategy,
             "routing_model": self.routing_model,
             "routing_prompt": self.routing_prompt,
             "routing_temperature": self.routing_temperature,
+            "routing_max_tokens": self.routing_max_tokens,
+            "system_one_backend": self.system_one_backend,
+            "system_one_min_confidence": self.system_one_min_confidence,
             "tier_classifier": self.tier_classifier,
             "tier_classifier_llm_model": self.tier_classifier_llm_model,
             "tier_classifier_max_tokens": self.tier_classifier_max_tokens,

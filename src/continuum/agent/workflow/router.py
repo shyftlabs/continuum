@@ -9,6 +9,7 @@ NOTE: Workflow agents now include Langfuse span tracing for full observability.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -20,13 +21,25 @@ from continuum.agent.types import Route, RunContext
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.llm.config import LLMConfig
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
+from continuum.system_one import (
+    ChoiceQuestion,
+    SystemOneError,
+    classify,
+    require_backend,
+    system_one_disabled,
+)
 
 if TYPE_CHECKING:
     from continuum.llm import LLMClient
 
 logger = get_logger(__name__)
+
+
+def _names(text: str, name: str) -> bool:
+    """``name`` appears in ``text`` whole: not as part of a longer word or name."""
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text) is not None
 
 
 @dataclass
@@ -91,6 +104,13 @@ class RouterAgent(BaseAgent):
     def __post_init__(self) -> None:
         """Initialize router agent."""
         super().__post_init__()
+
+        if self.router_config.routing_strategy == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the LLM route at run time.
+            require_backend(
+                self.router_config.system_one_backend, seam=f"RouterAgent '{self.name}'"
+            )
 
         if self.router_config.routing_strategy == "model_tier":
             if not (self.instructions or "").strip():
@@ -283,6 +303,12 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 "routing_strategy=model_tier but smart_layer_enabled=false; using llm routing instead"
             )
             strategy = "llm"
+        # The kill switch sends an opted-in router back to the LLM route it had
+        # before opting in; the trace records that the old path decided.
+        killed = strategy == "system_one_classifier" and system_one_disabled()
+        if killed:
+            logger.info("SYSTEM_ONE_DISABLED is set; router '%s' uses llm routing", self.name)
+            strategy = "llm"
 
         # Create span for routing decision
         async with SpanScope(
@@ -313,7 +339,15 @@ If the request doesn't clearly fit any specialist, respond with "none".
                 return result
             elif strategy == "llm":
                 result = await self._llm_route(input_text, llm_client)
-                span.set_output({"selected_route": result, "method": "llm"})
+                output: dict[str, Any] = {"selected_route": result, "method": "llm"}
+                if killed:
+                    output["decided_by"] = "legacy"
+                span.set_output(output)
+                self._stamp_priority(result, context)
+                return result
+            elif strategy == "system_one_classifier":
+                result, output = await self._system_one_route(input_text)
+                span.set_output(output)
                 self._stamp_priority(result, context)
                 return result
             elif strategy == "hybrid":
@@ -370,6 +404,91 @@ If the request doesn't clearly fit any specialist, respond with "none".
 
         return None
 
+    async def _system_one_route(self, input_text: str) -> tuple[str | None, dict[str, Any]]:
+        """Route with a System One Choice over the route names plus "none".
+
+        Nothing is parsed: the answer is one of the offered labels. A classifier
+        that cannot answer -- down, timed out, or denied by the run's egress
+        policy -- means "no route", so the request reaches ``fallback_agent_name``
+        (or ``NoRouteFoundError``); switching to the LLM here would put a second,
+        unrequested decision-maker behind the one the operator chose.
+        """
+        # Plain statements, because some backends see nothing else: an NLI model
+        # judges premise + hypothesis only, so "The request is about: <list>" or
+        # "fits none of the listed agents" (a list it never sees) cannot be
+        # judged -- live, both sent a pancake recipe to billing.
+        labels = {
+            route.agent_name: (
+                f"This request is about {(route.description or route.agent_name).rstrip('. ')}."
+            )
+            for route in self.routes
+        }
+        labels.setdefault("none", "This request is about something else.")
+        question = ChoiceQuestion(
+            instructions="Which agent should handle this request?", labels=labels
+        )
+        base = {"method": "system_one_classifier"}
+        try:
+            resp = await classify(
+                input_text, {"route": question}, spec=self.router_config.system_one_backend
+            )
+        except SystemOneError as e:
+            logger.warning(
+                "System One routing failed for router '%s' (%s); treating it as no route",
+                self.name,
+                type(e).__name__,
+            )
+            return None, {
+                **base,
+                "selected_route": None,
+                "decided_by": "fallback",
+                "error": type(e).__name__,
+            }
+
+        answer = resp.choice("route")
+        selected = None if answer.label == "none" else answer.label
+
+        # Below the floor the top route is not acted on: no route, so the
+        # request reaches fallback_agent_name as for "none". The answer's
+        # confidence is the backend's own: a threshold belongs to the backend.
+        floor = self.router_config.system_one_min_confidence
+        conf = answer.confidence
+        low_confidence = False
+        if floor is not None and selected is not None:
+            if conf is None:
+                logger.warning(
+                    "Router '%s': backend %s reports no confidence, so "
+                    "system_one_min_confidence=%s cannot be met; selecting no route",
+                    self.name,
+                    resp.provenance.backend,
+                    floor,
+                )
+                low_confidence = True
+            elif conf < floor:
+                low_confidence = True
+            if low_confidence:
+                selected = None
+
+        logger.info(
+            "Router '%s' decided_by=system_one backend=%s route=%s p=%.3f confidence=%s%s",
+            self.name,
+            resp.provenance.backend,
+            answer.label,
+            answer.probabilities.get(answer.label, 0.0),
+            "n/a" if conf is None else f"{conf:.3f}",
+            f" -> below min_confidence={floor}, no route" if low_confidence else "",
+        )
+        return selected, {
+            **base,
+            "selected_route": selected,
+            "decided_by": "system_one",
+            "backend": resp.provenance.backend,
+            "model": resp.provenance.model,
+            "confidence": conf,
+            "low_confidence": low_confidence,
+            "probabilities": answer.probabilities,
+        }
+
     async def _llm_route(
         self,
         input_text: str,
@@ -398,22 +517,39 @@ Agent name:"""
                 config=LLMConfig(
                     model=self.router_config.routing_model or self.model,
                     temperature=self.router_config.routing_temperature,
-                    max_tokens=50,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.router_config.routing_max_tokens is None
+                        else self.router_config.routing_max_tokens
+                    ),
                 ),
                 auto_session=False,
             )
 
             # Parse response
             result = (response.content or "").strip().lower()
-
-            # Find matching agent
-            for route in self.routes:
-                if route.agent_name.lower() in result or result in route.agent_name.lower():
-                    return route.agent_name
-
-            if "none" in result:
+            if not result:
+                # "" is a substring of every route name: without this an empty
+                # (e.g. truncated) reply would select the first route.
+                logger.warning("LLM routing got an empty reply; selecting no route")
                 return None
 
+            # A route is selected only by exactly one whole route name. A
+            # fragment, several names, or "none" plus a name is no route.
+            named = [r.agent_name for r in self.routes if _names(result, r.agent_name.lower())]
+            # "billing agent" also contains the route "billing"; that is one name.
+            named = [
+                n for n in named if not any(o != n and _names(o.lower(), n.lower()) for o in named)
+            ]
+            said_none = _names(result, "none")
+            if len(named) == 1 and not said_none:
+                return named[0]
+            if not named and said_none:
+                return None
+            logger.warning(
+                "LLM routing reply names no single route (%s); selecting no route",
+                log_content(result),
+            )
             return None
 
         except Exception as e:
@@ -457,7 +593,9 @@ def create_router_agent(
     routes: list[tuple[str, str]],  # List of (agent_name, description)
     *,
     fallback: str | None = None,
-    strategy: Literal["llm", "rule_based", "hybrid", "model_tier"] = "hybrid",
+    strategy: Literal[
+        "llm", "rule_based", "hybrid", "model_tier", "system_one_classifier"
+    ] = "hybrid",
     model: str | None = None,
 ) -> RouterAgent:
     """

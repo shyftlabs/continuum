@@ -363,6 +363,7 @@ cfg = ContextManagementConfig(
     summarization_temperature=0.1,
     summarization_timeout=30,
     summarization_max_retries=2,
+    summarization_max_tokens=None,       # None = DEFAULT_LLM_MAX_TOKENS
     keep_recent_messages=10,
     compression_strategy=CompressionStrategy.SMART,   # SUMMARIZE_OLD | TRUNCATE_OLDEST | SMART
     enable_caching=True,

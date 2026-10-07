@@ -203,6 +203,23 @@ class Settings(BaseSettings):
     smart_gateway_default_mode: str = "modest"  # SMART_GATEWAY_DEFAULT_MODE
 
     # -------------------------------------------------------------------------
+    # System One classifier (continuum.system_one) — fast typed judgements
+    # (Jev, local NLI models) that seams can opt into per agent. Off at every
+    # seam by default: setting a backend here enables NOTHING by itself, it only
+    # names the default backend for seams that have been switched on.
+    # -------------------------------------------------------------------------
+    system_one_backend: str | None = None  # SYSTEM_ONE_BACKEND, e.g. "jev:jev-latest"
+    # Kill switch: forces every seam back to its pre-System-One behaviour,
+    # whatever the per-seam config says. Only ever disables.
+    system_one_disabled: bool = False  # SYSTEM_ONE_DISABLED
+    system_one_timeout_seconds: float = 10.0  # SYSTEM_ONE_TIMEOUT_SECONDS (per backend call)
+    typesafe_api_key: str | None = None  # TYPESAFE_API_KEY — Jev backend
+    typesafe_base_url: str = "https://api.typesafe.ai"  # TYPESAFE_BASE_URL
+    # Jev through OpenRouter's (alpha) Decisions API: the openrouter:<model> backend.
+    openrouter_api_key: str | None = None  # OPENROUTER_API_KEY
+    openrouter_base_url: str = "https://openrouter.ai/api"  # OPENROUTER_BASE_URL
+
+    # -------------------------------------------------------------------------
     # Smart layer (model_tier routing + tier classifiers)
     # -------------------------------------------------------------------------
     smart_layer_enabled: bool = True  # When False, RouterAgent model_tier falls back to llm routing
