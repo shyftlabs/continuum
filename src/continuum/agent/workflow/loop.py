@@ -27,12 +27,25 @@ from continuum.agent.types import (
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
 from continuum.logging import get_logger
+from continuum.system_one import (
+    BinaryQuestion,
+    SystemOneError,
+    classify,
+    require_backend,
+    system_one_disabled,
+)
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
     from continuum.llm import LLMClient
 
 logger = get_logger(__name__)
+
+# The completion check's reply must open with the word COMPLETE, after any
+# markdown emphasis, quote marker or bullet (as the critic's PASS is read).
+# A substring test stopped on "INCOMPLETE" and "NOT COMPLETE".
+_LEADING_NOISE = re.compile(r"^[\s>*_#`\-]+")
+_COMPLETE_WORD = re.compile(r"COMPLETE\b", re.IGNORECASE)
 
 
 @dataclass
@@ -97,6 +110,11 @@ class LoopAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("LoopAgent requires an agent to execute")
+
+        if self.termination.type == TerminationType.SYSTEM_ONE_CLASSIFIER:
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the LLM check at run time.
+            require_backend(self.termination.system_one_backend, seam=f"LoopAgent '{self.name}'")
 
     @publish_active_policy
     async def execute(
@@ -171,7 +189,9 @@ class LoopAgent(BaseAgent):
             iteration += 1
 
             logger.info(
-                f"Loop iteration {iteration}/{self.termination.max_iterations}",
+                "Loop iteration %s/%s",
+                iteration,
+                self.termination.max_iterations,
                 extra={"run_id": context.run_id, "iteration": iteration},
             )
 
@@ -214,10 +234,11 @@ class LoopAgent(BaseAgent):
                     iteration=iteration,
                     history=iteration_history,
                     llm_client=llm_client,
+                    original_input=original_input,
                 )
 
                 if should_terminate:
-                    logger.info(f"Loop terminated at iteration {iteration}")
+                    logger.info("Loop terminated at iteration %s", iteration)
                     break
 
                 current_input = self._build_next_input(
@@ -227,7 +248,7 @@ class LoopAgent(BaseAgent):
                 )
 
             except Exception as e:
-                logger.error(f"Loop iteration {iteration} failed: {e}")
+                logger.error("Loop iteration %s failed: %s", iteration, e)
                 raise LoopWorkflowError(
                     f"Iteration {iteration} failed: {e}",
                     iteration=iteration,
@@ -236,7 +257,7 @@ class LoopAgent(BaseAgent):
                 ) from e
         else:
             if iteration >= self.termination.max_iterations:
-                logger.warning(f"Loop reached max iterations ({self.termination.max_iterations})")
+                logger.warning("Loop reached max iterations (%s)", self.termination.max_iterations)
 
         final_response = (
             all_responses[-1]
@@ -311,15 +332,43 @@ class LoopAgent(BaseAgent):
         iteration: int,
         history: list[dict[str, Any]],
         llm_client: LLMClient | None,
+        original_input: str | None = None,
     ) -> bool:
         """Check if loop should terminate."""
         term_type = self.termination.type
+
+        if term_type == TerminationType.SYSTEM_ONE_CLASSIFIER:
+            if system_one_disabled():
+                logger.info(
+                    "Loop termination decided_by=legacy (SYSTEM_ONE_DISABLED) for '%s'", self.name
+                )
+                return await self._llm_termination_check(
+                    response=response,
+                    history=history,
+                    llm_client=llm_client,
+                    original_input=original_input,
+                )
+            try:
+                return await self._system_one_termination_check(response, original_input)
+            except SystemOneError as e:
+                logger.warning(
+                    "System One termination check failed for '%s' (%s); using the LLM check",
+                    self.name,
+                    type(e).__name__,
+                )
+                return await self._llm_termination_check(
+                    response=response,
+                    history=history,
+                    llm_client=llm_client,
+                    original_input=original_input,
+                )
 
         if term_type == TerminationType.LLM_DECISION:
             return await self._llm_termination_check(
                 response=response,
                 history=history,
                 llm_client=llm_client,
+                original_input=original_input,
             )
 
         elif term_type == TerminationType.TOOL_CALL:
@@ -349,13 +398,49 @@ class LoopAgent(BaseAgent):
 
         return False
 
+    async def _system_one_termination_check(
+        self, response: AgentResponse, original_input: str | None
+    ) -> bool:
+        """Stop when P(complete) reaches ``termination.system_one_threshold``.
+
+        The true-criterion is a statement, not a question, so a local NLI backend
+        has something a premise can entail.
+        """
+        question = BinaryQuestion(
+            instructions=(
+                "Judging by `latest_output`, is the task described in `task` complete, "
+                "so that no further iteration is needed?"
+            ),
+            true_criteria="The latest output fully completes the task.",
+            false_criteria="The latest output is unfinished or needs more work.",
+        )
+        state = {"task": original_input or "", "latest_output": response.content or ""}
+        resp = await classify(
+            state, {"complete": question}, spec=self.termination.system_one_backend
+        )
+        p_complete = resp.binary("complete").probability
+        done = p_complete >= self.termination.system_one_threshold
+        logger.info(
+            "Loop termination decided_by=system_one backend=%s p_complete=%.3f threshold=%s -> %s",
+            resp.provenance.backend,
+            p_complete,
+            self.termination.system_one_threshold,
+            "stop" if done else "continue",
+        )
+        return done
+
     async def _llm_termination_check(
         self,
         response: AgentResponse,
         history: list[dict[str, Any]],
         llm_client: LLMClient | None,
+        original_input: str | None = None,
     ) -> bool:
-        """Use LLM to decide if task is complete."""
+        """Use LLM to decide if task is complete.
+
+        ``original_input`` is the user's request: without it "is the task
+        complete?" has nothing to be complete against.
+        """
         if llm_client is None:
             from continuum.core.container import get_container
 
@@ -367,9 +452,11 @@ class LoopAgent(BaseAgent):
             for h in history[-3:]  # Last 3 iterations
         )
 
+        task_text = f"Original task:\n{original_input}\n\n" if original_input else ""
+
         prompt = f"""{self.termination.decision_prompt}
 
-Recent iterations:
+{task_text}Recent iterations:
 {history_text}
 
 Current output:
@@ -385,15 +472,19 @@ Is the task complete? Respond with exactly 'COMPLETE' or 'CONTINUE':"""
                 config=LLMConfig(
                     model=self.agent.model if self.agent else settings.default_llm_model,
                     temperature=self.termination.decision_temperature,
-                    max_tokens=20,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.termination.decision_max_tokens is None
+                        else self.termination.decision_max_tokens
+                    ),
                 ),
             )
 
-            result = (llm_response.content or "").strip().upper()
-            return "COMPLETE" in result
+            reply = _LEADING_NOISE.sub("", llm_response.content or "")
+            return bool(_COMPLETE_WORD.match(reply))
 
         except Exception as e:
-            logger.warning(f"LLM termination check failed: {e}")
+            logger.warning("LLM termination check failed: %s", e)
             return False
 
     def _build_next_input(

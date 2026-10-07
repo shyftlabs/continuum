@@ -107,8 +107,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create trace: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create trace: %s", provider_name, e, exc_info=True
                 )
 
         # Return first successful result (typically from first provider in registry)
@@ -149,8 +148,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create span: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create span: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -196,8 +194,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create generation: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create generation: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -237,8 +234,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create event: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create event: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -276,8 +272,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create score: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create score: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -289,10 +284,7 @@ class ProviderManager:
             try:
                 provider.flush()
             except Exception as e:
-                logger.warning(
-                    f"Provider {provider_name} failed to flush: {e}",
-                    exc_info=True,
-                )
+                logger.warning("Provider %s failed to flush: %s", provider_name, e, exc_info=True)
 
     def shutdown(self) -> None:
         """Shutdown all registered providers."""
@@ -302,8 +294,7 @@ class ProviderManager:
                 provider.shutdown()
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to shutdown: {e}",
-                    exc_info=True,
+                    "Provider %s failed to shutdown: %s", provider_name, e, exc_info=True
                 )
 
     def create_prompt(
@@ -337,8 +328,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create prompt: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create prompt: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -372,8 +362,7 @@ class ProviderManager:
                     return result
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to get prompt: {e}",
-                    exc_info=True,
+                    "Provider %s failed to get prompt: %s", provider_name, e, exc_info=True
                 )
 
         return None
@@ -405,8 +394,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create dataset: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create dataset: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None
@@ -427,8 +415,7 @@ class ProviderManager:
                     return result
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to get dataset: {e}",
-                    exc_info=True,
+                    "Provider %s failed to get dataset: %s", provider_name, e, exc_info=True
                 )
 
         return None
@@ -462,8 +449,7 @@ class ProviderManager:
                     results.append(result)
             except Exception as e:
                 logger.warning(
-                    f"Provider {provider_name} failed to create dataset item: {e}",
-                    exc_info=True,
+                    "Provider %s failed to create dataset item: %s", provider_name, e, exc_info=True
                 )
 
         return results[0] if results else None

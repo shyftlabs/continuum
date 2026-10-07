@@ -272,7 +272,7 @@ class ObservabilityProvider(ABC):
             Provider-specific prompt object or None if not supported
         """
         if not self.supports_feature(ProviderCapabilities.PROMPT_MANAGEMENT):
-            logger.debug(f"Provider {self.name} does not support prompt management")
+            logger.debug("Provider %s does not support prompt management", self.name)
             return None
         return None
 
@@ -297,7 +297,7 @@ class ObservabilityProvider(ABC):
             Provider-specific prompt object or None if not supported
         """
         if not self.supports_feature(ProviderCapabilities.PROMPT_MANAGEMENT):
-            logger.debug(f"Provider {self.name} does not support prompt management")
+            logger.debug("Provider %s does not support prompt management", self.name)
             return None
         return None
 
@@ -320,7 +320,7 @@ class ObservabilityProvider(ABC):
             Provider-specific dataset object or None if not supported
         """
         if not self.supports_feature(ProviderCapabilities.DATASET_MANAGEMENT):
-            logger.debug(f"Provider {self.name} does not support dataset management")
+            logger.debug("Provider %s does not support dataset management", self.name)
             return None
         return None
 
@@ -335,7 +335,7 @@ class ObservabilityProvider(ABC):
             Provider-specific dataset object or None if not supported
         """
         if not self.supports_feature(ProviderCapabilities.DATASET_MANAGEMENT):
-            logger.debug(f"Provider {self.name} does not support dataset management")
+            logger.debug("Provider %s does not support dataset management", self.name)
             return None
         return None
 
@@ -360,6 +360,6 @@ class ObservabilityProvider(ABC):
             Provider-specific dataset item object or None if not supported
         """
         if not self.supports_feature(ProviderCapabilities.DATASET_MANAGEMENT):
-            logger.debug(f"Provider {self.name} does not support dataset management")
+            logger.debug("Provider %s does not support dataset management", self.name)
             return None
         return None

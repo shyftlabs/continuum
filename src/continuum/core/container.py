@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from continuum.config import settings
 from continuum.core.background_tasks import BackgroundTaskRegistry
 from continuum.logging import get_logger
-from continuum.protocols import ILLMClient, IMemoryClient, ISessionClient
+from continuum.protocols import ILLMClient, IMemoryClient, ISessionClient, ISystemOneClassifier
 
 if TYPE_CHECKING:
     from continuum.llm import LLMClient
@@ -129,6 +129,10 @@ class Container:
         self._langfuse_initialized = False
         self._tracing_initialized = False
         self._tool_initialized = False
+
+        # System One classifier (continuum.system_one). Never cached as None:
+        # a SYSTEM_ONE_BACKEND set after first access must still take effect.
+        self._system_one_classifier: ISystemOneClassifier | None = None
 
     # =========================================================================
     # LLM Client
@@ -430,6 +434,37 @@ class Container:
         return self._tool_executor is not None
 
     # =========================================================================
+    # System One classifier
+    # =========================================================================
+
+    @property
+    def system_one_classifier(self) -> ISystemOneClassifier | None:
+        """The default System One backend for seams that opted in, or None.
+
+        Built from ``SYSTEM_ONE_BACKEND`` on first access when none was set.
+        Having one enables nothing: each seam still opts in on its own.
+        """
+        if self._system_one_classifier is None and self._config.auto_initialize:
+            spec = settings.system_one_backend
+            if spec:
+                from continuum.system_one.registry import resolve_classifier
+
+                built = resolve_classifier(spec)
+                with self._lock:
+                    if self._system_one_classifier is None:
+                        self._system_one_classifier = built
+        return self._system_one_classifier
+
+    def set_system_one_classifier(self, classifier: ISystemOneClassifier | None) -> None:
+        """Set the default System One backend (any ISystemOneClassifier)."""
+        with self._lock:
+            self._system_one_classifier = classifier
+
+    def has_system_one_classifier(self) -> bool:
+        """Is a backend already set or built? Builds nothing."""
+        return self._system_one_classifier is not None
+
+    # =========================================================================
     # Lifecycle
     # =========================================================================
 
@@ -447,6 +482,7 @@ class Container:
             self._langfuse_client = None
             self._tracing_manager = None
             self._tool_executor = None
+            self._system_one_classifier = None
             self._background_tasks = BackgroundTaskRegistry(name="container")
 
             self._llm_initialized = False
@@ -490,7 +526,7 @@ class Container:
                     self._langfuse_client.shutdown()
                     logger.debug("Langfuse client shutdown complete")
                 except Exception as e:
-                    logger.warning(f"Error shutting down Langfuse client: {e}")
+                    logger.warning("Error shutting down Langfuse client: %s", e)
             else:
                 logger.debug(
                     "Langfuse is a shared service, skipping all operations (no flush, no shutdown)"
@@ -503,7 +539,7 @@ class Container:
                     self._tracing_manager.shutdown()
                     logger.debug("Tracing manager shutdown complete")
                 except Exception as e:
-                    logger.warning(f"Error shutting down tracing manager: {e}")
+                    logger.warning("Error shutting down tracing manager: %s", e)
             else:
                 logger.debug("Tracing manager is part of shared service, skipping shutdown")
 
@@ -515,7 +551,7 @@ class Container:
                 await self._background_tasks.drain(timeout=10.0)
                 logger.debug("Background tasks drained")
             except Exception as e:
-                logger.warning(f"Error draining background tasks: {e}")
+                logger.warning("Error draining background tasks: %s", e)
 
         # Close memory client (with timeout to prevent hanging)
         # Memory client (Qdrant) is typically not shared, so we close it
@@ -527,7 +563,7 @@ class Container:
                 logger.warning("Memory client close timed out after 5s — force-releasing reference")
                 self._memory_client = None
             except Exception as e:
-                logger.warning(f"Error closing memory client: {e}")
+                logger.warning("Error closing memory client: %s", e)
 
         # Close session provider (Redis connections) only if not a shared service
         provider = self.session_provider
@@ -546,7 +582,7 @@ class Container:
                         "Session provider close timed out after 5s — force-releasing reference"
                     )
                 except Exception as e:
-                    logger.warning(f"Error closing session manager: {e}")
+                    logger.warning("Error closing session manager: %s", e)
 
         # Close LLM client async resources
         if self._llm_initialized and self._llm_client is not None:
@@ -558,7 +594,7 @@ class Container:
                 logger.warning("LLM client cleanup timed out after 5s — force-releasing reference")
                 self._llm_client = None
             except Exception as e:
-                logger.warning(f"Error during LLM client cleanup: {e}")
+                logger.warning("Error during LLM client cleanup: %s", e)
 
         # Reset all state
         self.reset()
@@ -591,7 +627,7 @@ class Container:
             _ = self.llm_client
             results["llm"] = True
         except Exception as e:
-            logger.error(f"Failed to initialize LLM client: {e}")
+            logger.error("Failed to initialize LLM client: %s", e)
             results["llm"] = False
 
         # Memory
@@ -602,7 +638,7 @@ class Container:
                     self._memory_client is not None and self._memory_client.is_enabled
                 )
             except Exception as e:
-                logger.error(f"Failed to initialize Memory client: {e}")
+                logger.error("Failed to initialize Memory client: %s", e)
                 results["memory"] = False
 
         # Session
@@ -611,7 +647,7 @@ class Container:
                 _ = self.session_client
                 results["session"] = self._session_client is not None
             except Exception as e:
-                logger.error(f"Failed to initialize Session client: {e}")
+                logger.error("Failed to initialize Session client: %s", e)
                 results["session"] = False
 
         # Langfuse
@@ -620,7 +656,7 @@ class Container:
                 _ = self.langfuse_client
                 results["langfuse"] = self._langfuse_client is not None
             except Exception as e:
-                logger.error(f"Failed to initialize Langfuse client: {e}")
+                logger.error("Failed to initialize Langfuse client: %s", e)
                 results["langfuse"] = False
 
         return results

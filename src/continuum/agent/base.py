@@ -353,8 +353,9 @@ class BaseAgent:
                 prompt = prompt.format_map(_SafeFormatMap(vars_map))
             except Exception as e:
                 _logger.warning(
-                    f"Template rendering failed for agent '{self.name}': {e}. "
-                    f"Using unrendered instructions.",
+                    "Template rendering failed for agent '%s': %s. Using unrendered instructions.",
+                    self.name,
+                    e,
                     exc_info=True,
                 )
 
@@ -377,8 +378,10 @@ class BaseAgent:
                 prompt = modifier(prompt, context)
             except Exception as e:
                 _logger.warning(
-                    f"Instruction modifier '{getattr(modifier, '__name__', repr(modifier))}' "
-                    f"failed for agent '{self.name}': {e}. Skipping modifier.",
+                    "Instruction modifier '%s' failed for agent '%s': %s. Skipping modifier.",
+                    getattr(modifier, "__name__", repr(modifier)),
+                    self.name,
+                    e,
                     exc_info=True,
                 )
 

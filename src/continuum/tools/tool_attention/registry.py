@@ -58,11 +58,12 @@ class ToolSummaryRegistry:
             await asyncio.to_thread(self._sync_init, tool_defs)
             self._ready = True
             logger.info(
-                f"ToolSummaryRegistry ready: {len(tool_defs)} tools "
-                f"in collection '{self._config.collection_name}'"
+                "ToolSummaryRegistry ready: %s tools in collection '%s'",
+                len(tool_defs),
+                self._config.collection_name,
             )
         except Exception as e:
-            logger.warning(f"ToolSummaryRegistry init failed (tool-attention disabled): {e}")
+            logger.warning("ToolSummaryRegistry init failed (tool-attention disabled): %s", e)
 
     def _sync_init(self, tool_defs: list[Any]) -> None:
         from pymilvus import DataType, MilvusClient
@@ -88,7 +89,7 @@ class ToolSummaryRegistry:
                 max_length=256,
                 auto_id=False,
             )
-            logger.info(f"Created Milvus collection '{col}' (dim={dim})")
+            logger.info("Created Milvus collection '%s' (dim=%s)", col, dim)
 
         if tool_defs:
             self._sync_upsert(tool_defs)
@@ -104,7 +105,7 @@ class ToolSummaryRegistry:
             for n, e, s in zip(names, embeddings, summaries, strict=False)
         ]
         self._client.upsert(collection_name=self._config.collection_name, data=data)
-        logger.debug(f"Upserted {len(data)} tool embeddings")
+        logger.debug("Upserted %s tool embeddings", len(data))
 
         self._sync_prune(set(names))
 
@@ -139,7 +140,7 @@ class ToolSummaryRegistry:
                     stale,
                 )
         except Exception as e:
-            logger.warning(f"Tool embedding prune skipped for '{col}': {e}")
+            logger.warning("Tool embedding prune skipped for '%s': %s", col, e)
 
     def search(self, query: str, k: int) -> list[str]:
         """Return top-k tool names by cosine similarity. Synchronous."""
@@ -155,7 +156,7 @@ class ToolSummaryRegistry:
             )
             return [hit["entity"]["tool_name"] for hit in results[0]]
         except Exception as e:
-            logger.warning(f"Milvus search error: {e}")
+            logger.warning("Milvus search error: %s", e)
             return []
 
     def refresh(self, tool_defs: list[Any]) -> None:
@@ -165,7 +166,7 @@ class ToolSummaryRegistry:
         try:
             self._sync_upsert(tool_defs)
         except Exception as e:
-            logger.warning(f"Registry refresh failed: {e}")
+            logger.warning("Registry refresh failed: %s", e)
 
     @property
     def ready(self) -> bool:

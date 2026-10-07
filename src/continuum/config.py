@@ -169,6 +169,16 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
+    # Whether log lines may carry the content they describe -- assembled prompts,
+    # retrieved memories, tool arguments and results, model output. Off means a
+    # log line still says which agent, which tool and how much, but not what.
+    #
+    # Off by default because the leaky call sites log at INFO, which is also the
+    # default level: an operator who configures nothing must still be safe. Turn
+    # it on to debug why an agent ignored a memory or a RAG chunk -- on a laptop,
+    # not in production.
+    log_prompt_content: bool = False
+
     # -------------------------------------------------------------------------
     # MCP tool trust (security finding F3)
     # -------------------------------------------------------------------------
@@ -191,6 +201,23 @@ class Settings(BaseSettings):
     smart_gateway_url: str | None = None  # SMART_GATEWAY_URL
     smart_gateway_api_key: str | None = None  # SMART_GATEWAY_API_KEY
     smart_gateway_default_mode: str = "modest"  # SMART_GATEWAY_DEFAULT_MODE
+
+    # -------------------------------------------------------------------------
+    # System One classifier (continuum.system_one) — fast typed judgements
+    # (Jev, local NLI models) that seams can opt into per agent. Off at every
+    # seam by default: setting a backend here enables NOTHING by itself, it only
+    # names the default backend for seams that have been switched on.
+    # -------------------------------------------------------------------------
+    system_one_backend: str | None = None  # SYSTEM_ONE_BACKEND, e.g. "jev:jev-latest"
+    # Kill switch: forces every seam back to its pre-System-One behaviour,
+    # whatever the per-seam config says. Only ever disables.
+    system_one_disabled: bool = False  # SYSTEM_ONE_DISABLED
+    system_one_timeout_seconds: float = 10.0  # SYSTEM_ONE_TIMEOUT_SECONDS (per backend call)
+    typesafe_api_key: str | None = None  # TYPESAFE_API_KEY — Jev backend
+    typesafe_base_url: str = "https://api.typesafe.ai"  # TYPESAFE_BASE_URL
+    # Jev through OpenRouter's (alpha) Decisions API: the openrouter:<model> backend.
+    openrouter_api_key: str | None = None  # OPENROUTER_API_KEY
+    openrouter_base_url: str = "https://openrouter.ai/api"  # OPENROUTER_BASE_URL
 
     # -------------------------------------------------------------------------
     # Smart layer (model_tier routing + tier classifiers)

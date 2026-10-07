@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from continuum.agent.handoff.manager import HandoffManager
 from continuum.agent.interfaces.handler_interface import IHandoffExecutor
 from continuum.agent.types import HandoffResult, generate_handoff_id
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.observability.decorators import observe
 
 if TYPE_CHECKING:
@@ -114,10 +114,21 @@ class HandoffExecutor(IHandoffExecutor):
             try:
                 _, is_safe, reason = scanner(payload)
             except Exception as e:
-                # Fail-open on scanner errors, matching prepare_messages — a broken
-                # scanner must not take down every handoff.
-                logger.warning("Handoff input scanner failed (fail-open): %s", e)
-                continue
+                # Fail CLOSED on scanner errors, matching prepare_messages (F11): a
+                # scanner that crashed did not approve this payload, and letting it
+                # through would make "crash the scanner" a complete bypass of the
+                # only control here that can refuse.
+                #
+                # Returned rather than raised, per this function's contract above —
+                # the caller turns a reason into a failed HandoffResult, where an
+                # escaping exception would crash the run instead of this transfer.
+                from continuum.agent.utils.validation_utils import scanner_failure_reason
+
+                failure = scanner_failure_reason(scanner, e)
+                logger.error(
+                    "Handoff input scanner failed — agent=%s: %s", target_agent.name, failure
+                )
+                return failure
             if not is_safe:
                 return reason or "blocked"
 
@@ -202,9 +213,9 @@ class HandoffExecutor(IHandoffExecutor):
             if handoff_def:
                 # Fix #13: Log clearly that agent is defined but not registered
                 logger.error(
-                    f"Handoff target '{target_name}' is defined in agent '{agent.name}' handoffs "
-                    f"but not registered in the agent registry. Register the agent via "
-                    f"runner.register_agent() or pass it in agent_registry."
+                    "Handoff target '%s' is defined in agent '%s' handoffs but not registered in the agent registry. Register the agent via runner.register_agent() or pass it in agent_registry.",
+                    target_name,
+                    agent.name,
                 )
                 return HandoffResult(
                     handoff_id=generate_handoff_id(),
@@ -216,8 +227,9 @@ class HandoffExecutor(IHandoffExecutor):
                 )
             else:
                 logger.error(
-                    f"Handoff target '{target_name}' not found: no handoff definition "
-                    f"on agent '{agent.name}' and not in registry."
+                    "Handoff target '%s' not found: no handoff definition on agent '%s' and not in registry.",
+                    target_name,
+                    agent.name,
                 )
                 return HandoffResult(
                     handoff_id=generate_handoff_id(),
@@ -231,8 +243,11 @@ class HandoffExecutor(IHandoffExecutor):
         if self._handoff_manager.detect_cycle(run_state.agent_stack, target_name):
             cycle_path = " → ".join(run_state.agent_stack + [target_name])
             logger.warning(
-                f"Handoff cycle detected: {agent.name} → {target_name}. "
-                f"Agent '{target_name}' already in chain: {cycle_path}"
+                "Handoff cycle detected: %s → %s. Agent '%s' already in chain: %s",
+                agent.name,
+                target_name,
+                target_name,
+                cycle_path,
             )
             return HandoffResult(
                 handoff_id=generate_handoff_id(),
@@ -375,28 +390,39 @@ class HandoffExecutor(IHandoffExecutor):
             mem_cfg = getattr(target_agent, "memory_config", None)
             if mem_cfg:
                 logger.info(
-                    f"🔍 HANDOFF TARGET MEMORY CONFIG [{target_agent.name}]: "
-                    f"search_memories={mem_cfg.search_memories}, store_memories={mem_cfg.store_memories}, "
-                    f"search_scope={getattr(mem_cfg, 'search_scope', 'N/A')}, "
-                    f"store_scope={getattr(mem_cfg, 'store_scope', 'N/A')}"
+                    "🔍 HANDOFF TARGET MEMORY CONFIG [%s]: search_memories=%s, store_memories=%s, search_scope=%s, store_scope=%s",
+                    target_agent.name,
+                    mem_cfg.search_memories,
+                    mem_cfg.store_memories,
+                    getattr(mem_cfg, "search_scope", "N/A"),
+                    getattr(mem_cfg, "store_scope", "N/A"),
                 )
             logger.info(
-                f"===== HANDOFF FINAL PROMPT [{target_agent.name}] =====\n"
-                + "\n".join(
-                    f"[{m.get('role', '?')}] {str(m.get('content', ''))[:300]}"
-                    for m in target_messages
-                )
-                + "\n"
-                + "=" * 30
+                "===== HANDOFF FINAL PROMPT [%s] =====\n%s\n%s",
+                target_agent.name,
+                log_content(
+                    "\n".join(
+                        f"[{m.get('role', '?')}] {str(m.get('content', ''))}"
+                        for m in target_messages
+                    )
+                ),
+                "=" * 30,
             )
             _tools = target_agent.get_tools_for_llm()
             if _tools:
                 _tools_formatted = "\n".join(
-                    f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:200]}"
+                    f"  - {t.get('function', {}).get('name', '?')}: "
+                    f"{str(t.get('function', {}).get('parameters', ''))}"
                     for t in _tools
                 )
+                # Bare, not log_content(): this is each tool's name and parameter
+                # schema, defined by the developer or the MCP server -- the system's
+                # own fact, not the user's words. The handoff prompt logged just
+                # above carries the user's input; this does not.
                 logger.info(
-                    f"===== TOOLS [{target_agent.name}] =====\n{_tools_formatted}\n========================"
+                    "===== TOOLS [%s] =====\n%s\n========================",
+                    target_agent.name,
+                    _tools_formatted,
                 )
 
             # Execute target agent (executor guaranteed to be set by early validation).
@@ -419,7 +445,9 @@ class HandoffExecutor(IHandoffExecutor):
                     run_state=run_state,
                 )
             except Exception as e:
-                logger.error(f"Failed to execute target agent '{target_name}': {e}", exc_info=True)
+                logger.error(
+                    "Failed to execute target agent '%s': %s", target_name, e, exc_info=True
+                )
                 if target_agent.on_error:
                     target_agent.on_error(target_agent, e, {"context": target_context})
                 result = HandoffResult(
@@ -454,8 +482,7 @@ class HandoffExecutor(IHandoffExecutor):
 
         except Exception as e:
             logger.error(
-                f"Handoff from '{agent.name}' to '{target_name}' failed: {e}",
-                exc_info=True,
+                "Handoff from '%s' to '%s' failed: %s", agent.name, target_name, e, exc_info=True
             )
             return HandoffResult(
                 handoff_id=generate_handoff_id(),

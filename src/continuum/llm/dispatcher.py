@@ -81,7 +81,7 @@ class PriorityDispatcher:
         """Start background worker tasks. Call once after the event loop is running."""
         for _ in range(self.max_concurrent):
             self._workers.append(asyncio.create_task(self._worker_loop()))
-        logger.debug(f"PriorityDispatcher started with {self.max_concurrent} workers")
+        logger.debug("PriorityDispatcher started with %s workers", self.max_concurrent)
 
     async def stop(self) -> None:
         """Cancel all workers. Call on shutdown."""
@@ -111,7 +111,7 @@ class PriorityDispatcher:
 
         queue_depth = self._queue.qsize()
         if queue_depth > 5:
-            logger.warning(f"PriorityDispatcher queue depth={queue_depth} (priority={priority})")
+            logger.warning("PriorityDispatcher queue depth=%s (priority=%s)", queue_depth, priority)
 
         return await future
 
@@ -129,12 +129,14 @@ class PriorityDispatcher:
                         future.set_exception(exc)
                 finally:
                     elapsed_ms = (time.monotonic() - start) * 1000
-                    logger.debug(f"PriorityDispatcher: call completed in {elapsed_ms:.0f}ms")
+                    logger.debug(
+                        "PriorityDispatcher: call completed in %sms", format(elapsed_ms, ".0f")
+                    )
                     self._queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error(f"PriorityDispatcher worker error: {exc}")
+                logger.error("PriorityDispatcher worker error: %s", exc)
 
 
 class TwoLevelDispatcher:
@@ -168,7 +170,7 @@ class TwoLevelDispatcher:
         """Start background worker tasks."""
         for _ in range(self.max_workers):
             self._workers.append(asyncio.create_task(self._worker_loop()))
-        logger.debug(f"TwoLevelDispatcher started with {self.max_workers} workers")
+        logger.debug("TwoLevelDispatcher started with %s workers", self.max_workers)
 
     async def stop(self) -> None:
         """Cancel all workers."""
@@ -201,8 +203,10 @@ class TwoLevelDispatcher:
         queue_depth = self._queue.qsize()
         if queue_depth > 5:
             logger.warning(
-                f"TwoLevelDispatcher queue depth={queue_depth} "
-                f"(stage={stage_priority}, request={request_priority})"
+                "TwoLevelDispatcher queue depth=%s (stage=%s, request=%s)",
+                queue_depth,
+                stage_priority,
+                request_priority,
             )
 
         return await future
@@ -221,9 +225,11 @@ class TwoLevelDispatcher:
                         future.set_exception(exc)
                 finally:
                     elapsed_ms = (time.monotonic() - start) * 1000
-                    logger.debug(f"TwoLevelDispatcher: call completed in {elapsed_ms:.0f}ms")
+                    logger.debug(
+                        "TwoLevelDispatcher: call completed in %sms", format(elapsed_ms, ".0f")
+                    )
                     self._queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error(f"TwoLevelDispatcher worker error: {exc}")
+                logger.error("TwoLevelDispatcher worker error: %s", exc)

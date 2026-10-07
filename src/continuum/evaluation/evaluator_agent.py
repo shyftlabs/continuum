@@ -254,8 +254,10 @@ class EvaluatorAgent(BaseAgent):
             except _ParseError as parse_exc:
                 # Distinguish parse failure from genuine zero score
                 logger.warning(
-                    f"EvaluatorAgent '{self.name}': criterion '{criterion}' "
-                    f"JSON parse failed: {parse_exc}"
+                    "EvaluatorAgent '%s': criterion '%s' JSON parse failed: %s",
+                    self.name,
+                    criterion,
+                    parse_exc,
                 )
                 return (
                     CriterionScore(
@@ -286,7 +288,10 @@ class EvaluatorAgent(BaseAgent):
 
         except Exception as exc:
             logger.warning(
-                f"EvaluatorAgent '{self.name}': criterion '{criterion}' failed: {exc}",
+                "EvaluatorAgent '%s': criterion '%s' failed: %s",
+                self.name,
+                criterion,
+                exc,
                 exc_info=True,
             )
             return (

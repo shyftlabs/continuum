@@ -63,7 +63,7 @@ class TemporalClient:
                     if bridge is not None:
                         service_client._bridge_client = None
             except Exception as e:
-                logger.debug(f"Non-critical: could not release bridge client: {e}")
+                logger.debug("Non-critical: could not release bridge client: %s", e)
             self._client = None
         logger.info("Disconnected from Temporal")
 
@@ -101,7 +101,7 @@ class TemporalClient:
             execution_timeout=timeout,
             **kwargs,
         )
-        logger.info(f"Started workflow {workflow_id} on queue {queue}")
+        logger.info("Started workflow %s on queue %s", workflow_id, queue)
         return handle
 
     async def run_agent_workflow(

@@ -121,7 +121,7 @@ class DeepEvalEvaluator:
                 ),
             )
         except Exception as exc:
-            logger.error(f"DeepEvalEvaluator: deepeval.evaluate() failed: {exc}")
+            logger.error("DeepEvalEvaluator: deepeval.evaluate() failed: %s", exc)
             return EvalResult(
                 status=EvalStatus.ERROR,
                 evaluator_name=self.name,

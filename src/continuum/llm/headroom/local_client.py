@@ -243,7 +243,7 @@ class LocalHeadroomClient:
 
             return True
         except Exception as e:
-            logger.debug(f"Headroom library health check failed: {e}")
+            logger.debug("Headroom library health check failed: %s", e)
             return False
 
     async def aclose(self) -> None:

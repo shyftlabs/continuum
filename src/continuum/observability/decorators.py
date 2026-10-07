@@ -163,7 +163,7 @@ def observe(
                     # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             # Use SpanScope from trace_context (async-safe, links to current trace)
             with SpanScope(
@@ -193,7 +193,7 @@ def observe(
                     # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             # Use SpanScope from trace_context (async-safe, links to current trace)
             async with SpanScope(
@@ -229,7 +229,7 @@ def observe(
                 try:
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             async with SpanScope(
                 span_name,
@@ -258,7 +258,7 @@ def observe(
                 try:
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             with SpanScope(
                 span_name,
@@ -390,7 +390,7 @@ def trace_agent(
                     # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             # Create agent metadata
             agent_metadata = {"agent_type": agent_type}
@@ -501,9 +501,8 @@ def trace_agent(
                 else:
                     # No trace context and not explicitly creating one - skip tracing
                     logger.warning(
-                        f"@trace_agent on '{trace_name}' called without trace context. "
-                        "Skipping trace creation (use create_new_trace=True to create trace). "
-                        "Function will execute without tracing."
+                        "@trace_agent on '%s' called without trace context. Skipping trace creation (use create_new_trace=True to create trace). Function will execute without tracing.",
+                        trace_name,
                     )
                     return func(*args, **kwargs)
 
@@ -516,7 +515,7 @@ def trace_agent(
                     # Redaction is applied centrally in SpanScope (see _create_span).
                     input_data = truncate_data(_get_function_input(func, args, kwargs))
                 except Exception as e:
-                    logger.debug(f"Failed to capture input: {e}")
+                    logger.debug("Failed to capture input: %s", e)
 
             # Create agent metadata
             agent_metadata = {"agent_type": agent_type}

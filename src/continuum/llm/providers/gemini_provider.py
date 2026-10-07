@@ -10,6 +10,7 @@ This means we can reuse the openai SDK — no google-generativeai package needed
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 from typing import Any
 
 import openai
@@ -93,6 +94,16 @@ class GeminiProvider(BaseProvider):
             kwargs["response_format"] = config.response_format
         elif config.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+
+        # Forwarded just as the OpenAI wire provider does. It used to be dropped
+        # here: BaseAgent accepts extra_body and LLMConfig.from_agent carries it
+        # across, so an agent configured with provider options against Gemini got
+        # a request without them, with no error and no warning. deepcopy because
+        # one LLMConfig serves many calls and the SDK is handed the dict itself --
+        # pydantic's copy is shallow, so a nested value is shared with the
+        # caller's original too.
+        if config.extra_body is not None:
+            kwargs["extra_body"] = deepcopy(config.extra_body)
 
         if tools:
             kwargs["tools"] = tools

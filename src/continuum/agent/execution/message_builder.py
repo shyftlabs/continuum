@@ -6,10 +6,11 @@ Extracted from AgentRunner to provide clean separation of concerns.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.interfaces.handler_interface import IMessageBuilder
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.observability.decorators import observe
 from continuum.utils.sanitization import (
     detect_injection_patterns,
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from continuum.agent.services.memory_service import MemoryService
     from continuum.agent.services.session_service import SessionService
     from continuum.agent.types import RunContext
+    from continuum.tools.executor import ToolExecutor
     from continuum.tools.types import ToolContextState
 
 logger = get_logger(__name__)
@@ -169,6 +171,7 @@ class MessageBuilder(IMessageBuilder):
         input: str | list[dict[str, Any]] | list[Any],
         context: RunContext,
         tool_context_state: ToolContextState | None = None,
+        tool_executor: ToolExecutor | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """
         Prepare messages for agent execution.
@@ -178,6 +181,9 @@ class MessageBuilder(IMessageBuilder):
             input: User input (string or messages)
             context: Run context
             tool_context_state: Optional tool context state
+            tool_executor: The executor that will run this agent's tools. Its
+                servers' ``inject_into_system_prompt`` settings decide which
+                namespaces of ``tool_context_state`` the model is shown.
 
         Returns:
             Prepared message list
@@ -187,12 +193,12 @@ class MessageBuilder(IMessageBuilder):
         # Log agent memory config at start
         if hasattr(agent, "memory_config") and agent.memory_config:
             logger.info(
-                f"🔍 AGENT MEMORY CONFIG: "
-                f"search_memories={agent.memory_config.search_memories}, "
-                f"store_memories={agent.memory_config.store_memories}, "
-                f"search_scope={agent.memory_config.search_scope}, "
-                f"store_scope={agent.memory_config.store_scope}, "
-                f"search_limit={agent.memory_config.search_limit}"
+                "🔍 AGENT MEMORY CONFIG: search_memories=%s, store_memories=%s, search_scope=%s, store_scope=%s, search_limit=%s",
+                agent.memory_config.search_memories,
+                agent.memory_config.store_memories,
+                agent.memory_config.search_scope,
+                agent.memory_config.store_scope,
+                agent.memory_config.search_limit,
             )
         else:
             logger.warning("⚠️ Agent has no memory_config!")
@@ -205,8 +211,24 @@ class MessageBuilder(IMessageBuilder):
         if agent.config and agent.config.react_mode:
             messages.append({"role": "system", "content": _build_react_template(agent)})
 
-        # Inject tool context into system prompt for LLM awareness
-        if tool_context_state and not tool_context_state.is_empty():
+        # Inject tool context into system prompt for LLM awareness -- but only for
+        # an agent with a tool to use it with. The block reads "use these values
+        # for tool calls", and was going to every agent that inherited a
+        # non-empty context: a live debate run put the cart id into the prompts
+        # of three agents that had no tools, and in gateway-local-shop that id is
+        # "<user_id>:<conversation_id>", never hashed, so the user's id went to
+        # the model provider for nothing.
+        #
+        # "Has regular tools" is the test BaseAgent.get_tools_for_llm() itself
+        # applies before adding the think and headroom built-ins. Not "has any
+        # tool": get_tools_for_llm() also returns handoffs, and a handoff takes a
+        # reason, never a session_id -- an orchestrator whose only tool is a
+        # handoff was receiving the context too.
+        if (
+            tool_context_state
+            and not tool_context_state.is_empty()
+            and getattr(agent, "tools", None)
+        ):
             # Validate tool context state before injection
             try:
                 if not hasattr(tool_context_state, "to_prompt_context") or not hasattr(
@@ -220,11 +242,18 @@ class MessageBuilder(IMessageBuilder):
                     namespaces = tool_context_state.get_all_namespaces()
                     if not isinstance(namespaces, (list, set, tuple)):
                         logger.warning(
-                            f"Tool context state returned invalid namespaces type: {type(namespaces)}. "
-                            f"Skipping injection."
+                            "Tool context state returned invalid namespaces type: %s. Skipping injection.",
+                            type(namespaces),
                         )
                     else:
-                        context_prompt = self._inject_tool_context_to_prompt(tool_context_state)
+                        hidden = (
+                            tool_executor.namespaces_kept_out_of_prompt()
+                            if tool_executor
+                            else set()
+                        )
+                        context_prompt = self._inject_tool_context_to_prompt(
+                            tool_context_state, hidden
+                        )
                         if context_prompt:
                             messages.append({"role": "system", "content": context_prompt})
                             logger.info(
@@ -232,7 +261,7 @@ class MessageBuilder(IMessageBuilder):
                             )
             except Exception as e:
                 logger.warning(
-                    f"Failed to validate/inject tool context state: {e}. Continuing without it."
+                    "Failed to validate/inject tool context state: %s. Continuing without it.", e
                 )
 
         # Retrieved memory. NOT stable context, despite where it sits: this is a
@@ -249,8 +278,8 @@ class MessageBuilder(IMessageBuilder):
                     if memory_content and context.metadata is not None:
                         context.metadata.setdefault(CACHE_BREAKPOINT_KEY, len(messages))
 
-                    logger.info(f"💾 Injecting {len(memories)} memories into LLM context")
-                    logger.debug(f"💾 Memory context content:\n{memory_content}")
+                    logger.info("💾 Injecting %s memories into LLM context", len(memories))
+                    logger.debug("💾 Memory context content:\n%s", log_content(memory_content))
 
                     if memory_content:
                         messages.append({"role": "system", "content": memory_content})
@@ -263,7 +292,7 @@ class MessageBuilder(IMessageBuilder):
                     # memories"; a review demand that degrades is the human step
                     # silently skipped, which is what the mode exists to force.
                     raise
-                logger.warning(f"❌ Failed to retrieve memories: {e}", exc_info=True)
+                logger.warning("❌ Failed to retrieve memories: %s", e, exc_info=True)
 
         # Inject pipeline context from sequential/supervised/planner workflows
         # so sub-agents can see prior steps' outputs without loading Redis.
@@ -292,7 +321,9 @@ class MessageBuilder(IMessageBuilder):
                     )
                     if history:
                         logger.debug(
-                            f"🔄 SESSION HISTORY: Retrieved {len(history)} short-term messages using session_id={context.session_id}"
+                            "🔄 SESSION HISTORY: Retrieved %s short-term messages using session_id=%s",
+                            len(history),
+                            log_id(context.session_id),
                         )
                     messages.extend(history)
             except Exception as e:
@@ -300,12 +331,11 @@ class MessageBuilder(IMessageBuilder):
 
                 if isinstance(e, SessionNotFoundError):
                     logger.warning(
-                        f"No history loaded: session {context.session_id!r} does not exist "
-                        f"(it was never created via get_or_create_session). Run continues "
-                        f"without prior context."
+                        "No history loaded: session %r does not exist (it was never created via get_or_create_session). Run continues without prior context.",
+                        log_id(context.session_id),
                     )
                 else:
-                    logger.warning(f"Failed to load session history: {e}")
+                    logger.warning("Failed to load session history: %s", e)
 
         # Inject RAG context last (closest to current question for maximum recency effect)
         rag_context = agent.config.rag_context if agent.config else None
@@ -332,24 +362,39 @@ class MessageBuilder(IMessageBuilder):
                 detected = detect_injection_patterns(input)
                 if detected:
                     logger.warning(
-                        f"Potential prompt injection detected in input to agent "
-                        f"'{agent.name}': {detected}"
+                        "Potential prompt injection detected in input to agent '%s': %s",
+                        agent.name,
+                        detected,
                     )
 
         # Run product input scanners (e.g. an LLM Guard PromptInjection/Gibberish scanner).
         # Any scanner that returns is_safe=False raises InputBlockedError — the calling router
         # catches this and returns a blocked response without invoking the LLM.
+        #
+        # A scanner that RAISES blocks too (security finding F11). These are the only
+        # control on this path that can refuse, so swallowing their exceptions made the
+        # control's failure mode "no control" — and a scanner is usually a model or a
+        # remote call, which makes crashing it cheaper than evading it.
         if isinstance(input, str) and agent.config and agent.config.input_scanners:
+            from continuum.agent.utils.validation_utils import scanner_failure_reason
             from continuum.exceptions import InputBlockedError
 
             for scanner in agent.config.input_scanners:
                 try:
                     input, is_safe, reason = scanner(input)
                     if not is_safe:
+                        # Two fixes in one line. The field said scanner= and was
+                        # fed reason -- mislabelled since it was written. And
+                        # reason comes from a callable the integrator supplies:
+                        # AgentConfig's contract says (text, is_safe, reason) and
+                        # nothing about what reason may hold, so a scanner that
+                        # quotes the offending input satisfies it. Undecidable
+                        # from here, at WARNING on the security path, so declare it.
                         logger.warning(
-                            "Input scanner blocked request — agent=%s scanner=%s",
+                            "Input scanner blocked request — agent=%s scanner=%s reason=%s",
                             agent.name,
-                            reason,
+                            getattr(scanner, "__name__", type(scanner).__name__),
+                            log_content(reason),
                         )
                         raise InputBlockedError(
                             f"Input blocked by scanner: {reason}",
@@ -358,11 +403,15 @@ class MessageBuilder(IMessageBuilder):
                 except InputBlockedError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        "Input scanner %s failed (fail-open): %s",
-                        getattr(scanner, "__name__", repr(scanner)),
-                        e,
-                    )
+                    # Includes a scanner returning the wrong shape — the tuple unpack
+                    # above raises here too, and a scanner that cannot answer has not
+                    # approved anything.
+                    failure = scanner_failure_reason(scanner, e)
+                    logger.error("Input scanner failed — agent=%s: %s", agent.name, failure)
+                    raise InputBlockedError(
+                        failure,
+                        scanner=getattr(scanner, "__name__", ""),
+                    ) from e
 
         # Record the index where user input begins — used by save_messages to know
         # exactly which messages are new (avoids fragile initial_count - 1 arithmetic).
@@ -403,9 +452,12 @@ class MessageBuilder(IMessageBuilder):
 
                 if compression_result.was_compressed:
                     logger.info(
-                        f"Agent {agent.name}: Context compressed proactively - "
-                        f"{compression_result.original_token_count} → {compression_result.compressed_token_count} tokens "
-                        f"({compression_result.compression_ratio:.1%} ratio, strategy: {compression_result.strategy_used})"
+                        "Agent %s: Context compressed proactively - %s → %s tokens (%s ratio, strategy: %s)",
+                        agent.name,
+                        compression_result.original_token_count,
+                        compression_result.compressed_token_count,
+                        format(compression_result.compression_ratio, ".1%"),
+                        compression_result.strategy_used,
                     )
                     # Compression may have shortened the list, so find the user message
                     # by scanning backward from the end (it was the last message appended).
@@ -417,7 +469,9 @@ class MessageBuilder(IMessageBuilder):
                         user_message_index -= 1
         except Exception as e:
             logger.warning(
-                f"Context management failed for agent {agent.name}, continuing without compression: {e}"
+                "Context management failed for agent %s, continuing without compression: %s",
+                agent.name,
+                e,
             )
 
         # Run tool-attention routing: filters tools and produces Phase 1 summary.
@@ -428,11 +482,6 @@ class MessageBuilder(IMessageBuilder):
         )
         if context.metadata is not None:
             context.metadata["_filtered_tools"] = filtered_tools
-
-        import os
-
-        _full = os.environ.get("LOG_FULL_PROMPT", "").lower() == "true"
-        _limit = None if _full else 2000
 
         # Build display messages: insert Phase 1 inline so it appears in FINAL PROMPT log.
         _phase1 = context.metadata.get("tool_summary_message") if context.metadata else None
@@ -447,23 +496,37 @@ class MessageBuilder(IMessageBuilder):
         else:
             display_messages = messages
 
+        # The assembled prompt carries the system instructions, retrieved memories,
+        # session history, RAG context and the user's input. log_content() withholds
+        # it unless LOG_PROMPT_CONTENT is set; the line itself -- which agent, that a
+        # prompt was built, how big -- survives either way. This replaces the old
+        # LOG_FULL_PROMPT slicing, which capped the dump at 2000 characters per
+        # message but logged it by default.
         formatted = "\n".join(
-            f"[{m.get('role', '?')}] {str(m.get('content', ''))[:_limit]}" for m in display_messages
+            f"[{m.get('role', '?')}] {str(m.get('content', ''))}" for m in display_messages
         )
         logger.info(
-            "===== FINAL PROMPT [%s] =====\n%s\n========================", agent.name, formatted
+            "===== FINAL PROMPT [%s] =====\n%s\n========================",
+            agent.name,
+            log_content(formatted),
         )
 
         if filtered_tools:
-            _tool_limit = None if _full else 200
             _tools_formatted = "\n".join(
-                f"  - {t.get('function', {}).get('name', '?')}: {str(t.get('function', {}).get('parameters', ''))[:_tool_limit]}"
+                f"  - {t.get('function', {}).get('name', '?')}: "
+                f"{str(t.get('function', {}).get('parameters', ''))}"
                 if isinstance(t, dict)
-                else f"  - {t.function.name}: {str(t.function.parameters)[:_tool_limit]}"
+                else f"  - {t.function.name}: {str(t.function.parameters)}"
                 for t in filtered_tools
             )
+            # Bare, not log_content(): this is each tool's name and parameter
+            # schema, defined by the developer or the MCP server -- the system's
+            # own fact, not the user's words. The prompt logged just above
+            # carries the user's input; this does not.
             logger.info(
-                "===== TOOLS [%s] =====\n%s\n========================", agent.name, _tools_formatted
+                "===== TOOLS [%s] =====\n%s\n========================",
+                agent.name,
+                _tools_formatted,
             )
 
         return messages, user_message_index
@@ -471,12 +534,15 @@ class MessageBuilder(IMessageBuilder):
     def _inject_tool_context_to_prompt(
         self,
         context_state: ToolContextState,
+        hidden_namespaces: Collection[str] = (),
     ) -> str | None:
         """
         Generate system prompt injection for tool context awareness.
 
         Args:
             context_state: Tool context state with captured variables
+            hidden_namespaces: Namespaces the model must not be shown, and so
+                must not be told about ("A session already exists").
 
         Returns:
             Context string to inject into system prompt, or None if empty
@@ -484,11 +550,15 @@ class MessageBuilder(IMessageBuilder):
         if context_state.is_empty():
             return None
 
-        base_context = context_state.to_prompt_context()
+        base_context = context_state.to_prompt_context(exclude_namespaces=hidden_namespaces)
+        if base_context is None:
+            return None
 
         # Check if we have a session_id - if so, tell LLM not to create a new one
         has_session_id = False
         for namespace in context_state.get_all_namespaces():
+            if namespace in hidden_namespaces:
+                continue
             if context_state.get(namespace, "session_id"):
                 has_session_id = True
                 break

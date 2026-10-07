@@ -7,21 +7,40 @@ up to ``max_reflections`` times if the critique says "NEEDS IMPROVEMENT".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.base import BaseAgent
-from continuum.agent.config import ReflectionConfig
+from continuum.agent.config import DEFAULT_CRITIQUE_PROMPT, ReflectionConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.agent.workflow._quality_gate import system_one_approves
 from continuum.config import settings
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
+from continuum.system_one import require_backend
 
 if TYPE_CHECKING:
     from continuum.agent.runner import AgentRunner
     from continuum.agent.types import RunContext
 
 logger = get_logger(__name__)
+
+# Leading markdown/quote/bullet noise before the verdict word: "**PASS**", "> PASS".
+_LEADING_NOISE = re.compile(r"^[\s>*_#`\-]+")
+_PASS_WORD = re.compile(r"PASS(?:ED)?\b", re.IGNORECASE)
+
+
+def is_pass_verdict(verdict: str) -> bool:
+    """Does a critique reply say PASS, however the model formatted it?
+
+    The reply must open with the word PASS (or PASSED), in any case and after any
+    markdown emphasis, quote marker or bullet: "PASS", "Pass.", "**PASS**",
+    "PASS - all points covered". Anything else -- "NEEDS IMPROVEMENT: ...",
+    "Passable, but ...", free text -- is not a pass, so it is treated as
+    needing improvement, as before.
+    """
+    return bool(_PASS_WORD.match(_LEADING_NOISE.sub("", verdict)))
 
 
 @dataclass
@@ -70,6 +89,13 @@ class ReflectionAgent(BaseAgent):
             from continuum.agent.exceptions import AgentConfigurationError
 
             raise AgentConfigurationError("ReflectionAgent requires an inner agent to execute")
+
+        if self.reflection_config.verdict_mode == "system_one_classifier":
+            # Opted in with nothing to answer is an error here, not a silent
+            # fall back to the critic at run time.
+            require_backend(
+                self.reflection_config.system_one_backend, seam=f"ReflectionAgent '{self.name}'"
+            )
 
     @publish_active_policy
     async def execute(
@@ -151,8 +177,10 @@ class ReflectionAgent(BaseAgent):
 
         for attempt in range(start_attempt, self.reflection_config.max_reflections + 1):
             logger.info(
-                f"ReflectionAgent '{self.name}': attempt {attempt + 1} / "
-                f"{self.reflection_config.max_reflections + 1}"
+                "ReflectionAgent '%s': attempt %s / %s",
+                self.name,
+                attempt + 1,
+                self.reflection_config.max_reflections + 1,
             )
 
             # Decision trace: mark the start of this reflection attempt (0-based stage).
@@ -191,21 +219,55 @@ class ReflectionAgent(BaseAgent):
             if attempt == self.reflection_config.max_reflections:
                 break
 
+            if self.reflection_config.verdict_mode == "system_one_classifier":
+                p_pass = await system_one_approves(
+                    seam=f"ReflectionAgent '{self.name}'",
+                    request=original_input,
+                    draft=response.content or "",
+                    backend=self.reflection_config.system_one_backend,
+                    threshold=self.reflection_config.system_one_pass_threshold,
+                    review_criteria=self._review_criteria(),
+                )
+                if p_pass is not None:
+                    logger.info(
+                        "ReflectionAgent '%s': passed by the System One classifier on "
+                        "attempt %s (p_pass=%.3f)",
+                        self.name,
+                        attempt + 1,
+                        p_pass,
+                    )
+                    break
+
             critique = await self._critique(
                 response_content=response.content,
                 llm_client=llm_client,
+                request=original_input,
             )
             total_usage = total_usage.add(critique["usage"])
 
-            if critique["verdict"].startswith("PASS"):
+            # No verdict (the critique call failed or came back empty) is not a
+            # PASS: nothing checked this draft. It is returned as it is, reported
+            # as unverified, and not retried -- a retry would have no feedback to
+            # improve on.
+            if critique["verdict"] is None:
+                logger.warning(
+                    "ReflectionAgent '%s': critique unavailable on attempt %s; returning "
+                    "the current draft unverified (not treated as PASS)",
+                    self.name,
+                    attempt + 1,
+                )
+                break
+
+            if is_pass_verdict(critique["verdict"]):
                 logger.info(
-                    f"ReflectionAgent '{self.name}': critique passed on attempt {attempt + 1}"
+                    "ReflectionAgent '%s': critique passed on attempt %s", self.name, attempt + 1
                 )
                 break
 
             logger.info(
-                f"ReflectionAgent '{self.name}': critique says NEEDS IMPROVEMENT — retrying. "
-                f"Reason: {critique['verdict']}"
+                "ReflectionAgent '%s': critique says NEEDS IMPROVEMENT — retrying. Reason: %s",
+                self.name,
+                log_content(critique["verdict"]),
             )
             current_input = (
                 f"{original_input}\n\nPrevious attempt:\n{response.content}\n\n"
@@ -274,15 +336,34 @@ class ReflectionAgent(BaseAgent):
         finally:
             self.agent.config.session_history_turns = _orig_hist
 
+    def _review_criteria(self) -> str | None:
+        """A custom critique prompt (e.g. from generate_critique_prompt) is what
+        "good enough" means for this agent, so the classifier is shown it. The
+        default prompt is only reply-format instructions, so it is not."""
+        prompt = self.reflection_config.critique_prompt
+        return None if prompt == DEFAULT_CRITIQUE_PROMPT else prompt
+
     async def _critique(
         self,
         response_content: str,
         llm_client: Any,
+        request: str | None = None,
     ) -> dict[str, Any]:
         """
         Call the LLM to evaluate the inner agent's response.
 
-        Returns a dict with ``verdict`` (str) and ``usage`` (TokenUsage).
+        ``request`` is what the user originally asked -- the critique prompt asks
+        whether the draft "fully answers the request", so without it the critic
+        is judging blind (measured live: a correct answer rejected 2 times in 6
+        for "the original request was not provided"). It is always the original
+        request, never a retry's refinement input. Without it, the messages are
+        as before.
+
+        Returns a dict with ``verdict`` and ``usage`` (TokenUsage). ``verdict`` is
+        the critique text, or ``None`` when there is no verdict to act on: the call
+        raised, or the reply was empty. ``None`` is deliberately not ``"PASS"`` --
+        treating "the critic did not answer" as approval let a broken critic pass
+        every draft while the logs said each one had been checked.
         """
         from continuum.llm.config import LLMConfig
 
@@ -305,18 +386,34 @@ class ReflectionAgent(BaseAgent):
             {"role": "user", "content": response_content},
             {"role": "user", "content": self.reflection_config.critique_prompt},
         ]
+        if request:
+            messages.insert(0, {"role": "user", "content": f"The request:\n{request}"})
 
+        # response_content is the model's own answer about the user. The critique
+        # prompt is operator-written, like agent.instructions, and gets the same
+        # treatment: operator prompts routinely embed customer names and worked
+        # examples. The [:500] slice is gone -- truncating here leaked a prefix and
+        # discarded the rest; log_content gives nothing by default and all of it
+        # when an operator asks.
         logger.info(
             "===== CRITIQUE PROMPT [%s] =====\n%s\n%s\n=========================",
             self.name,
-            response_content[:500],
-            self.reflection_config.critique_prompt,
+            log_content(response_content),
+            log_content(self.reflection_config.critique_prompt),
         )
 
         try:
             llm_response = await llm_client.chat(
                 messages=messages,
-                config=LLMConfig(model=model, temperature=temperature, max_tokens=256),
+                config=LLMConfig(
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=(
+                        settings.default_llm_max_tokens
+                        if self.reflection_config.reflection_max_tokens is None
+                        else self.reflection_config.reflection_max_tokens
+                    ),
+                ),
                 auto_session=False,
             )
 
@@ -328,17 +425,29 @@ class ReflectionAgent(BaseAgent):
                     total_tokens=llm_response.usage.total_tokens or 0,
                 )
 
-            verdict = (llm_response.content or "PASS").strip()
+            verdict = (llm_response.content or "").strip()
+            if not verdict:
+                logger.warning("ReflectionAgent '%s': critique reply was empty", self.name)
+                return {"verdict": None, "usage": usage}
+            # The outcome is the SDK's own classification -- the same
+            # startswith("PASS") rule that decides whether to retry -- so it is a
+            # label and prints. The rest is the critique model writing about the
+            # draft, i.e. content: a live run printed it in full on this line,
+            # one line above the retry line that withheld the same text.
             logger.info(
-                "===== CRITIQUE VERDICT [%s] =====\n%s\n=========================",
+                "===== CRITIQUE VERDICT [%s] =====\noutcome=%s reason=%s\n"
+                "=========================",
                 self.name,
-                verdict,
+                "PASS" if is_pass_verdict(verdict) else "NEEDS IMPROVEMENT",
+                log_content(verdict),
             )
             return {"verdict": verdict, "usage": usage}
 
         except Exception as e:
-            logger.warning(f"ReflectionAgent critique call failed: {e}")
-            return {"verdict": "PASS", "usage": TokenUsage()}
+            logger.warning(
+                "ReflectionAgent '%s': critique call failed (%s)", self.name, type(e).__name__
+            )
+            return {"verdict": None, "usage": TokenUsage()}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -350,6 +459,10 @@ class ReflectionAgent(BaseAgent):
                     "critique_prompt": self.reflection_config.critique_prompt,
                     "max_reflections": self.reflection_config.max_reflections,
                     "reflection_model": self.reflection_config.reflection_model,
+                    "reflection_max_tokens": self.reflection_config.reflection_max_tokens,
+                    "verdict_mode": self.reflection_config.verdict_mode,
+                    "system_one_backend": self.reflection_config.system_one_backend,
+                    "system_one_pass_threshold": self.reflection_config.system_one_pass_threshold,
                 },
                 "workflow_type": "reflection",
             }
@@ -362,6 +475,7 @@ async def generate_critique_prompt(
     llm_client: Any,
     model: str | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Generate a critique prompt tailored to the user's query.
@@ -376,6 +490,9 @@ async def generate_critique_prompt(
         model: Model to use (defaults to the configured default)
         temperature: Temperature for the generation call. None inherits the
             default LLM temperature; pass a float to override.
+        max_tokens: Cap for the generation call. None uses the normal LLM
+            default (DEFAULT_LLM_MAX_TOKENS); on a reasoning model hidden
+            reasoning counts against it, and a small cap returns a stub.
 
     Returns:
         A critique prompt string ready for use in ReflectionConfig
@@ -396,7 +513,10 @@ async def generate_critique_prompt(
     from continuum.llm.config import LLMConfig
 
     _model = model or settings.default_llm_model
-    config = LLMConfig(model=_model, max_tokens=300)
+    config = LLMConfig(
+        model=_model,
+        max_tokens=settings.default_llm_max_tokens if max_tokens is None else max_tokens,
+    )
     if temperature is not None:
         config = config.with_overrides(temperature=temperature)
 
@@ -424,7 +544,7 @@ async def generate_critique_prompt(
         )
         return (response.content or "").strip()
     except Exception as e:
-        logger.warning(f"generate_critique_prompt failed: {e} — using default")
+        logger.warning("generate_critique_prompt failed: %s — using default", e)
         return ReflectionConfig().critique_prompt
 
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from continuum.agent.types import ResponseStatus, RunStatus
 from continuum.agent.utils.validation_utils import apply_output_scanners, last_user_prompt
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_id
 from continuum.observability.metrics import get_metrics_collector
 
 if TYPE_CHECKING:
@@ -210,7 +210,8 @@ class RunFinalizer:
         if run_artifacts_dict:
             merged.update(run_artifacts_dict)
             logger.debug(
-                f"Attached {len(run_artifacts_dict.get('tool_artifacts', []))} artifacts to response"
+                "Attached %s artifacts to response",
+                len(run_artifacts_dict.get("tool_artifacts", [])),
             )
 
         response.run_artifacts = merged if merged else None
@@ -234,7 +235,7 @@ class RunFinalizer:
         if updated_context_state:
             all_namespaces = updated_context_state.get_all_namespaces()
             logger.debug(
-                f"Checking {len(all_namespaces)} namespaces for MCP session_id: {all_namespaces}"
+                "Checking %s namespaces for MCP session_id: %s", len(all_namespaces), all_namespaces
             )
             for namespace in all_namespaces:
                 captured_session_id = updated_context_state.get(namespace, "session_id")
@@ -243,8 +244,12 @@ class RunFinalizer:
                     original = context.session_id
                     if mcp_session_id != original:
                         logger.debug(
-                            f"Found MCP session_id (namespace={namespace}): {mcp_session_id[:8]}... "
-                            f"(our session: {original[:8] if original else 'None'}...)"
+                            "Found MCP session_id (namespace=%s): %s (our session: %s)",
+                            namespace,
+                            log_id(mcp_session_id),
+                            # Was original[:8], bare: on plaintext session ids the
+                            # first eight characters are the front of the user id.
+                            log_id(original) if original else "None",
                         )
                     break
         else:
@@ -284,7 +289,7 @@ class RunFinalizer:
                 data_labels=context.data_labels,
             )
         except Exception as e:
-            logger.warning(f"Failed to save messages to session: {e}")
+            logger.warning("Failed to save messages to session: %s", e)
 
         final_context_state = updated_context_state or tool_context_state
         if final_context_state and not final_context_state.is_empty():
@@ -294,6 +299,6 @@ class RunFinalizer:
                     context_state=final_context_state,
                     trace_id=context.trace_id,
                 )
-                logger.debug(f"Saved tool context to session {original_session_id[:8]}...")
+                logger.debug("Saved tool context to session %s", log_id(original_session_id))
             except Exception as e:
-                logger.warning(f"Failed to save tool context: {e}")
+                logger.warning("Failed to save tool context: %s", e)

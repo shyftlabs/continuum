@@ -75,7 +75,7 @@ class LangfuseDatasetClient:
 
             self._lf = get_container().langfuse_client
         except Exception as exc:
-            logger.debug(f"LangfuseDatasetClient: could not get container: {exc}")
+            logger.debug("LangfuseDatasetClient: could not get container: %s", exc)
         return self._lf
 
     # ------------------------------------------------------------------
@@ -100,7 +100,7 @@ class LangfuseDatasetClient:
 
         existing = client.get_dataset(self._dataset_name)
         if existing is not None:
-            logger.debug(f"LangfuseDatasetClient: dataset '{self._dataset_name}' already exists")
+            logger.debug("LangfuseDatasetClient: dataset '%s' already exists", self._dataset_name)
             return existing
 
         dataset = client.create_dataset(
@@ -108,7 +108,7 @@ class LangfuseDatasetClient:
             description=description,
             metadata=metadata,
         )
-        logger.info(f"LangfuseDatasetClient: created dataset '{self._dataset_name}'")
+        logger.info("LangfuseDatasetClient: created dataset '%s'", self._dataset_name)
         return dataset
 
     # ------------------------------------------------------------------
@@ -149,7 +149,7 @@ class LangfuseDatasetClient:
             return None
 
         item_id = str(getattr(item, "id", "") or "")
-        logger.debug(f"LangfuseDatasetClient: uploaded case '{case.case_id}' → item '{item_id}'")
+        logger.debug("LangfuseDatasetClient: uploaded case '%s' → item '%s'", case.case_id, item_id)
         return item_id or None
 
     def upload_bulk_cases(
@@ -170,8 +170,10 @@ class LangfuseDatasetClient:
             if item_id:
                 mapping[case.case_id] = item_id
         logger.info(
-            f"LangfuseDatasetClient: uploaded {len(mapping)}/{len(cases)} cases "
-            f"to dataset '{self._dataset_name}'"
+            "LangfuseDatasetClient: uploaded %s/%s cases to dataset '%s'",
+            len(mapping),
+            len(cases),
+            self._dataset_name,
         )
         return mapping
 
@@ -223,8 +225,9 @@ class LangfuseDatasetClient:
             )
             if item is None:
                 logger.warning(
-                    f"LangfuseDatasetClient.link_run: item '{dataset_item_id}' not found "
-                    f"in dataset '{self._dataset_name}'"
+                    "LangfuseDatasetClient.link_run: item '%s' not found in dataset '%s'",
+                    dataset_item_id,
+                    self._dataset_name,
                 )
                 return
 
@@ -235,11 +238,13 @@ class LangfuseDatasetClient:
                 run_metadata=run_metadata or {},
             )
             logger.debug(
-                f"LangfuseDatasetClient: linked trace '{trace_id}' to item "
-                f"'{dataset_item_id}' as run '{run_name}'"
+                "LangfuseDatasetClient: linked trace '%s' to item '%s' as run '%s'",
+                trace_id,
+                dataset_item_id,
+                run_name,
             )
         except Exception as exc:
-            logger.warning(f"LangfuseDatasetClient.link_run failed: {exc}")
+            logger.warning("LangfuseDatasetClient.link_run failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Uploading scores
@@ -292,8 +297,9 @@ class LangfuseDatasetClient:
             )
 
         logger.debug(
-            f"LangfuseDatasetClient: uploaded {len(result.scores)} scores "
-            f"(+ overall) to trace '{trace_id}'"
+            "LangfuseDatasetClient: uploaded %s scores (+ overall) to trace '%s'",
+            len(result.scores),
+            trace_id,
         )
 
     # ------------------------------------------------------------------
@@ -320,7 +326,7 @@ class LangfuseDatasetClient:
         try:
             dataset = client.get_dataset(self._dataset_name)
             if dataset is None:
-                logger.warning(f"LangfuseDatasetClient: dataset '{self._dataset_name}' not found")
+                logger.warning("LangfuseDatasetClient: dataset '%s' not found", self._dataset_name)
                 return []
 
             items = dataset.items
@@ -352,11 +358,12 @@ class LangfuseDatasetClient:
                 )
 
             logger.info(
-                f"LangfuseDatasetClient: fetched {len(cases)} cases "
-                f"from dataset '{self._dataset_name}'"
+                "LangfuseDatasetClient: fetched %s cases from dataset '%s'",
+                len(cases),
+                self._dataset_name,
             )
             return cases
 
         except Exception as exc:
-            logger.warning(f"LangfuseDatasetClient.fetch_cases failed: {exc}")
+            logger.warning("LangfuseDatasetClient.fetch_cases failed: %s", exc)
             return []

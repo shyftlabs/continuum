@@ -15,7 +15,7 @@ from typing import Any
 
 from continuum.connectors.redis import RedisConnector
 from continuum.exceptions import InsecureConfigurationError
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content, log_id
 from continuum.observability.decorators import observe
 from continuum.session.base import BaseSessionProvider
 from continuum.session.config import SessionConfig
@@ -173,7 +173,7 @@ class RedisSessionProvider(BaseSessionProvider):
                 raise
             except Exception as e:
                 error_msg = str(e)
-                logger.error(f"Failed to initialize Redis Session Provider: {error_msg}")
+                logger.error("Failed to initialize Redis Session Provider: %s", error_msg)
                 self._initialized = True
                 return False
 
@@ -288,7 +288,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except Exception as e:
             # Lost the race, or the key expired between the check and the
             # rename. Either way the caller re-reads and finds whatever is there.
-            logger.debug(f"Legacy session migration skipped for {resolved}: {e}")
+            logger.debug("Legacy session migration skipped for %s: %s", log_id(resolved), e)
             return False
 
         legacy_messages = self._get_session_key(legacy)
@@ -296,7 +296,7 @@ class RedisSessionProvider(BaseSessionProvider):
             try:
                 await self._redis.rename(legacy_messages, self._get_session_key(resolved))
             except Exception as e:
-                logger.debug(f"Legacy message migration skipped for {resolved}: {e}")
+                logger.debug("Legacy message migration skipped for %s: %s", log_id(resolved), e)
 
         # The stored metadata still carries the old id; correct it so the
         # session reports the key it now lives under.
@@ -310,7 +310,7 @@ class RedisSessionProvider(BaseSessionProvider):
                 ex=self._config.ttl_seconds,
             )
 
-        logger.info(f"Migrated session to keyed id: {resolved}")
+        logger.info("Migrated session to keyed id: %s", log_id(resolved))
         return True
 
     @observe(name="session_provider_get_or_create", capture_output=True)
@@ -365,7 +365,7 @@ class RedisSessionProvider(BaseSessionProvider):
                     )
                     pipe.expire(messages_key, self._config.ttl_seconds)
                     await pipe.execute()
-                logger.debug(f"Retrieved existing session: {resolved_session_id}")
+                logger.debug("Retrieved existing session: %s", log_id(resolved_session_id))
                 return resolved_session_id
 
             # Session doesn't exist — create it atomically with SET NX so that
@@ -394,12 +394,14 @@ class RedisSessionProvider(BaseSessionProvider):
                     pipe.expire(messages_key, self._config.ttl_seconds)
                     await pipe.execute()
                 logger.debug(
-                    f"Race resolved: session already created by concurrent request: {resolved_session_id}"
+                    "Race resolved: session already created by concurrent request: %s",
+                    log_id(resolved_session_id),
                 )
             else:
                 logger.info(
-                    f"Created new session: {resolved_session_id}",
-                    extra={"user_id": user_id, "conversation_id": conversation_id},
+                    "Created new session: %s",
+                    log_id(resolved_session_id),
+                    extra={"user_id": log_id(user_id), "conversation_id": log_id(conversation_id)},
                 )
             return resolved_session_id
 
@@ -409,7 +411,7 @@ class RedisSessionProvider(BaseSessionProvider):
             # Surface as SessionConnectionError; the caller (SessionClient) owns
             # logging/reporting and decides whether to degrade quietly or fail.
             # Keep this layer quiet so the fallback path has no error spam.
-            logger.debug(f"Redis get_or_create_session failed (surfacing to caller): {e}")
+            logger.debug("Redis get_or_create_session failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to get or create session: {str(e)}",
                 session_id=resolved_session_id,
@@ -456,8 +458,10 @@ class RedisSessionProvider(BaseSessionProvider):
                 session_metadata = SessionMetadata.from_dict(json.loads(metadata_json))
             except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
                 logger.error(
-                    f"Corrupt session metadata for {session_id}: {parse_err}. "
-                    f"Raw preview: {str(metadata_json)[:200]}"
+                    "Corrupt session metadata for %s: %s. Raw preview: %s",
+                    log_id(session_id),
+                    parse_err,
+                    log_content(metadata_json),
                 )
                 raise SessionConnectionError(
                     f"Corrupt session metadata for session: {session_id}",
@@ -495,9 +499,10 @@ class RedisSessionProvider(BaseSessionProvider):
                     session_metadata.message_count = actual_count
 
                     logger.info(
-                        f"Sliding window triggered: trimmed {trim_count} oldest messages",
+                        "Sliding window triggered: trimmed %s oldest messages",
+                        trim_count,
                         extra={
-                            "session_id": session_id,
+                            "session_id": log_id(session_id),
                             "trimmed_count": trim_count,
                             "new_count": actual_count,
                         },
@@ -525,14 +530,15 @@ class RedisSessionProvider(BaseSessionProvider):
             await self._redis.set(metadata_key, metadata_json_updated, ex=self._config.ttl_seconds)
 
             logger.debug(
-                f"Added message to session: {session_id}",
+                "Added message to session: %s",
+                log_id(session_id),
                 extra={"message_count": session_metadata.message_count, "role": message.role},
             )
 
         except (SessionNotFoundError, SessionMessageLimitError):
             raise
         except Exception as e:
-            logger.debug(f"Redis add_message failed (surfacing to caller): {e}")
+            logger.debug("Redis add_message failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to add message to session: {str(e)}",
                 session_id=session_id,
@@ -585,8 +591,10 @@ class RedisSessionProvider(BaseSessionProvider):
                     session_messages.append(SessionMessage.from_dict(json.loads(msg_json)))
                 except (json.JSONDecodeError, TypeError, KeyError, ValueError) as parse_err:
                     logger.warning(
-                        f"Skipping malformed session message in {session_id}: {parse_err}. "
-                        f"Raw preview: {str(msg_json)[:200]}"
+                        "Skipping malformed session message in %s: %s. Raw preview: %s",
+                        log_id(session_id),
+                        parse_err,
+                        log_content(msg_json),
                     )
 
             # Convert to ChatMessage list
@@ -620,7 +628,9 @@ class RedisSessionProvider(BaseSessionProvider):
                 await pipe.execute()
 
             logger.debug(
-                f"Retrieved {len(messages)} messages from session: {session_id}",
+                "Retrieved %s messages from session: %s",
+                len(messages),
+                log_id(session_id),
                 extra={"limit": limit},
             )
 
@@ -629,7 +639,7 @@ class RedisSessionProvider(BaseSessionProvider):
         except SessionNotFoundError:
             raise
         except Exception as e:
-            logger.debug(f"Redis get_messages failed (surfacing to caller): {e}")
+            logger.debug("Redis get_messages failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to get messages from session: {str(e)}",
                 session_id=session_id,
@@ -668,7 +678,7 @@ class RedisSessionProvider(BaseSessionProvider):
             return metadata
 
         except Exception as e:
-            logger.debug(f"Redis get_session_metadata failed (surfacing to caller): {e}")
+            logger.debug("Redis get_session_metadata failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to get session metadata: {str(e)}",
                 session_id=session_id,
@@ -706,11 +716,11 @@ class RedisSessionProvider(BaseSessionProvider):
                 pipe.expire(messages_key, self._config.ttl_seconds)
                 await pipe.execute()
 
-            logger.debug(f"Updated session metadata: {session_id}")
+            logger.debug("Updated session metadata: %s", log_id(session_id))
             return True
 
         except Exception as e:
-            logger.debug(f"Redis update_session_metadata failed (surfacing to caller): {e}")
+            logger.debug("Redis update_session_metadata failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to update session metadata: {str(e)}",
                 session_id=session_id,
@@ -756,11 +766,11 @@ class RedisSessionProvider(BaseSessionProvider):
             else:
                 await self._redis.delete(messages_key)
 
-            logger.info(f"Cleared session: {session_id}")
+            logger.info("Cleared session: %s", log_id(session_id))
             return True
 
         except Exception as e:
-            logger.debug(f"Redis clear_session failed (surfacing to caller): {e}")
+            logger.debug("Redis clear_session failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to clear session: {str(e)}",
                 session_id=session_id,
@@ -793,11 +803,11 @@ class RedisSessionProvider(BaseSessionProvider):
             # Delete session data
             await self._redis.delete(messages_key, metadata_key)
 
-            logger.info(f"Deleted session: {session_id}")
+            logger.info("Deleted session: %s", log_id(session_id))
             return True
 
         except Exception as e:
-            logger.debug(f"Redis delete_session failed (surfacing to caller): {e}")
+            logger.debug("Redis delete_session failed (surfacing to caller): %s", e)
             raise SessionConnectionError(
                 f"Failed to delete session: {str(e)}",
                 session_id=session_id,
@@ -838,5 +848,5 @@ class RedisSessionProvider(BaseSessionProvider):
                 logger.info("Redis Session Provider closed")
 
             except Exception as e:
-                logger.warning(f"Error closing Redis Session Provider: {e}")
+                logger.warning("Error closing Redis Session Provider: %s", e)
                 self._initialized = False

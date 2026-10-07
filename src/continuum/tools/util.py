@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from continuum.llm.types import ToolDefinition
-from continuum.logging import get_logger
+from continuum.logging import get_logger, log_content
 from continuum.tools.exceptions import MCPError, MCPToolError
 from continuum.tools.schema import normalize_schema_for_llm
 
@@ -77,8 +77,9 @@ def build_namespaced_tool_name(server_name: str, tool_name: str) -> str:
         # what the model calls, so emit the prefixed name and let the provider
         # complain -- a loud 400 beats a silently mangled tool name.
         logger.warning(
-            f"Tool name '{tool_name}' leaves no room for a server namespace "
-            f"within {MAX_TOOL_NAME_LENGTH} characters; the provider may reject it."
+            "Tool name '%s' leaves no room for a server namespace within %s characters; the provider may reject it.",
+            tool_name,
+            MAX_TOOL_NAME_LENGTH,
         )
         return f"{prefix}{NAMESPACE_SEPARATOR}{tool_name}"
 
@@ -331,10 +332,12 @@ class MCPUtil:
         if normalize_schemas:
             try:
                 schema = normalize_schema_for_llm(schema, strict=strict_mode)
-                logger.debug(f"Normalized schema for tool '{tool.name}' (strict={strict_mode})")
+                logger.debug("Normalized schema for tool '%s' (strict=%s)", tool.name, strict_mode)
             except Exception as e:
                 logger.warning(
-                    f"Error normalizing schema for tool '{tool.name}': {e}. Using original schema."
+                    "Error normalizing schema for tool '%s': %s. Using original schema.",
+                    tool.name,
+                    e,
                 )
                 # Fall back to minimal fixes
                 if "properties" not in schema:
@@ -429,7 +432,7 @@ class MCPUtil:
 
                 # Skip widgets - they're for UI only
                 elif item_type in ("widget", "ui"):
-                    logger.debug(f"Skipping widget/UI content type: {item_type}")
+                    logger.debug("Skipping widget/UI content type: %s", item_type)
                     continue
 
                 # Handle other content types - include as is
@@ -437,7 +440,7 @@ class MCPUtil:
                     extracted_texts.append(json.dumps(item_dict))
 
             except Exception as e:
-                logger.warning(f"Error extracting MCP content item: {e}")
+                logger.warning("Error extracting MCP content item: %s", e)
                 # Fall back to raw dump
                 try:
                     if hasattr(item, "model_dump_json"):
@@ -506,7 +509,7 @@ class MCPUtil:
         try:
             json_data: dict[str, Any] = json.loads(input_json) if input_json else {}
         except Exception as e:
-            logger.debug(f"Invalid JSON input for tool {tool.name}: {input_json}")
+            logger.debug("Invalid JSON input for tool %s: %s", tool.name, log_content(input_json))
             raise MCPToolError(
                 f"Invalid JSON input for tool {tool.name}: {input_json}",
                 server_name=server.name,
@@ -514,7 +517,7 @@ class MCPUtil:
                 original_error=e,
             ) from e
 
-        logger.debug(f"Invoking MCP tool {tool.name} on server {server.name}")
+        logger.debug("Invoking MCP tool %s on server %s", tool.name, server.name)
 
         # Create span for tool call via provider manager
         manager = get_provider_manager()
@@ -554,7 +557,9 @@ class MCPUtil:
 
                 if is_json_error:
                     logger.error(
-                        f"❌ MCP server returned invalid JSON response for tool '{tool.name}': {error_msg[:300]}",
+                        "❌ MCP server returned invalid JSON response for tool '%s': %s",
+                        tool.name,
+                        log_content(error_msg),
                         extra={
                             "tool_name": tool.name,
                             "server_name": server.name,
@@ -567,10 +572,11 @@ class MCPUtil:
             duration_ms = (time.time() - start_time) * 1000
 
             logger.debug(
-                f"🔍 MCP tool {tool.name} raw response: "
-                f"has_structuredContent={result.structuredContent is not None}, "
-                f"has_meta={result.meta is not None}, "
-                f"content_items={len(result.content) if result.content else 0}"
+                "🔍 MCP tool %s raw response: has_structuredContent=%s, has_meta=%s, content_items=%s",
+                tool.name,
+                result.structuredContent is not None,
+                result.meta is not None,
+                len(result.content) if result.content else 0,
             )
 
             # Process text output for LLM
@@ -584,8 +590,8 @@ class MCPUtil:
             else:
                 tool_output = cls._extract_mcp_content(result.content)
                 logger.debug(
-                    f"MCP tool {tool.name} using extracted content for LLM text output "
-                    f"(no structuredContent available)"
+                    "MCP tool %s using extracted content for LLM text output (no structuredContent available)",
+                    tool.name,
                 )
 
             # Capture EVERYTHING the MCP returned
@@ -636,7 +642,9 @@ class MCPUtil:
                 )
 
             logger.debug(
-                f"MCP tool {tool.name} completed in {duration_ms:.2f}ms",
+                "MCP tool %s completed in %sms",
+                tool.name,
+                format(duration_ms, ".2f"),
                 extra={"server": server.name, "tool": tool.name, "duration_ms": duration_ms},
             )
 
@@ -645,7 +653,10 @@ class MCPUtil:
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(
-                f"Error invoking MCP tool {tool.name} on server {server.name}: {e}",
+                "Error invoking MCP tool %s on server %s: %s",
+                tool.name,
+                server.name,
+                e,
                 extra={"server": server.name, "tool": tool.name, "error": str(e)},
             )
 

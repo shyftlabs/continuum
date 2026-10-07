@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         RunState,
     )
     from continuum.llm.types import ToolCallInput
+    from continuum.tools.executor import ToolExecutor
     from continuum.tools.types import ToolContextState
 
 
@@ -30,6 +31,7 @@ class IMessageBuilder(ABC):
         input: str | list[dict[str, Any]] | list[Any],
         context: RunContext,
         tool_context_state: ToolContextState | None = None,
+        tool_executor: ToolExecutor | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Prepare messages for agent execution.
 

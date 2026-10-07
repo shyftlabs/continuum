@@ -101,7 +101,7 @@ class LangfuseClient:
                 self._initialized = True  # package missing won't change, no point retrying
                 return False
             except Exception as e:
-                logger.error(f"Failed to initialize Langfuse: {e}")
+                logger.error("Failed to initialize Langfuse: %s", e)
                 # Leave _initialized = False so transient failures (network, bad creds) can be retried
                 return False
 
@@ -127,7 +127,7 @@ class LangfuseClient:
             return None
 
         if not self.should_sample():
-            logger.debug(f"Trace '{name}' not sampled (rate: {self._config.sample_rate})")
+            logger.debug("Trace '%s' not sampled (rate: %s)", name, self._config.sample_rate)
             return None
 
         # Merge default tags and metadata
@@ -154,7 +154,7 @@ class LangfuseClient:
                 public=public,
             )
         except Exception as e:
-            logger.warning(f"Failed to create trace: {e}")
+            logger.warning("Failed to create trace: %s", e)
             return None
 
     def span(
@@ -183,7 +183,7 @@ class LangfuseClient:
                 level=level,
             )
         except Exception as e:
-            logger.warning(f"Failed to create span: {e}")
+            logger.warning("Failed to create span: %s", e)
             return None
 
     def generation(
@@ -218,7 +218,7 @@ class LangfuseClient:
                 usage=usage,
             )
         except Exception as e:
-            logger.warning(f"Failed to create generation: {e}")
+            logger.warning("Failed to create generation: %s", e)
             return None
 
     def score(
@@ -245,7 +245,7 @@ class LangfuseClient:
                 data_type=data_type,
             )
         except Exception as e:
-            logger.warning(f"Failed to create score: {e}")
+            logger.warning("Failed to create score: %s", e)
             return None
 
     def event(
@@ -274,7 +274,7 @@ class LangfuseClient:
                 level=level,
             )
         except Exception as e:
-            logger.warning(f"Failed to create event: {e}")
+            logger.warning("Failed to create event: %s", e)
             return None
 
     def create_prompt(
@@ -299,7 +299,7 @@ class LangfuseClient:
                 is_active=is_active,
             )
         except Exception as e:
-            logger.warning(f"Failed to create prompt: {e}")
+            logger.warning("Failed to create prompt: %s", e)
             return None
 
     def get_prompt(
@@ -322,7 +322,7 @@ class LangfuseClient:
                 cache_ttl_seconds=cache_ttl_seconds,
             )
         except Exception as e:
-            logger.warning(f"Failed to get prompt: {e}")
+            logger.warning("Failed to get prompt: %s", e)
             return None
 
     def create_dataset(
@@ -343,7 +343,7 @@ class LangfuseClient:
                 metadata=metadata,
             )
         except Exception as e:
-            logger.warning(f"Failed to create dataset: {e}")
+            logger.warning("Failed to create dataset: %s", e)
             return None
 
     def get_dataset(self, name: str) -> Any:
@@ -354,7 +354,7 @@ class LangfuseClient:
         try:
             return self._client.get_dataset(name=name)
         except Exception as e:
-            logger.warning(f"Failed to get dataset: {e}")
+            logger.warning("Failed to get dataset: %s", e)
             return None
 
     def create_dataset_item(
@@ -377,7 +377,7 @@ class LangfuseClient:
                 metadata=metadata,
             )
         except Exception as e:
-            logger.warning(f"Failed to create dataset item: {e}")
+            logger.warning("Failed to create dataset item: %s", e)
             return None
 
     def flush(self) -> None:
@@ -386,7 +386,7 @@ class LangfuseClient:
             try:
                 self._client.flush()
             except Exception as e:
-                logger.warning(f"Failed to flush Langfuse: {e}")
+                logger.warning("Failed to flush Langfuse: %s", e)
 
     def shutdown(self) -> None:
         """Shutdown the Langfuse client and flush pending events."""
@@ -396,7 +396,7 @@ class LangfuseClient:
                 self._client.shutdown()
                 logger.info("Langfuse client shutdown complete")
             except Exception as e:
-                logger.warning(f"Failed to shutdown Langfuse: {e}")
+                logger.warning("Failed to shutdown Langfuse: %s", e)
         self._client = None
         self._initialized = False
 
@@ -409,5 +409,5 @@ class LangfuseClient:
             result = self._client.auth_check()
             return result
         except Exception as e:
-            logger.warning(f"Langfuse auth check failed: {e}")
+            logger.warning("Langfuse auth check failed: %s", e)
             return False

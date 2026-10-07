@@ -146,11 +146,48 @@ and an auto-flush every 5 seconds.
 ## Debug tip: log the assembled prompt
 
 ```env
-LOG_FULL_PROMPT=true
+LOG_PROMPT_CONTENT=true
 ```
 
-The runner prints the entire message list it sends to the LLM —
-indispensable for debugging memory / RAG / handoff flows.
+By default (`false`) the log says which agent built a prompt and how big
+it was (`FINAL PROMPT [shop] <4383 chars>`), and identifiers show as
+`id#…` pseudonyms. With `true` it prints the whole message list sent to
+the LLM, including memories, tool results, model output and the real ids.
+That's what you need to debug memory / RAG / handoff flows. Turn it on
+locally only, never where logs are shipped. `LOG_FULL_PROMPT` is gone.
+
+---
+
+## Writing a log line in Continuum code
+
+Pass values as `%s` arguments. Ruff `G004` rejects f-strings in logging
+calls, because an f-string line cannot be redacted. Then wrap each value
+by **whose data it is**, not by whether it looks sensitive:
+
+```python
+from continuum.logging import log_content, log_id
+
+logger.info("TOOL RESULT: %s -> %s", tool_name, log_content(result))
+logger.info("Session ready: %s", log_id(session_id))
+```
+
+| value | wrapper |
+|---|---|
+| prompt, memory, tool argument or result, model output | `log_content()` |
+| `user_id`, `session_id`, `memory_id` | `log_id()` |
+| agent/tool names, schemas, model ids, counts, `trace_id`, paths, commands | bare |
+
+- Exceptions stay bare, unless the text quotes input: a pydantic
+  `ValidationError` includes `input_value='…'`, so wrap it.
+- `extra={...}` values follow the same rules. Third-party handlers
+  serialise them even though Continuum's formatters don't.
+- Never slice a logged value (`[:8]`, `[:200]`). Pass it whole: the
+  wrappers handle it.
+- `log_id(x) if x else "none"`, not `log_id(x or "none")`.
+- Add a path to `tests/unit/test_log_canary.py` when you add one. It is
+  the only check that a wrapper wasn't forgotten.
+
+Full rules: [`docs/installation.md`](../../../docs/installation.md), "Adding a log line".
 
 ---
 

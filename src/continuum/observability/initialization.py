@@ -68,14 +68,11 @@ def initialize_observability(
             provider = _create_provider(provider_name, config)
             if provider and provider.is_enabled:
                 registry.register(provider_name, provider, overwrite=True)
-                logger.info(f"Initialized observability provider: {provider_name}")
+                logger.info("Initialized observability provider: %s", provider_name)
             else:
-                logger.warning(f"Provider {provider_name} was created but is not enabled")
+                logger.warning("Provider %s was created but is not enabled", provider_name)
         except Exception as e:
-            logger.error(
-                f"Failed to initialize provider {provider_name}: {e}",
-                exc_info=True,
-            )
+            logger.error("Failed to initialize provider %s: %s", provider_name, e, exc_info=True)
 
     _initialized = True
 
@@ -131,7 +128,7 @@ def _create_provider(
     provider_config = config.get_provider_config(provider_name)
 
     if provider_config is None:
-        logger.warning(f"No configuration found for provider {provider_name}, skipping")
+        logger.warning("No configuration found for provider %s, skipping", provider_name)
         return None
 
     # Map provider names to provider classes
@@ -145,8 +142,9 @@ def _create_provider(
     provider_class = provider_classes.get(provider_name)
     if provider_class is None:
         logger.error(
-            f"Unknown provider: {provider_name}. "
-            f"Available providers: {list(provider_classes.keys())}"
+            "Unknown provider: %s. Available providers: %s",
+            provider_name,
+            list(provider_classes.keys()),
         )
         return None
 
@@ -160,10 +158,7 @@ def _create_provider(
             # Other providers expect dict config
             return provider_class(name=provider_name, config=provider_config)
     except Exception as e:
-        logger.error(
-            f"Failed to create provider {provider_name}: {e}",
-            exc_info=True,
-        )
+        logger.error("Failed to create provider %s: %s", provider_name, e, exc_info=True)
         return None
 
 

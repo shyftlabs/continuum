@@ -130,25 +130,27 @@ def load_pins(path: str | Path) -> dict[str, ServerPins]:
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:
-        logger.warning(f"Ignoring unreadable MCP tool-pin file {file}: {e}")
+        logger.warning("Ignoring unreadable MCP tool-pin file %s: %s", file, e)
         return {}
 
     if not isinstance(raw, dict):
-        logger.warning(f"Ignoring malformed MCP tool-pin file {file}: expected a JSON object.")
+        logger.warning("Ignoring malformed MCP tool-pin file %s: expected a JSON object.", file)
         return {}
 
     version = raw.get("version")
     if version != PIN_FORMAT_VERSION:
         logger.warning(
-            f"Ignoring MCP tool-pin file {file}: unsupported format version {version!r} "
-            f"(this build reads version {PIN_FORMAT_VERSION}). Re-create it with "
-            f"`continuum mcp inspect URL --name SERVER --write-pins {shlex.quote(str(file))}`."
+            "Ignoring MCP tool-pin file %s: unsupported format version %r (this build reads version %s). Re-create it with `continuum mcp inspect URL --name SERVER --write-pins %s`.",
+            file,
+            version,
+            PIN_FORMAT_VERSION,
+            shlex.quote(str(file)),
         )
         return {}
 
     servers = raw.get("servers")
     if not isinstance(servers, dict):
-        logger.warning(f"Ignoring MCP tool-pin file {file}: no 'servers' object.")
+        logger.warning("Ignoring MCP tool-pin file %s: no 'servers' object.", file)
         return {}
 
     return {

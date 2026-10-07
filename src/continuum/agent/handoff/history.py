@@ -224,7 +224,7 @@ class HistorySummarizer:
             ]
 
         except Exception as e:
-            logger.warning(f"LLM summarization failed, using text summary: {e}")
+            logger.warning("LLM summarization failed, using text summary: %s", e)
             return [self._text_summary(messages)]
 
     def _text_summary(self, messages: list[dict[str, Any]]) -> dict[str, Any]:

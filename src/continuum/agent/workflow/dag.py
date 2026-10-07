@@ -333,7 +333,9 @@ class DAGAgent(BaseAgent):
                     )
                     results[stage.stage_id] = response
                 except Exception as e:
-                    logger.error(f"DAGAgent '{self.name}': stage '{stage.stage_id}' failed: {e}")
+                    logger.error(
+                        "DAGAgent '%s': stage '%s' failed: %s", self.name, stage.stage_id, e
+                    )
                     results[stage.stage_id] = e
                     if self.fail_strategy == FailStrategy.FAIL_FAST:
                         abort.set()

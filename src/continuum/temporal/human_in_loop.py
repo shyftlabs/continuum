@@ -121,9 +121,11 @@ class HumanInLoopManager:
                 import logging
 
                 logging.getLogger(__name__).warning(
-                    f"Escalation: request_id '{request_id}' not found in pending "
-                    f"approvals for workflow '{workflow_id}'. "
-                    f"Available request_ids: {[r.get('request_id') for r in pending]}"
+                    "Escalation: request_id '%s' not found in pending "
+                    "approvals for workflow '%s'. Available request_ids: %s",
+                    request_id,
+                    workflow_id,
+                    [r.get("request_id") for r in pending],
                 )
 
         await self.submit_decision(workflow_id, decision)

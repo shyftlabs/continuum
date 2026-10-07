@@ -144,7 +144,10 @@ class SequentialAgent(BaseAgent):
                     step_num = i + 1
 
                     logger.info(
-                        f"Sequential step {step_num}/{len(self.agents)}: {agent.name}",
+                        "Sequential step %s/%s: %s",
+                        step_num,
+                        len(self.agents),
+                        agent.name,
                         extra={"run_id": context.run_id, "step": step_num},
                     )
 
@@ -221,7 +224,7 @@ class SequentialAgent(BaseAgent):
                                 current_input = response.content or ""
 
                         except Exception as e:
-                            logger.error(f"Sequential step {step_num} failed: {e}")
+                            logger.error("Sequential step %s failed: %s", step_num, e)
                             step_span.set_error(str(e))
                             step_span.set_output({"success": False, "error": str(e)})
 

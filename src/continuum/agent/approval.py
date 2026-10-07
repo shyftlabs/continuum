@@ -158,6 +158,7 @@ _LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
 )
 
 _WARNED_AGENTS: set[str] = set()
+_WARNED_TAINT_RULE: set[str] = set()
 
 
 def _ask_lock() -> asyncio.Lock:
@@ -191,6 +192,7 @@ def build_approval_settings(agent: Any) -> ToolApprovalSettings | None:
     handler = getattr(config, "approval_handler", None)
     agent_name = getattr(agent, "name", "")
     warn_if_approval_unwired(agent_name, set(declared), handler)
+    warn_if_taint_rule_unfed(agent, handler)
     return ToolApprovalSettings(
         tools=frozenset(declared),
         handler=handler,
@@ -281,4 +283,38 @@ def warn_if_approval_unwired(
         "as protection.",
         agent_name,
         sorted(declared),
+    )
+
+
+def warn_if_taint_rule_unfed(agent: Any, handler: ToolApprovalHandler | None) -> None:
+    """Say once that a handler's taint rule has no labels to read.
+
+    A handler that refuses to auto-approve in a labelled run (e.g.
+    ``system_one_approval_handler``'s ``no_auto_approve_with_labels``) exposes
+    ``taint_rule_labels``. It reads labels the integrator declares -- the SDK
+    ships no detector -- so an agent that declares none gets a rule that never
+    fires: configured and wired to nothing. Run-level seeds
+    (``create_run_context(data_labels=...)``) cannot be seen from here, so the
+    message names them rather than staying silent.
+    """
+    # Strict type check, not truthiness: a mock or proxy answers any attribute
+    # with a truthy object, and would read as a handler with a taint rule.
+    labels = getattr(handler, "taint_rule_labels", None)
+    if not isinstance(labels, frozenset) or not labels:
+        return
+    config = getattr(agent, "config", None)
+    memory = getattr(agent, "memory_config", None)
+    if getattr(config, "tool_data_labels", None) or getattr(memory, "scope_data_labels", None):
+        return
+    agent_name = getattr(agent, "name", "")
+    if agent_name in _WARNED_TAINT_RULE:
+        return
+    _WARNED_TAINT_RULE.add(agent_name)
+    logger.warning(
+        "Agent '%s' uses an approval handler that refuses to auto-approve in a run "
+        "carrying data labels, but declares no data label sources (tool_data_labels, "
+        "scope_data_labels). Unless its runs are seeded with data labels, that rule never "
+        "fires: a run that read untrusted content looks clean to it. Declare which tools "
+        "return untrusted content, e.g. tool_data_labels={'fetch_url': {'untrusted'}}.",
+        agent_name,
     )

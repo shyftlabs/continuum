@@ -1,5 +1,6 @@
 """
-All 10 workflow modes for gateway-multi-agent-shop.
+All 10 workflow modes for gateway-multi-agent-shop, plus System One variants of
+four of them (router, loop, reflection, supervised; see section 11).
 
 Identical logic to multi-agent-shop/workflows.py, with gateway_mode
 passed to every agent so the Smart Gateway can route each independently.
@@ -7,8 +8,11 @@ passed to every agent so the Smart Gateway can route each independently.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "sr
 from agents import (
     make_analyst_agent,
     make_cart_agent,
+    make_clarify_agent,
     make_recommend_agent,
     make_search_agent,
     make_summary_agent,
@@ -53,7 +58,7 @@ from continuum.agent.types import (
     TerminationConfig,
     TerminationType,
 )
-from continuum.agent.workflow.debate import DebateAgent
+from continuum.agent.workflow.debate import DebateAgent, DebateConfig
 from continuum.agent.workflow.loop import LoopAgent
 from continuum.agent.workflow.parallel import ParallelAgent
 from continuum.agent.workflow.planner import PlannerAgent
@@ -388,9 +393,17 @@ class LoopShop(_BaseWorkflow):
             name="budget-search-agent",
             instructions=(
                 "Search for pet products matching the user's request. "
+                # search_products matches text in names and categories only, so a
+                # query like "under $10" finds nothing -- the budget is applied here.
+                "The search tool cannot filter by price: for a budget, call "
+                "search_products with no query (or only an animal or category), "
+                "compare their prices yourself, and keep the ones within budget. "
                 "If you find a product matching all criteria (including any budget constraint), "
                 "start your response with 'FOUND:' followed by the product details. "
-                "If not found yet, describe what you tried and suggest a refined search."
+                "If not found yet, describe what you tried and suggest a refined search. "
+                # Inside a loop the next round gets only "continue", never a reply.
+                "Never ask the user a question: no one can answer during this search, "
+                "so decide sensible criteria yourself."
             ),
             model=m,
             gateway_mode=gm,
@@ -399,14 +412,13 @@ class LoopShop(_BaseWorkflow):
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=True),
         )
-        self._agent = LoopAgent(
-            name="loop-shop",
-            agent=searcher,
-            termination=TerminationConfig(
-                type=TerminationType.OUTPUT_MATCH,
-                pattern="FOUND:",
-                max_iterations=5,
-            ),
+        self._agent = LoopAgent(name="loop-shop", agent=searcher, termination=self._termination())
+
+    def _termination(self) -> TerminationConfig:
+        return TerminationConfig(
+            type=TerminationType.OUTPUT_MATCH,
+            pattern="FOUND:",
+            max_iterations=5,
         )
 
 
@@ -585,12 +597,16 @@ class SupervisedShop(_BaseWorkflow):
         self._agent = SupervisedSequentialAgent(
             name="supervised-shop",
             agents=[make_writer_agent(m, gm)],
-            supervised_config=SupervisedConfig(
-                quality_threshold=0.7,
-                max_retries=2,
-                supervisor_model=m,
-                pipeline_context_max_chars=None,
-            ),
+            supervised_config=self._supervised_config(),
+        )
+
+    def _supervised_config(self, **extra: Any) -> SupervisedConfig:
+        return SupervisedConfig(
+            quality_threshold=0.7,
+            max_retries=2,
+            supervisor_model=self.config.model,
+            pipeline_context_max_chars=None,
+            **extra,
         )
 
 
@@ -633,6 +649,13 @@ class DebateShop(_BaseWorkflow):
             name="debate-shop",
             model=m,
             gateway_mode=gm,
+            # Each side condenses its own argument into bullet points before the
+            # judge sees it. The default instead cuts each side to its first 2000
+            # characters, and a live run's judge got 49% of one argument and 58%
+            # of the other -- missing both conclusions. truncate_chars stays at
+            # 2000, so a side within it reaches the judge verbatim with no extra
+            # call; only a side over it is summarised.
+            debate_config=DebateConfig(summarise_arguments=True),
             pro_agent=BaseAgent(
                 name="pro-premium",
                 instructions=(
@@ -683,16 +706,20 @@ class ReflectionShop(_BaseWorkflow):
         self._agent = ReflectionAgent(
             name="reflection-shop",
             agent=make_writer_agent(m, gm),
-            reflection_config=ReflectionConfig(
-                max_reflections=2,
-                critique_prompt=(
-                    "Evaluate this pet product recommendation email. "
-                    "Check: is it friendly, specific, includes a product ID, and under 150 words? "
-                    "If all criteria are met respond with 'PASS'. "
-                    "Otherwise respond with 'NEEDS IMPROVEMENT: ' and the specific issue."
-                ),
-                reflection_model=m,
+            reflection_config=self._reflection_config(),
+        )
+
+    def _reflection_config(self, **extra: Any) -> ReflectionConfig:
+        return ReflectionConfig(
+            max_reflections=2,
+            critique_prompt=(
+                "Evaluate this pet product recommendation email. "
+                "Check: is it friendly, specific, includes a product ID, and under 150 words? "
+                "If all criteria are met respond with 'PASS'. "
+                "Otherwise respond with 'NEEDS IMPROVEMENT: ' and the specific issue."
             ),
+            reflection_model=self.config.model,
+            **extra,
         )
 
 
@@ -730,7 +757,7 @@ class RouterShop(_BaseWorkflow):
                 ),
             ],
             fallback_agent_name="support-agent",
-            router_config=RouterConfig(routing_strategy="llm"),
+            router_config=self._router_config(),
             memory_config=AgentMemoryConfig(search_memories=False, store_memories=False),
             config=AgentConfig(log_to_session=True),
         )
@@ -739,6 +766,9 @@ class RouterShop(_BaseWorkflow):
             "cart-agent": cart,
             "support-agent": support,
         }
+
+    def _router_config(self) -> RouterConfig:
+        return RouterConfig(routing_strategy="llm")
 
     async def chat(self, message: str, user_id: str, conversation_id: str) -> str:
         if not self._initialized:
@@ -851,6 +881,288 @@ class HandoffShop(_BaseWorkflow):
 # Factory
 # =============================================================================
 
+# =============================================================================
+# 11. System One modes: router / loop / reflection / supervised, opted in
+# =============================================================================
+# The same workflows with the SDK's System One seams turned on. Which backend
+# answers is whatever .env names in SYSTEM_ONE_BACKEND (Jev, Laya, a local NLI
+# model, ...); none of these set their own. Without one they refuse to run
+# (system_one_unavailable) rather than quietly run the plain workflow.
+
+# Loggers whose lines record a System One decision, its fallback, or the kill
+# switch -- and, for reflection, each attempt and the critic's verdict, so a
+# draft's System One score can be shown next to what the critic then said. A
+# System One mode appends this message's lines to its reply.
+_SYSTEM_ONE_LOGGERS = (
+    "continuum.agent.workflow.router",
+    "continuum.agent.workflow.loop",
+    "continuum.agent.workflow._quality_gate",
+    "continuum.agent.workflow.reflection",
+    "continuum.agent.workflow.supervised",
+)
+_SYSTEM_ONE_WORDS = ("decided_by=", "System One", "SYSTEM_ONE_DISABLED")
+_capture: ContextVar[list[str] | None] = ContextVar("system_one_capture", default=None)
+
+
+class _CaptureSystemOne(logging.Handler):
+    """Collect lines logged by the message being answered -- the ContextVar
+    keeps another request's lines out of this reply. Each mode picks the ones
+    it shows (_SystemOneMode._notes)."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        sink = _capture.get()
+        if sink is not None:
+            sink.append(record.getMessage())
+
+
+_capture_handler = _CaptureSystemOne(level=logging.INFO)
+for _name in _SYSTEM_ONE_LOGGERS:
+    _lg = logging.getLogger(_name)
+    if not any(isinstance(h, _CaptureSystemOne) for h in _lg.handlers):
+        _lg.addHandler(_capture_handler)
+
+
+def system_one_status() -> dict[str, Any]:
+    """What .env says about System One, for the UI and /status.
+
+    ``configured`` is only that a backend is named; ``ready`` is that it can be
+    built -- a backend missing its API key is named but cannot answer, and the
+    modes would be offered while every System One decision failed and fell
+    back. Building it sends nothing (the instance is cached for the calls that
+    do).
+    """
+    from continuum.config import settings
+    from continuum.system_one import SystemOneError
+    from continuum.system_one.registry import resolve_classifier
+    from continuum.utils.secrets import redact_sensitive_values
+
+    backend = getattr(settings, "system_one_backend", None) or None
+    problem = None
+    if backend is None:
+        problem = "Set SYSTEM_ONE_BACKEND in .env to enable the System One modes."
+    else:
+        try:
+            resolve_classifier(backend)
+        except SystemOneError as exc:
+            # The message alone: str(exc) adds the error code and context.
+            problem = redact_sensitive_values(exc.message)
+    return {
+        "configured": backend is not None,
+        "ready": problem is None,
+        "problem": problem,
+        "backend": backend,
+        "disabled": bool(getattr(settings, "system_one_disabled", False)),
+    }
+
+
+def system_one_unavailable(mode: str) -> str | None:
+    """Why a System One mode cannot run, or None if it can (or is not one)."""
+    cls = MODES.get(mode)
+    if cls is None or not getattr(cls, "system_one", False):
+        return None
+    status = system_one_status()
+    if status["ready"]:
+        return None
+    original = mode.removesuffix("-system-one")
+    if not status["configured"]:
+        return (
+            f"'{mode}' uses System One, but no backend is configured. Set SYSTEM_ONE_BACKEND "
+            "in .env (e.g. SYSTEM_ONE_BACKEND=openrouter:typesafe/jev-1.13 with "
+            f"OPENROUTER_API_KEY) and restart, or use '{original}'."
+        )
+    return (
+        f"'{mode}' uses System One, but {status['backend']} cannot be used: "
+        f"{status['problem'].rstrip('.')}. Fix .env and restart, or use '{original}'."
+    )
+
+
+class _SystemOneMode:
+    """Mixin: the reply ends with the System One decisions made for it."""
+
+    system_one = True
+
+    async def chat(self, message: str, user_id: str, conversation_id: str) -> str:
+        lines: list[str] = []
+        token = _capture.set(lines)
+        try:
+            reply = await super().chat(message, user_id, conversation_id)  # type: ignore[misc]
+        finally:
+            _capture.reset(token)
+        status = system_one_status()
+        header = f"[System One · {status['backend']}]"
+        if status["disabled"]:
+            header += " SYSTEM_ONE_DISABLED is set: the LLM decided"
+        notes = self._notes(lines) or ["no System One decision was made"]
+        return f"{reply}\n\n{header}\n" + "\n".join(f"• {n}" for n in notes)
+
+    def _notes(self, lines: list[str]) -> list[str]:
+        """The System One lines, as logged."""
+        return [ln for ln in lines if any(w in ln for w in _SYSTEM_ONE_WORDS)]
+
+
+class RouterSystemOneShop(_SystemOneMode, RouterShop):
+    def _build_workflow(self) -> None:
+        super()._build_workflow()
+        # An unsure router asks rather than guesses. Below the confidence floor
+        # (and for "none", or a classifier failure) the request reaches the
+        # fallback; support-agent, the plain router's fallback, is a real route
+        # with no tools and answered "I can't assist with adding items to your
+        # cart" to a find-and-add request. support-agent stays a route.
+        # And support-agent no longer claims unclear requests: its route said
+        # "... greetings, unclear intent", so a vague message could be routed to
+        # it with full confidence instead of reaching the clarifier.
+        for route in self._agent.routes:
+            if route.agent_name == "support-agent":
+                route.description = route.description.replace(", unclear intent", "")
+        clarify = make_clarify_agent(self.config.model, self.config.gateway_mode)
+        clarify.config.session_history_turns = 0
+        self._specialist_agents["clarify-agent"] = clarify
+        self._agent.fallback_agent_name = "clarify-agent"
+
+    def _router_config(self) -> RouterConfig:
+        # TypeSafe's intent-routing floor: below confidence 0.5 the top route is
+        # not acted on and the request goes to the fallback (support-agent).
+        return RouterConfig(routing_strategy="system_one_classifier", system_one_min_confidence=0.5)
+
+
+class LoopSystemOneShop(_SystemOneMode, LoopShop):
+    def _termination(self) -> TerminationConfig:
+        return TerminationConfig(type=TerminationType.SYSTEM_ONE_CLASSIFIER, max_iterations=5)
+
+    def _notes(self, lines: list[str]) -> list[str]:
+        """Each check, then whether the loop finished or ran out of rounds: five
+        "continue" lines alone do not say the loop stopped at its cap."""
+        notes = super()._notes(lines)
+        if any(_MAX_ITERATIONS.search(ln) for ln in lines):
+            cap = self._agent.termination.max_iterations
+            notes.append(f"stopped at max_iterations={cap} without completing")
+        return notes
+
+
+_MAX_ITERATIONS = re.compile(r"Loop reached max iterations")
+_ATTEMPT = re.compile(r"attempt (\d+) / \d+")
+_GATE_SCORE = re.compile(
+    r"decided_by=system_one .*?p_pass=([\d.]+) threshold=([\d.]+) -> (pass|ask the LLM judge)"
+)
+_GATE_FAILED = re.compile(r"System One quality check failed \((\w+)\)")
+_CRITIC = re.compile(r"outcome=(PASS|NEEDS IMPROVEMENT)")
+
+
+class ReflectionSystemOneShop(_SystemOneMode, ReflectionShop):
+    def _reflection_config(self, **extra: Any) -> ReflectionConfig:
+        return super()._reflection_config(verdict_mode="system_one_classifier", **extra)
+
+    def _notes(self, lines: list[str]) -> list[str]:
+        """One line per draft: System One's score, then what the critic said.
+        The critic's reason is content and is not shown -- only its outcome."""
+        drafts: list[dict[str, Any]] = []
+        unpaired: list[str] = []  # System One lines this format does not recognise
+
+        def current() -> dict[str, Any]:
+            if not drafts:
+                drafts.append({"n": 1, "s1": None, "passed": False, "critic": None})
+            return drafts[-1]
+
+        for line in lines:
+            if (m := _ATTEMPT.search(line)) and "ReflectionAgent" in line:
+                drafts.append({"n": int(m.group(1)), "s1": None, "passed": False, "critic": None})
+            elif m := _GATE_SCORE.search(line):
+                d = current()
+                p_pass, threshold, passed = m.group(1), m.group(2), m.group(3) == "pass"
+                bar = f"≥ {threshold}" if passed else f"needs ≥ {threshold}"
+                d["s1"], d["passed"] = f"System One p_pass {p_pass} ({bar})", passed
+            elif "decided_by=legacy (SYSTEM_ONE_DISABLED)" in line:
+                current()["s1"] = "System One off (SYSTEM_ONE_DISABLED)"
+            elif m := _GATE_FAILED.search(line):
+                current()["s1"] = f"System One failed ({m.group(1)})"
+            elif m := _CRITIC.search(line):
+                current()["critic"] = f"critic: {m.group(1)}"
+            elif "critique unavailable" in line:
+                current()["critic"] = "critic: unavailable, returned unverified"
+            elif (
+                any(w in line for w in _SYSTEM_ONE_WORDS) and "passed by the System One" not in line
+            ):
+                unpaired.append(line)
+
+        notes = []
+        for d in drafts:
+            if d["passed"]:
+                notes.append(f"draft {d['n']}: {d['s1']} → passed, no critic call")
+            elif d["s1"] is None and d["critic"] is None:
+                notes.append(f"draft {d['n']}: last attempt, returned without a check")
+            else:
+                notes.append(
+                    f"draft {d['n']}: {d['s1'] or 'System One not asked'} → {d['critic'] or 'no verdict'}"
+                )
+        return notes + unpaired
+
+
+_S_ATTEMPT = re.compile(r"SupervisedSequential step (\d+)/\d+ '.*?' — attempt (\d+)")
+_S_SCORE = re.compile(r"SupervisedSequential step \d+ '.*?' score=([\d.]+) \(threshold=([\d.]+)\)")
+
+
+class SupervisedSystemOneShop(_SystemOneMode, SupervisedShop):
+    def _supervised_config(self, **extra: Any) -> SupervisedConfig:
+        return super()._supervised_config(verdict_mode="system_one_classifier", **extra)
+
+    def _notes(self, lines: list[str]) -> list[str]:
+        """One line per step attempt: System One's score, then the supervisor's.
+        The supervisor's feedback is content and is not shown -- only its score."""
+        attempts: list[dict[str, Any]] = []
+        unpaired: list[str] = []
+
+        def current() -> dict[str, Any]:
+            if not attempts:
+                attempts.append({"step": 1, "n": 1, "s1": None, "passed": False, "judge": None})
+            return attempts[-1]
+
+        for line in lines:
+            if m := _S_ATTEMPT.search(line):
+                attempts.append(
+                    {
+                        "step": int(m.group(1)),
+                        "n": int(m.group(2)),
+                        "s1": None,
+                        "passed": False,
+                        "judge": None,
+                    }
+                )
+            elif m := _GATE_SCORE.search(line):
+                d = current()
+                p_pass, threshold, passed = m.group(1), m.group(2), m.group(3) == "pass"
+                bar = f"≥ {threshold}" if passed else f"needs ≥ {threshold}"
+                d["s1"], d["passed"] = f"System One p_pass {p_pass} ({bar})", passed
+            elif "decided_by=legacy (SYSTEM_ONE_DISABLED)" in line:
+                current()["s1"] = "System One off (SYSTEM_ONE_DISABLED)"
+            elif m := _GATE_FAILED.search(line):
+                current()["s1"] = f"System One failed ({m.group(1)})"
+            elif m := _S_SCORE.search(line):
+                score, threshold = m.group(1), m.group(2)
+                ok = float(score) >= float(threshold)
+                bar = f"passes ≥ {threshold}" if ok else f"needs ≥ {threshold}"
+                current()["judge"] = f"supervisor: score {score} ({bar})"
+            elif "below threshold" in line and "retrying" in line:
+                d = current()
+                d["judge"] = (d["judge"] or "supervisor: below threshold") + ", retried"
+            elif "exhausted retries" in line:
+                d = current()
+                d["judge"] = (d["judge"] or "supervisor: below threshold") + ", retries exhausted"
+            elif "supervisor could not score" in line:
+                current()["judge"] = "supervisor: could not score, kept unscored"
+            elif any(w in line for w in _SYSTEM_ONE_WORDS):
+                unpaired.append(line)
+
+        notes = []
+        for d in attempts:
+            head = f"step {d['step']}, attempt {d['n']}"
+            if d["passed"]:
+                notes.append(f"{head}: {d['s1']} → passed, no supervisor call")
+            else:
+                s1 = d["s1"] or "System One not asked"
+                notes.append(f"{head}: {s1} → {d['judge'] or 'no verdict'}")
+        return notes + unpaired
+
+
 MODES: dict[str, type[_BaseWorkflow]] = {
     "sequential": SequentialShop,
     "parallel": ParallelShop,
@@ -862,6 +1174,10 @@ MODES: dict[str, type[_BaseWorkflow]] = {
     "reflection": ReflectionShop,
     "router": RouterShop,
     "handoff": HandoffShop,
+    "router-system-one": RouterSystemOneShop,
+    "loop-system-one": LoopSystemOneShop,
+    "reflection-system-one": ReflectionSystemOneShop,
+    "supervised-system-one": SupervisedSystemOneShop,
 }
 
 

@@ -151,8 +151,11 @@ from continuum.agent.workflow import (
     ReflectionAgent,
     RouterAgent,
     SequentialAgent,
+    create_debate_agent,
     create_planner_agent,
     create_reflection_agent,
+    create_scatter_agent,
+    create_supervised_agent,
     generate_critique_prompt,
 )
 from continuum.agent.workflow.loop import create_loop_agent
@@ -182,6 +185,9 @@ __all__ = [
     "create_loop_agent",
     "create_planner_agent",
     "create_reflection_agent",
+    "create_debate_agent",
+    "create_scatter_agent",
+    "create_supervised_agent",
     "generate_critique_prompt",
     "PlannerAgent",
     "PlanningConfig",

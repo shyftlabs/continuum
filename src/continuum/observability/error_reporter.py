@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from continuum.config import settings
+from continuum.logging import log_id
 from continuum.utils.secrets import redact_dict, redact_sensitive_values
 
 if TYPE_CHECKING:
@@ -274,10 +275,20 @@ class ErrorReporter:
             )
         else:
             # Create a new trace for the error
+            # Pseudonymised, not dropped: an error stays attributable to a
+            # session without the person egressing to a third party. str() of the
+            # wrapper, because Langfuse wants a string and this is a payload, not
+            # a log record -- and because the wrapper never reveals on its own,
+            # telemetry stays pseudonymised even where a log would not. The same
+            # rendering the log uses, so the two can still be joined. Unaffected
+            # on the branch above: reporting onto an existing trace passes neither
+            # field.
+            reported_user = error_data.get("user_id")
+            reported_session = error_data.get("session_id")
             error_trace = manager.trace(
                 name=f"error-{error_data.get('error_code', 'unknown')}",
-                user_id=error_data.get("user_id"),
-                session_id=error_data.get("session_id"),
+                user_id=str(log_id(reported_user)) if reported_user else None,
+                session_id=str(log_id(reported_session)) if reported_session else None,
                 input=input_data,
                 metadata=metadata,
                 tags=["error", error_data.get("category", "unknown")],

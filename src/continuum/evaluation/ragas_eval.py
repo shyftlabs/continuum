@@ -105,7 +105,7 @@ def _build_metrics(metric_names: list[str], openai_api_key: str) -> list[Any]:
     resolved = []
     for name in metric_names:
         if name not in registry:
-            logger.warning(f"RagasEvaluator: unknown metric '{name}', skipping")
+            logger.warning("RagasEvaluator: unknown metric '%s', skipping", name)
             continue
         resolved.append(registry[name])
     return resolved
@@ -210,7 +210,7 @@ class RagasEvaluator:
             result_row = ragas_result.to_pandas().iloc[0].to_dict()
 
         except Exception as exc:
-            logger.error(f"RagasEvaluator: ragas.evaluate() failed: {exc}")
+            logger.error("RagasEvaluator: ragas.evaluate() failed: %s", exc)
             return EvalResult(
                 status=EvalStatus.ERROR,
                 evaluator_name=self.name,

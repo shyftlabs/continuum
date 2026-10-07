@@ -87,8 +87,10 @@ class WorkerManager:
         self._worker_task = asyncio.create_task(self._worker.run())
         self._running = True
         logger.info(
-            f"Temporal worker started on queue '{queue}' "
-            f"({len(workflows)} workflows, {len(activities)} activities)"
+            "Temporal worker started on queue '%s' (%s workflows, %s activities)",
+            queue,
+            len(workflows),
+            len(activities),
         )
 
     async def stop(self) -> None:

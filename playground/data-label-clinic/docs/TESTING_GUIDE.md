@@ -12,6 +12,7 @@ past 900 lines that did not concern them.
 | [F3 — MCP server trust](F3-server-trust.md) | rug pulls, pinning, drift, the pin gate | ~375 |
 | [F7 — approval](F7-approval.md) | a human-in-the-loop gate before a declared tool call |  ~210 |
 | [Namespacing](namespacing.md) | two servers, one colliding tool name; transports | ~495 |
+| [System One approval](system-one-approval.md) | Jev approves tool calls first: three ways to see it work | ~190 |
 
 > Commands in this guide run from `playground/data-label-clinic/`, one level
 > up from this file.
@@ -81,7 +82,7 @@ one in the repo-root `.env` also works, but note `config.py` loads it with
 | `WEB_POISON` | `1` | `web_lookup` returns a planted instruction ([F6](F6-memory.md)) |
 | `PHARMACY_TRANSPORT` | `streamable-http` (default) · `sse` · `stdio` | how the pharmacy is reached ([namespacing](namespacing.md)) |
 | `CLINIC_PIN_GATE` | `1` | drop drifted tools instead of warning ([F3](F3-server-trust.md)) |
-| `LOG_FULL_PROMPT` | `true` | lift the 2000-char per-message truncation in the `FINAL PROMPT` log |
+| `LOG_PROMPT_CONTENT` | `true` | let the `FINAL PROMPT` log carry the prompt itself; without it the line reads `<1843 chars>` |
 
 ## Offline scripts
 

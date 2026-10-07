@@ -312,7 +312,7 @@ class ContextWindowManager:
         for key, default_max in self.DEFAULT_LIMITS.items():
             if key in model_lower:
                 max_tokens = default_max
-                logger.debug(f"Using hardcoded limit for {model}: {max_tokens}")
+                logger.debug("Using hardcoded limit for %s: %s", model, max_tokens)
                 break
 
         # 2. Gemini API for unknown Gemini models
@@ -322,7 +322,10 @@ class ContextWindowManager:
                 max_input_tokens, max_output_tokens = limits
                 max_tokens = max_input_tokens  # total context = input limit
                 logger.info(
-                    f"Fetched Gemini limits for {model}: input={max_input_tokens}, output={max_output_tokens}"
+                    "Fetched Gemini limits for %s: input=%s, output=%s",
+                    model,
+                    max_input_tokens,
+                    max_output_tokens,
                 )
 
         # 3. Provider-family default — a new model within a known family (e.g.
@@ -332,14 +335,16 @@ class ContextWindowManager:
             for family, family_max in self.FAMILY_DEFAULTS.items():
                 if family in model_lower:
                     max_tokens = family_max
-                    logger.debug(f"Using {family}-family default limit for {model}: {max_tokens}")
+                    logger.debug(
+                        "Using %s-family default limit for %s: %s", family, model, max_tokens
+                    )
                     break
 
         # 4. Conservative fallback
         if max_tokens is None:
             max_tokens = 4096
             logger.warning(
-                f"Unknown context limit for {model}, using conservative default: {max_tokens}"
+                "Unknown context limit for %s, using conservative default: %s", model, max_tokens
             )
 
         return ModelLimits(
@@ -382,7 +387,7 @@ class ContextWindowManager:
             if input_limit and output_limit:
                 return int(input_limit), int(output_limit)
         except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
-            logger.debug(f"Gemini model info API failed for {model}: {e}")
+            logger.debug("Gemini model info API failed for %s: %s", model, e)
         return None
 
     def count_tokens(
@@ -423,7 +428,7 @@ class ContextWindowManager:
             total += 2  # priming tokens
             return total
         except Exception as e:
-            logger.warning(f"Token counting failed, using estimate: {e}")
+            logger.warning("Token counting failed, using estimate: %s", e)
             total_chars = 0
             for msg in messages:
                 content = msg.get("content")
@@ -545,8 +550,11 @@ class ContextWindowManager:
         truncated_count = self.count_tokens(truncated, model)
 
         logger.info(
-            f"Truncated messages from {original_count} to {truncated_count} tokens "
-            f"(removed {len(messages) - len(truncated)} messages) using {strategy.value}"
+            "Truncated messages from %s to %s tokens (removed %s messages) using %s",
+            original_count,
+            truncated_count,
+            len(messages) - len(truncated),
+            strategy.value,
         )
 
         return truncated, TruncationResult(

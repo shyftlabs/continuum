@@ -30,6 +30,25 @@ class IMemoryClient(Protocol):
 
 
 @runtime_checkable
+class ISystemOneClassifier(Protocol):
+    """Protocol for System One classifier backends (Jev, local NLI models, ...).
+
+    A backend answers only the question kinds its ``capabilities`` declare and
+    raises ``SystemOneCapabilityError`` for any other; it returns raw
+    distributions and leaves validation, normalisation and confidence to
+    ``continuum.system_one.classify``. Every failure must surface as a
+    ``SystemOneError`` subclass. ``continuum.system_one.testing.SystemOneContract``
+    checks all of this.
+    """
+
+    name: str  # registry prefix, e.g. "jev"
+    model: str
+    capabilities: Any  # SystemOneCapabilities
+
+    async def classify(self, state: Any, questions: dict[str, Any]) -> Any: ...
+
+
+@runtime_checkable
 class ISessionClient(Protocol):
     """Protocol for session clients."""
 

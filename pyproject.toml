@@ -99,6 +99,19 @@ headroom-local-ml = [
     "transformers>=4.30.0,<6.0",
 ]
 
+# System One backends (continuum.system_one). Upper bounds are deliberate: the
+# adapter reads Laya's answer format and usage fields (backends/laya.py) --
+# bump only after re-running the contract suite and the live probes.
+# Laya: Convai's open-weight typed-decision model (Apache-2.0 code and weights),
+# CPU/CUDA/MPS/XPU via torch. First use downloads the checkpoint (~1 GB).
+laya = [
+    "laya>=0.3.21,<0.4",
+]
+# The MLX port of Laya -- Apple Silicon Macs only; elsewhere use [laya].
+laya-mlx = [
+    "laya-mlx>=0.2,<0.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
 [project.scripts]
 continuum = "continuum.cli:main"
 
@@ -136,6 +149,12 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    # G004 specifically, not all of "G": the rest of flake8-logging-format is
+    # style (G201 prefers .exception() over .error(exc_info=True)) and would pull
+    # 26 unrelated sites into a security change. G004 is the one that matters
+    # here -- an f-string message cannot be redacted, because logging receives it
+    # already interpolated.
+    "G004",  # f-string in a logging call
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
@@ -152,7 +171,10 @@ known-first-party = ["continuum"]
 # deliberately assert on broad exceptions.
 "tests/**" = ["E402", "C408", "B017"]
 # Playground demos set gateway env vars / sys.path before importing continuum.
-"playground/**" = ["E402"]
+# G004: the demos print their own prompts and tool results on purpose -- showing
+# what the agent saw is what they are for -- and they are not shipped in the
+# package. src/ carries no G004 exemption.
+"playground/**" = ["E402", "G004"]
 
 [tool.mypy]
 python_version = "3.13"

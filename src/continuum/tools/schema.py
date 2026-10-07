@@ -109,7 +109,7 @@ def _normalize_schema_node(
         schema_type = _infer_type(schema)
         if schema_type:
             schema["type"] = schema_type
-            logger.debug(f"Inferred type '{schema_type}' at {path}")
+            logger.debug("Inferred type '%s' at %s", schema_type, path)
 
     # Normalize based on type
     if schema_type == "array":
@@ -162,11 +162,11 @@ def _normalize_array_schema(
     # Ensure 'items' exists - this is the critical fix for LLM compatibility
     if "items" not in schema:
         schema["items"] = DEFAULT_ARRAY_ITEMS.copy()
-        logger.debug(f"Added missing 'items' to array at {path}")
+        logger.debug("Added missing 'items' to array at %s", path)
     # Handle empty items schema {} - LLM providers reject this as invalid
     elif isinstance(schema.get("items"), dict) and not schema["items"]:
         schema["items"] = DEFAULT_ARRAY_ITEMS.copy()
-        logger.debug(f"Replaced empty 'items' schema with default at {path}")
+        logger.debug("Replaced empty 'items' schema with default at %s", path)
 
     # Recursively normalize items schema
     items = schema.get("items")
@@ -217,7 +217,7 @@ def _normalize_object_schema(
     # Ensure 'properties' exists
     if "properties" not in schema:
         schema["properties"] = {}
-        logger.debug(f"Added missing 'properties' to object at {path}")
+        logger.debug("Added missing 'properties' to object at %s", path)
 
     # Recursively normalize each property
     properties = schema.get("properties", {})
@@ -272,12 +272,12 @@ def _apply_strict_mode(schema: dict[str, Any], path: str) -> dict[str, Any]:
     # Add all properties to 'required' if not already set
     if "required" not in schema and properties:
         schema["required"] = list(properties.keys())
-        logger.debug(f"Added 'required' with all properties at {path}")
+        logger.debug("Added 'required' with all properties at %s", path)
 
     # Disallow additional properties
     if "additionalProperties" not in schema:
         schema["additionalProperties"] = False
-        logger.debug(f"Set 'additionalProperties: false' at {path}")
+        logger.debug("Set 'additionalProperties: false' at %s", path)
 
     return schema
 

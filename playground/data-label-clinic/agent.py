@@ -20,23 +20,28 @@ It returns a glassbox dict (taint, model used, gate events) for the web UI.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from contextvars import ContextVar
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from config import (
     PHI,
+    SYSTEM_ONE_APPROVAL_TOOLS,
     ClinicConfig,
     approval_timeout,
     build_approval_handler,
     build_approval_tools,
     build_policy_store,
     build_pre_store_filter,
+    build_system_one_approval_handler,
     default_config,
+    system_one_status,
 )
 
 from continuum import (
@@ -63,6 +68,25 @@ from continuum.tools.mcp import MCPServer, MCPServerSse, MCPServerStdio
 from continuum.tools.types import ToolTrustConfig
 
 logger = get_logger(__name__)
+
+# The System One approval handler logs each decision it makes (auto-approved,
+# escalated and why, or the classifier failing). While a turn runs with the
+# toggle on, those lines are collected for the gate panel; the ContextVar keeps
+# another request's lines out of this turn.
+_s1_capture: ContextVar[list[str] | None] = ContextVar("clinic_s1_capture", default=None)
+_S1_DECISION_WORDS = ("auto-approved by", "escalated", "System One approval check failed")
+
+
+class _CaptureSystemOne(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        sink = _s1_capture.get()
+        if sink is not None:
+            sink.append(record.getMessage())
+
+
+_s1_logger = logging.getLogger("continuum.agent.system_one_approval")
+if not any(isinstance(h, _CaptureSystemOne) for h in _s1_logger.handlers):
+    _s1_logger.addHandler(_CaptureSystemOne(level=logging.INFO))
 
 
 def build_trust_config(*, strict: bool = False) -> ToolTrustConfig:
@@ -315,6 +339,14 @@ class ClinicAgent:
                 approval_timeout=approval_timeout(),
             ),
         )
+        # Built once, used by turns that switch the header toggle on. None when
+        # .env names no backend: the toggle is then not offered.
+        self._system_one_handler = None
+        if system_one_status()["ready"]:
+            try:
+                self._system_one_handler = build_system_one_approval_handler()
+            except Exception as e:  # a misconfigured backend: report, keep the clinic up
+                logger.warning(f"System One approval unavailable: {e}")
 
     async def _ensure_session(self, user_id: str, conversation_id: str) -> str | None:
         """Resolve a deterministic session id from (user_id, conversation_id) —
@@ -369,8 +401,42 @@ class ClinicAgent:
         because run_stream reads ``output_scanners`` at the start of each run."""
         self._agent.config.output_scanners = self.config.output_scanners if on else []
 
+    def _apply_system_one(self, on: bool) -> None:
+        """Route gated tool calls through System One for this turn, or restore
+        exactly what CLINIC_APPROVAL set. Like the scanner toggle, this mutates
+        the live agent: the SDK reads tool_approval and approval_handler per
+        tool call. (Not safe for two concurrent turns with different settings;
+        the clinic is a single-user demo, as for the scanner.)"""
+        cfg = self._agent.config
+        if not hasattr(self, "_approval_off"):
+            self._approval_off = (cfg.tool_approval, cfg.approval_handler)
+        if on:
+            if self._system_one_handler is None:
+                raise ValueError("System One approval is not configured (SYSTEM_ONE_BACKEND)")
+            cfg.tool_approval = set(self._approval_off[0] or ()) | set(SYSTEM_ONE_APPROVAL_TOOLS)
+            cfg.approval_handler = self._system_one_handler
+        else:
+            cfg.tool_approval, cfg.approval_handler = self._approval_off
+
+    def _system_one_events(self, lines: list[str]) -> list[str]:
+        """The gate-panel lines for this turn's System One decisions."""
+        events = []
+        if system_one_status()["disabled"]:
+            events.append(
+                "🤖 SYSTEM ONE — SYSTEM_ONE_DISABLED is set: a person decides every gated call"
+            )
+        for line in lines:
+            if any(w in line for w in _S1_DECISION_WORDS):
+                events.append(f"🤖 SYSTEM ONE — {line}")
+        return events
+
     async def chat(
-        self, message: str, user_id: str, conversation_id: str, scanner_on: bool = True
+        self,
+        message: str,
+        user_id: str,
+        conversation_id: str,
+        scanner_on: bool = True,
+        system_one_on: bool = False,
     ) -> dict[str, Any]:
         """Run the turn, surfacing every gate decision for the glassbox UI."""
         if not self._initialized:
@@ -380,6 +446,9 @@ class ClinicAgent:
         model_used = self.config.cloud_model
         session_id = await self._ensure_session(user_id, conversation_id)
         self._apply_scanner(scanner_on)
+        s1_lines: list[str] = []
+        s1_token = _s1_capture.set(s1_lines) if system_one_on else None
+        self._apply_system_one(system_one_on)
 
         try:
             resp, ctx = await self._run_once(
@@ -424,6 +493,9 @@ class ClinicAgent:
         finally:
             self._agent.model = self.config.cloud_model  # reset for next request
             self._apply_scanner(True)  # restore default for the next request
+            self._apply_system_one(False)
+            if s1_token is not None:
+                _s1_capture.reset(s1_token)
 
         taint = sorted(ctx.data_labels)
 
@@ -459,6 +531,9 @@ class ClinicAgent:
                 )
                 if name:
                     tools_called.append(name)
+
+        if system_one_on:
+            gate_events.extend(self._system_one_events(s1_lines))
 
         if taint and model_used == self.config.onprem_model:
             pass  # the model-routing event was already logged
@@ -556,7 +631,12 @@ class ClinicAgent:
         }
 
     async def chat_stream(
-        self, message: str, user_id: str, conversation_id: str, scanner_on: bool = True
+        self,
+        message: str,
+        user_id: str,
+        conversation_id: str,
+        scanner_on: bool = True,
+        system_one_on: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Streaming twin of chat(): the SAME enforcement, observed live.
 
@@ -574,6 +654,9 @@ class ClinicAgent:
 
         session_id = await self._ensure_session(user_id, conversation_id)
         self._apply_scanner(scanner_on)
+        s1_lines: list[str] = []
+        s1_token = _s1_capture.set(s1_lines) if system_one_on else None
+        self._apply_system_one(system_one_on)
         model_used = self.config.cloud_model
         final: dict[str, Any] = {"content": "", "tools_called": [], "tool_blocks": []}
 
@@ -636,6 +719,13 @@ class ClinicAgent:
         finally:
             self._agent.model = self.config.cloud_model  # reset for next request
             self._apply_scanner(True)  # restore default for the next request
+            self._apply_system_one(False)
+            if s1_token is not None:
+                _s1_capture.reset(s1_token)
+
+        if system_one_on:
+            for event in self._system_one_events(s1_lines):
+                _add_gate(event)
 
         # Aggregate the glassbox state (mirrors chat()). In this clinic the only
         # taint source is PHI, and any PHI taint denies the cloud model — so a
