@@ -7,6 +7,8 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10-07
+
 ### Security
 - **Prompts, memories, tool results and user identity no longer reach the log by default.** `MessageBuilder.prepare_messages` logged the whole assembled prompt — system instructions, retrieved memories, session history, RAG context and the user's input — at `INFO`, which is the shipped level, and neither formatter redacted anything, so in production `JSONFormatter` shipped it verbatim to the aggregator. The existing `data_redaction` module guards *telemetry*; nothing guarded this path. `LOG_PROMPT_CONTENT` (default `false`) now governs it, enforced by `PromptContentFilter` on the handlers rather than at 460 call sites, so the policy lives in one place. Turn it on to debug why an agent ignored a memory — on a laptop, not where logs are shipped.
 - **mem0 logged live API keys** — `Mem0Provider` logged its whole config at `DEBUG`, and `to_mem0_config()` embeds the fact-extraction LLM's and the embedder's keys two levels down. Masked with `redact_dict`, which recurses; deliberately *not* routed through `LOG_PROMPT_CONTENT`, because a provider key is not a debugging convenience an operator should be able to switch back on. The rest of the config — provider, model, host — still prints, which is what the line exists to show.
