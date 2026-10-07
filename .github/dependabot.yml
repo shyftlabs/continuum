@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Every dependency in pyproject.toml has a ceiling below its next major
+  # (tests/unit/test_dependency_ranges.py). increase-if-necessary leaves a
+  # range alone while new releases still fit it, and opens a PR only when one
+  # does not -- typically a new major -- so raising a ceiling is a reviewed,
+  # CI-tested change instead of a surprise for users.
+  - package-ecosystem: pip
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+    versioning-strategy: increase-if-necessary
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies

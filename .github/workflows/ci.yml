@@ -50,3 +50,22 @@ jobs:
         # require optional extras (temporalio/deepeval) and an outdated asyncio
         # loop pattern. Tracked for rehabilitation; not part of the minimal gate.
         run: pytest tests/unit --ignore-glob='tests/unit/test_issue*.py' -q
+
+  test-lowest:
+    name: Tests (3.13, lowest deps)
+    # The job above installs the newest version each range allows. This one
+    # installs the oldest, so a lower bound in pyproject.toml is a tested
+    # promise rather than a guess: tiktoken>=0.7.0 and pymilvus>=2.4.0 could
+    # not even be installed on Python 3.13 when this job was added.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install (lowest direct dependencies)
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system --resolution lowest-direct -e ".[dev]"
+      - name: Unit tests
+        run: pytest tests/unit --ignore-glob='tests/unit/test_issue*.py' -q
