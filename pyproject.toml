@@ -33,49 +33,49 @@ classifiers = [
 ]
 
 dependencies = [
-    "aiohttp>=3.13.2",  # Explicit dependency - latest version fixes enable_cleanup_closed deprecation warning for Python 3.13+
-    "openai>=1.50.0",
-    "anthropic>=0.40.0",
-    "google-genai>=1.0.0",
-    "httpx>=0.27.0",  # Explicit dependency — llm/headroom sidecar client (was transitive via SDKs)
-    "tiktoken>=0.7.0",
+    "aiohttp>=3.13.2,<4",  # Explicit dependency - latest version fixes enable_cleanup_closed deprecation warning for Python 3.13+
+    "openai>=1.90.0,<4",
+    "anthropic>=0.40.0,<2",
+    "google-genai>=1.0.0,<3",
+    "httpx>=0.27.0,<1",  # Explicit dependency — llm/headroom sidecar client (was transitive via SDKs)
+    "tiktoken>=0.8.0,<1",
     "langfuse>=2.57.0,<3.0.0",
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
-    "python-dotenv>=1.0.1",
+    "pydantic>=2.11.0,<3",
+    "pydantic-settings>=2.6.0,<3",
+    "python-dotenv>=1.0.1,<2",
     "mem0ai>=1.0.0,<2.0.0",
-    "qdrant-client>=1.16.0",
-    "pymilvus>=2.4.0",
-    "redis>=5.0.0",
+    "qdrant-client>=1.16.0,<2",
+    "pymilvus>=2.6.0,<4",
+    "redis>=5.0.0,<9",
     "mcp>=1.23.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "pytest-cov>=5.0.0",
-    "pytest-mock>=3.14.0",
-    "pytest-timeout>=2.3.0",
-    "pytest-xdist>=3.5.0",
-    "fakeredis>=2.21.0",
-    "respx>=0.21.0",
+    "pytest>=8.3.0,<10",
+    "pytest-asyncio>=1.0.0,<2",
+    "pytest-cov>=5.0.0,<8",
+    "pytest-mock>=3.14.0,<4",
+    "pytest-timeout>=2.3.0,<3",
+    "pytest-xdist>=3.5.0,<4",
+    "fakeredis>=2.21.0,<3",
+    "respx>=0.21.0,<0.24",
     "ruff==0.14.10",
-    "mypy>=1.13.0",
-    "pre-commit>=4.0.0",
+    "mypy>=1.13.0,<3",
+    "pre-commit>=4.0.0,<5",
 ]
 embeddings = [
-    "sentence-transformers>=2.2.0",
+    "sentence-transformers>=2.2.0,<6",
 ]
 cohere = [
-    "cohere>=5.0.0",
+    "cohere>=5.0.0,<6",
 ]
 temporal = [
-    "temporalio>=1.23.0",
+    "temporalio>=1.23.0,<2",
 ]
 eval = [
-    "deepeval>=1.0.0",
-    "ragas>=0.2.0",
+    "deepeval>=1.0.0,<5",
+    "ragas>=0.2.0,<0.5",
 ]
 # In-process Headroom compression (headroom_mode=local — no sidecar).
 # Upper bound is deliberate: Continuum captures CCR hashes by scanning
@@ -95,7 +95,7 @@ headroom-local = [
 # the ~265 MB chopratejas/kompress-v2-base model to the HF cache.
 headroom-local-ml = [
     "headroom-ai>=0.28,<0.30",
-    "onnxruntime>=1.16.0",
+    "onnxruntime>=1.16.0,<2",
     "transformers>=4.30.0,<6.0",
 ]
 
