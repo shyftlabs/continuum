@@ -8,6 +8,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **Model calls reuse their connections.** `get_provider()` built a new provider, with new SDK clients and connection pools, for every model call, so each call opened a new TCP and TLS connection. Built-in providers (OpenAI, Anthropic, Gemini, Smart Gateway) are now reused per event loop and per set of client settings. Time to first token through the gateway, median of 8: 1.42 s before, 0.95 s after (a reused raw SDK client: 0.86–0.94 s). Custom registered factories are still called per call; `clear_provider_cache()` forgets reused providers.
+
+### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
 ### Changed
