@@ -889,6 +889,27 @@ agent = BaseAgent(
 Hooks run synchronously inside the runner. Keep them lightweight; for
 heavy work use `@observe` or push to a queue.
 
+### Steering after tool calls
+
+`AgentConfig.after_tool_round` runs after each round of tool calls with what
+the tools returned (`ToolRound`: this round's results, the run's history,
+`tools_used`). Return a string to add it as a system message before the next
+model call (at most `after_tool_round_max_nudges` times a run, default 1), or
+`None` to carry on. System messages are not saved to the session.
+
+```python
+from continuum.agent.execution.tool_round import ToolRound
+
+def dead_end(r: ToolRound) -> str | None:
+    if all(x.is_empty(["no_results_found"]) for x in r.history):
+        unused = {"vector_search", "sql_query"} - r.tools_used
+        if unused:
+            return f"Those lookups returned nothing. Call {', '.join(sorted(unused))} now."
+    return None
+
+AgentConfig(after_tool_round=dead_end)
+```
+
 ---
 
 ## 11 · Common patterns

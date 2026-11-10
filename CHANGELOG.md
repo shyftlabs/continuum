@@ -7,6 +7,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **`AgentConfig.after_tool_round`.** A product rule called after each round of tool calls with what the tools returned (`ToolRound`). A returned string is added as a system message before the next model call, at most `after_tool_round_max_nudges` times a run (default 1); it is not saved to the session. Typical use: when every lookup came back empty, tell the model to try the search tools it has not used instead of answering "nothing found". Works in `run` and `run_stream`; a failing rule is logged and ignored.
+
 ### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
