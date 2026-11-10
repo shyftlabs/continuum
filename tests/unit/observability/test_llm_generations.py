@@ -47,6 +47,8 @@ async def test_async_call_is_a_generation_with_model_and_usage():
     end = obs.end.call_args.kwargs
     assert end["model"] == "gpt-4o-mini-2024-07-18"
     assert end["usage_details"] == {"input": 120, "output": 30, "total": 150}
+    # Langfuse v2 servers read only `usage`
+    assert end["usage"] == {"input": 120, "output": 30, "total": 150, "unit": "TOKENS"}
 
 
 def test_sync_call_is_a_generation():

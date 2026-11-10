@@ -472,7 +472,11 @@ class SpanScope:
                 if self._model:
                     fields["model"] = self._model
                 if self._usage:
+                    # Langfuse v3 reads usage_details; a v2 server ignores it and
+                    # reads only usage (then estimates tokens from the truncated
+                    # input instead). Send both.
                     fields["usage_details"] = self._usage
+                    fields["usage"] = {**self._usage, "unit": "TOKENS"}
                 if self._completion_start:
                     fields["completion_start_time"] = self._completion_start
 
