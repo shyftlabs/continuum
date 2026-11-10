@@ -167,8 +167,8 @@ class SummaryCache:
         self._ttl = ttl_seconds
         self._max_size = max_size
 
-    def _generate_key(self, messages: list[dict[str, Any]]) -> str:
-        """Generate cache key from messages."""
+    def _generate_key(self, messages: list[dict[str, Any]], namespace: str = "") -> str:
+        """Generate cache key from messages and the settings that shaped the summary."""
         # Create hash of message content (excluding timestamps/metadata).
         # Non-security cache key for summary dedup only — no trust boundary.
         # It is logged through log_id(), not sliced: an unkeyed digest of the
@@ -177,10 +177,13 @@ class SummaryCache:
         # characters of it gave them 32 bits to compare against. The keyed
         # pseudonym still lets a cache hit be matched to its store.
         # Uses sha256 (not md5) so static analysis never flags a weak-hash finding here.
-        content = []
+        # The whole content is hashed: keying on a prefix let two conversations
+        # that start alike (a shared template, a pasted document) share a summary.
+        # The namespace keeps agents with different summarization settings apart.
+        content = [namespace]
         for msg in messages:
-            content.append(f"{msg.get('role')}:{(msg.get('content') or '')[:100]}")
-        content_str = "|".join(content)
+            content.append(f"{msg.get('role')}:{msg.get('content') or ''}")
+        content_str = "\x1f".join(content)
         return hashlib.sha256(content_str.encode()).hexdigest()
 
     def _evict_expired_and_lru(self) -> None:
@@ -196,9 +199,11 @@ class SummaryCache:
             oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
             del self._cache[oldest_key]
 
-    def get(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    def get(
+        self, messages: list[dict[str, Any]], namespace: str = ""
+    ) -> list[dict[str, Any]] | None:
         """Get cached summary if available and not expired."""
-        key = self._generate_key(messages)
+        key = self._generate_key(messages, namespace)
         with self._lock:
             if key in self._cache:
                 cached_messages, timestamp = self._cache[key]
@@ -212,9 +217,14 @@ class SummaryCache:
                     del self._cache[key]
         return None
 
-    def set(self, messages: list[dict[str, Any]], summary: list[dict[str, Any]]) -> None:
+    def set(
+        self,
+        messages: list[dict[str, Any]],
+        summary: list[dict[str, Any]],
+        namespace: str = "",
+    ) -> None:
         """Cache a summary."""
-        key = self._generate_key(messages)
+        key = self._generate_key(messages, namespace)
         with self._lock:
             self._cache[key] = (summary, time.time())
             self._evict_expired_and_lru()
@@ -269,17 +279,35 @@ class ProgressiveContextManager:
         self._config = config or ContextManagementConfig()
         self._llm_client = llm_client
         self._context_window_manager = context_window_manager or get_context_window_manager()
-        self._cache = (
-            SummaryCache(ttl_seconds=self._config.cache_ttl_seconds)
-            if self._config.enable_caching
-            else None
-        )
+        # One cache per TTL. Whether a call uses it follows that call's config,
+        # not the config of whichever agent created this (process-wide) manager.
+        self._caches: dict[int, SummaryCache] = {}
+        self._caches_lock = threading.Lock()
+        self._cache = self._cache_for(self._config)
         self._metrics = get_metrics_collector()
 
     @property
     def config(self) -> ContextManagementConfig:
         """Get current configuration."""
         return self._config
+
+    def _cache_for(self, config: ContextManagementConfig) -> SummaryCache | None:
+        """The summary cache a call with this config may use, or None when it opts out."""
+        if not config.enable_caching:
+            return None
+        with self._caches_lock:
+            cache = self._caches.get(config.cache_ttl_seconds)
+            if cache is None:
+                cache = SummaryCache(ttl_seconds=config.cache_ttl_seconds)
+                self._caches[config.cache_ttl_seconds] = cache
+            return cache
+
+    @staticmethod
+    def _cache_namespace(config: ContextManagementConfig) -> str:
+        return (
+            f"{config.summarization_model}|{config.summarization_temperature}"
+            f"|{config.summarization_max_tokens}"
+        )
 
     def _get_llm_client(self) -> LLMClient | None:
         """Get LLM client for summarization."""
@@ -617,8 +645,10 @@ class ProgressiveContextManager:
         # Check cache
         summary_messages = None
         cache_hit = False
-        if self._cache:
-            summary_messages = self._cache.get(older_messages)
+        cache = self._cache_for(config)
+        namespace = self._cache_namespace(config)
+        if cache:
+            summary_messages = cache.get(older_messages, namespace)
             if summary_messages:
                 cache_hit = True
                 logger.debug("Using cached summary")
@@ -632,8 +662,8 @@ class ProgressiveContextManager:
             )
 
             # Cache the summary
-            if self._cache and summary_messages:
-                self._cache.set(older_messages, summary_messages)
+            if cache and summary_messages:
+                cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
         compressed = system_messages + summary_messages + recent_messages
@@ -831,8 +861,12 @@ def get_progressive_context_manager(
     """
     Get the global progressive context manager.
 
+    One manager serves the process. Pass each agent's own config to
+    ``compress_if_needed``: thresholds, summarization settings and whether the
+    summary cache is used all follow that per-call config.
+
     Args:
-        config: Optional configuration override
+        config: Defaults for calls that pass no config (first call only)
 
     Returns:
         ProgressiveContextManager instance
