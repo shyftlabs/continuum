@@ -32,6 +32,7 @@ from continuum.agent.execution.run_finalizer import RunFinalizer
 from continuum.agent.execution.run_lifecycle import RunLifecycle
 from continuum.agent.execution.stream_executor import StreamExecutor
 from continuum.agent.execution.tool_handler import ToolHandler
+from continuum.agent.execution.tool_round import ToolRoundTracker
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     latest_step_payload,
@@ -1490,6 +1491,7 @@ class AgentRunner:
 
             content = ""
             turn = 0
+            tool_rounds = ToolRoundTracker(agent)
             while turn < ctx.max_turns:
                 turn += 1
                 # Filtered tools set by message_builder via apply_tool_attention.
@@ -1909,6 +1911,7 @@ class AgentRunner:
                                 }
                             )
 
+                    await tool_rounds.after_round(turn, tool_calls, messages)
                     continue
                 break
 

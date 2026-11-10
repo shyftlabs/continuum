@@ -336,6 +336,14 @@ class AgentConfig:
         default_factory=list
     )
 
+    # Called after each round of tool calls with what the tools returned
+    # (continuum.agent.execution.tool_round.ToolRound). A returned string is added
+    # as a system message before the next model call -- e.g. "those lookups were
+    # empty, try vector_search" -- at most after_tool_round_max_nudges times a run.
+    # Not saved to the session.
+    after_tool_round: Callable[[Any], Any] | None = None
+    after_tool_round_max_nudges: int = 1
+
     # Tool provenance — declare which tools return labeled (sensitive) data.
     # Maps tool name -> data-sensitivity labels. When a declared tool returns a
     # result, the run is tainted with those labels (RunContext.taint), so

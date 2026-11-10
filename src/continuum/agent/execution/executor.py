@@ -15,6 +15,7 @@ from continuum.agent.exceptions import (
     StructuredOutputError,
 )
 from continuum.agent.execution.message_builder import CACHE_BREAKPOINT_KEY
+from continuum.agent.execution.tool_round import ToolRoundTracker
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     record_llm_turn,
@@ -289,6 +290,7 @@ class Executor(IExecutor):
                 reasoning_usage.total_tokens,
             )
 
+        tool_rounds = ToolRoundTracker(agent)
         while turn < context.max_turns:
             turn += 1
             run_state.turn_count = turn
@@ -867,6 +869,9 @@ class Executor(IExecutor):
                                         "content": f"Handoff failed: {handoff_result.error or 'Unknown error'}",
                                     }
                                 )
+
+                    if regular_tool_calls:
+                        await tool_rounds.after_round(turn, regular_tool_calls, messages)
 
                     # Update state
                     from continuum.agent.utils.message_utils import message_to_dict
