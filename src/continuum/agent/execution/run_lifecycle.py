@@ -96,7 +96,6 @@ class RunLifecycle:
 
         return owns_trace
 
-    @observe(name="trace_run_end", capture_output=False)
     async def end_trace(
         self,
         agent: BaseAgent,
@@ -109,9 +108,26 @@ class RunLifecycle:
         Only the run that owns the trace updates its final output and clears the
         trace context. A nested run (owns_trace=False) leaves the shared parent
         trace intact so sibling/subsequent steps stay grouped under it.
+
+        The clear happens here, outside the ``trace_run_end`` span: a span puts
+        back the context it was opened in when it closes, so a clear made inside
+        it was undone, and every later run in the same task joined this trace.
         """
         if not owns_trace:
             return
+        try:
+            await self._finish_trace(agent, context, response)
+        finally:
+            clear_trace_context()
+            logger.debug("Trace context cleared for trace_id=%s", context.trace_id)
+
+    @observe(name="trace_run_end", capture_output=False)
+    async def _finish_trace(
+        self,
+        agent: BaseAgent,
+        context: RunContext,
+        response: AgentResponse,
+    ) -> None:
         try:
             trace = getattr(context, "_langfuse_trace", None)
             if trace:
@@ -146,18 +162,27 @@ class RunLifecycle:
                 except Exception as e:
                     logger.debug("Failed to update trace: %s", e)
 
-            clear_trace_context()
-            logger.debug("Trace context cleared for trace_id=%s", context.trace_id)
-
         except Exception as e:
             logger.warning("Failed to trace run end: %s", e)
-            try:
+
+    async def report_error(
+        self,
+        agent: BaseAgent,
+        context: RunContext,
+        error: Exception,
+        run_state: RunState | None = None,
+        owns_trace: bool = True,
+    ) -> None:
+        """Report the error, then (owner only) clear the trace context outside
+        the ``trace_run_error`` span, for the reason given in ``end_trace``."""
+        try:
+            await self._report_error(agent, context, error, run_state, owns_trace)
+        finally:
+            if owns_trace:
                 clear_trace_context()
-            except Exception:
-                pass
 
     @observe(name="trace_run_error", capture_output=False)
-    async def report_error(
+    async def _report_error(
         self,
         agent: BaseAgent,
         context: RunContext,
@@ -226,15 +251,8 @@ class RunLifecycle:
                     except Exception:
                         pass
 
-                clear_trace_context()
-
         except Exception as e:
             logger.warning("Failed to trace run error: %s", e)
-            if owns_trace:
-                try:
-                    clear_trace_context()
-                except Exception:
-                    pass
 
     @observe(name="report_metrics", capture_output=False)
     async def report_metrics(
