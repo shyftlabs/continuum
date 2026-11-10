@@ -8,6 +8,10 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **Each agent's context settings apply to its own calls.** `get_progressive_context_manager()` returns one manager per process, and its summary cache was built from the config of the first agent that asked, so a later agent with `enable_caching=False` was still served cached summaries (and one with caching on got none if the first had it off). Whether a call uses the cache now follows that call's `ContextManagementConfig`, and agents with different summarization model, temperature or max tokens no longer share summaries.
+- **Conversations that start alike no longer share a summary.** The summary cache key hashed only the first 100 characters of each message, so two conversations built from the same template or pasted document could be given each other's summary — in a multi-tenant product, one client's summary in another client's context. The whole message is hashed now.
+
+### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
 ### Changed
