@@ -400,6 +400,9 @@ class Settings(BaseSettings):
     context_summarization_max_retries: int = 2  # Max retries for summarization on failure
     context_keep_recent_messages: int = 10  # Number of recent messages to keep when compressing
     context_enable_caching: bool = True  # Cache summaries to avoid re-summarizing same content
+    context_summary_reuse_messages: int = (
+        10  # Reuse the last summary while <= this many messages were added since
+    )
     context_cache_ttl_seconds: int = 3600  # Cache TTL for summaries (1 hour)
 
     # -------------------------------------------------------------------------
