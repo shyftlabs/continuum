@@ -241,7 +241,7 @@ class LLMClient:
     # Synchronous Methods
     # =========================================================================
 
-    @observe(name="llm_chat_sync", capture_output=True)
+    @observe(name="llm_chat_sync", capture_output=True, as_type="generation")
     def chat_sync(
         self,
         messages: list[ChatMessage] | list[dict[str, Any]],
@@ -267,7 +267,7 @@ class LLMClient:
         self._validate_json_response(response.content, effective_config)
         return response
 
-    @observe(name="llm_chat_stream_sync", capture_output=False)
+    @observe(name="llm_chat_stream_sync", capture_output=False, as_type="generation")
     def chat_stream_sync(
         self,
         messages: list[ChatMessage] | list[dict[str, Any]],
@@ -294,7 +294,7 @@ class LLMClient:
     # Asynchronous Methods
     # =========================================================================
 
-    @observe(name="llm_chat", capture_output=True)
+    @observe(name="llm_chat", capture_output=True, as_type="generation")
     async def chat(
         self,
         messages: list[ChatMessage] | list[dict[str, Any]],
@@ -539,7 +539,7 @@ class LLMClient:
                     denial_message=decision.denial_message,
                 )
 
-    @observe(name="llm_chat_stream", capture_output=False)
+    @observe(name="llm_chat_stream", capture_output=False, as_type="generation")
     async def chat_stream(
         self,
         messages: list[ChatMessage] | list[dict[str, Any]],

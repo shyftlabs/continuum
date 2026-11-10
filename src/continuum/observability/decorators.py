@@ -117,6 +117,16 @@ def _serialize_output(output: Any) -> Any:
     return str(output)[:1000]  # Truncate long strings
 
 
+def _record_generation(span: SpanScope, result: Any) -> None:
+    """Pass a model call's served model and usage to its generation, when present."""
+    try:
+        span.set_generation(
+            model=getattr(result, "model", None), usage=getattr(result, "usage", None)
+        )
+    except Exception as e:  # noqa: BLE001 — tracing must never break the call
+        logger.debug("Failed to record generation usage: %s", e)
+
+
 def observe(
     name: str | None = None,
     *,
@@ -125,6 +135,7 @@ def observe(
     metadata: dict[str, Any] | None = None,
     level: SpanLevel = SpanLevel.DEFAULT,
     manager: TracingManager | None = None,
+    as_type: str = "span",
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """
     Decorator to trace a function execution.
@@ -138,6 +149,9 @@ def observe(
         metadata: Additional metadata to include
         level: Log level for the span
         manager: Optional TracingManager instance
+        as_type: "generation" for a model call: the served model and token usage
+            are read from the result (or from streamed chunks) so the trace
+            backend can price it
 
     Example:
         ```python
@@ -171,9 +185,12 @@ def observe(
                 input=input_data,
                 metadata=metadata or {},
                 level=level.value if isinstance(level, SpanLevel) else level,
+                as_type=as_type,
             ) as span:
                 try:
                     result = func(*args, **kwargs)
+                    if as_type == "generation":
+                        _record_generation(span, result)
 
                     if capture_output:
                         # Redaction is applied centrally in SpanScope.set_output.
@@ -201,9 +218,12 @@ def observe(
                 input=input_data,
                 metadata=metadata or {},
                 level=level.value if isinstance(level, SpanLevel) else level,
+                as_type=as_type,
             ) as span:
                 try:
                     result = await func(*args, **kwargs)
+                    if as_type == "generation":
+                        _record_generation(span, result)
 
                     if capture_output:
                         # Redaction is applied centrally in SpanScope.set_output.
@@ -236,10 +256,14 @@ def observe(
                 input=input_data,
                 metadata=metadata or {},
                 level=level.value if isinstance(level, SpanLevel) else level,
+                as_type=as_type,
             ) as span:
                 collected: list[Any] = []
                 try:
                     async for item in func(*args, **kwargs):
+                        if as_type == "generation":
+                            span.mark_first_output()
+                            _record_generation(span, item)
                         if capture_output:
                             collected.append(item)
                         yield item
@@ -265,10 +289,14 @@ def observe(
                 input=input_data,
                 metadata=metadata or {},
                 level=level.value if isinstance(level, SpanLevel) else level,
+                as_type=as_type,
             ) as span:
                 collected: list[Any] = []
                 try:
                     for item in func(*args, **kwargs):
+                        if as_type == "generation":
+                            span.mark_first_output()
+                            _record_generation(span, item)
                         if capture_output:
                             collected.append(item)
                         yield item
