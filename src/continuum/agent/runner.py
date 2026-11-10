@@ -25,6 +25,7 @@ from continuum.agent.execution.executor import (
     _MAX_STRUCTURED_OUTPUT_RETRIES,
     Executor,
     _enrich_config_for_gateway,
+    _usage_with_model,
 )
 from continuum.agent.execution.handoff_executor import HandoffExecutor
 from continuum.agent.execution.message_builder import MessageBuilder
@@ -57,6 +58,7 @@ from continuum.agent.types import (
     PrepareRunResult,
     ResponseStatus,
     RunContext,
+    TokenUsage,
     generate_run_id,
 )
 from continuum.agent.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
@@ -1490,8 +1492,11 @@ class AgentRunner:
 
             content = ""
             turn = 0
+            # Summed from the usage each provider reports on a stream's closing chunk.
+            stream_usage = TokenUsage()
             while turn < ctx.max_turns:
                 turn += 1
+                turn_usage = TokenUsage()
                 # Filtered tools set by message_builder via apply_tool_attention.
                 tools = (
                     ctx.metadata.get("_filtered_tools") if ctx.metadata else None
@@ -1535,6 +1540,8 @@ class AgentRunner:
                 ):
                     if chunk.model:
                         last_seen_model = chunk.model
+                    if getattr(chunk, "usage", None):
+                        turn_usage = turn_usage.add(_usage_with_model(chunk, agent.model))
                     if chunk.content:
                         content_parts.append(chunk.content)
                         if "NEED_TOOL:" not in chunk.content and not scanners_active:
@@ -1589,6 +1596,8 @@ class AgentRunner:
                         ):
                             if chunk.model:
                                 last_seen_model = chunk.model
+                            if getattr(chunk, "usage", None):
+                                turn_usage = turn_usage.add(_usage_with_model(chunk, agent.model))
                             if chunk.content:
                                 content_parts.append(chunk.content)
                                 if not scanners_active:
@@ -1627,6 +1636,7 @@ class AgentRunner:
                 # record this turn's LLM decision, BEFORE appending the assistant
                 # message below. Records every turn — including the final no-tool
                 # turn — so a streamed run is inspectable and forkable.
+                stream_usage = stream_usage.add(turn_usage)
                 _agent_stack = run_state.get_agent_stack_snapshot()
                 _snapshot = capture_snapshot(ctx.recorder, llm_messages)
                 llm_step_id = record_llm_turn(
@@ -1635,7 +1645,7 @@ class AgentRunner:
                     turn,
                     content=content,
                     has_tool_calls=bool(tool_calls),
-                    usage=None,
+                    usage=turn_usage,
                     snapshot=_snapshot,
                     agent_stack=_agent_stack,
                     data_labels=ctx.data_labels,
@@ -1937,11 +1947,11 @@ class AgentRunner:
                         log_content(structured_output_error),
                     )
 
-            # NOTE: no usage= is passed — streamed runs carry an EMPTY TokenUsage
-            # (zero totals, no model_usage). Callers must NOT rely on streamed
-            # responses for billing/metering.
+            # Usage comes from each stream's closing chunk; a provider that does not
+            # report it leaves the totals at zero.
             response = AgentResponse(
                 content=content,
+                usage=stream_usage,
                 structured_output=structured_output,
                 structured_output_error=structured_output_error,
                 run_id=ctx.run_id,
@@ -1986,6 +1996,7 @@ class AgentRunner:
                     if structured_output
                     else None,
                     "structured_output_error": structured_output_error,
+                    "usage": stream_usage.to_dict(),
                 },
                 trace_id=ctx.trace_id,
             )

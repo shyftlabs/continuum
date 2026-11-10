@@ -8,6 +8,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **Streamed runs report token usage.** `run_stream` returned an empty `TokenUsage`, so any product that streams answers to users (the common case for chat) could not meter cost or enforce budgets from Continuum. OpenAI-compatible providers (OpenAI and the Smart Gateway) now send `stream_options.include_usage` and put the usage on the closing `StreamChunk` (`StreamChunk.usage`); `run_stream` sums it per turn into `AgentResponse.usage` (with `model_usage` keyed on the served model), the decision trace's per-turn tokens, and the `RUN_END` event's new `usage` field. A server that rejects `stream_options` has it dropped and remembered for that model, so streaming never breaks. Anthropic and Gemini streaming, and the model-tier router's streaming path, are unchanged and still report zero.
+
+### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
 ### Changed

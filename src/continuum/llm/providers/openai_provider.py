@@ -35,6 +35,7 @@ from continuum.llm.types import (
     LLMResponse,
     StreamChunk,
     ToolCall,
+    Usage,
     provider_extras,
 )
 from continuum.logging import get_logger
@@ -501,6 +502,10 @@ class OpenAIProvider(BaseProvider):
     ) -> Iterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
+        # Ask for the usage chunk OpenAI-compatible servers send last. A server
+        # that rejects the field gets it dropped by _call_adapting, and remembered.
+        if "stream_options" not in self._unsupported_params.get(kwargs["model"], set()):
+            kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — nothing has been yielded yet,
             # so a retry here cannot emit a chunk twice.
@@ -510,7 +515,16 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            usage: Usage | None = None
+            model: str | None = None
             for chunk in response:
+                model = chunk.model or model
+                if getattr(chunk, "usage", None):
+                    usage = Usage(
+                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                        completion_tokens=chunk.usage.completion_tokens or 0,
+                        total_tokens=chunk.usage.total_tokens or 0,
+                    )
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -529,14 +543,20 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
+                    usage=usage,
                 )
             elif finish_reason:
                 # Same silent-empty case as the non-streaming path.
                 self._warn_if_budget_consumed(kwargs["model"], finish_reason, emitted_content)
-                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
+                yield StreamChunk(
+                    model=model, finish_reason=finish_reason, is_finished=True, usage=usage
+                )
+            elif usage:
+                yield StreamChunk(model=model, is_finished=True, usage=usage)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
@@ -550,6 +570,10 @@ class OpenAIProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
+        # Ask for the usage chunk OpenAI-compatible servers send last. A server
+        # that rejects the field gets it dropped by _call_adapting, and remembered.
+        if "stream_options" not in self._unsupported_params.get(kwargs["model"], set()):
+            kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — see the sync `stream` above.
             response = await self._acall_adapting(
@@ -559,7 +583,16 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            usage: Usage | None = None
+            model: str | None = None
             async for chunk in response:
+                model = chunk.model or model
+                if getattr(chunk, "usage", None):
+                    usage = Usage(
+                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                        completion_tokens=chunk.usage.completion_tokens or 0,
+                        total_tokens=chunk.usage.total_tokens or 0,
+                    )
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -578,14 +611,20 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
+                    usage=usage,
                 )
             elif finish_reason:
                 # Same silent-empty case as the non-streaming path.
                 self._warn_if_budget_consumed(kwargs["model"], finish_reason, emitted_content)
-                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
+                yield StreamChunk(
+                    model=model, finish_reason=finish_reason, is_finished=True, usage=usage
+                )
+            elif usage:
+                yield StreamChunk(model=model, is_finished=True, usage=usage)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
