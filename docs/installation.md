@@ -205,6 +205,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `CONTEXT_SUMMARIZATION_MAX_RETRIES` | `2` | |
 | `CONTEXT_KEEP_RECENT_MESSAGES` | `10` | Always keep the N most recent |
 | `CONTEXT_ENABLE_CACHING` | `true` | |
+| `CONTEXT_SUMMARY_REUSE_MESSAGES` | `10` | With caching on, a long chat reuses its last summary and keeps the messages added since word for word, until more than this many were added; then it summarizes afresh. `0` summarizes every turn |
 | `CONTEXT_CACHE_TTL_SECONDS` | `3600` | 1 hour |
 
 ### Headroom compression *(optional, requires `[headroom-local]` extra)*

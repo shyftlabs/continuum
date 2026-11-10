@@ -7,6 +7,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+- **A long chat reuses its summary.** When context compression summarizes older messages, the chat grew by a turn each time, so the whole older history was summarized again every turn (one extra model call per turn, with a growing prompt). With the summary cache on, the summary from an earlier turn is now reused and the messages added since follow it word for word, until more than `summary_reuse_messages` (default 10, `CONTEXT_SUMMARY_REUSE_MESSAGES`) were added; then the older history is summarized afresh. On a 12-turn chat through the gateway: 14 model calls instead of 22, about 25% lower cost, and recall no worse. `0` keeps the old behaviour.
+
 ### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 - **Each agent's summary-cache setting applies to its own compression.** `get_progressive_context_manager()` returns one manager per process, and its summary cache was built from the config of the first agent that asked, so a later agent with `enable_caching=False` was still served cached summaries (and one with caching on got none if the first had it off). Whether a call uses the cache now follows that call's `ContextManagementConfig`, and agents with different summarization model, temperature or max tokens no longer share summaries.
