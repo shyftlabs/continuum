@@ -7,6 +7,12 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **Labels on gateway calls.** Agent model calls through the Smart Gateway now carry the run's `tags` and any labels passed as `run(..., metadata={"gateway_metadata": {...}})` (for example a tenant, fund or feature) in `body.metadata`, beside `session_id` and `trace_id`, so the gateway can report cost and apply budgets per tenant or feature. Values are sent as strings; other run metadata is not sent.
+
+### Fixed
+- **An agent's `extra_body` survives the gateway.** Adding the gateway metadata replaced the agent's whole `extra_body`, so provider options set on an agent were dropped whenever `SMART_GATEWAY_URL` was set. The metadata is now merged in.
+
 ### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
