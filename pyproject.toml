@@ -73,6 +73,10 @@ cohere = [
 temporal = [
     "temporalio>=1.23.0,<2",
 ]
+# PostgreSQL session store (SESSION_PROVIDER=postgres)
+postgres = [
+    "asyncpg>=0.29.0,<1",
+]
 eval = [
     "deepeval>=1.0.0,<5",
     "ragas>=0.2.0,<0.5",
@@ -199,6 +203,7 @@ markers = [
     "slow: Tests that take more than 5 seconds",
     "live_mcp: Integration tests that require a live MCP server (set MCP_SERVER_URL)",
     "redis: Tests that require a live Redis instance",
+    "postgres: Tests that require a live PostgreSQL (set CONTINUUM_TEST_POSTGRES_DSN)",
     "milvus: Tests that require a live Milvus instance",
     "temporal: Tests that require a live Temporal cluster",
 ]

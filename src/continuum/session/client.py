@@ -262,7 +262,7 @@ class SessionClient:
 
         # Redis host/credentials not configured — degrade (or fail) per policy.
         if not cfg.is_configured():
-            return self._fallback_or_fail("Redis is not configured")
+            return self._fallback_or_fail(f"{cfg.provider} is not configured")
 
         # Configured: build the Redis provider lazily and probe it once.
         try:
@@ -272,7 +272,7 @@ class SessionClient:
             # outage — never degrade to in-memory, regardless of fallback_mode.
             raise
         except Exception as e:  # provider class missing (e.g. redis not installed)
-            return self._fallback_or_fail(f"Redis provider unavailable ({e})")
+            return self._fallback_or_fail(f"{cfg.provider} provider unavailable ({e})")
 
         aping = getattr(redis_provider, "aping", None)
         reachable = await aping() if aping is not None else True
@@ -288,7 +288,7 @@ class SessionClient:
         # fall back to the generic wording only when none was supplied.
         reason = getattr(redis_provider, "last_probe_error", None)
         return self._fallback_or_fail(
-            f"Redis probe failed: {reason}" if reason else "Redis is unreachable"
+            f"{cfg.provider} probe failed: {reason}" if reason else f"{cfg.provider} is unreachable"
         )
 
     def _fallback_or_fail(self, reason: str) -> BaseSessionProvider:
@@ -465,7 +465,9 @@ class SessionClient:
                 or self._session_config.fallback_mode == "fail"
             ):
                 raise
-            self._degrade_to_memory(f"Redis became unreachable mid-session ({e})")
+            self._degrade_to_memory(
+                f"{provider.provider_name} became unreachable mid-session ({e})"
+            )
             return await getattr(self._provider, method)(*args, **kwargs)
 
     def _initialize_provider(self) -> None:
