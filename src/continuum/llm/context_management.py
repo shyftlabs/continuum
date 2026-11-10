@@ -104,6 +104,14 @@ class ContextManagementConfig:
     # Caching
     enable_caching: bool = field(default_factory=lambda: settings.context_enable_caching)
     cache_ttl_seconds: int = field(default_factory=lambda: settings.context_cache_ttl_seconds)
+    # Reuse the summary cached for an earlier turn and keep the messages added
+    # since word for word, until there are more than this many of them; then
+    # summarize the whole older history afresh. Saves a summary call on most
+    # turns. 0 = summarize every turn the older history changes. Needs
+    # enable_caching.
+    summary_reuse_messages: int = field(
+        default_factory=lambda: settings.context_summary_reuse_messages
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -119,6 +127,7 @@ class ContextManagementConfig:
             "compression_strategy": self.compression_strategy.value,
             "enable_caching": self.enable_caching,
             "cache_ttl_seconds": self.cache_ttl_seconds,
+            "summary_reuse_messages": self.summary_reuse_messages,
         }
 
 
@@ -137,6 +146,7 @@ class CompressionResult:
     summarization_used: bool = False
     truncation_used: bool = False
     cache_hit: bool = False
+    summary_reused: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -152,6 +162,7 @@ class CompressionResult:
             "summarization_used": self.summarization_used,
             "truncation_used": self.truncation_used,
             "cache_hit": self.cache_hit,
+            "summary_reused": self.summary_reused,
         }
 
 
@@ -185,6 +196,34 @@ class SummaryCache:
             content.append(f"{msg.get('role')}:{msg.get('content') or ''}")
         content_str = "\x1f".join(content)
         return hashlib.sha256(content_str.encode()).hexdigest()
+
+    def _prefix_keys(self, messages: list[dict[str, Any]], namespace: str = "") -> list[str]:
+        """Keys of ``messages[:1]``, ``messages[:2]``, ... — each equal to ``_generate_key``."""
+        digest = hashlib.sha256(namespace.encode())
+        keys = []
+        for msg in messages:
+            digest.update(f"\x1f{msg.get('role')}:{msg.get('content') or ''}".encode())
+            keys.append(digest.copy().hexdigest())
+        return keys
+
+    def get_longest_prefix(
+        self, messages: list[dict[str, Any]], namespace: str = ""
+    ) -> tuple[int, list[dict[str, Any]]] | None:
+        """The summary cached for the longest proper prefix of ``messages``.
+
+        Returns ``(n, summary)`` where the summary covers ``messages[:n]``, or
+        None. In a chat the older part grows by a few messages a turn, so the
+        previous turn's summary is usually here.
+        """
+        keys = self._prefix_keys(messages[:-1], namespace)
+        now = time.time()
+        with self._lock:
+            for n in range(len(keys), 0, -1):
+                entry = self._cache.get(keys[n - 1])
+                if entry is not None and now - entry[1] < self._ttl:
+                    self._cache[keys[n - 1]] = (entry[0], now)
+                    return n, entry[0]
+        return None
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
@@ -450,6 +489,7 @@ class ProgressiveContextManager:
                         "compression_ratio": result.compression_ratio,
                         "summarization_used": result.summarization_used,
                         "cache_hit": result.cache_hit,
+                        "summary_reused": result.summary_reused,
                     },
                 )
 
@@ -653,6 +693,17 @@ class ProgressiveContextManager:
                 cache_hit = True
                 logger.debug("Using cached summary")
 
+        # Reuse an earlier turn's summary while few messages were added since:
+        # those stay word for word after it, and no summary call is made.
+        reused = False
+        if not summary_messages and cache and config.summary_reuse_messages > 0:
+            earlier = cache.get_longest_prefix(older_messages, namespace)
+            if earlier is not None:
+                covered, previous = earlier
+                if len(older_messages) - covered <= config.summary_reuse_messages:
+                    summary_messages = previous + older_messages[covered:]
+                    reused = True
+
         # Summarize if not cached
         if not summary_messages:
             summary_messages = await self._summarize_messages(
@@ -661,9 +712,9 @@ class ProgressiveContextManager:
                 config=config,
             )
 
-            # Cache the summary
-            if cache and summary_messages:
-                cache.set(older_messages, summary_messages, namespace)
+        # Cache a new or extended summary
+        if cache and summary_messages and not cache_hit and not reused:
+            cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
         compressed = system_messages + summary_messages + recent_messages
@@ -682,6 +733,7 @@ class ProgressiveContextManager:
             latency_ms=0.0,  # Will be set by caller
             summarization_used=True,
             cache_hit=cache_hit,
+            summary_reused=reused,
         )
 
     async def _compress_truncate(

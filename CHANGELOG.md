@@ -7,6 +7,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+- **A long chat reuses its summary.** When context compression summarizes older messages, the chat grew by a turn each time, so the whole older history was summarized again every turn (one extra model call per turn, with a growing prompt). With the summary cache on, the summary from an earlier turn is now reused and the messages added since follow it word for word, until more than `summary_reuse_messages` (default 10, `CONTEXT_SUMMARY_REUSE_MESSAGES`) were added; then the older history is summarized afresh. On a 12-turn chat through the gateway: 14 model calls instead of 22, about 25% lower cost, and recall no worse. `0` keeps the old behaviour.
+
 ### Fixed
 - **Each agent's context settings apply to its own calls.** `get_progressive_context_manager()` returns one manager per process, and its summary cache was built from the config of the first agent that asked, so a later agent with `enable_caching=False` was still served cached summaries (and one with caching on got none if the first had it off). Whether a call uses the cache now follows that call's `ContextManagementConfig`, and agents with different summarization model, temperature or max tokens no longer share summaries.
 - **Conversations that start alike no longer share a summary.** The summary cache key hashed only the first 100 characters of each message, so two conversations built from the same template or pasted document could be given each other's summary — in a multi-tenant product, one client's summary in another client's context. The whole message is hashed now.
