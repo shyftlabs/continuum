@@ -1986,6 +1986,11 @@ class AgentRunner:
                     if structured_output
                     else None,
                     "structured_output_error": structured_output_error,
+                    **(
+                        {"gateway_routing": response.run_artifacts["gateway_routing"]}
+                        if response.run_artifacts and "gateway_routing" in response.run_artifacts
+                        else {}
+                    ),
                 },
                 trace_id=ctx.trace_id,
             )
