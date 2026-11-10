@@ -36,6 +36,7 @@ from continuum.evaluation.types import (
     EvalCase,
     EvalResult,
     EvalStatus,
+    contexts_from_messages,
 )
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "CriterionScore",
     "EvalResult",
     "EvalStatus",
+    "contexts_from_messages",
     # Native LLM-as-judge evaluator
     "EvaluatorAgent",
     "create_evaluator_agent",

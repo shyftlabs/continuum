@@ -61,6 +61,32 @@ class EvalCase:
         }
 
     @classmethod
+    def from_run(
+        cls,
+        input_text: str,
+        messages: list[Any],
+        *,
+        tools: list[str] | tuple[str, ...] | None = None,
+        expected_output: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> EvalCase:
+        """A case whose context is what the agent's tools actually returned.
+
+        RAGAS faithfulness and context metrics need the retrieved text. Filling it
+        in by hand meant re-running the retrieval outside the agent, which can
+        return something different from what the agent saw. Pass the run's
+        messages (``AgentResponse.messages``); ``tools`` keeps only those tools'
+        results (matched on the tool name or its last ``__`` segment, so
+        ``"vector_search"`` matches ``"docs__vector_search"``).
+        """
+        return cls(
+            input_text=input_text,
+            expected_output=expected_output,
+            context=contexts_from_messages(messages, tools=tools),
+            metadata=dict(metadata or {}),
+        )
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvalCase:
         return cls(
             input_text=data.get("input_text", ""),
@@ -190,3 +216,40 @@ class EvalResult:
             langfuse_trace_id=data.get("langfuse_trace_id"),
             metadata=data.get("metadata", {}),
         )
+
+
+def contexts_from_messages(
+    messages: list[Any], *, tools: list[str] | tuple[str, ...] | None = None
+) -> list[str]:
+    """Tool results from a run's messages, in order, as eval context strings.
+
+    Each tool result is paired with the assistant tool call that asked for it
+    (by ``tool_call_id``) to know which tool produced it. Empty results are skipped.
+    """
+    wanted = set(tools or ())
+    names: dict[str, str] = {}
+    contexts: list[str] = []
+    for message in messages:
+        m = message if isinstance(message, dict) else _message_dict(message)
+        if m.get("role") == "assistant":
+            for call in m.get("tool_calls") or []:
+                call = call if isinstance(call, dict) else _message_dict(call)
+                fn = call.get("function") or {}
+                fn = fn if isinstance(fn, dict) else _message_dict(fn)
+                names[call.get("id") or ""] = fn.get("name") or ""
+        elif m.get("role") == "tool":
+            name = names.get(m.get("tool_call_id") or "", "")
+            if wanted and name not in wanted and name.split("__")[-1] not in wanted:
+                continue
+            content = m.get("content")
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            if content.strip():
+                contexts.append(content)
+    return contexts
+
+
+def _message_dict(obj: Any) -> dict[str, Any]:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return dict(getattr(obj, "__dict__", {}))

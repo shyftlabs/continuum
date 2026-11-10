@@ -181,6 +181,7 @@ Full inventory of every feature available in Continuum (updated at 2026-05-19 ),
 | ---------------------- | ------------------------------------------------------------------------- |
 | EvaluatorAgent         | LLM-as-judge with configurable criteria (correctness, conciseness, etc.)  |
 | EvalCase / EvalResult  | Structured types for test cases and results                               |
+| EvalCase.from_run      | A case whose context is what the agent's tools returned in a run (`contexts_from_messages`) |
 | deepeval integration   | `DeepEvalEvaluator` — optional (`pip install deepeval`)                   |
 | RAGAS integration      | `RagasEvaluator` for RAG quality metrics — optional (`pip install ragas`) |
 | LangfuseDatasetClient  | Manage golden datasets in Langfuse for regression testing                 |
