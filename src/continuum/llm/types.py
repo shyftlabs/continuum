@@ -266,6 +266,8 @@ class StreamChunk(BaseModel):
     tool_calls: list[ToolCall] | None = None
     finish_reason: str | None = None
     is_finished: bool = False
+    # Token usage for the whole call, on the closing chunk only (when the provider reports it).
+    usage: Usage | None = None
 
     @classmethod
     def from_openai_chunk(cls, chunk: Any) -> "StreamChunk":
