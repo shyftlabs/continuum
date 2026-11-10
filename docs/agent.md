@@ -173,6 +173,26 @@ async for event in runner.run_stream(agent, "Tell me a story"):
 > `CONTENT_DELTA` + `CONTENT_COMPLETE`, still wrapped in the normal
 > `RUN_START … RUN_END` events, so streaming callers keep working.
 
+Pass `stream_steps=True` to see a workflow's progress while it runs. Each step
+then sends `AGENT_START`, its tool calls (`TOOL_CALL_START` / `TOOL_CALL_END`
+with `tool_name` and `success`) and `AGENT_END` (with the step's `content` and
+`status`) as it happens, ahead of the final result. Step events carry
+`data["step"] = True` and `data["workflow"]` (the workflow's name), and use the
+workflow's `run_id`; `event.agent_name` is the step's agent. The final answer
+still arrives as the workflow's own `CONTENT_DELTA` / `CONTENT_COMPLETE`, so a UI
+that shows text should skip step events or show them as progress:
+
+```python
+async for event in runner.run_stream(pipeline, "Analyse fund X", stream_steps=True):
+    if event.data.get("step"):
+        if event.type == EventType.AGENT_START:
+            show_progress(f"{event.agent_name} working…")
+        elif event.type == EventType.TOOL_CALL_START:
+            show_progress(f"{event.agent_name}: {event.data['tool_name']}")
+    elif event.type == EventType.CONTENT_DELTA:
+        print(event.data["content"], end="")
+```
+
 ### Runner methods
 
 - `register_agent(agent)` — required for handoff targets

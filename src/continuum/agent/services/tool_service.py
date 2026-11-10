@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Any
 
 from continuum.agent.approval import build_approval_settings
 from continuum.agent.exceptions import AgentToolError
+from continuum.agent.execution.step_events import current_step_sink, emit_step_event
 from continuum.agent.interfaces.service_interface import IToolService
-from continuum.agent.types import ToolExecutionSummary
+from continuum.agent.types import EventType, ToolExecutionSummary
 from continuum.logging import get_logger, log_content
 from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
@@ -161,6 +162,49 @@ class ToolService(IToolService):
             )
 
     async def execute_tool_call(
+        self,
+        agent: BaseAgent,
+        tool_call: ToolCallInput,
+        context: RunContext,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """
+        Execute a single tool call with full tracing and metrics.
+
+        Inside a workflow streamed with ``stream_steps=True`` it also sends
+        TOOL_CALL_START / TOOL_CALL_END step events (tool name and success).
+
+        Returns:
+            Tuple of (tool_result_message, execution_metadata)
+        """
+        if current_step_sink() is None:
+            return await self._execute_tool_call(agent, tool_call, context)
+
+        tool_name = (
+            tool_call.function.name
+            if hasattr(tool_call, "function")
+            else tool_call.get("function", {}).get("name", "")
+        )
+        emit_step_event(
+            EventType.TOOL_CALL_START, agent.name, {"step": True, "tool_name": tool_name}
+        )
+        try:
+            result, exec_metadata = await self._execute_tool_call(agent, tool_call, context)
+        except Exception as e:
+            emit_step_event(
+                EventType.TOOL_CALL_END,
+                agent.name,
+                {"step": True, "tool_name": tool_name, "success": False, "error": str(e)[:100]},
+            )
+            raise
+        error = exec_metadata.get("error")
+        emit_step_event(
+            EventType.TOOL_CALL_END,
+            agent.name,
+            {"step": True, "tool_name": tool_name, "success": not error, "error": error},
+        )
+        return result, exec_metadata
+
+    async def _execute_tool_call(
         self,
         agent: BaseAgent,
         tool_call: ToolCallInput,
