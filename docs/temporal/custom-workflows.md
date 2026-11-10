@@ -64,6 +64,23 @@ class TranslationFanoutWorkflow:
         )
 ```
 
+`run_agent_activity` raises when the agent fails, so after the last retry
+`execute_activity` raises `ActivityError` and this workflow fails. To get an
+`AgentActivityResult` with `status="error"` instead and decide yourself, use
+`run_agent_step`, which the built-in workflows use:
+
+```python
+from continuum.temporal.workflows import run_agent_step
+
+result = await run_agent_step(
+    AgentActivityParams(agent_name="translator_french", input=input_text),
+    timeout=300,
+    retries=3,
+)
+if result.status == "error":
+    return WorkflowResult(status="failed", content=None, step_results=[result], error=result.error)
+```
+
 ### Register with the worker
 
 ```python

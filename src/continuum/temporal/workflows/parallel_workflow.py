@@ -7,12 +7,10 @@ Takes a list of agent names, runs them all concurrently, merges results.
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 from typing import Any
 
 try:
     from temporalio import workflow
-    from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
@@ -24,6 +22,7 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         WorkflowResult,
     )
+    from continuum.temporal.workflows.steps import run_agent_step
 
 
 from dataclasses import dataclass
@@ -59,32 +58,27 @@ class ParallelAgentWorkflow:
 
     @workflow.run
     async def run(self, input: ParallelWorkflowInput) -> WorkflowResult:
-        handles = []
-        for agent_name in input.agent_names:
-            handle = workflow.start_activity(
-                "run_agent_activity",
-                AgentActivityParams(
-                    agent_name=agent_name,
-                    input=input.initial_input,
-                    session_id=input.session_id,
-                    user_id=input.user_id,
-                ),
-                start_to_close_timeout=timedelta(seconds=input.timeout_per_agent),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3,
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=60),
-                ),
-                heartbeat_timeout=timedelta(seconds=60),
-                result_type=AgentActivityResult,
+        results: list[AgentActivityResult] = list(
+            await asyncio.gather(
+                *(
+                    run_agent_step(
+                        AgentActivityParams(
+                            agent_name=agent_name,
+                            input=input.initial_input,
+                            session_id=input.session_id,
+                            user_id=input.user_id,
+                        ),
+                        timeout=input.timeout_per_agent,
+                        retries=3,
+                    )
+                    for agent_name in input.agent_names
+                )
             )
-            handles.append(handle)
-
-        raw_results = await asyncio.gather(*handles)
-        results: list[AgentActivityResult] = [
-            r if isinstance(r, AgentActivityResult) else AgentActivityResult.model_validate(r)
-            for r in raw_results
+        )
+        failed = [
+            f"{r.agents_used[0] if r.agents_used else '?'}: {r.error}"
+            for r in results
+            if r.status == "error"
         ]
 
         # Merge
@@ -98,14 +92,18 @@ class ParallelAgentWorkflow:
             parts = {}
             for i, r in enumerate(results):
                 key = input.agent_names[i] if i < len(input.agent_names) else f"agent-{i}"
-                parts[key] = r.content
+                if r.status != "error":
+                    parts[key] = r.content
             content = str(parts)
         else:
             content = "\n\n".join(r.content for r in results if r.content)
 
-        self._status = "completed"
+        # Failed agents are left out of the merge; the run fails only if all did.
+        status = "failed" if results and len(failed) == len(results) else "completed"
+        self._status = status
         return WorkflowResult(
-            status="completed",
+            status=status,
             content=content,
             step_results=results,
+            error="; ".join(failed) or None,
         )

@@ -14,7 +14,6 @@ from typing import Any
 
 try:
     from temporalio import workflow
-    from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
@@ -36,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
         is_authorized,
         parse_step,
     )
+    from continuum.temporal.workflows.steps import StepFailedError, run_agent_step
 
 
 _logger = logging.getLogger(__name__)
@@ -365,8 +365,7 @@ class AgentWorkflow:
     async def _run_agent_step(self, step: AgentStep, wf_input: WorkflowInput) -> None:
         agent_input = step.input or self._last_output
 
-        raw = await workflow.execute_activity(
-            "run_agent_activity",
+        result = await run_agent_step(
             AgentActivityParams(
                 agent_name=step.agent_name,
                 input=agent_input,
@@ -374,21 +373,13 @@ class AgentWorkflow:
                 user_id=wf_input.user_id,
                 metadata=step.metadata,
             ),
-            start_to_close_timeout=timedelta(seconds=step.timeout),
-            retry_policy=RetryPolicy(
-                maximum_attempts=step.retries,
-                initial_interval=timedelta(seconds=1),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=60),
-            ),
-            heartbeat_timeout=timedelta(seconds=60),
-            result_type=AgentActivityResult,
-        )
-        result = (
-            raw if isinstance(raw, AgentActivityResult) else AgentActivityResult.model_validate(raw)
+            timeout=step.timeout,
+            retries=step.retries,
         )
 
         self._step_results.append(result)
+        if result.status == "error":
+            raise StepFailedError(f"Agent step '{step.agent_name}' failed: {result.error}")
         if result.content:
             self._last_output = result.content
 
@@ -505,36 +496,34 @@ class AgentWorkflow:
 
     async def _run_parallel_step(self, step: ParallelStep, wf_input: WorkflowInput) -> None:
         """Run multiple agents concurrently and merge results."""
-        handles = []
-        for agent_step in step.agents:
-            agent_input = agent_step.input or self._last_output
-            handle = workflow.start_activity(
-                "run_agent_activity",
-                AgentActivityParams(
-                    agent_name=agent_step.agent_name,
-                    input=agent_input,
-                    session_id=wf_input.session_id,
-                    user_id=wf_input.user_id,
-                    metadata=agent_step.metadata,
-                ),
-                start_to_close_timeout=timedelta(seconds=agent_step.timeout),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=agent_step.retries,
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=60),
-                ),
-                heartbeat_timeout=timedelta(seconds=60),
-                result_type=AgentActivityResult,
+        results: list[AgentActivityResult] = list(
+            await asyncio.gather(
+                *(
+                    run_agent_step(
+                        AgentActivityParams(
+                            agent_name=agent_step.agent_name,
+                            input=agent_step.input or self._last_output,
+                            session_id=wf_input.session_id,
+                            user_id=wf_input.user_id,
+                            metadata=agent_step.metadata,
+                        ),
+                        timeout=agent_step.timeout,
+                        retries=agent_step.retries,
+                    )
+                    for agent_step in step.agents
+                )
             )
-            handles.append(handle)
-
-        raw_results = await asyncio.gather(*handles)
-        results = [
-            r if isinstance(r, AgentActivityResult) else AgentActivityResult.model_validate(r)
-            for r in raw_results
-        ]
+        )
         self._step_results.extend(results)
+        # Failed agents are left out of the merge; the step fails only if all did.
+        if results and all(r.status == "error" for r in results):
+            raise StepFailedError(
+                "All parallel agents failed: "
+                + "; ".join(
+                    f"{r.agents_used[0] if r.agents_used else '?'}: {r.error}" for r in results
+                )
+            )
+        results = [r for r in results if r.status != "error"]
 
         # Merge strategy
         if step.merge_strategy == "first_success":
@@ -569,8 +558,7 @@ class AgentWorkflow:
         on replay the same activity result is replayed, so the branch decision
         is consistent across replays.
         """
-        raw_cond = await workflow.execute_activity(
-            "run_agent_activity",
+        condition_result = await run_agent_step(
             AgentActivityParams(
                 agent_name=step.condition_agent,
                 input=step.condition_input or self._last_output,
@@ -578,22 +566,14 @@ class AgentWorkflow:
                 user_id=wf_input.user_id,
                 metadata=step.metadata,
             ),
-            start_to_close_timeout=timedelta(seconds=step.timeout),
-            retry_policy=RetryPolicy(
-                maximum_attempts=step.retries,
-                initial_interval=timedelta(seconds=1),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=60),
-            ),
-            heartbeat_timeout=timedelta(seconds=60),
-            result_type=AgentActivityResult,
-        )
-        condition_result = (
-            raw_cond
-            if isinstance(raw_cond, AgentActivityResult)
-            else AgentActivityResult.model_validate(raw_cond)
+            timeout=step.timeout,
+            retries=step.retries,
         )
         self._step_results.append(condition_result)
+        if condition_result.status == "error":
+            raise StepFailedError(
+                f"Condition agent '{step.condition_agent}' failed: {condition_result.error}"
+            )
 
         # Deterministic evaluation: only accept explicit true/false values
         # to keep Temporal replay deterministic (LLM output is already fixed

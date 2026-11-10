@@ -11,11 +11,13 @@ import asyncio
 
 try:
     from temporalio import activity
+    from temporalio.exceptions import ApplicationError
 except ImportError as _err:
     raise ImportError(
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
+from continuum.temporal.exceptions import AgentNotRegisteredError
 from continuum.temporal.registry import get_agent_registry
 from continuum.temporal.types import (
     AgentActivityParams,
@@ -32,6 +34,9 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
 
     Agent-agnostic: looks up agent by name from registry, calls runner.run().
     All existing SDK features (LLM, memory, session, tools, observability) are unchanged.
+
+    Raises ApplicationError when the agent raises, so Temporal retries the step;
+    an unregistered agent is not retried.
     """
     registry = get_agent_registry()
 
@@ -59,14 +64,17 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
             tags=params.tags if params.tags else None,
         )
         return AgentActivityResult.from_agent_response(response)
+    except AgentNotRegisteredError as e:
+        # Retrying cannot register the agent; fail the step at once.
+        raise ApplicationError(str(e), type="AgentNotRegisteredError", non_retryable=True) from e
     except Exception as e:
-        activity.logger.error(f"Agent '{params.agent_name}' failed: {e}")
-        return AgentActivityResult(
-            content="",
-            status="error",
-            error=str(e),
-            agents_used=[params.agent_name],
-        )
+        # Raise instead of returning an error result, so Temporal retries the
+        # step with the workflow's retry policy (a model timeout, a rate limit).
+        attempt = activity.info().attempt
+        activity.logger.error(f"Agent '{params.agent_name}' failed (attempt {attempt}): {e}")
+        raise ApplicationError(
+            f"Agent '{params.agent_name}' failed: {e}", type=type(e).__name__
+        ) from e
     finally:
         heartbeat_task.cancel()
 
