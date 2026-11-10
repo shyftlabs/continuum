@@ -7,6 +7,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **PostgreSQL session provider** (`provider="postgres"`, extra `[postgres]`). Chat history can live in the database a product already runs instead of a separate Redis, so it is covered by the same backups, access rules and residency controls, and there is no second copy of user conversations to secure. Two tables, created on first use; same semantics as the Redis provider (deterministic ids, TTL refreshed on touch, sliding window, keyed-id migration); an unreachable database raises `SessionConnectionError`, so `SESSION_FALLBACK_MODE` applies as it does for Redis. Pass `pool=` to reuse the application's asyncpg pool. Settings `SESSION_POSTGRES_DSN`, `SESSION_POSTGRES_TABLE_PREFIX`, `SESSION_POSTGRES_MAX_CONNECTIONS`, `SESSION_POSTGRES_CREATE_TABLES`.
+
 ### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 

@@ -219,6 +219,26 @@ connection error. It serves two roles: an explicit zero-dependency provider for
 ephemeral or test flows, and the automatic fallback target when Redis is
 unreachable (see §10).
 
+The third is `PostgresSessionProvider` (`provider="postgres"`, install
+`shyftlabs-continuum[postgres]`): durable sessions in a PostgreSQL database the
+product already runs, so chat history sits under the same backups, access
+rules and data-residency controls as the rest of its data, with no second
+store to secure. Two tables, `continuum_sessions` and
+`continuum_session_messages` (prefix from `SESSION_POSTGRES_TABLE_PREFIX`),
+created on first use unless `SESSION_POSTGRES_CREATE_TABLES=false`. Same
+semantics as Redis: deterministic ids, TTL refreshed on every touch,
+sliding-window trim. Expired rows read as missing; call `purge_expired()` from
+a periodic job to delete them.
+
+```python
+# From settings: SESSION_PROVIDER=postgres, SESSION_POSTGRES_DSN=postgresql://...
+client = SessionClient(SessionConfig(provider="postgres"))
+
+# Or reuse the application's own asyncpg pool (never closed by the provider)
+from continuum.session.providers.postgres import PostgresSessionProvider
+client.set_provider(PostgresSessionProvider(SessionConfig(provider="postgres"), pool=app_pool))
+```
+
 To swap in a custom provider:
 
 ```python

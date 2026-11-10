@@ -54,7 +54,7 @@ class SessionConfig(BaseModel):
     # Provider Selection
     provider: str = Field(
         default="redis",
-        description="Session provider to use: 'redis', 'dynamodb', etc.",
+        description="Session provider to use: 'redis', 'postgres' or 'memory'.",
     )
 
     # Session Enable/Disable
@@ -98,6 +98,24 @@ class SessionConfig(BaseModel):
             "Path to a CA bundle for verifying the Redis server cert. "
             "None => system CA store. Set for private-CA endpoints."
         ),
+    )
+
+    # PostgreSQL Configuration (for the postgres provider)
+    postgres_dsn: str | None = Field(
+        default_factory=lambda: settings.session_postgres_dsn,
+        description="PostgreSQL DSN for session storage (provider='postgres')",
+    )
+    postgres_table_prefix: str = Field(
+        default_factory=lambda: settings.session_postgres_table_prefix,
+        description="Table name prefix: <prefix>s and <prefix>_messages",
+    )
+    postgres_max_connections: int = Field(
+        default_factory=lambda: settings.session_postgres_max_connections,
+        description="Pool size when the provider opens its own pool",
+    )
+    postgres_create_tables: bool = Field(
+        default_factory=lambda: settings.session_postgres_create_tables,
+        description="Create the session tables on first use if they are missing",
     )
 
     # Connection Pool Configuration
@@ -313,15 +331,14 @@ class SessionConfig(BaseModel):
         # Provider-specific configuration checks
         if self.provider == "redis":
             return bool(self.redis_host)
-        # Add checks for other providers as they're added
-        # elif self.provider == "dynamodb":
-        #     return bool(self.dynamodb_table_name)
+        if self.provider == "postgres":
+            return bool(self.postgres_dsn)
 
         # Unknown provider — fail explicitly rather than silently proceeding
         # and crashing later with a confusing error.
         raise ValueError(
             f"Unknown session provider: '{self.provider}'. "
-            f"Supported providers: 'redis'. "
+            f"Supported providers: 'redis', 'postgres'. "
             f"Check the SESSION_PROVIDER environment variable."
         )
 
