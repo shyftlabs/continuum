@@ -22,9 +22,12 @@ Resolution order in get_provider():
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
+import weakref
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from continuum.llm.config import LLMConfig
 from continuum.llm.providers.base import BaseProvider
@@ -50,6 +53,46 @@ _default_factory: ProviderFactory | None = None
 # when the Smart Gateway short-circuit silently shadows custom registrations.
 _BUILTIN_PREFIXES: frozenset[str] = frozenset()
 _gateway_shadow_warned = False
+
+
+# Built-in providers are reused, not rebuilt per call. Each one owns SDK clients
+# with their own connection pools, so a new provider per call meant a new TCP
+# and TLS handshake to the provider or gateway on every model call (~0.5 s to
+# the gateway, measured). Async SDK clients belong to the event loop they were
+# first used on, so there is one store per running loop, plus one for calls made
+# outside any loop. Keyed by the provider class and its constructor arguments,
+# so a changed key or setting gets a new provider.
+_loop_providers: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[tuple[Any, ...], BaseProvider]
+] = weakref.WeakKeyDictionary()
+_sync_providers: dict[tuple[Any, ...], BaseProvider] = {}
+_providers_lock = threading.Lock()
+
+
+def _reuse(cls: Callable[..., BaseProvider], **kwargs: Any) -> BaseProvider:
+    """The provider ``cls(**kwargs)`` already built for this event loop, or a new one."""
+    key = (cls, tuple(sorted(kwargs.items())))
+    try:
+        loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    with _providers_lock:
+        if loop is None:
+            store = _sync_providers
+        else:
+            store = _loop_providers.setdefault(loop, {})
+        provider = store.get(key)
+        if provider is None:
+            provider = cls(**kwargs)
+            store[key] = provider
+        return provider
+
+
+def clear_provider_cache() -> None:
+    """Forget reused providers (tests, or after rotating credentials in place)."""
+    with _providers_lock:
+        _loop_providers.clear()
+        _sync_providers.clear()
 
 
 def register_provider(prefix: str, factory: ProviderFactory) -> None:
@@ -112,7 +155,8 @@ def get_provider(config: LLMConfig) -> BaseProvider:
             mode,
             settings.smart_gateway_url,
         )
-        return GatewayProvider(
+        return _reuse(
+            GatewayProvider,
             gateway_url=settings.smart_gateway_url,
             api_key=settings.smart_gateway_api_key,
             router_mode=mode,
@@ -148,19 +192,22 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 def _make_gemini(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.gemini_provider import GeminiProvider
 
-    return GeminiProvider(api_key=settings.gemini_api_key, max_retries=config.max_retries)
+    return _reuse(GeminiProvider, api_key=settings.gemini_api_key, max_retries=config.max_retries)
 
 
 def _make_anthropic(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.anthropic_provider import AnthropicProvider
 
-    return AnthropicProvider(api_key=settings.anthropic_api_key, max_retries=config.max_retries)
+    return _reuse(
+        AnthropicProvider, api_key=settings.anthropic_api_key, max_retries=config.max_retries
+    )
 
 
 def _make_openai(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.openai_provider import OpenAIProvider
 
-    return OpenAIProvider(
+    return _reuse(
+        OpenAIProvider,
         api_key=config.api_key or settings.openai_api_key,
         organization=settings.openai_organization,
         api_base=config.api_base,
@@ -183,6 +230,7 @@ _BUILTIN_PREFIXES = frozenset(_PROVIDERS)
 __all__ = [
     "BaseProvider",
     "ProviderFactory",
+    "clear_provider_cache",
     "get_provider",
     "register_provider",
     "register_default_provider",
