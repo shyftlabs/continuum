@@ -30,6 +30,7 @@ from continuum.agent.execution.handoff_executor import HandoffExecutor
 from continuum.agent.execution.message_builder import MessageBuilder
 from continuum.agent.execution.run_finalizer import RunFinalizer
 from continuum.agent.execution.run_lifecycle import RunLifecycle
+from continuum.agent.execution.step_events import StepSink, current_step_sink, open_step_sink
 from continuum.agent.execution.stream_executor import StreamExecutor
 from continuum.agent.execution.tool_handler import ToolHandler
 from continuum.agent.execution.trace_capture import (
@@ -677,6 +678,75 @@ class AgentRunner:
                 (default), use ``SessionConfig.strict_sessions``. Ignored for
                 stateless runs (``session_id=None``).
         """
+        sink = current_step_sink()
+        if sink is None or id(agent) == sink.root_agent_id:
+            return await self._run_impl(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                context=context,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
+                tags=tags,
+                require_session=require_session,
+            )
+
+        # A step inside a workflow streamed with stream_steps=True: tell the
+        # caller it started and how it ended while the workflow keeps going.
+        sink.emit(EventType.AGENT_START, agent.name, {"step": True})
+        try:
+            response = await self._run_impl(
+                agent,
+                input,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                context=context,
+                max_turns=max_turns,
+                trace_id=trace_id,
+                metadata=metadata,
+                tags=tags,
+                require_session=require_session,
+            )
+        except Exception as e:
+            sink.emit(
+                EventType.AGENT_END,
+                agent.name,
+                {"step": True, "status": ResponseStatus.ERROR.value, "error": str(e)},
+            )
+            raise
+        sink.emit(
+            EventType.AGENT_END,
+            agent.name,
+            {
+                "step": True,
+                "status": response.status.value,
+                "content": response.content or "",
+                "turn_count": response.turn_count,
+                "error": response.error,
+            },
+        )
+        return response
+
+    async def _run_impl(
+        self,
+        agent: BaseAgent,
+        input: str | list[dict[str, Any]] | list[ChatMessage],
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+        context: RunContext | None = None,
+        max_turns: int | None = None,
+        trace_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        require_session: bool | None = None,
+    ) -> AgentResponse:
+        """Body of :meth:`run`, without step events."""
         # Workflow agents carry their orchestration in ``execute()``. Dispatch
         # them there: running one through the plain conversation loop would
         # silently flatten the whole workflow into a single bare LLM call using
@@ -1151,6 +1221,69 @@ class AgentRunner:
     # Run (streaming)
     # =========================================================================
 
+    async def _stream_workflow_steps(
+        self,
+        agent: BaseAgent,
+        input: str | list[dict[str, Any]],
+        *,
+        session_id: str | None,
+        conversation_id: str | None,
+        user_id: str | None,
+        max_turns: int | None,
+        trace_id: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> AsyncIterator[AgentEvent | AgentResponse]:
+        """Run a workflow agent in a task and pass on its step events as they come.
+
+        Yields RUN_START and AGENT_START first, then the step events, then the
+        workflow's AgentResponse as the last item.
+        """
+        context = create_run_context(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            max_turns=max_turns or agent.config.max_turns,
+            metadata=metadata or {},
+        )
+        sink = StepSink(
+            workflow_name=agent.name,
+            run_id=context.run_id,
+            root_agent_id=id(agent),
+            trace_id=context.trace_id,
+        )
+        yield AgentEvent(
+            type=EventType.RUN_START,
+            agent_name=agent.name,
+            run_id=context.run_id,
+            data={"input": input if isinstance(input, str) else "[messages]"},
+            trace_id=context.trace_id,
+        )
+        yield AgentEvent(
+            type=EventType.AGENT_START,
+            agent_name=agent.name,
+            run_id=context.run_id,
+            trace_id=context.trace_id,
+        )
+        with open_step_sink(sink):
+            task = asyncio.create_task(self.run(agent, input, context=context))
+        try:
+            while True:
+                getter = asyncio.ensure_future(sink.queue.get())
+                await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+                if getter.done():
+                    yield getter.result()
+                    continue
+                getter.cancel()
+                break
+            while not sink.queue.empty():
+                yield sink.queue.get_nowait()
+            response = await task
+        finally:
+            if not task.done():
+                task.cancel()
+        yield response
+
     async def run_stream(
         self,
         agent: BaseAgent,
@@ -1163,6 +1296,7 @@ class AgentRunner:
         trace_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         require_session: bool | None = None,
+        stream_steps: bool = False,
     ) -> AsyncIterator[AgentEvent]:
         """Run an agent with streaming output.
 
@@ -1180,6 +1314,15 @@ class AgentRunner:
             async with aclosing(runner.run_stream(agent, input)) as stream:
                 async for event in stream:
                     ...
+
+        Args:
+            stream_steps: Workflow agents only. When True, each step's
+                ``AGENT_START`` / ``AGENT_END`` (with its output) and its tool
+                calls (``TOOL_CALL_START`` / ``TOOL_CALL_END``) are sent while
+                the workflow runs, ahead of the final result. These events carry
+                ``data["workflow"]`` (the workflow's name) and ``data["step"]``
+                so a UI can tell them from the final answer. Default False: the
+                result arrives as one block, as before.
         """
         # Workflow agents have no native token-streaming form — their
         # orchestration lives in execute(), which returns a complete
@@ -1189,32 +1332,54 @@ class AgentRunner:
         # the same streaming event contract as a single chunk. Callers keep the
         # streaming interface and get correct output; it just arrives at once.
         if self._is_workflow_agent(agent):
-            response = await self.run(
-                agent,
-                input,
-                session_id=session_id,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                max_turns=max_turns,
-                trace_id=trace_id,
-                metadata=metadata,
-                require_session=require_session,
-            )
-            _run_id = response.run_id or generate_run_id()
+            if stream_steps:
+                response = None
+                stream_run_id = None
+                async for item in self._stream_workflow_steps(
+                    agent,
+                    input,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    max_turns=max_turns,
+                    trace_id=trace_id,
+                    metadata=metadata,
+                ):
+                    if isinstance(item, AgentResponse):
+                        response = item
+                    else:
+                        stream_run_id = stream_run_id or item.run_id
+                        yield item
+                assert response is not None
+                # Keep the run_id the step events already used.
+                _run_id = stream_run_id or response.run_id or generate_run_id()
+            else:
+                response = await self.run(
+                    agent,
+                    input,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    max_turns=max_turns,
+                    trace_id=trace_id,
+                    metadata=metadata,
+                    require_session=require_session,
+                )
+                _run_id = response.run_id or generate_run_id()
+                yield AgentEvent(
+                    type=EventType.RUN_START,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    data={"input": input if isinstance(input, str) else "[messages]"},
+                    trace_id=response.trace_id,
+                )
+                yield AgentEvent(
+                    type=EventType.AGENT_START,
+                    agent_name=agent.name,
+                    run_id=_run_id,
+                    trace_id=response.trace_id,
+                )
             _content = response.content or ""
-            yield AgentEvent(
-                type=EventType.RUN_START,
-                agent_name=agent.name,
-                run_id=_run_id,
-                data={"input": input if isinstance(input, str) else "[messages]"},
-                trace_id=response.trace_id,
-            )
-            yield AgentEvent(
-                type=EventType.AGENT_START,
-                agent_name=agent.name,
-                run_id=_run_id,
-                trace_id=response.trace_id,
-            )
             if _content:
                 # Full result as one delta (for token-accumulating UIs) plus a
                 # CONTENT_COMPLETE (for UIs that read only the final text).
