@@ -136,18 +136,34 @@ def _handoff_payload_key(reason: str | None, context: str | None) -> str:
 _MAX_STRUCTURED_OUTPUT_RETRIES = 1
 
 
+# Key in run(metadata=...) whose values are sent to the gateway with every model call.
+GATEWAY_METADATA_KEY = "gateway_metadata"
+
+
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
-    """Inject gateway metadata into body.metadata when Smart Gateway is configured."""
+    """Tag each model call for the Smart Gateway (``body.metadata``) so it can attribute cost.
+
+    Sends the session (or run) id, the trace id, the run's tags, and the labels
+    the caller passed as ``run(..., metadata={"gateway_metadata": {...}})`` --
+    for example a tenant, fund or feature -- as strings. The ids win over a
+    caller label of the same name. Merged into the agent's own ``extra_body``,
+    which used to be replaced outright.
+    """
     if not settings.smart_gateway_url:
         return config
-    return config.with_overrides(
-        extra_body={
-            "metadata": {
-                "session_id": context.session_id or context.run_id,
-                "trace_id": context.trace_id,
-            }
-        }
-    )
+    labels = (context.metadata or {}).get(GATEWAY_METADATA_KEY) or {}
+    metadata: dict[str, Any] = {
+        str(k): str(v) for k, v in labels.items() if v is not None and str(k)
+    }
+    if context.tags:
+        metadata["tags"] = ",".join(str(tag) for tag in context.tags)
+    metadata["session_id"] = context.session_id or context.run_id
+    metadata["trace_id"] = context.trace_id
+
+    extra_body = dict(config.extra_body or {})
+    own = extra_body.get("metadata")
+    extra_body["metadata"] = {**own, **metadata} if isinstance(own, dict) else metadata
+    return config.with_overrides(extra_body=extra_body)
 
 
 def _usage_with_model(response: Any, fallback_model: str | None) -> TokenUsage:

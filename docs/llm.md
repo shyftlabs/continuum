@@ -65,6 +65,15 @@ To disable the gateway (direct provider calls), set `SMART_GATEWAY_URL=`
 to the prefix table. Deleting the var from a shell after it was exported is
 not enough if it's still exported elsewhere; prefer the empty value.
 
+Each agent model call carries `body.metadata` for the gateway's cost and
+budget reports: `session_id`, `trace_id`, the run's `tags`, and any labels
+passed under `gateway_metadata` (sent as strings; the ids win over a label of
+the same name):
+
+```python
+await runner.run(agent, question, metadata={"gateway_metadata": {"org_id": org.id, "fund_id": fund.id}})
+```
+
 ### Provider quirks (handled for you)
 
 - **Gemini** does not support tools and JSON mode simultaneously — the
