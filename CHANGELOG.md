@@ -8,6 +8,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
+- **No memory-provenance warning when long-term memory is off.** `AgentMemoryConfig.search_memories` and `store_memories` default to `True`, so with `MEMORY_ENABLED=false` every agent still logged "has long-term memory enabled but declares no data provenance", although no memory client existed and nothing was read or written. The warning now needs a live memory client; with memory on it is unchanged.
+
+### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
 ### Changed

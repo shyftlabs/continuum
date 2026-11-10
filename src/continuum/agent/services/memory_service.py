@@ -93,6 +93,11 @@ class MemoryService(IMemoryService):
         """
         if getattr(agent, "_warned_provenance_undeclared", False):
             return
+        if self._memory_client is None:
+            # MEMORY_ENABLED=false (or no store configured): the agent's memory
+            # flags default to on, but nothing is read or written, so there is
+            # nothing to protect and the warning would be false.
+            return
 
         mem_cfg = getattr(agent, "memory_config", None)
         if mem_cfg is None:
