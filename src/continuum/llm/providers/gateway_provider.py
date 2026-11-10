@@ -52,6 +52,9 @@ class GatewayProvider(OpenAIProvider):
     # attribute them accordingly so a gateway 401 isn't blamed on OpenAI.
     _provider_label = "gateway"
 
+    # The gateway says which model it ran in response headers; keep them.
+    _records_gateway_routing = True
+
     # Substitution warn-once bookkeeping (per requested model name).
     _warned_models: ClassVar[set[str]] = set()
 
