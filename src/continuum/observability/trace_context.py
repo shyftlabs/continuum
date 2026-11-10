@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from continuum.logging import get_logger
@@ -329,17 +330,23 @@ class SpanScope:
         input: Any | None = None,
         metadata: dict[str, Any] | None = None,
         level: str = "DEFAULT",
+        as_type: str = "span",
     ):
         self.name = name
         self.input = input
         self.metadata = metadata or {}
         self.level = level
+        # "generation" records a model call: Langfuse prices it from model + usage.
+        self.as_type = as_type
         self._token: TraceContextToken | None = None
         self._span_client: StatefulSpanClient | None = None
         self._span_id: str | None = None
         self._start_time: float = 0
         self._output: Any = None
         self._error: str | None = None
+        self._model: str | None = None
+        self._usage: dict[str, int] | None = None
+        self._completion_start: datetime | None = None
 
     def _create_span(self) -> None:
         """Create the span using provider manager or parent client."""
@@ -362,7 +369,10 @@ class SpanScope:
 
             # If we have a parent client, use it directly
             if parent is not None:
-                self._span_client = parent.span(
+                create = parent.span
+                if self.as_type == "generation" and hasattr(parent, "generation"):
+                    create = parent.generation
+                self._span_client = create(
                     id=self._span_id,
                     name=self.name,
                     input=truncated_input,
@@ -398,7 +408,10 @@ class SpanScope:
                     parent_obs_id = get_parent_observation_id()
 
                     # Create span via provider manager (under existing trace)
-                    span_result = manager.span(
+                    create_obs = (
+                        manager.generation if self.as_type == "generation" else manager.span
+                    )
+                    span_result = create_obs(
                         trace_id=trace_id,
                         parent_observation_id=parent_obs_id,
                         name=self.name,
@@ -447,30 +460,29 @@ class SpanScope:
             # Truncate output if too large
             truncated_output = truncate_data(self._output)
 
+            fields: dict[str, Any] = {
+                "output": truncated_output,
+                "metadata": {**self.metadata, "latency_ms": round(latency_ms, 2)},
+                "level": "ERROR" if error else self.level,
+                "status_message": str(error) if error else None,
+            }
+            if self.as_type == "generation":
+                # Model and token counts let Langfuse price the call; the first
+                # output time gives time-to-first-token for streamed calls.
+                if self._model:
+                    fields["model"] = self._model
+                if self._usage:
+                    fields["usage_details"] = self._usage
+                if self._completion_start:
+                    fields["completion_start_time"] = self._completion_start
+
             # Try to call end() on the client (works for Langfuse clients)
             if hasattr(self._span_client, "end"):
-                self._span_client.end(
-                    output=truncated_output,
-                    metadata={
-                        **self.metadata,
-                        "latency_ms": round(latency_ms, 2),
-                    },
-                    level="ERROR" if error else self.level,
-                    status_message=str(error) if error else None,
-                )
-            else:
-                # If it doesn't have end(), it might be a different provider type
-                # Try to update it if it has an update method
-                if hasattr(self._span_client, "update"):
-                    self._span_client.update(
-                        output=truncated_output,
-                        metadata={
-                            **self.metadata,
-                            "latency_ms": round(latency_ms, 2),
-                        },
-                        level="ERROR" if error else self.level,
-                        status_message=str(error) if error else None,
-                    )
+                self._span_client.end(**fields)
+            # If it doesn't have end(), it might be a different provider type
+            # Try to update it if it has an update method
+            elif hasattr(self._span_client, "update"):
+                self._span_client.update(**fields)
 
         except Exception as e:
             logger.warning("Failed to end span '%s': %s", self.name, e)
@@ -488,6 +500,25 @@ class SpanScope:
         except Exception:
             # Fail safe: never let a redaction error leak raw output to telemetry.
             self._output = {"_redacted": "redaction error"}
+
+    def set_generation(self, *, model: str | None = None, usage: Any | None = None) -> None:
+        """Record the served model and token usage of a model call (generation only).
+
+        ``usage`` is anything with prompt_tokens / completion_tokens / total_tokens.
+        """
+        if model:
+            self._model = model
+        if usage is not None:
+            prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+            completion = int(getattr(usage, "completion_tokens", 0) or 0)
+            total = int(getattr(usage, "total_tokens", 0) or 0) or prompt + completion
+            if prompt or completion:
+                self._usage = {"input": prompt, "output": completion, "total": total}
+
+    def mark_first_output(self) -> None:
+        """Note when a streamed call produced its first output (once)."""
+        if self._completion_start is None:
+            self._completion_start = datetime.now(UTC)
 
     def set_error(self, error: str) -> None:
         """Set span error."""
