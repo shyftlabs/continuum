@@ -7,6 +7,8 @@ from the ones the agent saw.
 
 from __future__ import annotations
 
+import pytest
+
 from continuum.evaluation import EvalCase, contexts_from_messages
 from continuum.llm.types import ChatMessage, FunctionCall, ToolCall
 
@@ -69,3 +71,83 @@ def test_accepts_chat_message_models():
         ChatMessage(role="tool", tool_call_id="c1", content="chunk"),
     ]
     assert contexts_from_messages(messages, tools=["vector_search"]) == ["chunk"]
+
+
+def _call(id: str, name: str) -> dict:
+    return {"id": id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+NOISY = [
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            _call("t1", "think"),
+            _call("h1", "handoff_to_specialist"),
+            _call("v1", "vector_search"),
+            _call("v2", "vector_search"),
+            _call("v3", "vector_search"),
+        ],
+    },
+    {"role": "tool", "tool_call_id": "t1", "content": "Thought recorded."},
+    {"role": "tool", "tool_call_id": "h1", "content": "Handoff failed: no such agent"},
+    {
+        "role": "tool",
+        "tool_call_id": "v1",
+        "content": '{"error": "boom", "error_type": "TimeoutError"}',
+    },
+    {"role": "tool", "tool_call_id": "v2", "content": '{"error": "not an envelope"}'},
+    {"role": "tool", "tool_call_id": "v3", "content": "Net debt / EBITDA is 2.1x."},
+]
+
+
+def test_think_handoff_and_error_envelopes_are_skipped_whatever_the_filter():
+    kept = ['{"error": "not an envelope"}', "Net debt / EBITDA is 2.1x."]
+    assert contexts_from_messages(NOISY) == kept
+    assert contexts_from_messages(NOISY, tools=["vector_search"]) == kept
+    assert contexts_from_messages(NOISY, tools=["think", "handoff_to_specialist"]) == []
+
+
+def test_tools_none_means_all_and_empty_means_none():
+    assert len(contexts_from_messages(MESSAGES, tools=None)) == 2
+    assert contexts_from_messages(MESSAGES, tools=[]) == []
+
+
+def test_a_str_for_tools_is_rejected():
+    with pytest.raises(TypeError):
+        contexts_from_messages(MESSAGES, tools="vector_search")
+    with pytest.raises(TypeError):
+        EvalCase.from_run("q", MESSAGES, tools="vector_search")
+
+
+def test_accepts_an_agent_response_and_its_handoff_child():
+    from continuum.agent.types import AgentResponse, HandoffResult
+
+    child = AgentResponse(
+        content="2.1x",
+        agent_name="specialist",
+        messages=[
+            {"role": "assistant", "tool_calls": [_call("c9", "vector_search")]},
+            {"role": "tool", "tool_call_id": "c9", "content": "child chunk"},
+        ],
+    )
+    parent = AgentResponse(
+        content="2.1x",
+        agent_name="triage",
+        messages=[
+            {"role": "assistant", "tool_calls": [_call("c1", "vector_search")]},
+            {"role": "tool", "tool_call_id": "c1", "content": "parent chunk"},
+            {"role": "assistant", "tool_calls": [_call("h1", "handoff_to_specialist")]},
+            {"role": "tool", "tool_call_id": "h1", "content": "handoff accepted"},
+        ],
+        handoff_result=HandoffResult(
+            handoff_id="h",
+            from_agent="triage",
+            to_agent="specialist",
+            success=True,
+            response=child,
+        ),
+    )
+    case = EvalCase.from_run("q", parent, tools=["vector_search"])
+    assert case.context == ["parent chunk", "child chunk"]
+    assert contexts_from_messages(parent) == ["parent chunk", "child chunk"]
