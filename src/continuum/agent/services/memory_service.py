@@ -68,6 +68,23 @@ class MemoryService(IMemoryService):
         """Get memory client."""
         return self._memory_client
 
+    def _memory_is_live(self) -> bool:
+        """True when a long-term memory write can actually happen.
+
+        Mirrors the gate in ``SessionClient.add_message``: memory is reached
+        either through this service's own client or through the session
+        client's, and only an enabled client writes anything. The session
+        client's private resolver is used because its public ``memory_client``
+        property raises when nothing resolves, which is the memory-off default.
+        """
+
+        def live(client: Any | None) -> bool:
+            return client is not None and bool(getattr(client, "is_enabled", False))
+
+        sc = self._session_client
+        sc_mem = sc._resolve_memory_client() if sc is not None and sc.is_enabled else None
+        return live(self._memory_client) or live(sc_mem)
+
     def _warn_if_provenance_undeclared(self, agent: BaseAgent, context: RunContext) -> None:
         """Say once that the memory-poisoning defences are configured off.
 
@@ -93,7 +110,7 @@ class MemoryService(IMemoryService):
         """
         if getattr(agent, "_warned_provenance_undeclared", False):
             return
-        if self._memory_client is None:
+        if not self._memory_is_live():
             # MEMORY_ENABLED=false (or no store configured): the agent's memory
             # flags default to on, but nothing is read or written, so there is
             # nothing to protect and the warning would be false.
@@ -144,11 +161,17 @@ class MemoryService(IMemoryService):
         """
         self._warn_if_provenance_undeclared(agent, context)
 
-        if not agent.memory_config.search_memories or not self._memory_client:
+        if (
+            not agent.memory_config.search_memories
+            or not self._memory_client
+            or not self._memory_client.is_enabled
+        ):
             logger.debug(
                 "💾 Skipping memory search: search_memories=%s, memory_client=%s",
                 agent.memory_config.search_memories,
-                "available" if self._memory_client else "not available",
+                "available"
+                if self._memory_client and self._memory_client.is_enabled
+                else "not available",
             )
             return []
 
