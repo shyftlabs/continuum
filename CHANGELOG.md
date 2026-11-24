@@ -8,13 +8,13 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Fixed
-- **A run's trace ends with the run.** `RunLifecycle.end_trace` cleared the trace context inside its own `trace_run_end` span, and a span restores the context it was opened in when it closes, so the clear was undone: every later run in the same task joined the first run's trace (a batch job looping over items produced one trace for the whole batch). The context is now cleared after the span; `report_error` likewise.
+- **A run's trace ends with the run.** `RunLifecycle.end_trace` cleared the trace context inside its own `trace_run_end` span, and a span restores the context it was opened in when it closes, so the clear was undone: every later run in the same task joined the first run's trace (a batch job looping over items produced one trace for the whole batch). The run now puts back, after the span, the trace context it found before it opened its trace, so the trace id goes and the caller's ambient `user_id`/`session_id` (set with `set_trace_context`) stay; `report_error` likewise. A `run_stream` the caller stops early (`break` / `aclose()`) closes its trace the same way.
 - **`AgentResponse.trace_id` is the provider's trace id.** `TracingManager.create_trace` reported its own random id while Langfuse assigned another, so model calls landed in one trace, tool spans (which look the trace up by id) in a second orphan trace, and the returned id matched neither. The provider's id is used now.
-
-### Fixed
+- **`fork()` no longer tears down the caller's trace.** It builds its run state without `start_trace`, so the run kept the default `owns_trace=True` and cleared the trace a caller had opened around it; later runs in that block started a new trace. A fork now never owns the trace.
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
 ### Changed
+- **Fewer `trace_run_end` spans.** Only the run that opened a trace records `trace_run_end` now; a nested run (a workflow step, or a run inside a trace the caller opened) no longer does. A two-step workflow trace has 1 instead of 3, and a caller-opened trace with two runs has none instead of 2. Dashboards that count this span will see the drop.
 - **Every dependency has a ceiling below its next major** (next minor for a 0.x package) — `mem0ai>=1.0.0` met mem0ai 2.0 and broke installs, and `openai`, `anthropic`, `google-genai`, `pymilvus`, `redis` and `sentence-transformers` had each since released a major Continuum was never tested on. Each ceiling sits above the version CI tests, so no tested version is excluded; raising one is a deliberate, tested change. `requirements.txt` now matches `pyproject.toml` (it had no `httpx` and an uncapped `mcp`), and `tests/unit/test_dependency_ranges.py` keeps both true.
 - **CI tests the lowest allowed versions too** (`Tests (3.13, lowest deps)`), and Dependabot opens a PR when a release falls outside a range.
 

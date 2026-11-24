@@ -8,10 +8,12 @@ from continuum.logging import get_logger
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
 from continuum.observability.trace_context import (
+    apply_trace_context,
     clear_trace_context,
     get_current_trace_client,
     get_current_trace_id,
     set_trace_context,
+    snapshot_trace_context,
     truncate_data,
 )
 
@@ -52,6 +54,11 @@ class RunLifecycle:
                 logger.debug("Using existing trace context: %s", existing_trace_id)
             elif not context.trace_id:
                 from continuum.observability import TracingManager
+
+                # Taken only here, where this run creates the trace: workflow
+                # steps reuse the parent's RunContext and the branch above, so
+                # they never overwrite the owner's snapshot.
+                context.trace_context_snapshot = snapshot_trace_context()
                 from continuum.observability.data_redaction import redact_for_telemetry
 
                 tracing_manager = TracingManager()
@@ -103,23 +110,41 @@ class RunLifecycle:
         response: AgentResponse,
         owns_trace: bool = True,
     ) -> None:
-        """Update trace with final output and clear trace context.
+        """Update trace with final output and restore the caller's trace context.
 
-        Only the run that owns the trace updates its final output and clears the
-        trace context. A nested run (owns_trace=False) leaves the shared parent
-        trace intact so sibling/subsequent steps stay grouped under it.
+        Only the run that owns the trace updates its final output and puts back
+        the trace context it found (``restore_caller_context``). A nested run
+        (owns_trace=False) leaves the shared parent trace intact so
+        sibling/subsequent steps stay grouped under it.
 
-        The clear happens here, outside the ``trace_run_end`` span: a span puts
-        back the context it was opened in when it closes, so a clear made inside
-        it was undone, and every later run in the same task joined this trace.
+        The restore happens here, outside the ``trace_run_end`` span: a span
+        puts back the context it was opened in when it closes, so a change made
+        inside it was undone, and every later run in the same task joined this
+        trace.
         """
         if not owns_trace:
             return
         try:
             await self._finish_trace(agent, context, response)
         finally:
+            self.restore_caller_context(context)
+
+    @staticmethod
+    def restore_caller_context(context: RunContext) -> None:
+        """Put back the trace context from before this run created its trace.
+
+        The run's trace id goes away, but the caller's ambient values (user_id,
+        session_id set with ``set_trace_context``) survive, so a later
+        ``llm_client.chat()`` in the same task still finds its session. With no
+        snapshot (the run never created a trace) the context is cleared.
+        Safe to call more than once: the snapshot is kept, not consumed.
+        """
+        snapshot = context.trace_context_snapshot
+        if snapshot is None:
             clear_trace_context()
-            logger.debug("Trace context cleared for trace_id=%s", context.trace_id)
+        else:
+            apply_trace_context(snapshot)
+        logger.debug("Trace context restored after trace_id=%s", context.trace_id)
 
     @observe(name="trace_run_end", capture_output=False)
     async def _finish_trace(
@@ -173,13 +198,14 @@ class RunLifecycle:
         run_state: RunState | None = None,
         owns_trace: bool = True,
     ) -> None:
-        """Report the error, then (owner only) clear the trace context outside
-        the ``trace_run_error`` span, for the reason given in ``end_trace``."""
+        """Report the error, then (owner only) restore the caller's trace context
+        outside the ``trace_run_error`` span, for the reason given in
+        ``end_trace``."""
         try:
             await self._report_error(agent, context, error, run_state, owns_trace)
         finally:
             if owns_trace:
-                clear_trace_context()
+                self.restore_caller_context(context)
 
     @observe(name="trace_run_error", capture_output=False)
     async def _report_error(
@@ -190,13 +216,13 @@ class RunLifecycle:
         run_state: RunState | None = None,
         owns_trace: bool = True,
     ) -> None:
-        """Report error to trace and clear trace context.
+        """Report error to trace (``report_error`` restores the context).
 
         The error is always attached to the current trace (as an event when a
         trace already exists, via ``context.trace_id``) so a failing workflow
         step surfaces on the request trace instead of spawning an orphan
         ``error-*`` trace. Only the run that owns the trace marks the whole
-        trace ERROR and tears down the trace context.
+        trace ERROR.
         """
         try:
             error_metadata: dict[str, Any] = {

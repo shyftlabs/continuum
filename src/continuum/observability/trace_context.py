@@ -238,6 +238,41 @@ def clear_trace_context() -> None:
     _run_id.set(None)
 
 
+def snapshot_trace_context() -> dict[str, Any]:
+    """Return the current trace context values, for ``apply_trace_context``.
+
+    Unlike a ``TraceContextToken`` this holds plain values, so it can be put
+    back from a different context (a token only resets in the context that
+    made it).
+    """
+    return {
+        "trace_id": _trace_id.get(),
+        "trace_client": _trace_client.get(),
+        "span_id": _span_id.get(),
+        "span_client": _span_client.get(),
+        "user_id": _user_id.get(),
+        "session_id": _session_id.get(),
+        "agent_name": _agent_name.get(),
+        "run_id": _run_id.get(),
+    }
+
+
+def apply_trace_context(snapshot: dict[str, Any]) -> None:
+    """Set every trace context value from ``snapshot_trace_context()`` output.
+
+    Missing keys are set to None, so ``apply_trace_context({})`` is the same as
+    ``clear_trace_context()``.
+    """
+    _trace_id.set(snapshot.get("trace_id"))
+    _trace_client.set(snapshot.get("trace_client"))
+    _span_id.set(snapshot.get("span_id"))
+    _span_client.set(snapshot.get("span_client"))
+    _user_id.set(snapshot.get("user_id"))
+    _session_id.set(snapshot.get("session_id"))
+    _agent_name.set(snapshot.get("agent_name"))
+    _run_id.set(snapshot.get("run_id"))
+
+
 def set_sampling_enabled(enabled: bool) -> Token[bool]:
     """Set sampling enabled state."""
     return _sampling_enabled.set(enabled)

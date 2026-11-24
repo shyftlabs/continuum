@@ -80,6 +80,7 @@ from continuum.llm.structured_output import (
     to_openai_response_format,
 )
 from continuum.logging import get_logger, log_content, log_id
+from continuum.observability.trace_context import get_current_trace_id
 from continuum.tools.tool_attention.router import _tool_name
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
@@ -1024,6 +1025,9 @@ class AgentRunner:
         ctx.recorder.trace.edit = {"override": override, "label": label}
 
         run_state = await self._context_service.create_run_state(target, ctx)
+        # fork() never calls start_trace, so it opens no trace of its own and
+        # must not tear down the caller's trace context when it finishes.
+        run_state.owns_trace = False
         run_state.agent_stack = resume_stack
         run_state.current_agent = target.name
         run_state.messages = list(messages)
@@ -1298,14 +1302,6 @@ class AgentRunner:
         assert ctx is not None  # _prepare_run always sets context on success
         run_state = result.run_state
 
-        yield AgentEvent(
-            type=EventType.RUN_START,
-            agent_name=agent.name,
-            run_id=ctx.run_id,
-            data={"input": input if isinstance(input, str) else "[messages]"},
-            trace_id=ctx.trace_id,
-        )
-
         turn = 0
         # Publish the run's policy context so every llm_client.chat() in this
         # streaming run is gated by the data-label model-routing policy. A fresh
@@ -1317,6 +1313,14 @@ class AgentRunner:
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         _hr_token = enter_run_compressor()
         try:
+            yield AgentEvent(
+                type=EventType.RUN_START,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"input": input if isinstance(input, str) else "[messages]"},
+                trace_id=ctx.trace_id,
+            )
+
             messages = list(run_state.messages) if run_state.messages else []
 
             # When output_scanners are configured, raw token deltas must NOT reach
@@ -2018,6 +2022,11 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            # A stream the caller stopped early (break / aclose()) never reached
+            # finalize or handle_error, so its trace is still the current one.
+            # Close it here, or the next run in the same task joins it.
+            if run_state.owns_trace and ctx.trace_id and get_current_trace_id() == ctx.trace_id:
+                self._lifecycle.restore_caller_context(ctx)
             exit_run_compressor(_hr_token)
             try:
                 reset_active_policy(_policy_token)
