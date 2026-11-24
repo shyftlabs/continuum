@@ -40,7 +40,7 @@ AgentStep(
     agent_name: str,                       # required
     input: str | None = None,              # default: pass the previous step's output
     timeout: int = 300,
-    retries: int = 3,
+    retries: int = 3,                      # attempts in all; 1 runs once (side effects), 0 counts as 1
     metadata: dict[str, Any] = {},
 )
 
@@ -128,7 +128,7 @@ result = await handle.result()
 
 ```python
 RetryPolicy(
-    maximum_attempts=step.retries,         # default 3
+    maximum_attempts=max(1, step.retries), # default 3
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=60),
@@ -137,6 +137,29 @@ RetryPolicy(
 
 Activities also use `heartbeat_timeout=60s`; `run_agent_activity` calls
 `activity.heartbeat()` so long-running agents don't get evicted.
+
+The policy covers agent errors as well as timeouts. An agent that is not
+registered, hits max turns, is denied by a policy or is misconfigured is not
+retried; an open circuit breaker is retried after its cooldown. Set
+`retries: 1` on a step with side effects (an email, a payment) so it runs once.
+
+### When a step still fails
+
+`WorkflowInput.on_step_error` decides what an agent step that still fails after
+its retries does to the run:
+
+| Value | Behaviour |
+|---|---|
+| `"continue"` *(default)* | The error result goes into `step_results` and the next step runs. A step that timed out on its last attempt fails the run. |
+| `"fail"` | The run stops with `status="failed"` and `error` naming the step. A parallel step stops the run if any agent failed. |
+
+`SequentialWorkflowInput`, `LoopWorkflowInput` and `ParallelWorkflowInput` take
+the same field. For `ParallelAgentWorkflow`, `"fail"` returns `status="failed"`
+when any agent failed, with the others still merged and `error` naming the
+failed ones.
+`SequentialWorkflowInput.single_attempt_agents`,
+`ParallelWorkflowInput.single_attempt_agents` and
+`LoopWorkflowInput.single_attempt` run those agents once.
 
 ### Parallel merge strategies
 

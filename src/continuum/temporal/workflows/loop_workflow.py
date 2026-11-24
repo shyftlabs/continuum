@@ -23,9 +23,10 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         ApprovalDecision,
         NotificationParams,
+        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_agent_step
+    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
 
 
 from dataclasses import dataclass
@@ -43,6 +44,11 @@ class LoopWorkflowInput:
     user_id: str | None = None
     approval_per_iteration: bool = False
     approval_timeout: int = 86400
+    # "continue" runs the next iteration after one fails (the 2.x behaviour);
+    # "fail" stops the run with status="failed".
+    on_step_error: OnStepError = "continue"
+    # Run each iteration once, never retried: an agent with side effects.
+    single_attempt: bool = False
 
 
 @workflow.defn(sandboxed=False)
@@ -108,7 +114,7 @@ class LoopAgentWorkflow:
                         approval_decisions=self._approval_decisions,
                     )
 
-            result = await run_agent_step(
+            result = await run_builtin_agent_step(
                 AgentActivityParams(
                     agent_name=input.agent_name,
                     input=last_output,
@@ -116,10 +122,15 @@ class LoopAgentWorkflow:
                     user_id=input.user_id,
                 ),
                 timeout=300,
-                retries=3,
+                retries=1 if input.single_attempt else 3,
+                raise_timeouts=input.on_step_error == "continue",
             )
             self._step_results.append(result)
-            if result.status == "error":
+            if (
+                result.status == "error"
+                and input.on_step_error == "fail"
+                and step_retries_enabled()
+            ):
                 self._status = "failed"
                 return WorkflowResult(
                     status="failed",

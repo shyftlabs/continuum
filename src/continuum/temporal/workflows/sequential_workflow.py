@@ -23,11 +23,12 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         ApprovalDecision,
         NotificationParams,
+        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_agent_step
+    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -40,6 +41,11 @@ class SequentialWorkflowInput:
     user_id: str | None = None
     approval_between_steps: bool = False
     approval_timeout: int = 86400
+    # "continue" runs the next agent after one fails (the 2.x behaviour);
+    # "fail" stops the run with status="failed".
+    on_step_error: OnStepError = "continue"
+    # Agents that run once, never retried: steps with side effects.
+    single_attempt_agents: list[str] = field(default_factory=list)
 
 
 @workflow.defn(sandboxed=False)
@@ -98,7 +104,7 @@ class SequentialAgentWorkflow:
                         approval_decisions=self._approval_decisions,
                     )
 
-            result = await run_agent_step(
+            result = await run_builtin_agent_step(
                 AgentActivityParams(
                     agent_name=agent_name,
                     input=last_output,
@@ -106,10 +112,15 @@ class SequentialAgentWorkflow:
                     user_id=input.user_id,
                 ),
                 timeout=300,
-                retries=3,
+                retries=1 if agent_name in input.single_attempt_agents else 3,
+                raise_timeouts=input.on_step_error == "continue",
             )
             self._step_results.append(result)
-            if result.status == "error":
+            if (
+                result.status == "error"
+                and input.on_step_error == "fail"
+                and step_retries_enabled()
+            ):
                 self._status = "failed"
                 return WorkflowResult(
                     status="failed",

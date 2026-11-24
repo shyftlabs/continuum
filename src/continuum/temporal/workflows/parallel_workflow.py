@@ -20,12 +20,13 @@ with workflow.unsafe.imports_passed_through():
     from continuum.temporal.types import (
         AgentActivityParams,
         AgentActivityResult,
+        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_agent_step
+    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -38,6 +39,11 @@ class ParallelWorkflowInput:
     user_id: str | None = None
     merge_strategy: str = "concatenate"
     timeout_per_agent: int = 300
+    # "continue" completes with whatever merged (the 2.x behaviour); "fail"
+    # returns status="failed" naming the failed agents, with the rest merged.
+    on_step_error: OnStepError = "continue"
+    # Agents that run once, never retried: agents with side effects.
+    single_attempt_agents: list[str] = field(default_factory=list)
 
 
 @workflow.defn(sandboxed=False)
@@ -61,7 +67,7 @@ class ParallelAgentWorkflow:
         results: list[AgentActivityResult] = list(
             await asyncio.gather(
                 *(
-                    run_agent_step(
+                    run_builtin_agent_step(
                         AgentActivityParams(
                             agent_name=agent_name,
                             input=input.initial_input,
@@ -69,7 +75,9 @@ class ParallelAgentWorkflow:
                             user_id=input.user_id,
                         ),
                         timeout=input.timeout_per_agent,
-                        retries=3,
+                        retries=1 if agent_name in input.single_attempt_agents else 3,
+                        # With "fail" a timed-out agent is a failed result and the others merge.
+                        raise_timeouts=input.on_step_error == "continue",
                     )
                     for agent_name in input.agent_names
                 )
@@ -92,18 +100,23 @@ class ParallelAgentWorkflow:
             parts = {}
             for i, r in enumerate(results):
                 key = input.agent_names[i] if i < len(input.agent_names) else f"agent-{i}"
-                if r.status != "error":
-                    parts[key] = r.content
+                parts[key] = r.content
             content = str(parts)
         else:
             content = "\n\n".join(r.content for r in results if r.content)
 
-        # Failed agents are left out of the merge; the run fails only if all did.
-        status = "failed" if results and len(failed) == len(results) else "completed"
-        self._status = status
+        if failed and input.on_step_error == "fail" and step_retries_enabled():
+            self._status = "failed"
+            return WorkflowResult(
+                status="failed",
+                content=content,
+                step_results=results,
+                error="; ".join(failed),
+            )
+
+        self._status = "completed"
         return WorkflowResult(
-            status=status,
+            status="completed",
             content=content,
             step_results=results,
-            error="; ".join(failed) or None,
         )

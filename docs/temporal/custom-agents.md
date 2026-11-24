@@ -122,12 +122,16 @@ becomes durable):
                             metadata=params.metadata, tags=params.tags)`
 5. Return `AgentActivityResult.from_agent_response(resp)`
 
-If `run()` raises, the activity raises too, so Temporal retries it with the
-step's retry policy (`retries`, default 3, with backoff). An agent that is not
-registered is not retried. When the retries run out, the built-in workflows
-stop and return `WorkflowResult(status="failed", error=...)` naming the step
-and the error; later steps do not run. A parallel step or `ParallelAgentWorkflow`
-leaves failed agents out of the merge and fails only if every agent failed.
+If `run()` raises, the activity returns a result with `status="error"` and
+`error=str(exc)`, and Temporal does not retry it. With
+`AgentActivityParams(raise_on_error=True)`, which `run_agent_step` and the
+built-in workflows set, the activity raises instead, so the step's retry policy
+(`retries`, default 3, with backoff) applies. An agent that is not registered,
+hits max turns, is denied by a policy or is misconfigured is not retried; an
+open circuit breaker is retried after its cooldown. When the retries run out,
+`WorkflowInput.on_step_error` decides what happens: `"continue"` (default)
+records the error result and runs the next step, `"fail"` stops the run with
+`WorkflowResult(status="failed", error=...)` naming the step.
 
 ---
 

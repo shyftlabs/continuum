@@ -35,7 +35,11 @@ with workflow.unsafe.imports_passed_through():
         is_authorized,
         parse_step,
     )
-    from continuum.temporal.workflows.steps import StepFailedError, run_agent_step
+    from continuum.temporal.workflows.steps import (
+        StepFailedError,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
 
 _logger = logging.getLogger(__name__)
@@ -362,10 +366,17 @@ class AgentWorkflow:
     # Step handlers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _stops_on(result: AgentActivityResult, wf_input: WorkflowInput) -> bool:
+        """True when a failed agent result should end the run (``on_step_error="fail"``)."""
+        return (
+            result.status == "error" and wf_input.on_step_error == "fail" and step_retries_enabled()
+        )
+
     async def _run_agent_step(self, step: AgentStep, wf_input: WorkflowInput) -> None:
         agent_input = step.input or self._last_output
 
-        result = await run_agent_step(
+        result = await run_builtin_agent_step(
             AgentActivityParams(
                 agent_name=step.agent_name,
                 input=agent_input,
@@ -375,10 +386,11 @@ class AgentWorkflow:
             ),
             timeout=step.timeout,
             retries=step.retries,
+            raise_timeouts=wf_input.on_step_error == "continue",
         )
 
         self._step_results.append(result)
-        if result.status == "error":
+        if self._stops_on(result, wf_input):
             raise StepFailedError(f"Agent step '{step.agent_name}' failed: {result.error}")
         if result.content:
             self._last_output = result.content
@@ -499,7 +511,7 @@ class AgentWorkflow:
         results: list[AgentActivityResult] = list(
             await asyncio.gather(
                 *(
-                    run_agent_step(
+                    run_builtin_agent_step(
                         AgentActivityParams(
                             agent_name=agent_step.agent_name,
                             input=agent_step.input or self._last_output,
@@ -509,21 +521,21 @@ class AgentWorkflow:
                         ),
                         timeout=agent_step.timeout,
                         retries=agent_step.retries,
+                        raise_timeouts=wf_input.on_step_error == "continue",
                     )
                     for agent_step in step.agents
                 )
             )
         )
         self._step_results.extend(results)
-        # Failed agents are left out of the merge; the step fails only if all did.
-        if results and all(r.status == "error" for r in results):
+        failed = [r for r in results if self._stops_on(r, wf_input)]
+        if failed:
             raise StepFailedError(
-                "All parallel agents failed: "
+                "Parallel step failed: "
                 + "; ".join(
-                    f"{r.agents_used[0] if r.agents_used else '?'}: {r.error}" for r in results
+                    f"{r.agents_used[0] if r.agents_used else '?'}: {r.error}" for r in failed
                 )
             )
-        results = [r for r in results if r.status != "error"]
 
         # Merge strategy
         if step.merge_strategy == "first_success":
@@ -558,7 +570,7 @@ class AgentWorkflow:
         on replay the same activity result is replayed, so the branch decision
         is consistent across replays.
         """
-        condition_result = await run_agent_step(
+        condition_result = await run_builtin_agent_step(
             AgentActivityParams(
                 agent_name=step.condition_agent,
                 input=step.condition_input or self._last_output,
@@ -568,9 +580,10 @@ class AgentWorkflow:
             ),
             timeout=step.timeout,
             retries=step.retries,
+            raise_timeouts=wf_input.on_step_error == "continue",
         )
         self._step_results.append(condition_result)
-        if condition_result.status == "error":
+        if self._stops_on(condition_result, wf_input):
             raise StepFailedError(
                 f"Condition agent '{step.condition_agent}' failed: {condition_result.error}"
             )

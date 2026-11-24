@@ -8,6 +8,7 @@ They are agent-agnostic: any registered BaseAgent can be executed.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 try:
     from temporalio import activity
@@ -17,6 +18,8 @@ except ImportError as _err:
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
     ) from _err
 
+from continuum.agent.exceptions import AgentConfigurationError, MaxTurnsExceededError
+from continuum.exceptions import ConfigurationError, PolicyDeniedError
 from continuum.temporal.exceptions import AgentNotRegisteredError
 from continuum.temporal.registry import get_agent_registry
 from continuum.temporal.types import (
@@ -27,6 +30,27 @@ from continuum.temporal.types import (
 
 _HEARTBEAT_INTERVAL = 15  # seconds — must be less than heartbeat_timeout in the workflow
 
+# Errors a retry cannot fix; with raise_on_error they fail the step at once.
+_PERMANENT_ERRORS: tuple[type, ...] = (
+    AgentNotRegisteredError,
+    MaxTurnsExceededError,
+    PolicyDeniedError,
+    ConfigurationError,
+    AgentConfigurationError,
+)
+
+
+def _is_permanent(error: BaseException) -> bool:
+    """True for an agent error that a retry cannot fix.
+
+    The runner wraps unexpected errors in ``AgentExecutionError``, so the
+    wrapped ``original_error`` is checked too.
+    """
+    for e in (error, getattr(error, "original_error", None)):
+        if isinstance(e, _PERMANENT_ERRORS):
+            return True
+    return False
+
 
 @activity.defn
 async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult:
@@ -35,8 +59,11 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
     Agent-agnostic: looks up agent by name from registry, calls runner.run().
     All existing SDK features (LLM, memory, session, tools, observability) are unchanged.
 
-    Raises ApplicationError when the agent raises, so Temporal retries the step;
-    an unregistered agent is not retried.
+    By default an agent error comes back as a result with ``status="error"``.
+    With ``params.raise_on_error`` (set by ``run_agent_step``) the activity
+    raises ``ApplicationError`` instead, so the caller's retry policy applies:
+    an unregistered agent, max turns, a policy denial and a configuration error
+    are not retried, and an open circuit breaker is retried after its cooldown.
     """
     registry = get_agent_registry()
 
@@ -63,17 +90,31 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
             metadata=params.metadata if params.metadata else None,
             tags=params.tags if params.tags else None,
         )
+        retry_after = (getattr(response, "run_artifacts", None) or {}).get("retry_after_s")
+        if params.raise_on_error and retry_after is not None:
+            # The runner's circuit breaker is open: retry once it has cooled down.
+            raise ApplicationError(
+                f"Agent '{params.agent_name}' failed: {response.error}",
+                type="CircuitBreakerOpen",
+                next_retry_delay=timedelta(seconds=max(1.0, float(retry_after))),
+            )
         return AgentActivityResult.from_agent_response(response)
-    except AgentNotRegisteredError as e:
-        # Retrying cannot register the agent; fail the step at once.
-        raise ApplicationError(str(e), type="AgentNotRegisteredError", non_retryable=True) from e
     except Exception as e:
-        # Raise instead of returning an error result, so Temporal retries the
-        # step with the workflow's retry policy (a model timeout, a rate limit).
+        if params.raise_on_error and isinstance(e, ApplicationError):
+            raise  # already shaped for Temporal (the open circuit breaker above)
         attempt = activity.info().attempt
         activity.logger.error(f"Agent '{params.agent_name}' failed (attempt {attempt}): {e}")
+        if not params.raise_on_error:
+            return AgentActivityResult(
+                content="",
+                status="error",
+                error=str(e),
+                agents_used=[params.agent_name],
+            )
         raise ApplicationError(
-            f"Agent '{params.agent_name}' failed: {e}", type=type(e).__name__
+            f"Agent '{params.agent_name}' failed: {e}",
+            type=type(e).__name__,
+            non_retryable=_is_permanent(e),
         ) from e
     finally:
         heartbeat_task.cancel()

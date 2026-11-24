@@ -31,6 +31,8 @@ class AgentStep(BaseModel):
     agent_name: str
     input: str | None = None
     timeout: int = 300
+    # Attempts in all, not extra tries. 1 runs the agent once: use it for a step
+    # with side effects (an email, a payment) that must not repeat. 0 counts as 1.
     retries: int = 3
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -97,6 +99,11 @@ class AgentActivityParams(BaseModel):
     user_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
+    # False (default): an agent error comes back as a result with
+    # status="error" and is not retried. True: the activity raises, so the
+    # caller's retry policy applies; only ``run_agent_step`` sets it. Old
+    # workers ignore the field, so either deploy order works.
+    raise_on_error: bool = False
 
 
 class AgentActivityResult(BaseModel):
@@ -188,12 +195,19 @@ def is_authorized(step: ApprovalStep, decision: ApprovalDecision) -> bool:
 # ---------------------------------------------------------------------------
 
 
+OnStepError = Literal["continue", "fail"]
+
+
 class WorkflowInput(BaseModel):
     steps: list[dict[str, Any]]
     initial_input: str = Field(max_length=2_000_000)  # 2MB max to stay within Temporal gRPC limits
     session_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # What an agent step that still fails after its retries does to the run:
+    # "continue" records the error result and runs the next step (the 2.x
+    # behaviour); "fail" stops the run with status="failed".
+    on_step_error: OnStepError = "continue"
 
 
 class WorkflowResult(BaseModel):

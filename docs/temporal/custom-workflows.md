@@ -64,10 +64,11 @@ class TranslationFanoutWorkflow:
         )
 ```
 
-`run_agent_activity` raises when the agent fails, so after the last retry
-`execute_activity` raises `ActivityError` and this workflow fails. To get an
-`AgentActivityResult` with `status="error"` instead and decide yourself, use
-`run_agent_step`, which the built-in workflows use:
+`run_agent_activity` returns an `AgentActivityResult` with `status="error"`
+when the agent fails, so `retry_policy` above only covers timeouts. To retry
+agent errors too, use `run_agent_step`, which the built-in workflows use. It
+sets `raise_on_error=True`, retries with backoff (`retries` is attempts in
+all; 1 runs once) and returns the error result after the last attempt:
 
 ```python
 from continuum.temporal.workflows import run_agent_step
@@ -80,6 +81,9 @@ result = await run_agent_step(
 if result.status == "error":
     return WorkflowResult(status="failed", content=None, step_results=[result], error=result.error)
 ```
+
+If you set `raise_on_error=True` yourself, also pass a `retry_policy` with
+`maximum_attempts`: without one Temporal retries a failing agent forever.
 
 ### Register with the worker
 
