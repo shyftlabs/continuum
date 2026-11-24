@@ -53,7 +53,7 @@ class SessionConfig(BaseModel):
 
     # Provider Selection
     provider: str = Field(
-        default="redis",
+        default_factory=lambda: settings.session_provider,
         description="Session provider to use: 'redis', 'postgres' or 'memory'.",
     )
 
@@ -116,6 +116,11 @@ class SessionConfig(BaseModel):
     postgres_create_tables: bool = Field(
         default_factory=lambda: settings.session_postgres_create_tables,
         description="Create the session tables on first use if they are missing",
+    )
+    postgres_timeout_seconds: float = Field(
+        default_factory=lambda: settings.session_postgres_timeout_seconds,
+        gt=0,
+        description="Timeout for connecting, each query and acquiring a pooled connection",
     )
 
     # Connection Pool Configuration

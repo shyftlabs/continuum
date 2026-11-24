@@ -190,3 +190,121 @@ async def test_shared_pool_is_left_open():
     finally:
         await pool.execute(f"DROP TABLE IF EXISTS {p._messages}, {p._sessions}")
         await pool.close()
+
+
+async def _drop(p: PostgresSessionProvider) -> None:
+    async with p._conn() as conn:
+        await conn.execute(f"DROP TABLE IF EXISTS {p._messages}, {p._sessions}")
+    await p.close()
+
+
+async def test_clear_racing_a_trimming_add_does_not_deadlock():
+    p = PostgresSessionProvider(_config(max_messages=4, sliding_window_trim_count=2))
+    try:
+        sid = await p.get_or_create_session(user_id="u1", conversation_id="dl")
+        for round_ in range(30):
+            while (await p.get_session_metadata(sid)).message_count < 4:
+                await p.add_message(sid, _msg("user", "fill"))
+            await asyncio.gather(
+                p.clear_session(sid), p.add_message(sid, _msg("user", f"r{round_}"))
+            )
+    finally:
+        await _drop(p)
+
+
+async def test_clear_refreshes_expiry(provider):
+    sid = await provider.get_or_create_session(user_id="u1", conversation_id="exp")
+    async with provider._conn() as conn:
+        await conn.execute(
+            f"UPDATE {provider._sessions} SET expires_at = now() + interval '5 seconds'"
+        )
+    await provider.clear_session(sid)
+    async with provider._conn() as conn:
+        left = await conn.fetchval(
+            f"SELECT extract(epoch FROM expires_at - now()) FROM {provider._sessions}"
+        )
+    assert left > 200  # ttl_seconds=300 in _config
+
+
+async def test_application_pool_with_jsonb_codec():
+    import json
+
+    async def init(conn):
+        for name in ("json", "jsonb"):
+            await conn.set_type_codec(
+                name, encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+
+    pool = await asyncpg.create_pool(DSN, min_size=1, max_size=2, init=init)
+    p = PostgresSessionProvider(_config(), pool=pool)
+    try:
+        sid = await p.get_or_create_session(user_id="u1", conversation_id="codec")
+        await p.add_message(sid, _msg("user", "hi"), metadata={"k": 1})
+        assert [m.content for m in await p.get_messages(sid)] == ["hi"]
+        meta = await p.get_session_metadata(sid)
+        meta.custom = {"fund": "F-1"}
+        assert await p.update_session_metadata(sid, meta)
+        assert (await p.get_session_metadata(sid)).custom == {"fund": "F-1"}
+        # Stored as an object, not as a JSON string holding an object.
+        assert await pool.fetchval(f"SELECT jsonb_typeof(message) FROM {p._messages}") == "object"
+    finally:
+        await pool.execute(f"DROP TABLE IF EXISTS {p._messages}, {p._sessions}")
+        await pool.close()
+
+
+async def test_nul_characters_are_stored_without_error(provider):
+    sid = await provider.get_or_create_session(user_id="u1", conversation_id="nul")
+    await provider.add_message(sid, _msg("user", "pdf\x00text"), metadata={"src": "a\x00b"})
+    [back] = await provider.get_messages(sid)
+    assert back.content == "pdftext"
+    meta = await provider.get_session_metadata(sid)
+    meta.custom = {"note": "x\x00y"}
+    assert await provider.update_session_metadata(sid, meta)
+    assert (await provider.get_session_metadata(sid)).custom == {"note": "xy"}
+
+
+async def test_role_that_does_not_own_the_tables_can_use_them():
+    from urllib.parse import urlsplit, urlunsplit
+
+    owner = PostgresSessionProvider(_config())
+    prefix = owner._sessions[:-1]
+    role = f"app_{uuid.uuid4().hex[:8]}"
+    parts = urlsplit(DSN)
+    netloc = f"{role}@{parts.hostname}" + (f":{parts.port}" if parts.port else "")
+    app = PostgresSessionProvider(
+        _config(
+            postgres_dsn=urlunsplit(parts._replace(netloc=netloc)), postgres_table_prefix=prefix
+        )
+    )
+    try:
+        await owner.get_or_create_session(user_id="owner", conversation_id="setup")
+        async with owner._conn() as conn:
+            await conn.execute(f"CREATE ROLE {role} LOGIN")
+            await conn.execute(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON {owner._sessions}, {owner._messages} "
+                f"TO {role}"
+            )
+            await conn.execute(f"GRANT USAGE ON SEQUENCE {owner._messages}_id_seq TO {role}")
+        assert await app.aping(), app.last_probe_error
+        sid = await app.get_or_create_session(user_id="u1", conversation_id="least-privilege")
+        await app.add_message(sid, _msg("user", "hi"))
+        assert [m.content for m in await app.get_messages(sid)] == ["hi"]
+    finally:
+        await app.close()
+        async with owner._conn() as conn:
+            await conn.execute(f"DROP TABLE IF EXISTS {owner._messages}, {owner._sessions}")
+            await conn.execute(f"DROP ROLE IF EXISTS {role}")
+        await owner.close()
+
+
+async def test_hung_query_times_out_as_connection_error():
+    from continuum.session.exceptions import SessionConnectionError
+
+    p = PostgresSessionProvider(_config(postgres_timeout_seconds=1))
+    try:
+        await p.get_or_create_session(user_id="u1", conversation_id="slow")
+        with pytest.raises(SessionConnectionError):
+            async with p._conn() as conn:
+                await conn.execute("SELECT pg_sleep(5)")
+    finally:
+        await _drop(p)

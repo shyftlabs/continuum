@@ -302,6 +302,7 @@ class Settings(BaseSettings):
     # Session Configuration (Redis for short-term memory)
     # -------------------------------------------------------------------------
     session_enabled: bool = True  # Enable/disable session management
+    session_provider: str = "redis"  # Session store: 'redis', 'postgres' or 'memory'
     session_redis_host: str = "localhost"  # Redis host for sessions
     session_redis_port: int = 6380  # Redis port for sessions (different from Langfuse Redis)
     session_redis_password: str | None = None  # Redis password (matches docker-compose default)
@@ -327,6 +328,9 @@ class Settings(BaseSettings):
     session_postgres_table_prefix: str = "continuum_session"  # tables <prefix>s, <prefix>_messages
     session_postgres_max_connections: int = 10  # pool size when the provider opens its own pool
     session_postgres_create_tables: bool = True  # create the tables on first use if missing
+    # Bounds connecting, each query and waiting for a pooled connection, so a hung
+    # database or an exhausted pool fails over like an unreachable one.
+    session_postgres_timeout_seconds: float = 5.0
     # Long-term memory (mem0) write timing: 'sync' (await before returning) or
     # 'background' (fire-and-forget, faster responses, eventual consistency).
     # Default 'background' — the mem0 fact-extraction (an LLM call) is kept off

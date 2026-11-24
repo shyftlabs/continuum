@@ -2,7 +2,7 @@
 Health Check Module - Comprehensive dependency health monitoring.
 
 Provides health checks for all SDK dependencies:
-- Redis (Session storage)
+- Redis or PostgreSQL (Session storage, per SESSION_PROVIDER)
 - Qdrant (Vector storage for memory)
 - Langfuse (Observability)
 - LLM Providers (OpenAI, Anthropic, Gemini)
@@ -105,7 +105,12 @@ class HealthCheck:
 
     def _register_default_checks(self) -> None:
         """Register default health checks based on configuration."""
-        self._checks["redis"] = self._check_redis
+        # Probe the session store actually in use: a PostgreSQL-only setup has no
+        # Redis, and reporting it unhealthy would mark the whole service unhealthy.
+        if settings.session_provider == "postgres":
+            self._checks["postgres"] = self._check_postgres
+        else:
+            self._checks["redis"] = self._check_redis
         # Use configured vector store provider instead of always Qdrant
         if settings.vector_store_provider == "milvus":
             self._checks["milvus"] = self._check_milvus
@@ -336,6 +341,51 @@ class HealthCheck:
                     "error": str(e),
                 },
             )
+
+    async def check_postgres(self) -> HealthCheckResult:
+        """Check PostgreSQL connectivity (the postgres session provider)."""
+        return await self._check_postgres()
+
+    async def _check_postgres(self) -> HealthCheckResult:
+        """Internal PostgreSQL health check: connect and run one query."""
+        start_time = time.time()
+
+        if not settings.session_enabled:
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.HEALTHY,
+                message="PostgreSQL disabled (SESSION_ENABLED=false)",
+                details={"enabled": False},
+            )
+
+        from continuum.connectors.postgres import PostgresConnector
+        from continuum.session.config import SessionConfig
+
+        connector = PostgresConnector(SessionConfig(provider="postgres"))
+        target = {k: v for k, v in connector.describe().items() if k in ("host", "port")}
+        try:
+            version = await connector.server_version()
+        except ImportError:
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.UNHEALTHY,
+                message="asyncpg package not installed (pip install 'shyftlabs-continuum[postgres]')",
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.UNHEALTHY,
+                message=f"PostgreSQL connection failed: {type(e).__name__}: {e}",
+                latency_ms=(time.time() - start_time) * 1000,
+                details={**target, "error": f"{type(e).__name__}: {e}"},
+            )
+        return HealthCheckResult(
+            name="postgres",
+            status=HealthStatus.HEALTHY,
+            message="PostgreSQL connection successful",
+            latency_ms=(time.time() - start_time) * 1000,
+            details={"enabled": True, **target, "server_version": version},
+        )
 
     async def check_vector_store(self) -> HealthCheckResult:
         """Check vector store connectivity (dispatches to configured provider)."""

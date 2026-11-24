@@ -75,7 +75,7 @@ temporal = [
 ]
 # PostgreSQL session store (SESSION_PROVIDER=postgres)
 postgres = [
-    "asyncpg>=0.29.0,<1",
+    "asyncpg>=0.30.0,<1",
 ]
 eval = [
     "deepeval>=1.0.0,<5",

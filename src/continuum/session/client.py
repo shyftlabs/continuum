@@ -36,6 +36,18 @@ from continuum.session.types import ChatMessage, SessionMetadata
 
 logger = get_logger(__name__)
 
+# How each durable store is named in fallback messages, and what to set to make it
+# durable. Keeps the long-standing "Redis probe failed" wording for Redis users.
+_DISPLAY_NAMES = {"redis": "Redis", "postgres": "PostgreSQL"}
+_DURABLE_HINTS = {
+    "redis": "configure Redis (SESSION_REDIS_HOST / SESSION_REDIS_PORT)",
+    "postgres": "configure PostgreSQL (SESSION_POSTGRES_DSN, and the [postgres] extra)",
+}
+
+
+def _display_name(provider: str) -> str:
+    return _DISPLAY_NAMES.get(provider, provider)
+
 
 def _in_temporal_activity() -> bool:
     """Return True if executing inside a Temporal activity right now.
@@ -262,7 +274,7 @@ class SessionClient:
 
         # Redis host/credentials not configured — degrade (or fail) per policy.
         if not cfg.is_configured():
-            return self._fallback_or_fail(f"{cfg.provider} is not configured")
+            return self._fallback_or_fail(f"{_display_name(cfg.provider)} is not configured")
 
         # Configured: build the Redis provider lazily and probe it once.
         try:
@@ -272,7 +284,9 @@ class SessionClient:
             # outage — never degrade to in-memory, regardless of fallback_mode.
             raise
         except Exception as e:  # provider class missing (e.g. redis not installed)
-            return self._fallback_or_fail(f"{cfg.provider} provider unavailable ({e})")
+            return self._fallback_or_fail(
+                f"{_display_name(cfg.provider)} provider unavailable ({e})"
+            )
 
         aping = getattr(redis_provider, "aping", None)
         reachable = await aping() if aping is not None else True
@@ -287,8 +301,9 @@ class SessionClient:
         # Prefer the concrete cause the probe recorded (auth/TLS/config error);
         # fall back to the generic wording only when none was supplied.
         reason = getattr(redis_provider, "last_probe_error", None)
+        name = _display_name(cfg.provider)
         return self._fallback_or_fail(
-            f"{cfg.provider} probe failed: {reason}" if reason else f"{cfg.provider} is unreachable"
+            f"{name} probe failed: {reason}" if reason else f"{name} is unreachable"
         )
 
     def _fallback_or_fail(self, reason: str) -> BaseSessionProvider:
@@ -308,9 +323,12 @@ class SessionClient:
         logger.warning(
             "Session persistence falling back to non-durable in-memory store: %s. "
             "Sessions will not survive a restart and are not shared across workers. "
-            "Set SESSION_ENABLED=false to silence this, or configure Redis "
-            "(SESSION_REDIS_HOST / SESSION_REDIS_PORT) for durable sessions.",
+            "Set SESSION_ENABLED=false to silence this, or %s for durable sessions.",
             reason,
+            _DURABLE_HINTS.get(
+                self._session_config.provider,
+                f"configure the {self._session_config.provider} session provider",
+            ),
         )
         # Mark the health signal: we are now serving non-durable in-memory state.
         self._degraded = True
@@ -466,7 +484,7 @@ class SessionClient:
             ):
                 raise
             self._degrade_to_memory(
-                f"{provider.provider_name} became unreachable mid-session ({e})"
+                f"{_display_name(provider.provider_name)} became unreachable mid-session ({e})"
             )
             return await getattr(self._provider, method)(*args, **kwargs)
 

@@ -10,6 +10,16 @@ Semantics mirror RedisSessionProvider: deterministic session ids (keyed when
 ``max_messages`` either trims the oldest messages or raises. Expired rows read as
 missing; ``purge_expired()`` deletes them and is meant for a periodic job.
 
+The tables are created on first use only when they are missing, so an
+application role that does not own them needs just SELECT, INSERT, UPDATE and
+DELETE on both (and USAGE on the messages id sequence). Set
+``SESSION_POSTGRES_CREATE_TABLES=false`` to skip the check entirely.
+
+Connecting, every query and waiting for a pooled connection are bounded by
+``postgres_timeout_seconds``, so a hung database or an exhausted pool fails as
+``SessionConnectionError`` and ``SESSION_FALLBACK_MODE`` applies. A pool handed
+over by the application keeps its own ``command_timeout``.
+
 A product that already holds an asyncpg pool can hand it over instead of a DSN,
 so sessions share its connections, credentials and backups::
 
@@ -49,6 +59,23 @@ logger = get_logger(__name__)
 
 # Table names are interpolated into SQL, so the prefix must be a plain identifier.
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
+
+
+def _strip_nul(value: Any) -> Any:
+    """Drop U+0000 from every string in a JSON-able value. PostgreSQL text and jsonb
+    cannot hold it (PDF text can), and Redis stores it, so the write must not fail."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_strip_nul(v) for v in value]
+    return value
+
+
+def _dumps(value: Any) -> str:
+    """JSON text for a jsonb column, without NUL characters."""
+    return json.dumps(_strip_nul(value))
 
 
 def _connection_errors() -> tuple[type[BaseException], ...]:
@@ -103,6 +130,10 @@ class PostgresSessionProvider(BaseSessionProvider):
         return self._last_probe_error
 
     @property
+    def _timeout(self) -> float:
+        return self._config.postgres_timeout_seconds
+
+    @property
     def _ttl(self) -> timedelta:
         return timedelta(seconds=self._config.ttl_seconds)
 
@@ -123,15 +154,29 @@ class PostgresSessionProvider(BaseSessionProvider):
                     self._config.postgres_dsn,
                     min_size=1,
                     max_size=self._config.postgres_max_connections,
+                    timeout=self._timeout,
+                    command_timeout=self._timeout,
                 )
-            if self._config.postgres_create_tables:
+            if self._config.postgres_create_tables and not await self._tables_exist(self._pool):
                 await self._create_tables(self._pool)
             self._ready = True
             return self._pool
 
+    async def _tables_exist(self, pool: Any) -> bool:
+        """True when both tables are already there. Skipping the DDL then lets a role
+        that does not own them start, and avoids the SHARE lock CREATE INDEX takes."""
+        async with pool.acquire(timeout=self._timeout) as conn:
+            return bool(
+                await conn.fetchval(
+                    "SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL",
+                    self._sessions,
+                    self._messages,
+                )
+            )
+
     async def _create_tables(self, pool: Any) -> None:
         s, m = self._sessions, self._messages
-        async with pool.acquire() as conn, conn.transaction():
+        async with pool.acquire(timeout=self._timeout) as conn, conn.transaction():
             # Several workers starting at once would race on CREATE TABLE IF NOT EXISTS.
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", s)
             await conn.execute(
@@ -165,7 +210,7 @@ class PostgresSessionProvider(BaseSessionProvider):
         which lets SessionClient apply its fallback policy as it does for Redis."""
         try:
             pool = await self._ensure_ready()
-            async with pool.acquire() as conn:
+            async with pool.acquire(timeout=self._timeout) as conn:
                 if transaction:
                     async with conn.transaction():
                         yield conn
@@ -294,10 +339,13 @@ class PostgresSessionProvider(BaseSessionProvider):
                     self._config.sliding_window_trim_count,
                 )
             await conn.execute(
-                f"INSERT INTO {m} (session_id, message, metadata) VALUES ($1, $2::jsonb, $3::jsonb)",
+                # $n::text::jsonb: the value goes over as text and Postgres parses it, so an
+                # application pool with a jsonb codec cannot encode it a second time.
+                f"INSERT INTO {m} (session_id, message, metadata) "
+                "VALUES ($1, $2::text::jsonb, $3::text::jsonb)",
                 session_id,
-                json.dumps(message.to_dict()),
-                json.dumps(metadata or {}),
+                _dumps(message.to_dict()),
+                _dumps(metadata or {}),
             )
             await conn.execute(
                 f"UPDATE {s} SET last_accessed_at = now(), expires_at = now() + $2::interval "
@@ -326,14 +374,15 @@ class PostgresSessionProvider(BaseSessionProvider):
                 )
             if limit and limit > 0:
                 rows = await conn.fetch(
-                    f"SELECT message FROM (SELECT id, message FROM {m} WHERE session_id = $1 "
-                    "ORDER BY id DESC LIMIT $2) recent ORDER BY id",
+                    f"SELECT message::text AS message FROM (SELECT id, message FROM {m} "
+                    "WHERE session_id = $1 ORDER BY id DESC LIMIT $2) recent ORDER BY id",
                     session_id,
                     limit * 2,
                 )
             else:
                 rows = await conn.fetch(
-                    f"SELECT message FROM {m} WHERE session_id = $1 ORDER BY id", session_id
+                    f"SELECT message::text AS message FROM {m} WHERE session_id = $1 ORDER BY id",
+                    session_id,
                 )
         messages = [ChatMessage(**json.loads(r["message"])) for r in rows]
 
@@ -349,8 +398,11 @@ class PostgresSessionProvider(BaseSessionProvider):
         s, m = self._sessions, self._messages
         async with self._conn() as conn:
             row = await conn.fetchrow(
-                f"SELECT s.*, (SELECT count(*) FROM {m} WHERE {m}.session_id = s.session_id) "
-                f"AS message_count FROM {s} s WHERE s.session_id = $1 AND s.expires_at > now()",
+                # custom::text: read jsonb as text so an application codec cannot decode it first.
+                "SELECT s.session_id, s.user_id, s.agent_id, s.conversation_id, s.created_at, "
+                "s.last_accessed_at, s.custom::text AS custom, "
+                f"(SELECT count(*) FROM {m} WHERE {m}.session_id = s.session_id) AS message_count "
+                f"FROM {s} s WHERE s.session_id = $1 AND s.expires_at > now()",
                 session_id,
             )
         if row is None:
@@ -370,13 +422,13 @@ class PostgresSessionProvider(BaseSessionProvider):
         async with self._conn() as conn:
             updated = await conn.fetchval(
                 f"UPDATE {self._sessions} SET user_id = $2, agent_id = $3, conversation_id = $4, "
-                "custom = $5::jsonb, last_accessed_at = $6, expires_at = now() + $7::interval "
+                "custom = $5::text::jsonb, last_accessed_at = $6, expires_at = now() + $7::interval "
                 "WHERE session_id = $1 AND expires_at > now() RETURNING 1",
                 session_id,
                 metadata.user_id,
                 metadata.agent_id,
                 metadata.conversation_id,
-                json.dumps(metadata.custom),
+                _dumps(metadata.custom),
                 metadata.last_accessed_at,
                 self._ttl,
             )
@@ -384,11 +436,15 @@ class PostgresSessionProvider(BaseSessionProvider):
 
     async def clear_session(self, session_id: str) -> bool:
         async with self._conn(transaction=True) as conn:
-            await conn.execute(f"DELETE FROM {self._messages} WHERE session_id = $1", session_id)
+            # Session row first, then its messages: the order add_message locks in, so a
+            # clear racing a trimming add waits for it instead of deadlocking.
             await conn.execute(
-                f"UPDATE {self._sessions} SET last_accessed_at = now() WHERE session_id = $1",
+                f"UPDATE {self._sessions} SET last_accessed_at = now(), "
+                "expires_at = now() + $2::interval WHERE session_id = $1",
                 session_id,
+                self._ttl,
             )
+            await conn.execute(f"DELETE FROM {self._messages} WHERE session_id = $1", session_id)
         return True
 
     async def delete_session(self, session_id: str) -> bool:

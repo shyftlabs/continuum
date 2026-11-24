@@ -41,7 +41,9 @@ class RedisConnector(BaseConnector["Redis"]):
 
     @property
     def is_enabled(self) -> bool:
-        return self._config.enabled
+        # Redis here is the session store; with another session provider
+        # (SESSION_PROVIDER=postgres) it is not in use and is not probed.
+        return self._config.enabled and self._config.provider == "redis"
 
     def is_configured(self) -> bool:
         return bool(self._config.redis_host)

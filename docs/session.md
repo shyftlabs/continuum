@@ -225,10 +225,20 @@ product already runs, so chat history sits under the same backups, access
 rules and data-residency controls as the rest of its data, with no second
 store to secure. Two tables, `continuum_sessions` and
 `continuum_session_messages` (prefix from `SESSION_POSTGRES_TABLE_PREFIX`),
-created on first use unless `SESSION_POSTGRES_CREATE_TABLES=false`. Same
-semantics as Redis: deterministic ids, TTL refreshed on every touch,
-sliding-window trim. Expired rows read as missing; call `purge_expired()` from
-a periodic job to delete them.
+created on first use when they are missing. If they already exist the DDL is
+skipped, so an application role that does not own them needs only `SELECT`,
+`INSERT`, `UPDATE`, `DELETE` on both tables and `USAGE` on the messages id
+sequence; set `SESSION_POSTGRES_CREATE_TABLES=false` to skip the check as well.
+Deterministic ids, TTL refreshed on every touch and sliding-window trim work as
+with Redis. Retention does not: an expired row reads as missing but stays in
+the database until `purge_expired()` runs (call it from a periodic job) or the
+session is reopened or deleted.
+
+Connecting, each query and waiting for a pooled connection time out after
+`SESSION_POSTGRES_TIMEOUT_SECONDS` (default 5), so a hung database fails over
+per `SESSION_FALLBACK_MODE` like an unreachable one. A pool passed in with
+`pool=` keeps its own `command_timeout`. NUL characters in message content and
+metadata are dropped on write, because PostgreSQL text cannot hold them.
 
 ```python
 # From settings: SESSION_PROVIDER=postgres, SESSION_POSTGRES_DSN=postgresql://...
