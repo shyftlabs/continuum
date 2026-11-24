@@ -67,14 +67,17 @@ not enough if it's still exported elsewhere; prefer the empty value.
 
 #### Which model the gateway ran
 
-Each agent run through the gateway lists what the gateway did for every model
-call in `response.run_artifacts["gateway_routing"]` (and in the streamed
-`RUN_END` event's `data["gateway_routing"]`):
+Each agent or workflow run through the gateway lists what the gateway did in
+`response.run_artifacts["gateway_routing"]` (and in the streamed `RUN_END`
+event's `data["gateway_routing"]`). There is one entry per HTTP attempt, not
+per model call: when the SDK retries (a 503, then a 200), each attempt has its
+own entry. A workflow's list holds its steps' calls and its own (a merge, a
+completion check); the steps' own responses do not repeat them.
 
 ```python
 resp = await runner.run(agent, "What is NAV?")
 for call in (resp.run_artifacts or {}).get("gateway_routing", []):
-    print(call.get("served_model"), call.get("router_attempts"), call["request_id"])
+    print(call.get("served_model"), call.get("router_attempts"), call.get("request_id"))
 ```
 
 Each entry has whichever of these the gateway sent: `router_mode`,
@@ -82,8 +85,9 @@ Each entry has whichever of these the gateway sent: `router_mode`,
 `model@provider:status` per attempt, so failovers show), `cache_status`,
 `timing` (the gateway's per-phase milliseconds), `ratelimit`, `request_id`
 (to find the call in gateway logs) and `status`. `served_model` is the model
-named in a non-streamed reply; a streamed reply's body is not read. Nothing is
-recorded for direct provider calls.
+named in the reply: read from a non-streamed body, or, for `run_stream`, from
+the stream's chunks. Timing values that are not finite numbers are dropped.
+Nothing is recorded for direct provider calls.
 
 ### Provider quirks (handled for you)
 

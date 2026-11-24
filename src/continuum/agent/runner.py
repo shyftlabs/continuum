@@ -71,6 +71,7 @@ from continuum.agent.workflow.router import RouterAgent
 from continuum.config import settings
 from continuum.config import settings as app_settings
 from continuum.core.container import Container, get_container
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
 from continuum.llm.structured_output import (
     coerce_and_validate,
@@ -96,6 +97,12 @@ if TYPE_CHECKING:
     from continuum.tools import ToolExecutor
 
 logger = get_logger(__name__)
+
+
+def _gateway_routing_data(response: AgentResponse) -> dict[str, Any]:
+    """``{"gateway_routing": [...]}`` for a RUN_END event, or ``{}`` if none was recorded."""
+    routing = (response.run_artifacts or {}).get("gateway_routing")
+    return {"gateway_routing": routing} if routing else {}
 
 
 class AgentRunner:
@@ -616,25 +623,36 @@ class AgentRunner:
         owns_trace = await self._lifecycle.start_trace(agent, context, None, input_text[:500])
 
         logger.info("Dispatching workflow agent '%s' to its execute() entry point", agent.name)
-        try:
-            response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
-            await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
-            return response
-        except Exception as e:
-            # Attach the failure to the request trace (as an event) and, if we
-            # own it, mark it ERROR + tear it down — so a failing step surfaces
-            # on the workflow trace instead of escaping untraced and later
-            # spawning an orphan "error-UNKNOWN_ERROR" trace.
-            await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
-            if isinstance(e, AgentError):
-                raise
-            raise AgentExecutionError(
-                str(e),
-                agent_name=agent.name,
-                run_id=context.run_id,
-                trace_id=context.trace_id,
-                original_error=e,
-            ) from e
+        # Steps share this run id; they leave their gateway routing entries for
+        # the workflow, which collects them with its own calls' after execute().
+        with gateway_routing.collect_for_workflow(context.run_id) as collects_routing:
+            try:
+                response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
+                if collects_routing and (routing := gateway_routing.pop_run(context.run_id)):
+                    artifacts = response.run_artifacts or {}
+                    response.run_artifacts = {
+                        **artifacts,
+                        "gateway_routing": [*artifacts.get("gateway_routing", []), *routing],
+                    }
+                await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
+                return response
+            except Exception as e:
+                if collects_routing:
+                    gateway_routing.pop_run(context.run_id)
+                # Attach the failure to the request trace (as an event) and, if we
+                # own it, mark it ERROR + tear it down — so a failing step surfaces
+                # on the workflow trace instead of escaping untraced and later
+                # spawning an orphan "error-UNKNOWN_ERROR" trace.
+                await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
+                if isinstance(e, AgentError):
+                    raise
+                raise AgentExecutionError(
+                    str(e),
+                    agent_name=agent.name,
+                    run_id=context.run_id,
+                    trace_id=context.trace_id,
+                    original_error=e,
+                ) from e
 
     # =========================================================================
     # Run (non-streaming)
@@ -1251,7 +1269,11 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=_run_id,
-                data={"content": _content, "turn_count": response.turn_count},
+                data={
+                    "content": _content,
+                    "turn_count": response.turn_count,
+                    **_gateway_routing_data(response),
+                },
                 trace_id=response.trace_id,
             )
             return
@@ -1483,7 +1505,7 @@ class AgentRunner:
                     type=EventType.RUN_END,
                     agent_name=agent.name,
                     run_id=ctx.run_id,
-                    data={"content": content, "turn_count": 1},
+                    data={"content": content, "turn_count": 1, **_gateway_routing_data(response)},
                     trace_id=ctx.trace_id,
                 )
                 return
@@ -1550,6 +1572,7 @@ class AgentRunner:
 
                 if last_seen_model and settings.smart_gateway_url:
                     logger.info("🎯 Gateway selected model: %s", last_seen_model)
+                    gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
 
                 content = "".join(content_parts)
 
@@ -1603,6 +1626,7 @@ class AgentRunner:
                                 tool_calls = chunk.tool_calls
                         if last_seen_model and settings.smart_gateway_url:
                             logger.info("🎯 Gateway selected model: %s", last_seen_model)
+                            gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
                         content = "".join(content_parts)
                 else:
                     pass  # CONTENT_DELTA already yielded live in the streaming loop above
@@ -1986,11 +2010,7 @@ class AgentRunner:
                     if structured_output
                     else None,
                     "structured_output_error": structured_output_error,
-                    **(
-                        {"gateway_routing": response.run_artifacts["gateway_routing"]}
-                        if response.run_artifacts and "gateway_routing" in response.run_artifacts
-                        else {}
-                    ),
+                    **_gateway_routing_data(response),
                 },
                 trace_id=ctx.trace_id,
             )

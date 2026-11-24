@@ -8,15 +8,28 @@ application could not tell which model answered a question.
 
 Gateway clients get an httpx response hook that reads those headers and files
 them under the current run's id. On a non-streamed reply it also reads the
-body's ``model`` (the model that answered); a streamed body is never touched. The run finalizer then puts the list on
-``AgentResponse.run_artifacts["gateway_routing"]``, one entry per model call.
+body's ``model`` (the model that answered); a streamed body is never touched,
+and ``run_stream`` fills the model in from the stream's chunks instead.
+The run finalizer then puts the list on
+``AgentResponse.run_artifacts["gateway_routing"]``.
+
+There is one entry per HTTP attempt, not per model call: when the SDK retries
+(say a 503, then a 200), each attempt the gateway answered has its own entry.
+
+Steps of a workflow share the workflow's run id. While a workflow runs, its
+steps leave their entries in place and the workflow collects them all after
+``execute()``, together with its own calls (a merge, a completion check).
 """
 
 from __future__ import annotations
 
 import json
+import math
 import threading
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -33,6 +46,11 @@ _MAX_RUNS = 1024
 
 _by_run: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
 _lock = threading.Lock()
+
+# Run ids whose entries an enclosing workflow will collect.
+_workflow_runs: ContextVar[frozenset[str]] = ContextVar(
+    "continuum_gateway_routing_workflow_runs", default=frozenset()
+)
 
 
 _RATELIMIT_PREFIX = "x-aura-ratelimit-"
@@ -52,6 +70,9 @@ def _entry(response: httpx.Response, served_model: str | None = None) -> dict[st
     headers = response.headers
     routing = _parse_routing(headers)
     timing = _parse_timing(headers.get("x-aura-timing"))
+    if timing:
+        # NaN / Infinity parse as floats but break strict JSON encoders.
+        timing = {k: v for k, v in timing.items() if math.isfinite(v)} or None
     ratelimit = {
         k[len(_RATELIMIT_PREFIX) :].replace("-", "_"): v
         for k, v in headers.items()
@@ -98,6 +119,50 @@ def pop_run(run_id: str | None) -> list[dict[str, Any]] | None:
         return _by_run.pop(run_id, None)
 
 
+def note_streamed_model(run_id: str | None, model: str | None) -> None:
+    """Set ``served_model`` from a streamed reply's chunks on the run's last entry.
+
+    A streamed body is not read by the hook, so its entry has no model. The
+    stream's own chunks name it; the caller passes it once the stream ends.
+    Only the latest entry is filled, and only if it has no model yet and
+    succeeded, which is the attempt that produced the stream.
+    """
+    if not run_id or not model:
+        return
+    with _lock:
+        entries = _by_run.get(run_id)
+        if not entries:
+            return
+        last = entries[-1]
+        if "served_model" not in last and last.get("status", 0) < 400:
+            last["served_model"] = model
+
+
+def claim_run(run_id: str | None) -> list[dict[str, Any]] | None:
+    """Like :func:`pop_run`, but None for a step whose workflow collects the entries."""
+    if run_id and run_id in _workflow_runs.get():
+        return None
+    return pop_run(run_id)
+
+
+@contextmanager
+def collect_for_workflow(run_id: str | None) -> Iterator[bool]:
+    """Keep the entries of ``run_id`` for the workflow running inside this block.
+
+    Yields True when this workflow is the one that collects them, False when an
+    enclosing workflow on the same run id already does (a nested workflow).
+    """
+    current = _workflow_runs.get()
+    if not run_id or run_id in current:
+        yield False
+        return
+    token = _workflow_runs.set(current | {run_id})
+    try:
+        yield True
+    finally:
+        _workflow_runs.reset(token)
+
+
 def _is_streaming(response: httpx.Response) -> bool:
     return "text/event-stream" in (response.headers.get("content-type") or "")
 
@@ -105,22 +170,22 @@ def _is_streaming(response: httpx.Response) -> bool:
 def _sync_hook(response: httpx.Response) -> None:
     served = None
     if get_current_run_id() and not _is_streaming(response):
-        try:
-            response.read()  # httpx keeps it; the SDK reads it again for free
-            served = _served_model(response)
-        except Exception:  # noqa: BLE001
-            pass
+        # httpx keeps the body; the SDK reads it again for free. A failed read
+        # (connection dropped or timed out mid-body) must raise here, where the
+        # SDK retries it; swallowed, the SDK later hits StreamConsumed instead.
+        response.read()
+        served = _served_model(response)
     record(response, served)
 
 
 async def _async_hook(response: httpx.Response) -> None:
     served = None
     if get_current_run_id() and not _is_streaming(response):
-        try:
-            await response.aread()  # httpx keeps it; the SDK reads it again for free
-            served = _served_model(response)
-        except Exception:  # noqa: BLE001
-            pass
+        # httpx keeps the body; the SDK reads it again for free. A failed read
+        # (connection dropped or timed out mid-body) must raise here, where the
+        # SDK retries it; swallowed, the SDK later hits StreamConsumed instead.
+        await response.aread()
+        served = _served_model(response)
     record(response, served)
 
 

@@ -60,7 +60,8 @@ class RunFinalizer:
         response.handoff_chain = [h.get("to_agent", "") for h in run_state.handoff_chain]
 
         self.attach_run_artifacts(agent, response)
-        routing = gateway_routing.pop_run(context.run_id)
+        # None for a workflow step: the workflow collects its steps' entries.
+        routing = gateway_routing.claim_run(context.run_id)
         if routing:
             response.run_artifacts = {**(response.run_artifacts or {}), "gateway_routing": routing}
 
@@ -178,7 +179,7 @@ class RunFinalizer:
         start_time: float,
     ) -> None:
         """Shared error handling for run() and run_stream()."""
-        gateway_routing.pop_run(context.run_id)
+        gateway_routing.claim_run(context.run_id)
         metrics = get_metrics_collector()
         metrics.track_error(
             "agent_run",
