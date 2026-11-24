@@ -7,7 +7,11 @@ gateway that measured ~0.5 s of time-to-first-token per call (reused client
 
 Covers:
 - same settings in one event loop -> the same provider (gateway and direct)
-- another event loop, or no loop, gets its own (async clients are loop-bound)
+- another event loop gets its own (async clients are loop-bound); calls outside
+  a loop get a new provider each time, so sync code before asyncio.run() works
+- stores of closed loops are dropped (asyncio.run per request must not leak)
+- each loop keeps at most _MAX_PROVIDERS_PER_LOOP, least recently used dropped
+- a forked child starts with no providers and a fresh lock
 - a different key, model routing argument or retry count -> a different provider
 - custom registered factories are called every time, as before
 - clear_provider_cache() forgets them
@@ -16,6 +20,10 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 import pytest
@@ -69,7 +77,7 @@ def test_each_event_loop_and_sync_calls_get_their_own():
         sync_a = get_provider(LLMConfig(model="gpt-4o-mini"))
         sync_b = get_provider(LLMConfig(model="gpt-4o-mini"))
     assert first is not second
-    assert sync_a is sync_b
+    assert sync_a is not sync_b  # outside a loop: new each time, as before
     assert sync_a is not first
 
 
@@ -90,9 +98,122 @@ def test_custom_factories_are_still_called_every_time():
     assert len(made) == 2
 
 
-def test_clear_forgets_reused_providers():
+async def test_clear_forgets_reused_providers():
     with _settings():
         a = get_provider(LLMConfig(model="gpt-4o-mini"))
         clear_provider_cache()
         b = get_provider(LLMConfig(model="gpt-4o-mini"))
     assert a is not b
+
+
+def test_closed_loops_are_dropped():
+    # A provider's pooled connections hold its loop, so without the purge every
+    # asyncio.run() left a closed loop, a provider and a socket behind.
+    class HoldsLoop:  # stands in for a provider with a pooled connection
+        def __init__(self):
+            self.loop = asyncio.get_running_loop()
+
+    async def in_loop():
+        providers._reuse(HoldsLoop)
+        return len(providers._loop_providers)
+
+    counts = [asyncio.run(in_loop()) for _ in range(50)]
+    assert max(counts) <= 2  # this loop's store, plus at most the last closed one
+
+
+async def test_each_loop_keeps_only_the_most_recently_used_providers():
+    cap = providers._MAX_PROVIDERS_PER_LOOP
+    with _settings():
+        first = get_provider(LLMConfig(model="gpt-4o-mini", api_key="sk-0"))
+        second = get_provider(LLMConfig(model="gpt-4o-mini", api_key="sk-1"))
+        for i in range(2, cap + 1):
+            get_provider(LLMConfig(model="gpt-4o-mini", api_key=f"sk-{i}"))
+            # Keep the first one recently used, so the second is the oldest.
+            assert get_provider(LLMConfig(model="gpt-4o-mini", api_key="sk-0")) is first
+        store = providers._loop_providers[asyncio.get_running_loop()]
+        assert len(store) == cap
+        assert get_provider(LLMConfig(model="gpt-4o-mini", api_key="sk-0")) is first
+        assert get_provider(LLMConfig(model="gpt-4o-mini", api_key="sk-1")) is not second
+
+
+async def test_fork_hook_rebinds_without_taking_the_old_lock():
+    with _settings():
+        get_provider(LLMConfig(model="gpt-4o-mini"))
+    old_lock = providers._providers_lock
+    old_lock.acquire()  # another thread holds it at the moment of the fork
+    try:
+        providers._forget_providers_after_fork()
+        assert providers._providers_lock is not old_lock
+        assert len(providers._loop_providers) == 0
+        with _settings():
+            get_provider(LLMConfig(model="gpt-4o-mini"))  # does not deadlock
+    finally:
+        old_lock.release()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+async def test_forked_child_gets_its_own_provider():
+    with _settings():
+        parent = get_provider(LLMConfig(model="gpt-4o-mini"))
+    pid = os.fork()
+    if pid == 0:  # child: exit status carries the result, never return to pytest
+        try:
+            ok = len(providers._loop_providers) == 0 and providers._providers_lock.acquire(
+                timeout=5
+            )
+            os._exit(0 if ok else 1)
+        except BaseException:
+            os._exit(2)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    with _settings():
+        assert get_provider(LLMConfig(model="gpt-4o-mini")) is parent
+
+
+class _ChatHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # keep-alive, so the client pools the socket
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = json.dumps(
+            {
+                "id": "c1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_provider_got_outside_a_loop_works_in_each_asyncio_run():
+    # A provider cached outside any loop had its async client bound to the first
+    # asyncio.run(), so every second call failed with "Event loop is closed".
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _ChatHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/v1"
+    config = LLMConfig(model="gpt-4o-mini", api_base=base, max_retries=0)
+    messages = [{"role": "user", "content": "hi"}]
+    try:
+        with _settings():
+            for _ in range(6):
+                p = get_provider(config)
+                assert asyncio.run(p.acomplete(messages, config)).content == "ok"
+    finally:
+        server.shutdown()
+        server.server_close()

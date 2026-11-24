@@ -537,6 +537,27 @@ for prompt in big_batch:
   names no shape, so it stays a system-prompt instruction.
 - **Gemini + tools + JSON**: not supported simultaneously; the framework
   drops `json_mode` automatically when `tools` are present.
+- **Built-in providers are reused within an event loop.** Inside a running
+  loop, `get_provider()` returns the same OpenAI, Anthropic, Gemini or Smart
+  Gateway provider for the same client settings, so calls keep their
+  connections. Calls outside a loop get a new provider each time. Two
+  consequences:
+  - A key read from the environment is fixed in that provider. After rotating
+    it in place, call `clear_provider_cache()`.
+  - A test that patches `OpenAI` / `AsyncOpenAI` (or the Anthropic client)
+    can get a provider an earlier test built in the same loop, with that
+    test's mock. Clear the cache around each test:
+
+    ```python
+    import pytest
+    from continuum.llm.providers import clear_provider_cache
+
+    @pytest.fixture(autouse=True)
+    def _fresh_providers():
+        clear_provider_cache()
+        yield
+        clear_provider_cache()
+    ```
 - **`session_id` in `chat()`** triggers automatic Redis history loading
   *and* persistence. Pass `auto_session=False` if you want to manage
   history yourself.

@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import weakref
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -59,32 +61,46 @@ _gateway_shadow_warned = False
 # with their own connection pools, so a new provider per call meant a new TCP
 # and TLS handshake to the provider or gateway on every model call (~0.5 s to
 # the gateway, measured). Async SDK clients belong to the event loop they were
-# first used on, so there is one store per running loop, plus one for calls made
-# outside any loop. Keyed by the provider class and its constructor arguments,
-# so a changed key or setting gets a new provider.
+# first used on, so there is one store per running loop. Keyed by the provider
+# class and its constructor arguments, so a changed key or setting gets a new
+# provider.
+#
+# Only calls inside a running loop reuse. A provider built outside one is new
+# each time, as before: its async client would be bound to whichever loop used
+# it first, so the next asyncio.run() would fail with "Event loop is closed",
+# and a cached one would be shared by processes forked after it was built.
+_MAX_PROVIDERS_PER_LOOP = 32
 _loop_providers: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, dict[tuple[Any, ...], BaseProvider]
+    asyncio.AbstractEventLoop, OrderedDict[tuple[Any, ...], BaseProvider]
 ] = weakref.WeakKeyDictionary()
-_sync_providers: dict[tuple[Any, ...], BaseProvider] = {}
 _providers_lock = threading.Lock()
 
 
 def _reuse(cls: Callable[..., BaseProvider], **kwargs: Any) -> BaseProvider:
     """The provider ``cls(**kwargs)`` already built for this event loop, or a new one."""
-    key = (cls, tuple(sorted(kwargs.items())))
     try:
-        loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        loop = None
+        return cls(**kwargs)
+    key = (cls, tuple(sorted(kwargs.items())))
     with _providers_lock:
-        if loop is None:
-            store = _sync_providers
-        else:
-            store = _loop_providers.setdefault(loop, {})
+        # A provider's pooled connections hold its loop, so the weak key alone
+        # never frees a finished loop (asyncio.run per request, async_to_sync).
+        # Drop the stores of closed loops here.
+        for old in [lp for lp in _loop_providers if lp.is_closed()]:
+            del _loop_providers[old]
+        store = _loop_providers.get(loop)
+        if store is None:
+            store = _loop_providers[loop] = OrderedDict()
         provider = store.get(key)
-        if provider is None:
-            provider = cls(**kwargs)
-            store[key] = provider
+        if provider is not None:
+            store.move_to_end(key)
+            return provider
+        provider = store[key] = cls(**kwargs)
+        # Many distinct keys or bases would otherwise each keep a provider and
+        # a socket for the life of the loop. Least recently used goes first.
+        while len(store) > _MAX_PROVIDERS_PER_LOOP:
+            store.popitem(last=False)
         return provider
 
 
@@ -92,7 +108,20 @@ def clear_provider_cache() -> None:
     """Forget reused providers (tests, or after rotating credentials in place)."""
     with _providers_lock:
         _loop_providers.clear()
-        _sync_providers.clear()
+
+
+def _forget_providers_after_fork() -> None:
+    # A forked child must not share the parent's providers: both processes
+    # would read from the same sockets and could get each other's responses.
+    # Rebind rather than clear, since another parent thread may have held the
+    # lock at the moment of the fork.
+    global _loop_providers, _providers_lock
+    _loop_providers = weakref.WeakKeyDictionary()
+    _providers_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_providers_after_fork)
 
 
 def register_provider(prefix: str, factory: ProviderFactory) -> None:
