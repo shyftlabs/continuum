@@ -66,10 +66,30 @@ _RENAMED_PARAMS = {"max_tokens": "max_completion_tokens"}
 # `param` field names the offending kwarg, so no message parsing is needed.
 _UNSUPPORTED_PARAM_CODES = frozenset({"unsupported_parameter", "unsupported_value"})
 
+# Sent by Continuum on every stream to ask for the usage chunk, so a server that
+# rejects it in any shape must not break streaming.
+_STREAM_OPTIONS = "stream_options"
+
 # Upper bound on adaptation retries for one call. Each 400 names a single
 # parameter, so an unrecognised reasoning model needs one round trip per
-# rejected parameter — at most every param we know how to drop, plus the rename.
-_MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 1
+# rejected parameter — at most every param we know how to drop, plus the rename
+# and stream_options.
+_MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 2
+
+
+def _body_names(body: Any, name: str) -> bool:
+    """True if an error body mentions `name` outside an echoed request (``input``).
+
+    A pydantic 422 echoes the request under ``input``, so without the skip any
+    validation error on a streamed call would look like a rejection of `name`.
+    """
+    if isinstance(body, str):
+        return name in body
+    if isinstance(body, dict):
+        return any(k != "input" and _body_names(v, name) for k, v in body.items())
+    if isinstance(body, (list, tuple)):
+        return any(_body_names(v, name) for v in body)
+    return False
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -299,14 +319,23 @@ class OpenAIProvider(BaseProvider):
         OpenAI reports these in structured form — ``code`` is
         ``unsupported_parameter``/``unsupported_value`` and ``param`` names the
         kwarg — so this reads the body instead of pattern-matching the message.
+
+        ``stream_options`` is added by Continuum rather than the caller, so it is
+        also recognised from other OpenAI-compatible servers: a 400 with no
+        ``code``/``param``, or a 422 from a strict schema (``extra_forbidden``),
+        whose body names it. The body is read, not ``str(e)``, which can be just
+        ``Error code: 422``.
         """
-        if not isinstance(e, openai.BadRequestError):
+        if not isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
             return None
         body = e.body if isinstance(e.body, dict) else {}
-        if body.get("code") not in _UNSUPPORTED_PARAM_CODES:
-            return None
-        param = body.get("param")
-        return param if isinstance(param, str) and param else None
+        if isinstance(e, openai.BadRequestError) and body.get("code") in _UNSUPPORTED_PARAM_CODES:
+            param = body.get("param")
+            if isinstance(param, str) and param:
+                return param
+        if _body_names(e.body, _STREAM_OPTIONS):
+            return _STREAM_OPTIONS
+        return None
 
     def _call_adapting(self, make_call: Callable[[], Any], kwargs: dict[str, Any]) -> Any:
         """Run `make_call`, adapting away rejected parameters and retrying.

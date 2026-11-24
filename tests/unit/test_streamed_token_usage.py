@@ -17,7 +17,13 @@ import pytest
 
 from continuum.agent.base import BaseAgent
 from continuum.agent.config import AgentConfig, AgentMemoryConfig
-from continuum.agent.types import EventType, PrepareRunResult, RunContext, RunState
+from continuum.agent.types import (
+    EventType,
+    PrepareRunResult,
+    RunContext,
+    RunState,
+    TokenUsage,
+)
 from continuum.llm.config import LLMConfig
 from continuum.llm.providers.openai_provider import OpenAIProvider
 from continuum.llm.types import StreamChunk, Usage
@@ -41,6 +47,14 @@ def _aiter(items):
             yield item
 
     return gen()
+
+
+@pytest.fixture(autouse=True)
+def _clear_unsupported_params():
+    # Rejections are remembered per model on the class; keep tests independent.
+    OpenAIProvider._unsupported_params.clear()
+    yield
+    OpenAIProvider._unsupported_params.clear()
 
 
 class TestProviderStreamUsage:
@@ -91,13 +105,52 @@ class TestProviderStreamUsage:
         ]
         assert chunks[-1].is_finished and chunks[-1].usage is None
 
-    async def test_rejected_stream_options_is_dropped_and_remembered(self):
+    @pytest.mark.parametrize(
+        ("status", "error_cls", "body"),
+        [
+            # OpenAI's own shape.
+            (
+                400,
+                openai.BadRequestError,
+                {"code": "unsupported_parameter", "param": "stream_options"},
+            ),
+            # Compatible server: 400 that names the field only in the message.
+            (
+                400,
+                openai.BadRequestError,
+                {
+                    "message": "Unrecognized request argument supplied: stream_options",
+                    "type": "invalid_request_error",
+                    "code": None,
+                    "param": None,
+                },
+            ),
+            # Strict proxy (pydantic extra="forbid"): 422 extra_forbidden.
+            (
+                422,
+                openai.UnprocessableEntityError,
+                {
+                    "detail": [
+                        {
+                            "type": "extra_forbidden",
+                            "loc": ["body", "stream_options"],
+                            "msg": "Extra inputs are not permitted",
+                            "input": {"include_usage": True},
+                        }
+                    ]
+                },
+            ),
+        ],
+        ids=["openai-400", "400-null-code", "422-extra-forbidden"],
+    )
+    async def test_rejected_stream_options_is_dropped_and_remembered(self, status, error_cls, body):
         provider = OpenAIProvider(api_key="test-key")
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-        rejected = openai.BadRequestError(
-            "unsupported",
-            response=httpx.Response(400, request=request),
-            body={"code": "unsupported_parameter", "param": "stream_options"},
+        # The message is what openai 3.x gives a 422: no hint of the field.
+        rejected = error_cls(
+            f"Error code: {status}",
+            response=httpx.Response(status, request=request),
+            body=body,
         )
         calls = []
 
@@ -115,6 +168,39 @@ class TestProviderStreamUsage:
         [c async for c in provider.astream([{"role": "user", "content": "hi"}], cfg)]
 
         assert ["stream_options" in c for c in calls] == [True, False, False]
+
+    async def test_unrelated_422_that_echoes_stream_options_is_not_adapted(self):
+        # A 422 for another field echoes the whole request under "input"; that
+        # must not be read as a rejection of stream_options.
+        provider = OpenAIProvider(api_key="test-key")
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        rejected = openai.UnprocessableEntityError(
+            "Error code: 422",
+            response=httpx.Response(422, request=request),
+            body={
+                "detail": [
+                    {
+                        "type": "missing",
+                        "loc": ["body", "messages"],
+                        "msg": "Field required",
+                        "input": {"stream_options": {"include_usage": True}},
+                    }
+                ]
+            },
+        )
+        create = AsyncMock(side_effect=rejected)
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = create
+
+        with pytest.raises(Exception):
+            [
+                c
+                async for c in provider.astream(
+                    [{"role": "user", "content": "hi"}], LLMConfig(model="strict-model")
+                )
+            ]
+        assert create.await_count == 1
+        assert OpenAIProvider._unsupported_params == {}
 
 
 # ---------------------------------------------------------------------------
@@ -200,3 +286,82 @@ async def test_run_stream_without_provider_usage_is_zero(usage):
     events = [e async for e in runner.run_stream(_agent(), "hi")]
     [run_end] = [e for e in events if e.type == EventType.RUN_END]
     assert run_end.data["usage"]["total_tokens"] == 0
+
+
+async def test_run_stream_adds_handoff_child_usage():
+    from continuum.agent.types import AgentResponse, HandoffResult
+    from continuum.llm.types import FunctionCall, ToolCall
+
+    turns = iter(
+        [
+            [
+                StreamChunk(
+                    model="parent-m",
+                    tool_calls=[
+                        ToolCall(
+                            id="t1",
+                            function=FunctionCall(name="transfer_to_child", arguments="{}"),
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                    is_finished=True,
+                    usage=Usage(prompt_tokens=30, completion_tokens=8, total_tokens=38),
+                )
+            ],
+            [StreamChunk(content="done", finish_reason="stop", is_finished=True)],
+        ]
+    )
+
+    async def chat_stream(*args, **kwargs):
+        for chunk in next(turns):
+            yield chunk
+
+    runner = _runner(chat_stream)
+    child_usage = TokenUsage(
+        prompt_tokens=400,
+        completion_tokens=100,
+        total_tokens=500,
+        model_usage={
+            "child-m": {"prompt_tokens": 400, "completion_tokens": 100, "total_tokens": 500}
+        },
+    )
+    runner._handoff_executor = MagicMock()
+    runner._handoff_executor.execute_handoff = AsyncMock(
+        return_value=HandoffResult(
+            handoff_id="h1",
+            from_agent="a",
+            to_agent="child",
+            success=True,
+            response=AgentResponse(content="child answer", usage=child_usage),
+        )
+    )
+    agent = _agent()
+    agent.is_handoff_tool_call = lambda name: (name == "transfer_to_child", "child")
+
+    events = [e async for e in runner.run_stream(agent, "hi")]
+
+    [run_end] = [e for e in events if e.type == EventType.RUN_END]
+    assert run_end.data["usage"]["total_tokens"] == 538
+    assert set(run_end.data["usage"]["model_usage"]) == {"parent-m", "child-m"}
+
+
+async def test_every_run_end_carries_usage():
+    # Error exit: the stream fails mid-turn.
+    async def chat_stream(*args, **kwargs):
+        yield StreamChunk(content="x", model="m")
+        raise RuntimeError("boom")
+
+    runner = _runner(chat_stream)
+    events = []
+    with pytest.raises(Exception):
+        async for e in runner.run_stream(_agent(), "hi"):
+            events.append(e)
+    [run_end] = [e for e in events if e.type == EventType.RUN_END]
+    assert run_end.data["usage"]["total_tokens"] == 0
+
+    # Validation-failure exit.
+    runner = _runner(chat_stream)
+    runner._prepare_run = AsyncMock(return_value=PrepareRunResult(success=False))
+    events = [e async for e in runner.run_stream(_agent(), "hi")]
+    [run_end] = [e for e in events if e.type == EventType.RUN_END]
+    assert run_end.data["usage"] == TokenUsage().to_dict()

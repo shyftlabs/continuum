@@ -1253,7 +1253,11 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=_run_id,
-                data={"content": _content, "turn_count": response.turn_count},
+                data={
+                    "content": _content,
+                    "turn_count": response.turn_count,
+                    "usage": response.usage.to_dict(),
+                },
                 trace_id=response.trace_id,
             )
             return
@@ -1291,7 +1295,7 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=_run_id,
-                data={"content": "", "turn_count": 0},
+                data={"content": "", "turn_count": 0, "usage": TokenUsage().to_dict()},
                 trace_id=trace_id,
             )
             return
@@ -1309,6 +1313,9 @@ class AgentRunner:
         )
 
         turn = 0
+        # Summed from the usage each provider reports on a stream's closing chunk,
+        # plus any handoff child's usage. Set before the try so every RUN_END has it.
+        stream_usage = TokenUsage()
         # Publish the run's policy context so every llm_client.chat() in this
         # streaming run is gated by the data-label model-routing policy. A fresh
         # Headroom compressor rides the same boundary so CCR retrieve
@@ -1485,15 +1492,17 @@ class AgentRunner:
                     type=EventType.RUN_END,
                     agent_name=agent.name,
                     run_id=ctx.run_id,
-                    data={"content": content, "turn_count": 1},
+                    data={
+                        "content": content,
+                        "turn_count": 1,
+                        "usage": response.usage.to_dict(),
+                    },
                     trace_id=ctx.trace_id,
                 )
                 return
 
             content = ""
             turn = 0
-            # Summed from the usage each provider reports on a stream's closing chunk.
-            stream_usage = TokenUsage()
             while turn < ctx.max_turns:
                 turn += 1
                 turn_usage = TokenUsage()
@@ -1787,7 +1796,11 @@ class AgentRunner:
                                     type=EventType.RUN_END,
                                     agent_name=agent.name,
                                     run_id=ctx.run_id,
-                                    data={"content": "", "turn_count": turn},
+                                    data={
+                                        "content": "",
+                                        "turn_count": turn,
+                                        "usage": stream_usage.to_dict(),
+                                    },
                                     trace_id=ctx.trace_id,
                                 )
                                 return
@@ -1817,11 +1830,18 @@ class AgentRunner:
                                     type=EventType.RUN_END,
                                     agent_name=agent.name,
                                     run_id=ctx.run_id,
-                                    data={"content": "", "turn_count": turn},
+                                    data={
+                                        "content": "",
+                                        "turn_count": turn,
+                                        "usage": stream_usage.to_dict(),
+                                    },
                                     trace_id=ctx.trace_id,
                                 )
                                 return
 
+                            if handoff_result.response:
+                                # The child run's usage, as the non-streaming loop adds it.
+                                stream_usage = stream_usage.add(handoff_result.response.usage)
                             handoff_content = (
                                 handoff_result.response.content if handoff_result.response else ""
                             )
@@ -2015,7 +2035,7 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=ctx.run_id,
-                data={"content": "", "turn_count": turn},
+                data={"content": "", "turn_count": turn, "usage": stream_usage.to_dict()},
                 trace_id=ctx.trace_id,
             )
 
