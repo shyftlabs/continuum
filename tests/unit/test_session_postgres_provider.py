@@ -220,23 +220,46 @@ def test_jsonb_goes_over_the_wire_as_text():
     assert "message::text" in src and "custom::text" in src
 
 
-async def test_fallback_warning_names_postgres(caplog):
+def _warnings(monkeypatch) -> list[str]:
+    """Capture the session client's warnings without relying on caplog.
+
+    Another test can leave the continuum logger not propagating, so caplog sees
+    nothing depending on test order; patching the module logger does not.
+    """
+    import continuum.session.client as client_module
+
+    seen: list[str] = []
+    real = client_module.logger
+
+    class _Logger:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def warning(self, msg, *args, **kwargs):
+            seen.append(msg % args if args else str(msg))
+
+    monkeypatch.setattr(client_module, "logger", _Logger())
+    return seen
+
+
+async def test_fallback_warning_names_postgres(monkeypatch):
     from continuum.session.client import SessionClient
 
+    seen = _warnings(monkeypatch)
     client = SessionClient(
         SessionConfig(provider="postgres", postgres_dsn=None, fallback_mode="degrade")
     )
-    with caplog.at_level("WARNING"):
-        await client.get_or_create_session(user_id="u1", conversation_id="c1")
-    text = caplog.text
+    await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    text = "\n".join(seen)
     assert "PostgreSQL is not configured" in text
     assert "SESSION_POSTGRES_DSN" in text
     assert "SESSION_REDIS_HOST" not in text
 
 
-async def test_unreachable_postgres_message_keeps_display_casing(caplog):
+async def test_unreachable_postgres_message_keeps_display_casing(monkeypatch):
     from continuum.session.client import SessionClient
 
+    seen = _warnings(monkeypatch)
     client = SessionClient(
         SessionConfig(
             provider="postgres",
@@ -245,19 +268,19 @@ async def test_unreachable_postgres_message_keeps_display_casing(caplog):
             fallback_mode="degrade",
         )
     )
-    with caplog.at_level("WARNING"):
-        await client.get_or_create_session(user_id="u1", conversation_id="c1")
-    assert "PostgreSQL probe failed" in caplog.text
+    await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    assert any("PostgreSQL probe failed" in m for m in seen)
 
 
-async def test_redis_messages_keep_their_casing(caplog):
+async def test_redis_messages_keep_their_casing(monkeypatch):
     from continuum.session.client import SessionClient, _display_name
 
+    seen = _warnings(monkeypatch)
     client = SessionClient(SessionConfig(provider="redis", redis_host="", fallback_mode="degrade"))
-    with caplog.at_level("WARNING"):
-        await client.get_or_create_session(user_id="u1", conversation_id="c1")
-    assert "Redis is not configured" in caplog.text
-    assert "configure Redis (SESSION_REDIS_HOST / SESSION_REDIS_PORT)" in caplog.text
+    await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    text = "\n".join(seen)
+    assert "Redis is not configured" in text
+    assert "configure Redis (SESSION_REDIS_HOST / SESSION_REDIS_PORT)" in text
     assert f"{_display_name('redis')} probe failed" == "Redis probe failed"
 
 
