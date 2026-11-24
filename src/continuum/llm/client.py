@@ -9,7 +9,7 @@ Includes full observability integration with Langfuse via @observe decorator.
 import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from continuum.llm.callbacks import (
     get_langfuse_metadata,
@@ -32,6 +32,9 @@ from continuum.observability.decorators import observe
 from continuum.observability.trace_context import (
     get_current_session_id,
 )
+
+if TYPE_CHECKING:
+    from continuum.llm.context_management import ContextManagementConfig
 
 logger = get_logger(__name__)
 
@@ -310,6 +313,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
+        context_config: "ContextManagementConfig | None" = None,  # noqa: UP037
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -321,6 +325,10 @@ class LLMClient:
         are folded into the policy subjects and the target model is checked as
         ``llm:<model>`` before any provider is selected; a deny raises
         ModelAccessDeniedError. Mirrors the tool-access gate.
+
+        context_config: the calling agent's context settings for the compression
+        pass. Defaults to the ones the running agent published
+        (``use_context_config``), then to the process-wide manager's config.
         """
         effective_config = config or self.default_config
         effective_session_id = session_id or get_current_session_id()
@@ -376,13 +384,20 @@ class LLMClient:
 
         # Context compression
         try:
-            from continuum.llm.context_management import get_progressive_context_manager
+            from continuum.llm.context_management import (
+                get_active_context_config,
+                get_progressive_context_manager,
+            )
 
             context_manager = get_progressive_context_manager()
-            if context_manager.config.enabled:
+            compress_config = (
+                context_config or get_active_context_config() or context_manager.config
+            )
+            if compress_config.enabled:
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
+                    config=compress_config,
                 )
                 if compression_result.was_compressed:
                     logger.info(
@@ -551,6 +566,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
+        context_config: "ContextManagementConfig | None" = None,  # noqa: UP037
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
@@ -569,13 +585,20 @@ class LLMClient:
 
         # Context compression before streaming
         try:
-            from continuum.llm.context_management import get_progressive_context_manager
+            from continuum.llm.context_management import (
+                get_active_context_config,
+                get_progressive_context_manager,
+            )
 
             context_manager = get_progressive_context_manager()
-            if context_manager.config.enabled:
+            compress_config = (
+                context_config or get_active_context_config() or context_manager.config
+            )
+            if compress_config.enabled:
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
+                    config=compress_config,
                 )
                 if compression_result.was_compressed:
                     logger.info(

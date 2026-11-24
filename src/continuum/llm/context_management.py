@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -32,6 +36,14 @@ from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 
 logger = get_logger(__name__)
+
+# Message fields that make up a summary cache key.
+_KEY_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def _key_part(value: Any) -> bytes:
+    """One newline-terminated line of canonical JSON for the summary cache key."""
+    return (json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) + "\n").encode()
 
 
 def _carries_tool_io(msg: dict[str, Any]) -> bool:
@@ -122,6 +134,40 @@ class ContextManagementConfig:
         }
 
 
+# The running agent's context settings, published by the executor for the
+# duration of its loop so the compression pass in LLMClient.chat() follows that
+# agent's config rather than the process-wide manager's. Same ambient pattern
+# as continuum.security.policy_context.
+_active_context_config: ContextVar[ContextManagementConfig | None] = ContextVar(
+    "continuum_active_context_config", default=None
+)
+
+
+def get_active_context_config() -> ContextManagementConfig | None:
+    """The context settings of the agent currently executing, if one published them."""
+    return _active_context_config.get()
+
+
+@contextmanager
+def use_context_config(config: ContextManagementConfig | None) -> Iterator[None]:
+    """Publish ``config`` as the active context settings for the enclosed block.
+
+    ``None`` publishes nothing new: calls inside fall back to the process-wide
+    manager's config, as before.
+    """
+    token = _active_context_config.set(config)
+    try:
+        yield
+    finally:
+        _active_context_config.reset(token)
+
+
+def agent_context_config(agent: Any) -> ContextManagementConfig | None:
+    """The agent's own ``ContextManagementConfig``, or None when it sets none."""
+    agent_config = getattr(agent, "config", None)
+    return getattr(agent_config, "context_management", None) if agent_config else None
+
+
 @dataclass
 class CompressionResult:
     """Result of context compression operation."""
@@ -177,14 +223,17 @@ class SummaryCache:
         # characters of it gave them 32 bits to compare against. The keyed
         # pseudonym still lets a cache hit be matched to its store.
         # Uses sha256 (not md5) so static analysis never flags a weak-hash finding here.
-        # The whole content is hashed: keying on a prefix let two conversations
+        # Each message is hashed whole: keying on a prefix let two conversations
         # that start alike (a shared template, a pasted document) share a summary.
-        # The namespace keeps agents with different summarization settings apart.
-        content = [namespace]
+        # Each part is one line of canonical JSON (JSON escapes newlines inside
+        # strings), so message boundaries are unambiguous, and
+        # tool_calls / tool_call_id / name are included so the same text with a
+        # different tool exchange is a different key. The namespace keeps agents
+        # with different summarization settings apart.
+        digest = hashlib.sha256(_key_part(namespace))
         for msg in messages:
-            content.append(f"{msg.get('role')}:{msg.get('content') or ''}")
-        content_str = "\x1f".join(content)
-        return hashlib.sha256(content_str.encode()).hexdigest()
+            digest.update(_key_part({f: msg.get(f) for f in _KEY_FIELDS}))
+        return digest.hexdigest()
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""

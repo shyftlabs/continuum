@@ -85,3 +85,77 @@ def test_conversations_that_differ_after_100_characters_do_not_share_a_key():
 
     assert cache.get(fund_b) is None
     assert cache.get(fund_a) == [{"role": "assistant", "content": "about A"}]
+
+
+def test_same_text_with_a_different_tool_exchange_is_a_different_key():
+    cache = SummaryCache()
+    plain = [{"role": "assistant", "content": "Looking it up."}]
+    with_call = [
+        {
+            "role": "assistant",
+            "content": "Looking it up.",
+            "tool_calls": [{"id": "c1", "function": {"name": "lookup", "arguments": "{}"}}],
+        }
+    ]
+
+    cache.set(plain, [{"role": "assistant", "content": "plain"}])
+
+    assert cache.get(with_call) is None
+
+
+def test_message_boundaries_cannot_collide():
+    cache = SummaryCache()
+    joined = [{"role": "user", "content": "a\x1fuser:b"}]
+    split = [{"role": "user", "content": "a"}, {"role": "user", "content": "b"}]
+
+    cache.set(joined, [{"role": "assistant", "content": "joined"}])
+
+    assert cache.get(split) is None
+
+
+# compress_if_needed(config=None): the call falls back to the manager's own config.
+
+LONG = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(6)]
+
+
+def _manager_over_threshold(config: ContextManagementConfig):
+    manager, llm = _manager(first=config)
+    window = MagicMock()
+    window.count_tokens = MagicMock(side_effect=lambda msgs, _model: 1000 * len(msgs))
+    window.get_model_limits = MagicMock(return_value=MagicMock(effective_input_limit=4000))
+    manager._context_window_manager = window
+    return manager, llm
+
+
+async def test_compress_without_config_uses_the_managers_cache_setting():
+    manager, llm = _manager_over_threshold(
+        ContextManagementConfig(enable_caching=True, keep_recent_messages=1)
+    )
+
+    _, first = await manager.compress_if_needed(list(LONG), "gpt-4o-mini")
+    _, second = await manager.compress_if_needed(list(LONG), "gpt-4o-mini")
+
+    assert first.was_compressed and second.was_compressed
+    assert llm.chat.await_count == 1
+    assert second.cache_hit
+
+
+async def test_compress_without_config_respects_the_managers_caching_off():
+    manager, llm = _manager_over_threshold(
+        ContextManagementConfig(enable_caching=False, keep_recent_messages=1)
+    )
+
+    await manager.compress_if_needed(list(LONG), "gpt-4o-mini")
+    await manager.compress_if_needed(list(LONG), "gpt-4o-mini")
+
+    assert llm.chat.await_count == 2
+
+
+async def test_compress_without_config_is_off_when_the_manager_is_disabled():
+    manager, llm = _manager_over_threshold(ContextManagementConfig(enabled=False))
+
+    out, result = await manager.compress_if_needed(list(LONG), "gpt-4o-mini")
+
+    assert out == LONG
+    assert result.strategy_used == "disabled"
+    llm.chat.assert_not_awaited()

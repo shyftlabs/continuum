@@ -378,7 +378,12 @@ new_messages, result = await mgr.compress_if_needed(messages, model="gpt-4o-mini
 `compressed_token_count`, `was_compressed`, `strategy_used`,
 `compression_ratio`, `latency_ms`, `cache_hit`, etc.
 
-To override per-agent: set `agent.config.context_management = cfg`.
+To override per-agent: set `agent.config.context_management = cfg`. The
+runner applies it both when it builds the agent's messages and in the
+compression pass inside `LLMClient.chat()` / `chat_stream()` on each turn.
+`get_progressive_context_manager()` returns one manager per process, and
+`compress_if_needed(config=None)` falls back to that manager's config. A
+direct `LLMClient.chat()` call can pass `context_config=cfg`.
 
 ### Headroom compression (optional)
 

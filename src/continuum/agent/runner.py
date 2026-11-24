@@ -72,6 +72,7 @@ from continuum.config import settings
 from continuum.config import settings as app_settings
 from continuum.core.container import Container, get_container
 from continuum.llm.config import LLMConfig
+from continuum.llm.context_management import agent_context_config
 from continuum.llm.structured_output import (
     coerce_and_validate,
     is_pydantic_schema,
@@ -1531,6 +1532,7 @@ class AgentRunner:
                     messages=llm_messages,
                     tools=tools if tools else None,
                     config=_stream_config,
+                    context_config=agent_context_config(agent),
                     trace_metadata={"session_id": session_id} if session_id else None,
                 ):
                     if chunk.model:
@@ -1585,6 +1587,7 @@ class AgentRunner:
                             config=_enrich_config_for_gateway(
                                 LLMConfig.from_agent_config(agent), ctx
                             ),
+                            context_config=agent_context_config(agent),
                             trace_metadata={"session_id": session_id} if session_id else None,
                         ):
                             if chunk.model:
