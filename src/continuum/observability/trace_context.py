@@ -338,6 +338,9 @@ class SpanScope:
         self.level = level
         # "generation" records a model call: Langfuse prices it from model + usage.
         self.as_type = as_type
+        # Whether the observation was actually created as a generation; a backend
+        # that has no generations gets a plain span and plain end() fields.
+        self._is_generation = False
         self._token: TraceContextToken | None = None
         self._span_client: StatefulSpanClient | None = None
         self._span_id: str | None = None
@@ -372,6 +375,7 @@ class SpanScope:
                 create = parent.span
                 if self.as_type == "generation" and hasattr(parent, "generation"):
                     create = parent.generation
+                    self._is_generation = True
                 self._span_client = create(
                     id=self._span_id,
                     name=self.name,
@@ -389,6 +393,7 @@ class SpanScope:
                 # No parent client, use ProviderManager
                 # CRITICAL: Spans require a parent trace. Never create a trace here.
                 from continuum.observability.provider_manager import get_provider_manager
+                from continuum.observability.providers.base import ProviderCapabilities
 
                 manager = get_provider_manager()
                 trace_id = get_current_trace_id()
@@ -408,9 +413,12 @@ class SpanScope:
                     parent_obs_id = get_parent_observation_id()
 
                     # Create span via provider manager (under existing trace)
-                    create_obs = (
-                        manager.generation if self.as_type == "generation" else manager.span
+                    # Providers without generations (e.g. a custom TRACE + SPAN
+                    # provider) keep getting the call as a span, as before.
+                    self._is_generation = self.as_type == "generation" and (
+                        manager.supports_feature(ProviderCapabilities.GENERATION)
                     )
+                    create_obs = manager.generation if self._is_generation else manager.span
                     span_result = create_obs(
                         trace_id=trace_id,
                         parent_observation_id=parent_obs_id,
@@ -466,17 +474,23 @@ class SpanScope:
                 "level": "ERROR" if error else self.level,
                 "status_message": str(error) if error else None,
             }
-            if self.as_type == "generation":
+            if self._is_generation:
                 # Model and token counts let Langfuse price the call; the first
                 # output time gives time-to-first-token for streamed calls.
-                if self._model:
-                    fields["model"] = self._model
                 if self._usage:
                     # Langfuse v3 reads usage_details; a v2 server ignores it and
                     # reads only usage (then estimates tokens from the truncated
                     # input instead). Send both.
                     fields["usage_details"] = self._usage
                     fields["usage"] = {**self._usage, "unit": "TOKENS"}
+                    if self._model:
+                        fields["model"] = self._model
+                elif self._model:
+                    # No usage (stream closed early, or a provider that does not
+                    # report it): a model without usage makes a v2 server estimate
+                    # tokens from the truncated input and store a wrong cost, so
+                    # the model goes in metadata instead.
+                    fields["metadata"]["model"] = self._model
                 if self._completion_start:
                     fields["completion_start_time"] = self._completion_start
 

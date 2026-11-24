@@ -7,7 +7,7 @@ model, no token counts and therefore no cost.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from continuum.llm.types import StreamChunk
 from continuum.observability.decorators import observe
@@ -90,7 +90,9 @@ async def test_stream_records_usage_from_closing_chunk_and_first_token_time():
     assert "output" in end and end["output"] is None  # stream content still not captured
 
 
-async def test_stream_without_usage_still_names_the_model():
+async def test_stream_without_usage_names_the_model_in_metadata_only():
+    # A model without usage makes a Langfuse v2 server estimate tokens from the
+    # truncated input and store a wrong cost, so the model goes in metadata.
     @observe(name="llm_chat_stream", capture_output=False, as_type="generation")
     async def stream():
         yield StreamChunk(content="x", model="m-1")
@@ -101,7 +103,34 @@ async def test_stream_without_usage_still_names_the_model():
     finally:
         restore_trace_context(token)
     end = obs.end.call_args.kwargs
-    assert end["model"] == "m-1" and "usage_details" not in end
+    assert "model" not in end
+    assert "usage_details" not in end and "usage" not in end
+    assert end["metadata"]["model"] == "m-1"
+
+
+async def test_stream_closed_before_usage_chunk_has_no_model():
+    @observe(name="llm_chat_stream", capture_output=False, as_type="generation")
+    async def stream():
+        yield StreamChunk(content="He", model="m-1")
+        yield StreamChunk(content="llo", model="m-1")
+        # The closing chunk with usage, never reached here.
+        yield SimpleNamespace(
+            content=None,
+            model="m-1",
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        )
+
+    trace, obs, token = _trace()
+    try:
+        gen = stream()
+        assert (await gen.__anext__()).content == "He"
+        await gen.aclose()  # consumer stops before the usage chunk
+    finally:
+        restore_trace_context(token)
+    obs.end.assert_called_once()
+    end = obs.end.call_args.kwargs
+    assert "model" not in end and "usage_details" not in end
+    assert end["metadata"]["model"] == "m-1"
 
 
 async def test_plain_spans_are_unchanged():
@@ -141,3 +170,38 @@ def test_tracing_failure_never_breaks_the_call():
         assert chat().model is None
     finally:
         restore_trace_context(token)
+
+
+def test_provider_without_generations_still_gets_a_span():
+    # A custom provider that declares only TRACE and SPAN got llm_chat_sync as a
+    # span before; it keeps getting it, with plain end() fields.
+    from continuum.observability.provider_manager import ProviderManager
+    from continuum.observability.providers.base import ProviderCapabilities
+
+    obs = MagicMock(name="span")
+    provider = MagicMock(name="provider")
+    provider.supports_feature.side_effect = lambda f: f in {
+        ProviderCapabilities.TRACE,
+        ProviderCapabilities.SPAN,
+    }
+    provider.span.return_value = obs
+    registry = MagicMock()
+    registry.get_enabled.return_value = {"custom": provider}
+
+    @observe(name="llm_chat_sync", as_type="generation")
+    def chat():
+        return _response()
+
+    token = set_trace_context(trace_id="t1")
+    try:
+        with patch(
+            "continuum.observability.provider_manager.get_provider_manager",
+            return_value=ProviderManager(registry=registry),
+        ):
+            chat()
+    finally:
+        restore_trace_context(token)
+    provider.span.assert_called_once()
+    provider.generation.assert_not_called()
+    end = obs.end.call_args.kwargs
+    assert "model" not in end and "usage_details" not in end
