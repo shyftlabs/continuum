@@ -74,6 +74,19 @@ the same name):
 await runner.run(agent, question, metadata={"gateway_metadata": {"org_id": org.id, "fund_id": fund.id}})
 ```
 
+A handoff target's calls carry the same labels and tags. Nested values are sent
+as JSON. At most 16 keys are sent in all (the ids and tags count), with keys cut
+to 64 characters and values to 512; extra labels are dropped with a warning, and
+a `gateway_metadata` that is not a mapping is ignored with a warning. Labels and
+tags leave the process, so keep personal data (names, emails, free text) out of
+them; use opaque ids.
+
+Only agent model calls are labelled. Internal model calls carry neither the
+labels nor the session or trace id, so per-tenant cost and budgets miss them:
+context summaries, handoff history summaries, the parallel merge, the tier
+classifier and model-tier fallback, and the planner, router, scatter, debate,
+supervised, loop, reflection and memory calls.
+
 ### Provider quirks (handled for you)
 
 - **Gemini** does not support tools and JSON mode simultaneously — the

@@ -7,6 +7,7 @@ Extracted from AgentRunner to provide clean separation of concerns.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.exceptions import (
@@ -139,6 +140,26 @@ _MAX_STRUCTURED_OUTPUT_RETRIES = 1
 # Key in run(metadata=...) whose values are sent to the gateway with every model call.
 GATEWAY_METADATA_KEY = "gateway_metadata"
 
+# Limits on body.metadata, matching OpenAI's request metadata (16 keys, 64-character
+# keys, 512-character values) in case the gateway forwards it. The ids and tags
+# count towards the 16 keys; caller labels beyond that are dropped.
+_GATEWAY_MAX_KEYS = 16
+_GATEWAY_MAX_KEY_LEN = 64
+_GATEWAY_MAX_VALUE_LEN = 512
+
+
+def _gateway_value(value: Any) -> str:
+    """A label value as a string, at most 512 characters; nested values as JSON."""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        if isinstance(value, (set, frozenset)):
+            value = sorted(value, key=str)
+        text = json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+    else:
+        text = str(value)
+    return text[:_GATEWAY_MAX_VALUE_LEN]
+
 
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
     """Tag each model call for the Smart Gateway (``body.metadata``) so it can attribute cost.
@@ -148,17 +169,47 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
     for example a tenant, fund or feature -- as strings. The ids win over a
     caller label of the same name. Merged into the agent's own ``extra_body``,
     which used to be replaced outright.
+
+    Labels are capped at 16 keys in all (ids and tags included), 64-character
+    keys and 512-character values; nested values are sent as JSON. A
+    ``gateway_metadata`` that is not a mapping is ignored with a warning. Labels
+    and tags leave the process, so they must not hold personal data.
     """
     if not settings.smart_gateway_url:
         return config
     labels = (context.metadata or {}).get(GATEWAY_METADATA_KEY) or {}
-    metadata: dict[str, Any] = {
-        str(k): str(v) for k, v in labels.items() if v is not None and str(k)
-    }
+    if not isinstance(labels, Mapping):
+        logger.warning(
+            "Ignoring run metadata %r: expected a mapping of labels, got %s",
+            GATEWAY_METADATA_KEY,
+            type(labels).__name__,
+        )
+        labels = {}
+
+    reserved: dict[str, Any] = {}
     if context.tags:
-        metadata["tags"] = ",".join(str(tag) for tag in context.tags)
-    metadata["session_id"] = context.session_id or context.run_id
-    metadata["trace_id"] = context.trace_id
+        reserved["tags"] = _gateway_value(",".join(str(tag) for tag in context.tags))
+    reserved["session_id"] = context.session_id or context.run_id
+    reserved["trace_id"] = context.trace_id
+
+    metadata: dict[str, Any] = {}
+    room = _GATEWAY_MAX_KEYS - len(reserved)
+    dropped = 0
+    for k, v in labels.items():
+        key = str(k)[:_GATEWAY_MAX_KEY_LEN]
+        if v is None or not key or key in reserved:
+            continue
+        if key not in metadata and len(metadata) >= room:
+            dropped += 1
+            continue
+        metadata[key] = _gateway_value(v)
+    if dropped:
+        logger.warning(
+            "Dropped %d gateway label(s): at most %d keys are sent, ids and tags included",
+            dropped,
+            _GATEWAY_MAX_KEYS,
+        )
+    metadata.update(reserved)
 
     extra_body = dict(config.extra_body or {})
     own = extra_body.get("metadata")
