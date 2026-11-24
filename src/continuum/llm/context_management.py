@@ -119,8 +119,9 @@ class ContextManagementConfig:
     # Reuse the summary cached for an earlier turn and keep the messages added
     # since word for word, until there are more than this many of them; then
     # summarize the whole older history afresh. Saves a summary call on most
-    # turns. 0 = summarize every turn the older history changes. Needs
-    # enable_caching.
+    # turns, but the model sees those messages verbatim. Only when the result
+    # fits under the compression threshold. 0 (default) = off, summarize every
+    # turn the older history changes. Needs enable_caching.
     summary_reuse_messages: int = field(
         default_factory=lambda: settings.context_summary_reuse_messages
     )
@@ -530,6 +531,7 @@ class ProgressiveContextManager:
                         messages=messages,
                         model=model,
                         config=effective_config,
+                        threshold_tokens=threshold_tokens,
                     )
                 else:  # TRUNCATE_OLDEST
                     compressed, result = await self._compress_truncate(
@@ -643,6 +645,7 @@ class ProgressiveContextManager:
                 messages=messages,
                 model=model,
                 config=config,
+                threshold_tokens=threshold_tokens,
             )
 
             # Check if summarization was sufficient
@@ -686,8 +689,14 @@ class ProgressiveContextManager:
         messages: list[dict[str, Any]],
         model: str,
         config: ContextManagementConfig,
+        threshold_tokens: int | None = None,
     ) -> tuple[list[dict[str, Any]], CompressionResult]:
-        """Compress by summarizing older messages."""
+        """Compress by summarizing older messages.
+
+        ``threshold_tokens`` is the budget an earlier turn's reused summary must
+        fit under, with the messages kept after it; without one, no summary is
+        reused.
+        """
         if not messages:
             return [], CompressionResult(
                 original_token_count=0,
@@ -758,26 +767,43 @@ class ProgressiveContextManager:
                 logger.debug("Using cached summary")
 
         # Reuse an earlier turn's summary while few messages were added since:
-        # those stay word for word after it, and no summary call is made.
+        # those stay word for word after it, and no summary call is made. Only
+        # when the result fits the token budget: over it, a later truncation
+        # would drop the summary first (it is the oldest message), and a second
+        # compression would summarize the summary. Never when the kept messages
+        # would start inside a tool exchange, which providers reject.
         reused = False
-        if not summary_messages and cache and config.summary_reuse_messages > 0:
+        if (
+            not summary_messages
+            and cache
+            and config.summary_reuse_messages > 0
+            and threshold_tokens is not None
+        ):
             earlier = cache.get_longest_prefix(older_messages, namespace)
             if earlier is not None:
                 covered, previous = earlier
-                if len(older_messages) - covered <= config.summary_reuse_messages:
-                    summary_messages = previous + older_messages[covered:]
-                    reused = True
+                tail = older_messages[covered:]
+                if len(tail) <= config.summary_reuse_messages and not _carries_tool_io(tail[0]):
+                    candidate = system_messages + previous + tail + recent_messages
+                    if (
+                        self._context_window_manager.count_tokens(candidate, model)
+                        <= threshold_tokens
+                    ):
+                        summary_messages = previous + tail
+                        reused = True
 
         # Summarize if not cached
+        summarized = False
         if not summary_messages:
-            summary_messages = await self._summarize_messages(
+            summary_messages, summarized = await self._summarize_with_status(
                 messages=older_messages,
                 model=model,
                 config=config,
             )
 
-        # Cache a new or extended summary
-        if cache and summary_messages and not cache_hit and not reused:
+        # Cache a new summary. Not the text fallback used when the summary call
+        # failed: the next turn should try the model again, not reuse that.
+        if cache and summary_messages and summarized:
             cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
@@ -841,10 +867,20 @@ class ProgressiveContextManager:
         config: ContextManagementConfig,
     ) -> list[dict[str, Any]]:
         """Summarize a list of messages using LLM."""
+        summary, _ = await self._summarize_with_status(messages, model, config)
+        return summary
+
+    async def _summarize_with_status(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        config: ContextManagementConfig,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Summarize with the LLM. The flag is False when the text fallback was used."""
         llm_client = self._get_llm_client()
         if not llm_client:
             logger.warning("No LLM client available for summarization, using text fallback")
-            return self._text_summary(messages)
+            return self._text_summary(messages), False
 
         # Build summarization prompt
         conversation_text = self._format_messages_for_summary(messages)
@@ -908,7 +944,7 @@ SUMMARY:"""
 
                 span.set_output(truncate_data({"summary_length": len(summary_content)}))
 
-                return [summary_message]
+                return [summary_message], True
 
             except TimeoutError:
                 logger.warning("Summarization timed out, using text fallback")
@@ -922,7 +958,7 @@ SUMMARY:"""
                         "timeout": config.summarization_timeout,
                     },
                 )
-                return self._text_summary(messages)
+                return self._text_summary(messages), False
             except Exception as e:
                 logger.warning("Summarization failed: %s, using text fallback", e)
                 span.set_error(str(e))
@@ -935,7 +971,7 @@ SUMMARY:"""
                         "original_model": model,
                     },
                 )
-                return self._text_summary(messages)
+                return self._text_summary(messages), False
 
     def _format_messages_for_summary(self, messages: list[dict[str, Any]]) -> str:
         """Format messages for summarization prompt."""
