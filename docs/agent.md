@@ -193,6 +193,13 @@ async for event in runner.run_stream(pipeline, "Analyse fund X", stream_steps=Tr
         print(event.data["content"], end="")
 ```
 
+Each step also has a `data["step_id"]` (1, 2, 3, ... in start order) on its
+`AGENT_START` / `AGENT_END` and on its tool events, so two steps of the same
+agent running at once (for example in a `ParallelAgent` or `DAGAgent`) can be
+told apart. If the workflow raises, the stream sends `RUN_ERROR` and `RUN_END`
+with the same `run_id`, then raises the error. Closing or cancelling the stream
+early stops the workflow.
+
 ### Runner methods
 
 - `register_agent(agent)` — required for handoff targets

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.base import BaseAgent
@@ -30,7 +31,12 @@ from continuum.agent.execution.handoff_executor import HandoffExecutor
 from continuum.agent.execution.message_builder import MessageBuilder
 from continuum.agent.execution.run_finalizer import RunFinalizer
 from continuum.agent.execution.run_lifecycle import RunLifecycle
-from continuum.agent.execution.step_events import StepSink, current_step_sink, open_step_sink
+from continuum.agent.execution.step_events import (
+    StepSink,
+    current_step_sink,
+    open_step_sink,
+    step_scope,
+)
 from continuum.agent.execution.stream_executor import StreamExecutor
 from continuum.agent.execution.tool_handler import ToolHandler
 from continuum.agent.execution.trace_capture import (
@@ -696,39 +702,42 @@ class AgentRunner:
 
         # A step inside a workflow streamed with stream_steps=True: tell the
         # caller it started and how it ended while the workflow keeps going.
-        sink.emit(EventType.AGENT_START, agent.name, {"step": True})
-        try:
-            response = await self._run_impl(
-                agent,
-                input,
-                session_id=session_id,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                context=context,
-                max_turns=max_turns,
-                trace_id=trace_id,
-                metadata=metadata,
-                tags=tags,
-                require_session=require_session,
-            )
-        except Exception as e:
+        # The step_id stays set while the step runs, so its tool events carry
+        # it and concurrent steps of one agent can be told apart.
+        with step_scope(sink.next_step_id()):
+            sink.emit(EventType.AGENT_START, agent.name, {"step": True})
+            try:
+                response = await self._run_impl(
+                    agent,
+                    input,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    context=context,
+                    max_turns=max_turns,
+                    trace_id=trace_id,
+                    metadata=metadata,
+                    tags=tags,
+                    require_session=require_session,
+                )
+            except Exception as e:
+                sink.emit(
+                    EventType.AGENT_END,
+                    agent.name,
+                    {"step": True, "status": ResponseStatus.ERROR.value, "error": str(e)},
+                )
+                raise
             sink.emit(
                 EventType.AGENT_END,
                 agent.name,
-                {"step": True, "status": ResponseStatus.ERROR.value, "error": str(e)},
+                {
+                    "step": True,
+                    "status": response.status.value,
+                    "content": response.content or "",
+                    "turn_count": response.turn_count,
+                    "error": response.error,
+                },
             )
-            raise
-        sink.emit(
-            EventType.AGENT_END,
-            agent.name,
-            {
-                "step": True,
-                "status": response.status.value,
-                "content": response.content or "",
-                "turn_count": response.turn_count,
-                "error": response.error,
-            },
-        )
         return response
 
     async def _run_impl(
@@ -1267,6 +1276,7 @@ class AgentRunner:
         )
         with open_step_sink(sink):
             task = asyncio.create_task(self.run(agent, input, context=context))
+        getter: asyncio.Future[AgentEvent] | None = None
         try:
             while True:
                 getter = asyncio.ensure_future(sink.queue.get())
@@ -1278,10 +1288,34 @@ class AgentRunner:
                 break
             while not sink.queue.empty():
                 yield sink.queue.get_nowait()
-            response = await task
+            try:
+                response = await task
+            except Exception as e:
+                # RUN_START is already out: close the run as the single-agent
+                # stream does, then let the error through unchanged.
+                yield AgentEvent(
+                    type=EventType.RUN_ERROR,
+                    agent_name=agent.name,
+                    run_id=context.run_id,
+                    data={"error": str(e), "error_type": type(e).__name__},
+                    trace_id=context.trace_id,
+                )
+                yield AgentEvent(
+                    type=EventType.RUN_END,
+                    agent_name=agent.name,
+                    run_id=context.run_id,
+                    data={"content": "", "turn_count": 0},
+                    trace_id=context.trace_id,
+                )
+                raise
         finally:
-            if not task.done():
-                task.cancel()
+            # The consumer may have stopped early (cancelled, or closed the
+            # stream): stop the workflow and the pending get, and wait for both
+            # so no task is left behind.
+            pending = [t for t in (getter, task) if t is not None]
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         yield response
 
     async def run_stream(
@@ -1335,21 +1369,26 @@ class AgentRunner:
             if stream_steps:
                 response = None
                 stream_run_id = None
-                async for item in self._stream_workflow_steps(
-                    agent,
-                    input,
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                    max_turns=max_turns,
-                    trace_id=trace_id,
-                    metadata=metadata,
-                ):
-                    if isinstance(item, AgentResponse):
-                        response = item
-                    else:
-                        stream_run_id = stream_run_id or item.run_id
-                        yield item
+                # aclosing: if this stream is closed early, the inner stream's
+                # cleanup (stopping the workflow task) runs before we return.
+                async with aclosing(
+                    self._stream_workflow_steps(
+                        agent,
+                        input,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        max_turns=max_turns,
+                        trace_id=trace_id,
+                        metadata=metadata,
+                    )
+                ) as steps:
+                    async for item in steps:
+                        if isinstance(item, AgentResponse):
+                            response = item
+                        else:
+                            stream_run_id = stream_run_id or item.run_id
+                            yield item
                 assert response is not None
                 # Keep the run_id the step events already used.
                 _run_id = stream_run_id or response.run_id or generate_run_id()
