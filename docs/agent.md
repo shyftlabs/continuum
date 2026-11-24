@@ -910,6 +910,17 @@ def dead_end(r: ToolRound) -> str | None:
 AgentConfig(after_tool_round=dead_end)
 ```
 
+`think`, Headroom retrieve and handoff calls are left out of a round, so the
+rule sees the same rounds in `run` and `run_stream`; a round made only of
+them does not call it.
+
+Like the hooks above, keep the rule lightweight. An async rule is awaited with
+no timeout, so a rule that hangs holds up the run; put your own
+`asyncio.wait_for` around slow work. Write the nudge yourself rather than
+pasting raw tool output into it: it goes in as a system message on every
+provider, and the direct Anthropic provider merges system messages into the
+top-level system prompt, so tool text there would carry system-level weight.
+
 ---
 
 ## 11 · Common patterns

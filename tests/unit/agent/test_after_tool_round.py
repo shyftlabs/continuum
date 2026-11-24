@@ -15,7 +15,7 @@ from continuum.agent.base import BaseAgent
 from continuum.agent.config import AgentConfig, AgentMemoryConfig
 from continuum.agent.execution.tool_round import ToolRound, ToolRoundResult, ToolRoundTracker
 from continuum.agent.types import EventType, PrepareRunResult, RunContext, RunState
-from continuum.llm.types import FunctionCall, StreamChunk, ToolCall
+from continuum.llm.types import FunctionCall, LLMResponse, StreamChunk, ToolCall
 
 EMPTY = '{"rows": [], "result_status": "no_results_found"}'
 
@@ -185,3 +185,128 @@ async def test_run_stream_without_hook_is_unchanged():
     )
     [e async for e in runner.run_stream(_agent(), "compare leverage")]
     assert all(m.get("role") != "system" for m in sent[1])
+
+
+# ---------------------------------------------------------- run / run_stream parity
+#
+# run's executor drops think, Headroom-retrieve and handoff calls before the hook;
+# run_stream used to pass every call, so a react_mode agent that thought first
+# never reached the dead_end nudge when streaming. Same script, both paths.
+
+
+def _think_then_empty_sql():
+    return [
+        [_tc("c0", "think", '{"thought": "check SQL first"}')],
+        [_tc("c1", "sql_query", '{"q": "lev"}')],
+        None,  # answer
+    ]
+
+
+def _recording_hook(rounds):
+    def hook(r: ToolRound):
+        rounds.append((r.turn, [x.name for x in r.results], sorted(r.tools_used)))
+        return dead_end(r)
+
+    return hook
+
+
+NUDGE = "Those lookups returned nothing. Call vector_search now."
+
+
+async def _via_execute_loop():
+    from unittest.mock import patch
+
+    from continuum.agent.execution.executor import Executor
+
+    script = _think_then_empty_sql()
+    sent: list[list[dict]] = []
+
+    async def chat(*args, messages, **kwargs):
+        sent.append([dict(m) for m in messages])
+        calls = script[len(sent) - 1]
+        return LLMResponse(model="m", content=None if calls else "no records", tool_calls=calls)
+
+    async def execute_tools_batch(agent, tool_calls, context, tool_summary):
+        return [{"role": "tool", "tool_call_id": tc.id, "content": EMPTY} for tc in tool_calls]
+
+    llm = MagicMock()
+    llm.chat = AsyncMock(side_effect=chat)
+    handler = MagicMock()
+    handler.execute_tools_batch = AsyncMock(side_effect=execute_tools_batch)
+    rounds: list = []
+    agent = _agent(_recording_hook(rounds))
+    messages = [{"role": "user", "content": "compare leverage"}]
+    run_state = RunState(run_id="run-test")
+    run_state.messages = list(messages)
+    with patch("continuum.agent.execution.executor.LLMConfig") as cfg:
+        cfg.from_agent_config.return_value = MagicMock()
+        await Executor(llm_client=llm, tool_handler=handler).execute_loop(
+            agent, messages, RunContext(run_id="run-test", max_turns=5), run_state
+        )
+    return rounds, sent
+
+
+async def _via_run_stream():
+    script = _think_then_empty_sql()
+    sent: list[list[dict]] = []
+
+    async def stream(*args, messages, **kwargs):
+        sent.append([dict(m) for m in messages])
+        calls = script[len(sent) - 1]
+        if calls:
+            yield StreamChunk(tool_calls=calls, is_finished=True)
+        else:
+            yield StreamChunk(content="no records", is_finished=True)
+
+    async def run_tool(agent_, tc, ctx_):
+        content = "Thought recorded." if tc.function.name == "think" else EMPTY
+        return ({"role": "tool", "tool_call_id": tc.id, "content": content}, None)
+
+    runner = _runner(stream)
+    runner._tool_service.execute_tool_call = AsyncMock(side_effect=run_tool)
+    rounds: list = []
+    [e async for e in runner.run_stream(_agent(_recording_hook(rounds)), "compare leverage")]
+    return rounds, sent
+
+
+async def test_run_and_run_stream_hand_the_hook_the_same_rounds():
+    run_rounds, run_sent = await _via_execute_loop()
+    stream_rounds, stream_sent = await _via_run_stream()
+
+    # The think-only turn does not call the hook; the empty sql_query turn does,
+    # and think is not in the history it sees.
+    assert run_rounds == [(2, ["sql_query"], ["sql_query"])]
+    assert stream_rounds == run_rounds
+    # and both send the nudge before the third model call
+    for sent in (run_sent, stream_sent):
+        assert len(sent) == 3
+        assert sent[2][-1] == {"role": "system", "content": NUDGE}
+
+
+async def test_internal_calls_are_left_out_of_a_round():
+    from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+    seen: list[ToolRound] = []
+    agent = _agent(lambda r: seen.append(r))
+    agent.is_handoff_tool_call = lambda name: (name == "transfer_to_b", "b")
+    msgs = [{"role": "tool", "tool_call_id": i, "content": EMPTY} for i in ("c1", "c2", "c3", "c4")]
+    calls = [
+        _tc("c1", "think"),
+        _tc("c2", RETRIEVE_TOOL_NAME),
+        _tc("c3", "transfer_to_b"),
+    ]
+    tracker = ToolRoundTracker(agent)
+    assert await tracker.after_round(1, calls, msgs) is None
+    assert seen == []  # a round of only internal calls does not call the hook
+
+    await tracker.after_round(2, [*calls, _tc("c4", "sql_query")], msgs)
+    [round_] = seen
+    assert [r.name for r in round_.results] == ["sql_query"]
+
+
+def test_bad_max_nudges_only_matters_when_a_hook_is_set():
+    import pytest
+
+    ToolRoundTracker(_agent(None, max_nudges="one"))  # no hook: never read
+    with pytest.raises(ValueError):
+        ToolRoundTracker(_agent(dead_end, max_nudges="one"))

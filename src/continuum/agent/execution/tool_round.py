@@ -18,6 +18,10 @@ A returned string is added as a system message before the next model call, at mo
 ``after_tool_round_max_nudges`` times per run (default 1). System messages are not
 saved to the session, so the nudge steers this run without entering chat history.
 A hook that raises is logged and ignored.
+
+The hook sees the same rounds in ``run`` and ``run_stream``: internal calls
+(``think``, the Headroom retrieve, handoffs) are left out of a round, and a round
+made only of them does not call the hook.
 """
 
 from __future__ import annotations
@@ -80,14 +84,34 @@ def _call_name_args_id(tc: Any) -> tuple[str, dict[str, Any], str]:
     return name or "", args if isinstance(args, dict) else {"_raw": args}, tc_id or ""
 
 
+def _is_internal_call(agent: Any, name: str) -> bool:
+    """``think``, the Headroom retrieve and handoffs are plumbing, not lookups."""
+    from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
+
+    if name in ("think", RETRIEVE_TOOL_NAME):
+        return True
+    check = getattr(agent, "is_handoff_tool_call", None)
+    if check is None:
+        return False
+    is_handoff, target = check(name)
+    return bool(is_handoff and target)
+
+
 class ToolRoundTracker:
     """Per-run state for the after-tool-round hook."""
 
     def __init__(self, agent: Any):
         config = getattr(agent, "config", None)
+        self._agent = agent
         self._agent_name = getattr(agent, "name", "")
         self._hook: AfterToolRound | None = getattr(config, "after_tool_round", None)
-        self._max = int(getattr(config, "after_tool_round_max_nudges", 1) or 0)
+        # Read only when a hook is set, so a bad value cannot fail agents that
+        # do not use the hook.
+        self._max = (
+            int(getattr(config, "after_tool_round_max_nudges", 1) or 0)
+            if self._hook is not None
+            else 0
+        )
         self._history: list[ToolRoundResult] = []
         self._nudges = 0
 
@@ -106,9 +130,14 @@ class ToolRoundTracker:
         results = []
         for tc in tool_calls:
             name, args, tc_id = _call_name_args_id(tc)
+            # Left out here, once, so run (whose executor already drops them)
+            # and run_stream (which passes every call) hand the hook the same
+            # rounds: their results are not lookup results.
+            if _is_internal_call(self._agent, name):
+                continue
             reply = by_id.get(tc_id)
             if reply is None:
-                continue  # handoffs and internal calls have no tool result
+                continue  # no tool result (e.g. a call that was not executed)
             content = reply.get("content")
             results.append(
                 ToolRoundResult(
