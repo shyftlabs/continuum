@@ -382,8 +382,9 @@ To override per-agent: set `agent.config.context_management = cfg`. The
 runner applies it both when it builds the agent's messages and in the
 compression pass inside `LLMClient.chat()` / `chat_stream()` on each turn.
 `get_progressive_context_manager()` returns one manager per process, and
-`compress_if_needed(config=None)` falls back to that manager's config. A
-direct `LLMClient.chat()` call can pass `context_config=cfg`.
+`compress_if_needed(config=None)` falls back to that manager's config, and so
+do both passes for an agent that sets no `context_management`. A direct
+`LLMClient.chat()` call can pass `context_config=cfg`.
 
 ### Headroom compression (optional)
 

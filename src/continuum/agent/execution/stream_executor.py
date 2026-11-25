@@ -15,7 +15,7 @@ from continuum.agent.execution.executor import _enrich_config_for_gateway
 from continuum.agent.interfaces.executor_interface import IStreamExecutor
 from continuum.agent.types import AgentEvent, EventType, RunContext, RunState
 from continuum.llm.config import LLMConfig
-from continuum.llm.context_management import agent_context_config
+from continuum.llm.context_management import agent_context_kwargs
 from continuum.logging import get_logger
 
 if TYPE_CHECKING:
@@ -109,7 +109,7 @@ class StreamExecutor(IStreamExecutor):
                     messages=messages,
                     tools=tools if tools else None,
                     config=llm_config,
-                    context_config=agent_context_config(agent),
+                    **agent_context_kwargs(agent),
                     trace_metadata={"session_id": context.session_id}
                     if context.session_id
                     else None,

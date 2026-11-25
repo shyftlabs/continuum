@@ -24,7 +24,7 @@ from enum import Enum
 from typing import Any
 
 from continuum.config import settings
-from continuum.llm import LLMClient
+from continuum.llm.client import LLMClient
 from continuum.llm.context_window import (
     ContextWindowManager,
     TruncationStrategy,
@@ -166,6 +166,17 @@ def agent_context_config(agent: Any) -> ContextManagementConfig | None:
     """The agent's own ``ContextManagementConfig``, or None when it sets none."""
     agent_config = getattr(agent, "config", None)
     return getattr(agent_config, "context_management", None) if agent_config else None
+
+
+def agent_context_kwargs(agent: Any) -> dict[str, ContextManagementConfig]:
+    """``{"context_config": cfg}`` when the agent sets its own config, else ``{}``.
+
+    Spread into ``llm_client.chat_stream(...)`` so a client injected through
+    ``AgentRunner(llm_client=...)`` whose method takes no ``context_config``
+    keeps working for agents that set none.
+    """
+    config = agent_context_config(agent)
+    return {"context_config": config} if config is not None else {}
 
 
 @dataclass

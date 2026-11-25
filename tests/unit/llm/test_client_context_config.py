@@ -76,7 +76,42 @@ MESSAGES = [ChatMessage(role="user", content="hi")]
 async def test_without_an_agent_config_the_shared_managers_config_is_used(client, shared_manager):
     await client.chat(MESSAGES, auto_session=False)
 
-    assert shared_manager.compress_if_needed.await_args.kwargs["config"] is shared_manager.config
+    # No config= at all: the manager applies its own, as on dev.
+    shared_manager.compress_if_needed.assert_awaited_once()
+    assert "config" not in shared_manager.compress_if_needed.await_args.kwargs
+
+
+async def test_a_manager_override_without_a_config_parameter_still_compresses(client):
+    """An override whose compress_if_needed(messages, model) takes no config used to
+    raise TypeError there, which was caught and logged, so compression was skipped."""
+    manager = MagicMock()
+    manager.config = ContextManagementConfig(enabled=True)
+
+    async def compress_if_needed(messages, model):
+        return messages, _result()
+
+    manager.compress_if_needed = AsyncMock(side_effect=compress_if_needed)
+    with patch(
+        "continuum.llm.context_management.get_progressive_context_manager",
+        return_value=manager,
+    ):
+        await client.chat(MESSAGES, auto_session=False)
+        async for _ in client.chat_stream(MESSAGES):
+            pass
+
+    assert manager.compress_if_needed.await_count == 2
+    for call in manager.compress_if_needed.await_args_list:
+        assert "config" not in call.kwargs
+
+
+def test_context_config_type_hints_resolve_at_runtime():
+    import typing
+
+    from continuum.llm.client import LLMClient
+
+    for method in (LLMClient.chat, LLMClient.chat_stream):
+        hint = typing.get_type_hints(method)["context_config"]
+        assert ContextManagementConfig in typing.get_args(hint)
 
 
 async def test_published_agent_config_disables_compression(client, shared_manager):
@@ -150,3 +185,143 @@ async def test_executor_publishes_the_agents_config_for_its_loop():
 
     assert seen["config"] is mine
     assert get_active_context_config() is None
+
+
+# --- run_stream with an injected client (round 2) ---------------------------------
+
+
+def _stream_agent(context_management):
+    agent = MagicMock()
+    agent.name = "streamer"
+    agent.model = "gpt-4o-mini"
+    agent.temperature = 0.7
+    agent.max_tokens = 256
+    agent.gateway_mode = None
+    agent.extra_body = None
+    agent.enable_json_mode = False
+    agent.json_schema = None
+    agent.json_strict = False
+    agent.metadata = {}
+    agent.on_end = None
+    agent.output_schema = None
+    agent.config.output_scanners = None
+    agent.config.context_management = context_management
+    agent.is_handoff_tool_call.return_value = (False, None)
+    agent.get_tools_for_llm.return_value = []
+    return agent
+
+
+async def _run_stream(llm_client, agent):
+    from continuum.agent.runner import AgentRunner
+    from continuum.agent.types import PrepareRunResult
+
+    with patch("continuum.agent.runner.get_container", return_value=MagicMock()):
+        runner = AgentRunner(llm_client=llm_client)
+    ctx = MagicMock(max_turns=2, session_id=None, priority=5, metadata={}, recorder=None)
+    ctx.run_id, ctx.trace_id = "run-1", "trace-1"
+    runner._prepare_run = AsyncMock(
+        return_value=PrepareRunResult(success=True, context=ctx, run_state=MagicMock(messages=[]))
+    )
+    runner._finalizer.finalize = AsyncMock()
+    return [e async for e in runner.run_stream(agent, "hi")]
+
+
+class _StrictStreamClient:
+    """An injected client whose chat_stream takes no **kwargs (worked on dev)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat_stream(self, messages, tools=None, config=None, trace_metadata=None):
+        self.calls += 1
+        yield StreamChunk(content="streamed answer", model="m")
+
+
+async def test_run_stream_works_with_a_client_that_takes_no_context_config():
+    from continuum.agent.types import EventType
+
+    llm = _StrictStreamClient()
+    events = await _run_stream(llm, _stream_agent(context_management=None))
+
+    assert llm.calls == 1
+    assert not [e for e in events if e.type == EventType.RUN_ERROR]
+    deltas = [e.data["content"] for e in events if e.type == EventType.CONTENT_DELTA]
+    assert "streamed answer" in "".join(deltas)
+
+
+async def test_run_stream_passes_the_agents_own_config():
+    mine = ContextManagementConfig(keep_recent_messages=4)
+    seen = {}
+
+    class _Client:
+        async def chat_stream(self, **kwargs):
+            seen.update(kwargs)
+            yield StreamChunk(content="ok", model="m")
+
+    await _run_stream(_Client(), _stream_agent(context_management=mine))
+
+    assert seen["context_config"] is mine
+
+
+def test_agent_context_kwargs_is_empty_without_an_agent_config():
+    from continuum.llm.context_management import agent_context_kwargs
+
+    mine = ContextManagementConfig()
+    assert agent_context_kwargs(MagicMock(config=MagicMock(context_management=None))) == {}
+    assert agent_context_kwargs(MagicMock(config=MagicMock(context_management=mine))) == {
+        "context_config": mine
+    }
+
+
+# --- the message-builder pass (round 2) --------------------------------------------
+
+
+def _builder_agent(context_management=None):
+    from continuum.agent.base import BaseAgent
+    from continuum.agent.config import AgentConfig, AgentMemoryConfig
+
+    return BaseAgent(
+        name="builder-agent",
+        instructions="You are helpful.",
+        config=AgentConfig(
+            input_sanitization=False,
+            injection_detection=False,
+            context_management=context_management,
+        ),
+        memory_config=AgentMemoryConfig(search_memories=False),
+    )
+
+
+async def _prepare(agent):
+    from continuum.agent.execution.message_builder import MessageBuilder
+    from continuum.agent.utils.context_utils import create_run_context
+
+    session = MagicMock(get_conversation_history=AsyncMock(return_value=[]))
+    memory = MagicMock(retrieve_memories=AsyncMock(return_value=[]))
+    builder = MessageBuilder(memory_service=memory, session_service=session)
+    return await builder.prepare_messages(agent, "hello", create_run_context())
+
+
+async def test_message_builder_without_an_agent_config_uses_the_managers_config(shared_manager):
+    """A process-wide enable_caching=False (or TTL) set through
+    get_progressive_context_manager(config=...) applies to this pass again; it was
+    replaced by a default config, so summaries were cached anyway."""
+    shared_manager.config = ContextManagementConfig(enabled=True, enable_caching=False)
+
+    await _prepare(_builder_agent())
+
+    assert shared_manager.compress_if_needed.await_args.kwargs["config"] is shared_manager.config
+
+
+async def test_message_builder_does_not_make_an_agents_config_the_process_default(monkeypatch):
+    """The first agent through the builder created the process-wide manager with its
+    own config, so its settings became every config-less caller's fallback."""
+    import continuum.llm.context_management as cm
+
+    monkeypatch.setattr(cm, "_global_context_manager", None)
+    mine = ContextManagementConfig(keep_recent_messages=3, enable_caching=False)
+
+    await _prepare(_builder_agent(context_management=mine))
+
+    assert cm.get_progressive_context_manager().config is not mine
+    assert cm.get_progressive_context_manager().config == ContextManagementConfig()

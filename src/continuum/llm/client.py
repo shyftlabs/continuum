@@ -9,7 +9,7 @@ Includes full observability integration with Langfuse via @observe decorator.
 import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from continuum.llm.callbacks import (
     get_langfuse_metadata,
@@ -32,9 +32,6 @@ from continuum.observability.decorators import observe
 from continuum.observability.trace_context import (
     get_current_session_id,
 )
-
-if TYPE_CHECKING:
-    from continuum.llm.context_management import ContextManagementConfig
 
 logger = get_logger(__name__)
 
@@ -313,7 +310,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
-        context_config: "ContextManagementConfig | None" = None,  # noqa: UP037
+        context_config: "ContextManagementConfig | None" = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -394,10 +391,15 @@ class LLMClient:
                 context_config or get_active_context_config() or context_manager.config
             )
             if compress_config.enabled:
+                # config= only when it is not the manager's own, so a manager
+                # override whose compress_if_needed takes no config still runs.
+                extra = (
+                    {} if compress_config is context_manager.config else {"config": compress_config}
+                )
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
-                    config=compress_config,
+                    **extra,
                 )
                 if compression_result.was_compressed:
                     logger.info(
@@ -566,7 +568,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
-        context_config: "ContextManagementConfig | None" = None,  # noqa: UP037
+        context_config: "ContextManagementConfig | None" = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
@@ -595,10 +597,15 @@ class LLMClient:
                 context_config or get_active_context_config() or context_manager.config
             )
             if compress_config.enabled:
+                # config= only when it is not the manager's own, so a manager
+                # override whose compress_if_needed takes no config still runs.
+                extra = (
+                    {} if compress_config is context_manager.config else {"config": compress_config}
+                )
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
-                    config=compress_config,
+                    **extra,
                 )
                 if compression_result.was_compressed:
                     logger.info(
@@ -714,3 +721,9 @@ class LLMClient:
     ) -> Iterator[StreamChunk]:
         """Alias for chat_stream_sync."""
         yield from self.chat_stream_sync(messages, config, **kwargs)
+
+
+# Imported last: context_management imports LLMClient from this module. Bound at
+# module level so the context_config hints on chat() / chat_stream() resolve at
+# runtime (typing.get_type_hints).
+from continuum.llm.context_management import ContextManagementConfig  # noqa: E402
