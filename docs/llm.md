@@ -68,16 +68,20 @@ not enough if it's still exported elsewhere; prefer the empty value.
 Each agent model call carries `body.metadata` for the gateway's cost and
 budget reports: `session_id`, `trace_id`, the run's `tags`, and any labels
 passed under `gateway_metadata` (sent as strings; the ids win over a label of
-the same name):
+the same name). An agent's own `extra_body["metadata"]` is kept and counts as
+labels; a caller label of the same name wins over it:
 
 ```python
 await runner.run(agent, question, metadata={"gateway_metadata": {"org_id": org.id, "fund_id": fund.id}})
 ```
 
 A handoff target's calls carry the same labels and tags. Nested values are sent
-as JSON. At most 16 keys are sent in all (the ids and tags count), with keys cut
-to 64 characters and values to 512; extra labels are dropped with a warning, and
-a `gateway_metadata` that is not a mapping is ignored with a warning. Labels and
+as JSON, or as text when JSON cannot encode them (keys that are not strings, a
+value that contains itself). At most 16 keys are sent in all (the ids, tags and
+the agent's own metadata count), with keys cut to 64 characters and values to
+512; extra labels are dropped, and keys that are the same in their first 64
+characters keep the last value. Each of these, and a `gateway_metadata` that is
+not a mapping (ignored), is logged as a warning once per run. Labels and
 tags leave the process, so keep personal data (names, emails, free text) out of
 them; use opaque ids.
 

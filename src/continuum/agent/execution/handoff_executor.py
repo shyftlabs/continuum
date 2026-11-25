@@ -368,6 +368,7 @@ class HandoffExecutor(IHandoffExecutor):
             from continuum.agent.execution.executor import GATEWAY_METADATA_KEY
             from continuum.agent.types import RunContext
 
+            source_metadata = getattr(context, "metadata", None) or {}
             target_context = RunContext(
                 run_id=context.run_id,
                 session_id=context.session_id,
@@ -389,10 +390,11 @@ class HandoffExecutor(IHandoffExecutor):
                 # calls are attributed like the source's. Only the gateway entry:
                 # the rest of ``metadata`` holds per-agent state such as
                 # ``_filtered_tools``, which would give the target the source's tools.
-                tags=list(context.tags),
+                # A caller-built context may have no tags or metadata (or None).
+                tags=list(getattr(context, "tags", None) or []),
                 metadata=(
-                    {GATEWAY_METADATA_KEY: context.metadata[GATEWAY_METADATA_KEY]}
-                    if context.metadata and GATEWAY_METADATA_KEY in context.metadata
+                    {GATEWAY_METADATA_KEY: source_metadata[GATEWAY_METADATA_KEY]}
+                    if GATEWAY_METADATA_KEY in source_metadata
                     else {}
                 ),
             )
