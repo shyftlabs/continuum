@@ -91,6 +91,11 @@ def parse_step(data: dict[str, Any]) -> WorkflowStep:
 # Activity params / results
 # ---------------------------------------------------------------------------
 
+# Marks an ApplicationError (in its details) or a heartbeat as an agent error
+# raised by run_agent_activity itself, as opposed to one the Temporal SDK or
+# worker raised (e.g. an activity the worker does not have).
+AGENT_ERROR_MARKER = "continuum-agent-error"
+
 
 class AgentActivityParams(BaseModel):
     agent_name: str
@@ -104,6 +109,9 @@ class AgentActivityParams(BaseModel):
     # caller's retry policy applies; only ``run_agent_step`` sets it. Old
     # workers ignore the field, so either deploy order works.
     raise_on_error: bool = False
+    # The step's attempts in all, set by ``run_agent_step``: a failed attempt
+    # counts toward the runner's circuit breaker only if it is the last one.
+    max_attempts: int | None = None
 
 
 class AgentActivityResult(BaseModel):

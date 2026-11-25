@@ -23,10 +23,13 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         ApprovalDecision,
         NotificationParams,
-        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
+    from continuum.temporal.workflows.steps import (
+        check_on_step_error,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
 
 from dataclasses import dataclass
@@ -46,7 +49,9 @@ class LoopWorkflowInput:
     approval_timeout: int = 86400
     # "continue" runs the next iteration after one fails (the 2.x behaviour);
     # "fail" stops the run with status="failed".
-    on_step_error: OnStepError = "continue"
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; run() rejects anything else with a clear error.
+    on_step_error: str = "continue"
     # Run each iteration once, never retried: an agent with side effects.
     single_attempt: bool = False
 
@@ -86,6 +91,7 @@ class LoopAgentWorkflow:
 
     @workflow.run
     async def run(self, input: LoopWorkflowInput) -> WorkflowResult:
+        check_on_step_error(input.on_step_error)
         last_output = input.initial_input
 
         for iteration in range(input.max_iterations):

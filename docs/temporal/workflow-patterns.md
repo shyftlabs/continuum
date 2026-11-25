@@ -138,9 +138,12 @@ RetryPolicy(
 Activities also use `heartbeat_timeout=60s`; `run_agent_activity` calls
 `activity.heartbeat()` so long-running agents don't get evicted.
 
-The policy covers agent errors as well as timeouts. An agent that is not
-registered, hits max turns, is denied by a policy or is misconfigured is not
-retried; an open circuit breaker is retried after its cooldown. Set
+The policy covers agent errors as well as timeouts. Errors a retry cannot fix
+are not retried: an unregistered agent, max turns, a policy denial, a
+configuration error, a blocked input, an authentication, context-length,
+invalid-request or content-filter error from the model, and a session error
+other than a lost connection. An open circuit breaker is retried after its
+cooldown, and a step's failed attempts count once toward the breaker. Set
 `retries: 1` on a step with side effects (an email, a payment) so it runs once.
 
 ### When a step still fails
@@ -150,7 +153,7 @@ its retries does to the run:
 
 | Value | Behaviour |
 |---|---|
-| `"continue"` *(default)* | The error result goes into `step_results` and the next step runs. A step that timed out on its last attempt fails the run. |
+| `"continue"` *(default)* | The error result goes into `step_results` and the next step runs. A step that timed out on every attempt fails the run; one that hit an agent error first is an error result. |
 | `"fail"` | The run stops with `status="failed"` and `error` naming the step. A parallel step stops the run if any agent failed. |
 
 `SequentialWorkflowInput`, `LoopWorkflowInput` and `ParallelWorkflowInput` take

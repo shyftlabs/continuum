@@ -126,10 +126,14 @@ If `run()` raises, the activity returns a result with `status="error"` and
 `error=str(exc)`, and Temporal does not retry it. With
 `AgentActivityParams(raise_on_error=True)`, which `run_agent_step` and the
 built-in workflows set, the activity raises instead, so the step's retry policy
-(`retries`, default 3, with backoff) applies. An agent that is not registered,
-hits max turns, is denied by a policy or is misconfigured is not retried; an
-open circuit breaker is retried after its cooldown. When the retries run out,
-`WorkflowInput.on_step_error` decides what happens: `"continue"` (default)
+(`retries`, default 3, with backoff) applies. Errors a retry cannot fix are not
+retried: an unregistered agent, max turns, a policy denial, a configuration
+error, a blocked input, an authentication, context-length, invalid-request or
+content-filter error from the model, and a session error other than a lost
+connection, also when the runner wraps them. An open circuit breaker is retried
+after its cooldown, and a step's failed attempts count once toward the breaker.
+When the retries run out, the step's `error` text is the same as without
+retries, and `WorkflowInput.on_step_error` decides what happens: `"continue"` (default)
 records the error result and runs the next step, `"fail"` stops the run with
 `WorkflowResult(status="failed", error=...)` naming the step.
 

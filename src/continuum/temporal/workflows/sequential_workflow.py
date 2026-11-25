@@ -23,10 +23,13 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         ApprovalDecision,
         NotificationParams,
-        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
+    from continuum.temporal.workflows.steps import (
+        check_on_step_error,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
 from dataclasses import dataclass, field
 
@@ -43,7 +46,9 @@ class SequentialWorkflowInput:
     approval_timeout: int = 86400
     # "continue" runs the next agent after one fails (the 2.x behaviour);
     # "fail" stops the run with status="failed".
-    on_step_error: OnStepError = "continue"
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; run() rejects anything else with a clear error.
+    on_step_error: str = "continue"
     # Agents that run once, never retried: steps with side effects.
     single_attempt_agents: list[str] = field(default_factory=list)
 
@@ -78,6 +83,7 @@ class SequentialAgentWorkflow:
 
     @workflow.run
     async def run(self, input: SequentialWorkflowInput) -> WorkflowResult:
+        check_on_step_error(input.on_step_error)
         last_output = input.initial_input
 
         for i, agent_name in enumerate(input.agent_names):

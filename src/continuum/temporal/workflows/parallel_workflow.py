@@ -20,10 +20,13 @@ with workflow.unsafe.imports_passed_through():
     from continuum.temporal.types import (
         AgentActivityParams,
         AgentActivityResult,
-        OnStepError,
         WorkflowResult,
     )
-    from continuum.temporal.workflows.steps import run_builtin_agent_step, step_retries_enabled
+    from continuum.temporal.workflows.steps import (
+        check_on_step_error,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
 
 from dataclasses import dataclass, field
@@ -41,7 +44,9 @@ class ParallelWorkflowInput:
     timeout_per_agent: int = 300
     # "continue" completes with whatever merged (the 2.x behaviour); "fail"
     # returns status="failed" naming the failed agents, with the rest merged.
-    on_step_error: OnStepError = "continue"
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; run() rejects anything else with a clear error.
+    on_step_error: str = "continue"
     # Agents that run once, never retried: agents with side effects.
     single_attempt_agents: list[str] = field(default_factory=list)
 
@@ -64,6 +69,7 @@ class ParallelAgentWorkflow:
 
     @workflow.run
     async def run(self, input: ParallelWorkflowInput) -> WorkflowResult:
+        check_on_step_error(input.on_step_error)
         results: list[AgentActivityResult] = list(
             await asyncio.gather(
                 *(
