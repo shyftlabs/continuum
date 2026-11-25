@@ -8,7 +8,7 @@ no memory client existed and nothing was read or written.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from continuum.agent.base import BaseAgent
 from continuum.agent.services import memory_service
@@ -74,3 +74,66 @@ async def test_disabled_client_skips_memory_search():
     agent = BaseAgent(name="ask", instructions="x", model="m")
     assert await service.retrieve_memories(agent, "q", RunContext(run_id="r")) == []
     client.search.assert_not_called()
+
+
+async def test_protocol_session_client_keeps_memory_recall():
+    # A session client that follows ISessionClient without subclassing
+    # SessionClient has no _resolve_memory_client. The warning check used to call
+    # it anyway, so retrieve_memories raised before searching and nothing was
+    # recalled.
+    from continuum.protocols import ISessionClient
+
+    client = _memory(True)
+    client.config.memory_isolation = "user"
+    client.search = AsyncMock(return_value=[])
+    session = MagicMock(spec=ISessionClient)
+    session.is_enabled = True
+    service = MemoryService(memory_client=client, session_client=session)
+    agent = BaseAgent(name="ask", instructions="x", model="m")
+    with patch.object(memory_service, "logger"):
+        await service.retrieve_memories(agent, "q", RunContext(run_id="r", user_id="u"))
+    client.search.assert_called_once()
+    assert not _warned(None, session)  # unknown memory path: no warning, no error
+
+
+async def test_duck_typed_memory_client_without_is_enabled_is_searched():
+    class DuckMemory:
+        def __init__(self):
+            self.config = MagicMock(memory_isolation="user")
+            self.search = AsyncMock(return_value=[])
+
+    client = DuckMemory()
+    service = MemoryService(memory_client=client)
+    agent = BaseAgent(name="ask", instructions="x", model="m")
+    with patch.object(memory_service, "logger"):
+        await service.retrieve_memories(agent, "q", RunContext(run_id="r", user_id="u"))
+    client.search.assert_called_once()
+
+
+def test_warning_check_does_not_create_the_container():
+    # A container-resolving SessionClient with memory off in the app's own
+    # container: deciding on a log line must not create the global container or
+    # build a MemoryClient.
+    from continuum.core import container as container_module
+
+    container_module.reset_container()
+    try:
+        with patch.object(container_module, "Container") as container_cls:
+            assert not _warned(None, _session(None))
+        container_cls.assert_not_called()
+        assert container_module._global_container is None
+    finally:
+        container_module.reset_container()
+
+
+def test_warning_uses_an_existing_container_client():
+    from continuum.core import container as container_module
+
+    container_module.reset_container()
+    try:
+        existing = MagicMock()
+        existing.has_memory_client.return_value = True
+        container_module._global_container = existing
+        assert _warned(None, _session(None))
+    finally:
+        container_module._global_container = None
