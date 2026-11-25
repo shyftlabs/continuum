@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from continuum.llm import LLMClient
     from continuum.memory import MemoryClient
     from continuum.observability import TracingManager
-    from continuum.session import SessionClient
+    from continuum.session import SessionClient, SessionConfig
     from continuum.session.base import BaseSessionProvider
     from continuum.tools import ToolExecutor
 
@@ -295,17 +295,24 @@ class Container:
         in-memory provider if Redis is disabled, unconfigured, or unreachable —
         so constructing the container never opens a connection.
         """
-        from continuum.session import SessionClient, SessionConfig
-
-        config_dict = self._config.session_config or {}
-        config = SessionConfig(**config_dict)
+        from continuum.session import SessionClient
 
         self._session_client = SessionClient(
-            session_config=config,
+            session_config=self.configured_session_config(),
             background_tasks=self.background_tasks,
         )
         self._session_initialized = True
         logger.debug("Session client initialized via container")
+
+    def configured_session_config(self) -> SessionConfig:
+        """The SessionConfig this container builds its session client from.
+
+        Settings plus ``ContainerConfig.session_config`` overrides. Building it
+        creates no client and opens no connection.
+        """
+        from continuum.session import SessionConfig
+
+        return SessionConfig(**(self._config.session_config or {}))
 
     def set_session_client(
         self,

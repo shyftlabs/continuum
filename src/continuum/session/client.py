@@ -45,6 +45,10 @@ _DURABLE_HINTS = {
 }
 
 
+# Bound on closing a provider the client drops, so a hung store cannot stall a request.
+_CLOSE_TIMEOUT_SECONDS = 5.0
+
+
 def _display_name(provider: str) -> str:
     return _DISPLAY_NAMES.get(provider, provider)
 
@@ -238,6 +242,11 @@ class SessionClient:
         """
         return self._degraded
 
+    @property
+    def active_provider(self) -> BaseSessionProvider | None:
+        """The provider in use once chosen (or injected), else None. Never resolves one."""
+        return self._provider if self._provider_resolved else None
+
     def set_provider(self, provider: BaseSessionProvider) -> None:
         """Set the session provider explicitly (trusted; never probed/swapped)."""
         self._provider = provider
@@ -302,6 +311,8 @@ class SessionClient:
         # fall back to the generic wording only when none was supplied.
         reason = getattr(redis_provider, "last_probe_error", None)
         name = _display_name(cfg.provider)
+        # The probe may have opened a pool; it is not used, so release it.
+        await self._close_dropped(redis_provider)
         return self._fallback_or_fail(
             f"{name} probe failed: {reason}" if reason else f"{name} is unreachable"
         )
@@ -350,17 +361,29 @@ class SessionClient:
         except Exception:  # noqa: BLE001 — metrics are best-effort
             pass
 
-    def _degrade_to_memory(self, reason: str) -> None:
+    async def _degrade_to_memory(self, reason: str) -> None:
         """Swap the active provider to in-memory after a mid-session connection loss.
 
         Idempotent: once degraded, further connection errors don't re-warn. The
         warning is emitted exactly once, so a Redis that dies mid-session costs
-        one log line, not an error per request.
+        one log line, not an error per request. The dropped provider is closed,
+        so its pooled connections do not stay open.
         """
-        if isinstance(self._provider, MemorySessionProvider):
+        dropped = self._provider
+        if isinstance(dropped, MemorySessionProvider):
             return
+        # Swap before awaiting, so a concurrent caller sees the swap and returns.
         self._provider = self._make_memory_fallback(reason)
         self._provider_resolved = True
+        if dropped is not None:
+            await self._close_dropped(dropped)
+
+    async def _close_dropped(self, provider: BaseSessionProvider) -> None:
+        """Close a provider the client no longer uses. Never raises."""
+        try:
+            await asyncio.wait_for(provider.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except Exception as e:  # noqa: BLE001 — cleanup must not mask the fallback
+            logger.debug("Closing the dropped session provider failed: %s", e)
 
     # -------------------------------------------------------------------------
     # Session ownership
@@ -483,7 +506,7 @@ class SessionClient:
                 or self._session_config.fallback_mode == "fail"
             ):
                 raise
-            self._degrade_to_memory(
+            await self._degrade_to_memory(
                 f"{_display_name(provider.provider_name)} became unreachable mid-session ({e})"
             )
             return await getattr(self._provider, method)(*args, **kwargs)

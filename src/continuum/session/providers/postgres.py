@@ -61,21 +61,29 @@ logger = get_logger(__name__)
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
 
 
-def _strip_nul(value: Any) -> Any:
-    """Drop U+0000 from every string in a JSON-able value. PostgreSQL text and jsonb
-    cannot hold it (PDF text can), and Redis stores it, so the write must not fail."""
+# A UTF-16 surrogate on its own (a split emoji in a truncated JSON body, say).
+_LONE_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def _pg_safe(value: Any) -> Any:
+    """Make every string in a JSON-able value storable in PostgreSQL text and jsonb.
+
+    Neither can hold U+0000 (PDF text can) or a lone surrogate, and Redis stores
+    both, so the write must not fail: NUL is dropped and a lone surrogate becomes
+    U+FFFD, the replacement character.
+    """
     if isinstance(value, str):
-        return value.replace("\x00", "")
+        return _LONE_SURROGATE.sub("\ufffd", value.replace("\x00", ""))
     if isinstance(value, dict):
-        return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
+        return {_pg_safe(k): _pg_safe(v) for k, v in value.items()}
     if isinstance(value, list | tuple):
-        return [_strip_nul(v) for v in value]
+        return [_pg_safe(v) for v in value]
     return value
 
 
 def _dumps(value: Any) -> str:
-    """JSON text for a jsonb column, without NUL characters."""
-    return json.dumps(_strip_nul(value))
+    """JSON text for a jsonb column that PostgreSQL accepts."""
+    return json.dumps(_pg_safe(value))
 
 
 def _connection_errors() -> tuple[type[BaseException], ...]:
@@ -217,7 +225,10 @@ class PostgresSessionProvider(BaseSessionProvider):
                 else:
                     yield conn
         except _connection_errors() as e:
-            raise SessionConnectionError(f"PostgreSQL session store unreachable: {e}") from e
+            # A timeout has an empty message, so name the error type too.
+            raise SessionConnectionError(
+                f"PostgreSQL session store unreachable: {type(e).__name__}: {e}"
+            ) from e
 
     async def aping(self) -> bool:
         """Probe once; SessionClient calls this before choosing the provider."""
@@ -438,9 +449,11 @@ class PostgresSessionProvider(BaseSessionProvider):
         async with self._conn(transaction=True) as conn:
             # Session row first, then its messages: the order add_message locks in, so a
             # clear racing a trimming add waits for it instead of deadlocking.
+            # Only a live session is refreshed: an expired one not yet purged must
+            # stay expired, not come back with its old user_id and custom fields.
             await conn.execute(
                 f"UPDATE {self._sessions} SET last_accessed_at = now(), "
-                "expires_at = now() + $2::interval WHERE session_id = $1",
+                "expires_at = now() + $2::interval WHERE session_id = $1 AND expires_at > now()",
                 session_id,
                 self._ttl,
             )
@@ -452,11 +465,29 @@ class PostgresSessionProvider(BaseSessionProvider):
             await conn.execute(f"DELETE FROM {self._sessions} WHERE session_id = $1", session_id)
         return True
 
-    async def purge_expired(self) -> int:
-        """Delete expired sessions and their messages. Returns how many sessions went."""
-        async with self._conn() as conn:
-            status = await conn.execute(f"DELETE FROM {self._sessions} WHERE expires_at <= now()")
-        return int(status.split()[-1])
+    async def purge_expired(self, batch_size: int = 1000) -> int:
+        """Delete expired sessions and their messages. Returns how many sessions went.
+
+        Deletes ``batch_size`` sessions per statement, each its own transaction
+        under the query timeout, so a large backlog is worked off a batch at a
+        time instead of one long DELETE that times out and rolls back every run.
+        Lower ``batch_size`` when sessions hold many messages.
+        """
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
+        s = self._sessions
+        total = 0
+        while True:
+            async with self._conn() as conn:
+                status = await conn.execute(
+                    f"DELETE FROM {s} WHERE session_id IN (SELECT session_id FROM {s} "
+                    "WHERE expires_at <= now() LIMIT $1 FOR UPDATE SKIP LOCKED)",
+                    batch_size,
+                )
+            deleted = int(status.split()[-1])
+            total += deleted
+            if deleted < batch_size:
+                return total
 
     async def close(self) -> None:
         if self._owns_pool and self._pool is not None:

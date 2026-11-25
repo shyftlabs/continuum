@@ -303,8 +303,59 @@ async def test_hung_query_times_out_as_connection_error():
     p = PostgresSessionProvider(_config(postgres_timeout_seconds=1))
     try:
         await p.get_or_create_session(user_id="u1", conversation_id="slow")
-        with pytest.raises(SessionConnectionError):
+        with pytest.raises(SessionConnectionError, match="TimeoutError"):
             async with p._conn() as conn:
                 await conn.execute("SELECT pg_sleep(5)")
     finally:
         await _drop(p)
+
+
+async def _expire_all(provider) -> None:
+    async with provider._conn() as conn:
+        await conn.execute(
+            f"UPDATE {provider._sessions} SET expires_at = now() - interval '1 second'"
+        )
+
+
+async def test_clear_does_not_revive_an_expired_session(provider):
+    sid = await provider.get_or_create_session(user_id="u1", conversation_id="gone")
+    meta = await provider.get_session_metadata(sid)
+    meta.custom = {"plan": "old"}
+    assert await provider.update_session_metadata(sid, meta)
+    await _expire_all(provider)
+    assert await provider.clear_session(sid) is True
+    assert await provider.get_session_metadata(sid) is None
+    # Coming back starts a fresh session, without the old one's fields.
+    assert await provider.get_or_create_session(user_id="u1", conversation_id="gone") == sid
+    assert (await provider.get_session_metadata(sid)).custom == {}
+
+
+async def test_purge_works_off_a_backlog_in_batches(provider):
+    for i in range(7):
+        sid = await provider.get_or_create_session(user_id="u1", conversation_id=f"b{i}")
+        await provider.add_message(sid, _msg("user", "x"))
+    await _expire_all(provider)
+    live = await provider.get_or_create_session(user_id="u1", conversation_id="live")
+    statements = []
+    real_conn = provider._conn
+
+    def counting_conn(**kwargs):
+        statements.append(1)
+        return real_conn(**kwargs)
+
+    provider._conn = counting_conn
+    assert await provider.purge_expired(batch_size=3) == 7
+    assert len(statements) == 3  # 3 + 3 + 1
+    provider._conn = real_conn
+    async with provider._conn() as conn:
+        assert await conn.fetchval(f"SELECT count(*) FROM {provider._messages}") == 0
+        assert await conn.fetchval(f"SELECT count(*) FROM {provider._sessions}") == 1
+    assert await provider.get_session_metadata(live) is not None
+    assert await provider.purge_expired() == 0
+
+
+async def test_lone_surrogates_are_stored_without_error(provider):
+    sid = await provider.get_or_create_session(user_id="u1", conversation_id="emoji")
+    await provider.add_message(sid, _msg("user", "cut \ud83d"), metadata={"m": "\ude00"})
+    [back] = await provider.get_messages(sid)
+    assert back.content == "cut \ufffd"

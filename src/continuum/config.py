@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file into os.environ BEFORE creating Settings
@@ -80,6 +80,10 @@ def _resolve_default_model(
     if has_gemini:
         return gemini_model
     return "gpt-4o-mini"
+
+
+# Built-in session stores selectable with SESSION_PROVIDER.
+SESSION_PROVIDERS = ("redis", "postgres", "memory")
 
 
 class Settings(BaseSettings):
@@ -302,7 +306,7 @@ class Settings(BaseSettings):
     # Session Configuration (Redis for short-term memory)
     # -------------------------------------------------------------------------
     session_enabled: bool = True  # Enable/disable session management
-    session_provider: str = "redis"  # Session store: 'redis', 'postgres' or 'memory'
+    session_provider: str = "redis"  # Session store: one of SESSION_PROVIDERS
     session_redis_host: str = "localhost"  # Redis host for sessions
     session_redis_port: int = 6380  # Redis port for sessions (different from Langfuse Redis)
     session_redis_password: str | None = None  # Redis password (matches docker-compose default)
@@ -330,7 +334,7 @@ class Settings(BaseSettings):
     session_postgres_create_tables: bool = True  # create the tables on first use if missing
     # Bounds connecting, each query and waiting for a pooled connection, so a hung
     # database or an exhausted pool fails over like an unreachable one.
-    session_postgres_timeout_seconds: float = 5.0
+    session_postgres_timeout_seconds: float = Field(default=5.0, gt=0)
     # Long-term memory (mem0) write timing: 'sync' (await before returning) or
     # 'background' (fire-and-forget, faster responses, eventual consistency).
     # Default 'background' — the mem0 fact-extraction (an LLM call) is kept off
@@ -516,6 +520,25 @@ class Settings(BaseSettings):
     )
     # When True: Only flush Langfuse traces, don't shutdown client. Don't close Redis connections.
     # When False: Fully shutdown Langfuse and close Redis connections on shutdown.
+
+    @field_validator("session_provider", mode="before")
+    @classmethod
+    def _check_session_provider(cls, v: object) -> object:
+        """Normalize SESSION_PROVIDER and reject unknown names at startup.
+
+        Case and surrounding spaces are ignored and an empty value means the
+        default, so a typo fails here, when settings load, rather than on the
+        first session call.
+        """
+        if not isinstance(v, str):
+            return v
+        name = v.strip().lower() or "redis"
+        if name not in SESSION_PROVIDERS:
+            raise ValueError(
+                f"Unknown SESSION_PROVIDER {v!r}. "
+                f"Valid values: {', '.join(repr(p) for p in SESSION_PROVIDERS)}."
+            )
+        return name
 
     @model_validator(mode="after")
     def _apply_provider_aware_defaults(self) -> "Settings":

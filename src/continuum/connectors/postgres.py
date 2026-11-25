@@ -10,6 +10,7 @@ is optional and a Redis-only install must still import this module.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -18,6 +19,9 @@ from continuum.logging import get_logger
 from continuum.session.config import SessionConfig
 
 logger = get_logger(__name__)
+
+# One keyword=value pair of a libpq connection string; the value may be quoted.
+_KEYWORD_PAIR = re.compile(r"(\w+)\s*=\s*('(?:[^'\\]|\\.)*'|\S+)")
 
 
 class PostgresConnector(BaseConnector[Any]):
@@ -40,8 +44,19 @@ class PostgresConnector(BaseConnector[Any]):
     def _target(self) -> dict[str, Any]:
         """Host, port and database from the DSN. Never the user or password."""
         dsn = self._config.postgres_dsn
+        empty = {"host": None, "port": None, "database": None}
         if not dsn:
-            return {"host": None, "port": None, "database": None}
+            return empty
+        if "://" not in dsn:
+            # libpq keyword form: "host=db port=5432 dbname=app password=...".
+            # urlsplit would put the whole string, password included, in path.
+            pairs = dict(_KEYWORD_PAIR.findall(dsn))
+            port = pairs.get("port", "").strip("'")
+            return {
+                "host": pairs.get("host", "").strip("'") or None,
+                "port": int(port) if port.isdigit() else None,
+                "database": pairs.get("dbname", "").strip("'") or None,
+            }
         try:
             parts = urlsplit(dsn)
             return {
@@ -50,7 +65,7 @@ class PostgresConnector(BaseConnector[Any]):
                 "database": parts.path.lstrip("/") or None,
             }
         except ValueError:
-            return {"host": None, "port": None, "database": None}
+            return empty
 
     @property
     def mode(self) -> ConnectionMode:

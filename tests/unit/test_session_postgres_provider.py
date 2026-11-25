@@ -367,3 +367,263 @@ def test_ci_installs_postgres_extra_and_runs_integration_tests():
     assert "POSTGRES_HOST_AUTH_METHOD: trust" in ci
     assert "CONTINUUM_TEST_POSTGRES_DSN: postgresql://postgres@localhost:5432/postgres" in ci
     assert "tests/integration/test_postgres_session.py" in ci
+
+
+# -----------------------------------------------------------------------------
+# Round-2 review fixes
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Redis", "redis"),
+        (" redis", "redis"),
+        ("", "redis"),
+        ("  ", "redis"),
+        ("POSTGRES", "postgres"),
+        ("memory", "memory"),
+    ],
+)
+def test_session_provider_env_is_normalized(monkeypatch, raw, expected):
+    from continuum.config import Settings
+
+    monkeypatch.setenv("SESSION_PROVIDER", raw)
+    assert Settings(_env_file=None).session_provider == expected
+
+
+@pytest.mark.parametrize("raw", ["postgresql", "dynamodb", "redis-cluster"])
+def test_unknown_session_provider_fails_when_settings_load(monkeypatch, raw):
+    from pydantic import ValidationError
+
+    from continuum.config import Settings
+
+    monkeypatch.setenv("SESSION_PROVIDER", raw)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    message = str(excinfo.value)
+    assert "SESSION_PROVIDER" in message
+    assert all(f"'{name}'" in message for name in ("redis", "postgres", "memory"))
+
+
+def test_session_config_normalizes_provider():
+    assert SessionConfig(provider=" Redis ").provider == "redis"
+    assert SessionConfig(provider="").provider == "redis"
+    assert SessionConfig(provider="Postgres").provider == "postgres"
+    assert SessionConfig(provider="memory").is_configured() is True
+    with pytest.raises(ValueError, match="'memory'"):
+        SessionConfig(provider="dynamodb").is_configured()
+
+
+def test_zero_timeout_from_the_environment_is_rejected(monkeypatch):
+    from pydantic import ValidationError
+
+    from continuum.config import Settings, settings
+
+    monkeypatch.setenv("SESSION_POSTGRES_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValidationError, match="session_postgres_timeout_seconds"):
+        Settings(_env_file=None)
+    monkeypatch.setattr(settings, "session_postgres_timeout_seconds", 0)
+    with pytest.raises(ValidationError, match="postgres_timeout_seconds"):
+        SessionConfig()
+
+
+async def test_purge_expired_deletes_in_batches():
+    class PurgeConn(_Conn):
+        def __init__(self, counts):
+            super().__init__()
+            self.counts = list(counts)
+            self.args: list[tuple] = []
+
+        async def execute(self, sql, *args):
+            self.sql.append(sql)
+            self.args.append(args)
+            return f"DELETE {self.counts.pop(0)}"
+
+    conn = PurgeConn([2, 2, 1])
+    provider = PostgresSessionProvider(
+        SessionConfig(provider="postgres", postgres_create_tables=False), pool=_Pool(conn)
+    )
+    assert await provider.purge_expired(batch_size=2) == 5
+    assert len(conn.sql) == 3
+    assert all("LIMIT $1" in q for q in conn.sql) and conn.args == [(2,)] * 3
+    with pytest.raises(ValueError, match="batch_size"):
+        await provider.purge_expired(batch_size=0)
+
+
+async def test_clear_session_only_refreshes_a_live_session():
+    conn = _Conn()
+    provider = PostgresSessionProvider(
+        SessionConfig(provider="postgres", postgres_create_tables=False), pool=_Pool(conn)
+    )
+    await provider.clear_session("s1")
+    [update] = [q for q in conn.sql if q.startswith("UPDATE")]
+    assert "expires_at > now()" in update
+
+
+async def test_timeout_reason_names_the_error_type():
+    class ExhaustedPool(_Pool):
+        def acquire(self, timeout=None):
+            raise TimeoutError
+
+    provider = PostgresSessionProvider(
+        SessionConfig(provider="postgres", postgres_create_tables=False),
+        pool=ExhaustedPool(_Conn()),
+    )
+    with pytest.raises(SessionConnectionError, match="unreachable: TimeoutError"):
+        await provider.get_messages("s1")
+
+
+def test_lone_surrogates_become_replacement_characters():
+    import json
+
+    from continuum.session.providers.postgres import _dumps
+
+    out = _dumps({"content": "cut \ud83d", "custom": {"\ude00": ["ok 😀"]}})
+    # PostgreSQL rejects a lone \ud83d escape in jsonb; a valid pair is fine.
+    assert '"cut \\ufffd"' in out
+    assert json.loads(out) == {"content": "cut \ufffd", "custom": {"\ufffd": ["ok 😀"]}}
+
+
+def test_connector_describe_hides_a_keyword_dsn_password():
+    from continuum.connectors.postgres import PostgresConnector
+
+    secret = "s3cr3t-" + "value"
+    dsn = f"host=db-host port=5433 dbname=app user=app password={secret} sslmode=require"
+    d = PostgresConnector(SessionConfig(provider="postgres", postgres_dsn=dsn)).describe()
+    assert secret not in str(d) and "password" not in str(d)
+    assert (d["host"], d["port"], d["database"]) == ("db-host", 5433, "app")
+
+
+def _probe_provider(*, reachable: bool, fail_calls: bool = False):
+    """A stand-in session provider that records whether it was closed."""
+    from continuum.session.base import BaseSessionProvider
+
+    class Provider(BaseSessionProvider):
+        provider_name = "postgres"
+        config = None
+        is_initialized = True
+        last_probe_error = None if reachable else "OSError: refused"
+
+        def __init__(self):
+            self.closed = 0
+
+        async def aping(self):
+            return reachable
+
+        async def get_or_create_session(self, *args, **kwargs):
+            if fail_calls:
+                raise SessionConnectionError("PostgreSQL session store unreachable: OSError: x")
+            return "sid"
+
+        async def add_message(self, *args, **kwargs): ...
+        async def get_messages(self, *args, **kwargs): ...
+        async def get_session_metadata(self, *args, **kwargs): ...
+        async def update_session_metadata(self, *args, **kwargs): ...
+        async def clear_session(self, *args, **kwargs): ...
+        async def delete_session(self, *args, **kwargs): ...
+
+        async def close(self):
+            self.closed += 1
+
+    return Provider()
+
+
+@pytest.mark.parametrize("mode", ["degrade", "fail"])
+async def test_failed_probe_closes_the_dropped_provider(monkeypatch, mode):
+    import continuum.session.client as client_module
+    from continuum.session.client import SessionClient
+
+    dropped = _probe_provider(reachable=False)
+    monkeypatch.setattr(client_module, "create_provider", lambda name, cfg: dropped)
+    client = SessionClient(
+        SessionConfig(provider="postgres", postgres_dsn="postgresql://h/db", fallback_mode=mode)
+    )
+    if mode == "fail":
+        with pytest.raises(SessionConnectionError):
+            await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    else:
+        await client.get_or_create_session(user_id="u1", conversation_id="c1")
+        assert client.persistence_degraded is True
+    assert dropped.closed == 1
+
+
+async def test_mid_session_degrade_closes_the_dropped_provider(monkeypatch):
+    import continuum.session.client as client_module
+    from continuum.session.client import SessionClient
+    from continuum.session.providers.memory import MemorySessionProvider
+
+    dropped = _probe_provider(reachable=True, fail_calls=True)
+    monkeypatch.setattr(client_module, "create_provider", lambda name, cfg: dropped)
+    client = SessionClient(
+        SessionConfig(
+            provider="postgres", postgres_dsn="postgresql://h/db", fallback_mode="degrade"
+        )
+    )
+    assert await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    assert isinstance(client.active_provider, MemorySessionProvider)
+    assert dropped.closed == 1
+
+
+def _container_with(monkeypatch, *, session_config=None, client=None, provider=None):
+    from continuum.core import container as container_module
+    from continuum.core.container import Container, ContainerConfig
+
+    container = Container(
+        ContainerConfig(auto_initialize=False, enable_session=True, session_config=session_config)
+    )
+    if client is not None:
+        container.set_session_client(client, provider)
+    monkeypatch.setattr(container_module, "_global_container", container)
+    return container
+
+
+def test_health_check_follows_session_config_not_only_the_env(monkeypatch):
+    from continuum.config import settings
+    from continuum.core.health import HealthCheck
+
+    monkeypatch.setattr(settings, "session_enabled", True)
+    monkeypatch.setattr(settings, "session_provider", "redis")
+    _container_with(monkeypatch, session_config={"provider": "postgres"})
+    checks = HealthCheck()._checks
+    assert "postgres" in checks and "redis" not in checks
+
+
+async def test_health_check_probes_a_provider_given_a_pool(monkeypatch):
+    from continuum.config import settings
+    from continuum.core.health import HealthCheck, HealthStatus
+    from continuum.session.client import SessionClient
+
+    monkeypatch.setattr(settings, "session_enabled", True)
+    monkeypatch.setattr(settings, "session_provider", "redis")
+    monkeypatch.setattr(settings, "session_postgres_dsn", None)
+    health = HealthCheck()  # built before the application sets up its store
+
+    conn = _Conn(answers=[True, 1])
+    provider = PostgresSessionProvider(SessionConfig(provider="postgres"), pool=_Pool(conn))
+    client = SessionClient(SessionConfig(provider="redis"))
+    _container_with(monkeypatch, client=client, provider=provider)
+
+    health._checks = {
+        name: fn for name, fn in health._checks.items() if name in ("redis", "postgres")
+    }
+    result = await health.check_all(timeout=5)
+    [store] = result.checks
+    assert store.name == "postgres" and store.status == HealthStatus.HEALTHY
+    assert "SELECT 1" in conn.sql
+
+
+def test_custom_store_check_is_not_replaced(monkeypatch):
+    from continuum.config import settings
+    from continuum.core.health import HealthCheck
+
+    monkeypatch.setattr(settings, "session_provider", "redis")
+    _container_with(monkeypatch, session_config={"provider": "postgres"})
+    health = HealthCheck()
+
+    async def mine():
+        raise AssertionError
+
+    health.register_check("postgres", mine)
+    health._sync_session_store_check()
+    assert health._checks["postgres"] is mine

@@ -232,13 +232,22 @@ sequence; set `SESSION_POSTGRES_CREATE_TABLES=false` to skip the check as well.
 Deterministic ids, TTL refreshed on every touch and sliding-window trim work as
 with Redis. Retention does not: an expired row reads as missing but stays in
 the database until `purge_expired()` runs (call it from a periodic job) or the
-session is reopened or deleted.
+session is reopened or deleted. `purge_expired()` deletes `batch_size` sessions
+(default 1000) per statement, each under the query timeout, until none are
+left; lower it when sessions hold many messages.
 
 Connecting, each query and waiting for a pooled connection time out after
 `SESSION_POSTGRES_TIMEOUT_SECONDS` (default 5), so a hung database fails over
 per `SESSION_FALLBACK_MODE` like an unreachable one. A pool passed in with
 `pool=` keeps its own `command_timeout`. NUL characters in message content and
-metadata are dropped on write, because PostgreSQL text cannot hold them.
+metadata are dropped on write and a lone surrogate (half of a split emoji)
+becomes U+FFFD, because PostgreSQL text cannot hold either.
+
+`SESSION_PROVIDER` takes `redis` (the default), `postgres` or `memory`. Case
+and surrounding spaces are ignored and an empty value means `redis`; any other
+value stops the application when settings load. The health checks probe the
+store in use, including one set up in code with `SessionConfig(provider=...)`
+or `pool=`.
 
 ```python
 # From settings: SESSION_PROVIDER=postgres, SESSION_POSTGRES_DSN=postgresql://...

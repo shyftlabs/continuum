@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from continuum.config import settings
+from continuum.config import SESSION_PROVIDERS, settings
 from continuum.security.secrets_guard import (
     MIN_OFFLINE_SECRET_LENGTH,
     enforce_credential,
@@ -120,6 +120,8 @@ class SessionConfig(BaseModel):
     postgres_timeout_seconds: float = Field(
         default_factory=lambda: settings.session_postgres_timeout_seconds,
         gt=0,
+        # Check the value from the environment too, not only one passed in.
+        validate_default=True,
         description="Timeout for connecting, each query and acquiring a pooled connection",
     )
 
@@ -128,6 +130,14 @@ class SessionConfig(BaseModel):
         default_factory=lambda: settings.session_redis_max_connections,
         description="Maximum Redis connections in pool (floored at the safe minimum)",
     )
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, v: object) -> object:
+        # 'Redis', ' redis' and '' mean what SESSION_PROVIDER means for them.
+        if isinstance(v, str):
+            return v.strip().lower() or "redis"
+        return v
 
     @field_validator("redis_max_connections")
     @classmethod
@@ -338,12 +348,14 @@ class SessionConfig(BaseModel):
             return bool(self.redis_host)
         if self.provider == "postgres":
             return bool(self.postgres_dsn)
+        if self.provider == "memory":
+            return True
 
         # Unknown provider — fail explicitly rather than silently proceeding
         # and crashing later with a confusing error.
         raise ValueError(
             f"Unknown session provider: '{self.provider}'. "
-            f"Supported providers: 'redis', 'postgres'. "
+            f"Supported providers: {', '.join(repr(p) for p in SESSION_PROVIDERS)}. "
             f"Check the SESSION_PROVIDER environment variable."
         )
 
