@@ -25,6 +25,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.llm.config import LLMConfig
+from continuum.llm.exceptions import LLMContextLengthError
 from continuum.llm.providers.openai_provider import OpenAIProvider
 from continuum.llm.types import StreamChunk, Usage
 
@@ -51,10 +52,12 @@ def _aiter(items):
 
 @pytest.fixture(autouse=True)
 def _clear_unsupported_params():
-    # Rejections are remembered per model on the class; keep tests independent.
+    # Rejections are remembered on the class; keep tests independent.
     OpenAIProvider._unsupported_params.clear()
+    OpenAIProvider._stream_options_rejected.clear()
     yield
     OpenAIProvider._unsupported_params.clear()
+    OpenAIProvider._stream_options_rejected.clear()
 
 
 class TestProviderStreamUsage:
@@ -106,13 +109,21 @@ class TestProviderStreamUsage:
         assert chunks[-1].is_finished and chunks[-1].usage is None
 
     @pytest.mark.parametrize(
-        ("status", "error_cls", "body"),
+        ("status", "error_cls", "body", "text"),
         [
             # OpenAI's own shape.
             (
                 400,
                 openai.BadRequestError,
                 {"code": "unsupported_parameter", "param": "stream_options"},
+                None,
+            ),
+            # OpenAI's shape, naming the nested field.
+            (
+                400,
+                openai.BadRequestError,
+                {"code": "unsupported_parameter", "param": "stream_options.include_usage"},
+                None,
             ),
             # Compatible server: 400 that names the field only in the message.
             (
@@ -124,6 +135,7 @@ class TestProviderStreamUsage:
                     "code": None,
                     "param": None,
                 },
+                None,
             ),
             # Strict proxy (pydantic extra="forbid"): 422 extra_forbidden.
             (
@@ -139,17 +151,43 @@ class TestProviderStreamUsage:
                         }
                     ]
                 },
+                None,
+            ),
+            # marshmallow/webargs 422: the field is only a dict key.
+            (
+                422,
+                openai.UnprocessableEntityError,
+                {"errors": {"json": {"stream_options": ["Unknown field."]}}},
+                None,
+            ),
+            # Joi/Boom or NestJS 400: the SDK keeps only "Bad Request" as the
+            # body, so the field name is only in the raw response text.
+            (
+                400,
+                openai.BadRequestError,
+                "Bad Request",
+                '{"statusCode": 400, "error": "Bad Request",'
+                ' "message": "\\"stream_options\\" is not allowed"}',
             ),
         ],
-        ids=["openai-400", "400-null-code", "422-extra-forbidden"],
+        ids=[
+            "openai-400",
+            "openai-400-nested-param",
+            "400-null-code",
+            "422-extra-forbidden",
+            "422-marshmallow-key",
+            "400-joi-text-only",
+        ],
     )
-    async def test_rejected_stream_options_is_dropped_and_remembered(self, status, error_cls, body):
+    async def test_rejected_stream_options_is_dropped_and_remembered(
+        self, status, error_cls, body, text
+    ):
         provider = OpenAIProvider(api_key="test-key")
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
         # The message is what openai 3.x gives a 422: no hint of the field.
         rejected = error_cls(
             f"Error code: {status}",
-            response=httpx.Response(status, request=request),
+            response=httpx.Response(status, request=request, text=text),
             body=body,
         )
         calls = []
@@ -169,25 +207,38 @@ class TestProviderStreamUsage:
 
         assert ["stream_options" in c for c in calls] == [True, False, False]
 
-    async def test_unrelated_422_that_echoes_stream_options_is_not_adapted(self):
-        # A 422 for another field echoes the whole request under "input"; that
-        # must not be read as a rejection of stream_options.
+    def test_sync_stream_drops_stream_options_named_only_in_response_text(self):
         provider = OpenAIProvider(api_key="test-key")
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-        rejected = openai.UnprocessableEntityError(
-            "Error code: 422",
-            response=httpx.Response(422, request=request),
-            body={
-                "detail": [
-                    {
-                        "type": "missing",
-                        "loc": ["body", "messages"],
-                        "msg": "Field required",
-                        "input": {"stream_options": {"include_usage": True}},
-                    }
-                ]
-            },
+        rejected = openai.BadRequestError(
+            "Error code: 400",
+            response=httpx.Response(
+                400,
+                request=request,
+                text='{"statusCode": 400, "message": "\\"stream_options\\" is not allowed"}',
+            ),
+            body="Bad Request",
         )
+        calls = []
+
+        def create(**kwargs):
+            calls.append(dict(kwargs))
+            if "stream_options" in kwargs:
+                raise rejected
+            return iter([_chunk("ok", finish="stop")])
+
+        provider._client = MagicMock()
+        provider._client.chat.completions.create = create
+
+        chunks = list(
+            provider.stream([{"role": "user", "content": "hi"}], LLMConfig(model="joi-model"))
+        )
+
+        assert chunks[-1].is_finished
+        assert ["stream_options" in c for c in calls] == [True, False]
+
+    async def _assert_not_adapted(self, rejected, model="strict-model"):
+        provider = OpenAIProvider(api_key="test-key")
         create = AsyncMock(side_effect=rejected)
         provider._async_client = MagicMock()
         provider._async_client.chat.completions.create = create
@@ -196,11 +247,119 @@ class TestProviderStreamUsage:
             [
                 c
                 async for c in provider.astream(
-                    [{"role": "user", "content": "hi"}], LLMConfig(model="strict-model")
+                    [{"role": "user", "content": "hi"}], LLMConfig(model=model)
                 )
             ]
         assert create.await_count == 1
         assert OpenAIProvider._unsupported_params == {}
+        assert OpenAIProvider._stream_options_rejected == set()
+
+    async def test_unrelated_422_whose_echoed_input_quotes_stream_options_is_not_adapted(self):
+        # A 422 for another field echoes the whole request under "input". Here
+        # the echo names stream_options in a plain string (the user's own
+        # message), so only the skip of "input" keeps it from looking like a
+        # rejection of stream_options.
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        await self._assert_not_adapted(
+            openai.UnprocessableEntityError(
+                "Error code: 422",
+                response=httpx.Response(422, request=request),
+                body={
+                    "detail": [
+                        {
+                            "type": "missing",
+                            "loc": ["body", "model"],
+                            "msg": "Field required",
+                            "input": {
+                                "messages": [
+                                    {"role": "user", "content": "what does stream_options do?"}
+                                ]
+                            },
+                        }
+                    ]
+                },
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # str(pydantic.ValidationError), as vLLM returns it.
+            "1 validation error for ChatCompletionRequest\n  Value error, When using "
+            "`tool_choice`, `tools` must be set. [type=value_error, input_value="
+            "{'model': 'm', 'messages': [], 'stream': True, 'stream_options': "
+            "{'include_usage': True}, 'tool_choice': 'auto'}, input_type=dict]",
+            # repr of ValidationError.errors(), the other form vLLM has used.
+            "[{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, When "
+            "using `tool_choice`, `tools` must be set.', 'input': {'model': 'm', "
+            "'stream': True, 'stream_options': {'include_usage': True}}}]",
+        ],
+        ids=["pydantic-str", "errors-repr"],
+    )
+    async def test_vllm_400_that_echoes_the_request_is_not_adapted(self, message):
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        body = {"object": "error", "message": message, "type": "BadRequestError", "code": 400}
+        await self._assert_not_adapted(
+            openai.BadRequestError(
+                "Error code: 400",
+                response=httpx.Response(400, request=request, json=body),
+                body=body,
+            )
+        )
+
+    async def test_rejection_is_remembered_per_server_not_per_model_name(self):
+        request = httpx.Request("POST", "https://strict.test/v1/chat/completions")
+        rejected = openai.BadRequestError(
+            "Error code: 400",
+            response=httpx.Response(400, request=request),
+            body={"message": "Unrecognized request argument supplied: stream_options"},
+        )
+        calls: dict[str, list[bool]] = {"strict": [], "open": []}
+
+        def make_create(name, reject):
+            async def create(**kwargs):
+                calls[name].append("stream_options" in kwargs)
+                if reject and "stream_options" in kwargs:
+                    raise rejected
+                return _aiter([_chunk("ok", finish="stop")])
+
+            return create
+
+        strict = OpenAIProvider(api_key="test-key", api_base="https://strict.test/v1")
+        strict._async_client = MagicMock()
+        strict._async_client.chat.completions.create = make_create("strict", True)
+        other = OpenAIProvider(api_key="test-key", api_base="https://open.test/v1")
+        other._async_client = MagicMock()
+        other._async_client.chat.completions.create = make_create("open", False)
+        cfg = LLMConfig(model="shared-model")
+        msgs = [{"role": "user", "content": "hi"}]
+
+        [c async for c in strict.astream(msgs, cfg)]
+        [c async for c in other.astream(msgs, cfg)]
+        [c async for c in strict.astream(msgs, cfg)]
+
+        assert calls == {"strict": [True, False, False], "open": [True]}
+
+    async def test_context_length_400_quoting_stream_options_stays_a_context_error(self):
+        provider = OpenAIProvider(api_key="test-key")
+        request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+        body = {
+            "message": "This model's maximum context length is 4096 tokens, but the "
+            "request (with stream_options) needs 5000 tokens.",
+            "code": None,
+            "param": None,
+        }
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = AsyncMock(
+            side_effect=openai.BadRequestError(
+                f"Error code: 400 - {body}",
+                response=httpx.Response(400, request=request),
+                body=body,
+            )
+        )
+
+        with pytest.raises(LLMContextLengthError):
+            await provider.acomplete([{"role": "user", "content": "hi"}], LLMConfig(model="m"))
 
 
 # ---------------------------------------------------------------------------

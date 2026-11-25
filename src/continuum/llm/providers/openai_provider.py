@@ -7,6 +7,8 @@ the o-series reasoning models, and Azure OpenAI.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from copy import deepcopy
 from typing import Any
@@ -77,19 +79,58 @@ _STREAM_OPTIONS = "stream_options"
 _MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 2
 
 
-def _body_names(body: Any, name: str) -> bool:
-    """True if an error body mentions `name` outside an echoed request (``input``).
+# Echoed request input inside an error *message*: pydantic's
+# ``input_value=... input_type=`` repr (vLLM puts ``str(ValidationError)`` in its
+# 400 message), so the echo is cut out before the text is searched.
+_PYDANTIC_ECHO = re.compile(r"input_value=.*?input_type=", re.DOTALL)
 
-    A pydantic 422 echoes the request under ``input``, so without the skip any
-    validation error on a streamed call would look like a rejection of `name`.
+# `stream_options` as a key whose value is an object — the echoed request
+# (``"stream_options": {"include_usage": true}``), not a complaint about it.
+_ECHOED_STREAM_OPTIONS = re.compile(r"""stream_options(?!['"]?\s*[:=]\s*\{)""")
+
+
+def _text_names_stream_options(text: str) -> bool:
+    """True if `text` names stream_options other than in an echo of the request."""
+    return bool(_ECHOED_STREAM_OPTIONS.search(_PYDANTIC_ECHO.sub("", text)))
+
+
+def _body_names_stream_options(body: Any) -> bool:
+    """True if an error body names stream_options outside an echoed request.
+
+    Keys are checked as well as values — marshmallow/webargs name the field only
+    as a key (``{"errors": {"json": {"stream_options": ["Unknown field."]}}}``).
+    A key whose value is an object is the request echoed back, and so is
+    anything under ``input`` (a pydantic 422 echoes the request there); without
+    those skips any validation error on a streamed call would look like a
+    rejection of stream_options.
     """
     if isinstance(body, str):
-        return name in body
+        return _text_names_stream_options(body)
     if isinstance(body, dict):
-        return any(k != "input" and _body_names(v, name) for k, v in body.items())
+        for k, v in body.items():
+            if k == "input":
+                continue
+            if k == _STREAM_OPTIONS and not isinstance(v, dict):
+                return True
+            if _body_names_stream_options(v):
+                return True
+        return False
     if isinstance(body, (list, tuple)):
-        return any(_body_names(v, name) for v in body)
+        return any(_body_names_stream_options(v) for v in body)
     return False
+
+
+def _response_text(e: Exception) -> str:
+    """The raw response body of an API error, or "" if there is none to read.
+
+    Some servers' bodies reach the SDK in a shape it reduces to just the status
+    text (a Joi/Boom 400 leaves ``e.body`` as ``Bad Request``), so the field
+    name is only in the raw response.
+    """
+    try:
+        return getattr(getattr(e, "response", None), "text", "") or ""
+    except Exception:  # an unread streamed response raises on .text
+        return ""
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -120,6 +161,12 @@ class OpenAIProvider(BaseProvider):
     # is a property of the model, not of the client/key). Mirrors
     # AnthropicProvider._temp_unsupported.
     _unsupported_params: dict[str, set[str]] = {}
+
+    # (base URL, model) pairs whose server rejected ``stream_options``. Kept
+    # apart from _unsupported_params and keyed by server too: whether the field
+    # is accepted is a property of the server, so one strict proxy must not turn
+    # usage off for the same model name on every other backend.
+    _stream_options_rejected: set[tuple[str, str]] = set()
 
     def __init__(
         self,
@@ -168,6 +215,7 @@ class OpenAIProvider(BaseProvider):
 
         self._client = OpenAI(**sync_kwargs)
         self._async_client = AsyncOpenAI(**async_kwargs)
+        self._base_url = str(self._client.base_url)
 
     @staticmethod
     def supports_native_schema() -> bool:
@@ -313,28 +361,52 @@ class OpenAIProvider(BaseProvider):
         self._warn_if_budget_consumed(model, finish_reason, bool(content))
 
     @staticmethod
-    def _rejected_param(e: Exception) -> str | None:
-        """Return the parameter name a 400 rejected, or None if it is not one.
+    def _coded_param(e: Exception) -> str | None:
+        """Return the parameter an OpenAI-coded 400 rejected, or None.
 
         OpenAI reports these in structured form — ``code`` is
         ``unsupported_parameter``/``unsupported_value`` and ``param`` names the
         kwarg — so this reads the body instead of pattern-matching the message.
+        A param under ``stream_options`` (``stream_options.include_usage``) is
+        reported as ``stream_options``, the kwarg that can be dropped.
+        """
+        if not isinstance(e, openai.BadRequestError):
+            return None
+        body = e.body if isinstance(e.body, dict) else {}
+        if body.get("code") not in _UNSUPPORTED_PARAM_CODES:
+            return None
+        param = body.get("param")
+        if not isinstance(param, str) or not param:
+            return None
+        if param.split(".", 1)[0] == _STREAM_OPTIONS:
+            return _STREAM_OPTIONS
+        return param
+
+    @classmethod
+    def _rejected_param(cls, e: Exception) -> str | None:
+        """Return the parameter a 400/422 rejected, or None if it is not one.
 
         ``stream_options`` is added by Continuum rather than the caller, so it is
-        also recognised from other OpenAI-compatible servers: a 400 with no
-        ``code``/``param``, or a 422 from a strict schema (``extra_forbidden``),
-        whose body names it. The body is read, not ``str(e)``, which can be just
-        ``Error code: 422``.
+        also recognised from other OpenAI-compatible servers whose error names it
+        without OpenAI's code: in the parsed body (values or keys) or in the raw
+        response text. Echoed request input is ignored, so an unrelated
+        validation error on a streamed call is not taken for a rejection.
         """
         if not isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
             return None
-        body = e.body if isinstance(e.body, dict) else {}
-        if isinstance(e, openai.BadRequestError) and body.get("code") in _UNSUPPORTED_PARAM_CODES:
-            param = body.get("param")
-            if isinstance(param, str) and param:
-                return param
-        if _body_names(e.body, _STREAM_OPTIONS):
+        param = cls._coded_param(e)
+        if param is not None:
+            return param
+        if _body_names_stream_options(e.body):
             return _STREAM_OPTIONS
+        text = _response_text(e)
+        if text:
+            try:
+                parsed: Any = json.loads(text)
+            except ValueError:
+                parsed = text
+            if _body_names_stream_options(parsed):
+                return _STREAM_OPTIONS
         return None
 
     def _call_adapting(self, make_call: Callable[[], Any], kwargs: dict[str, Any]) -> Any:
@@ -382,7 +454,10 @@ class OpenAIProvider(BaseProvider):
             return False
 
         model = kwargs.get("model", "")
-        self._unsupported_params.setdefault(model, set()).add(param)
+        if param == _STREAM_OPTIONS:
+            self._stream_options_rejected.add(self._server_key(model))
+        else:
+            self._unsupported_params.setdefault(model, set()).add(param)
 
         value = kwargs.pop(param)
         renamed = _RENAMED_PARAMS.get(param)
@@ -404,6 +479,10 @@ class OpenAIProvider(BaseProvider):
                 param,
             )
         return True
+
+    def _server_key(self, model: str) -> tuple[str, str]:
+        """Key for the stream_options memo: the server this provider calls, and the model."""
+        return (getattr(self, "_base_url", ""), model)
 
     def _handle_exception(self, e: Exception, model: str) -> None:
         provider = self._provider_label
@@ -429,7 +508,7 @@ class OpenAIProvider(BaseProvider):
             # its message contains "token" (e.g. "'max_tokens' is not supported
             # with this model"), which the substring check below would otherwise
             # misclassify — hiding the real cause behind a context-length error.
-            if self._rejected_param(e) is None and (
+            if self._coded_param(e) is None and (
                 "context" in msg.lower() or "token" in msg.lower()
             ):
                 raise LLMContextLengthError(
@@ -533,7 +612,7 @@ class OpenAIProvider(BaseProvider):
         kwargs["stream"] = True
         # Ask for the usage chunk OpenAI-compatible servers send last. A server
         # that rejects the field gets it dropped by _call_adapting, and remembered.
-        if "stream_options" not in self._unsupported_params.get(kwargs["model"], set()):
+        if self._server_key(kwargs["model"]) not in self._stream_options_rejected:
             kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — nothing has been yielded yet,
@@ -601,7 +680,7 @@ class OpenAIProvider(BaseProvider):
         kwargs["stream"] = True
         # Ask for the usage chunk OpenAI-compatible servers send last. A server
         # that rejects the field gets it dropped by _call_adapting, and remembered.
-        if "stream_options" not in self._unsupported_params.get(kwargs["model"], set()):
+        if self._server_key(kwargs["model"]) not in self._stream_options_rejected:
             kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — see the sync `stream` above.
