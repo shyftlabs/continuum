@@ -13,6 +13,7 @@ Found running a research agent against a real Langfuse:
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from continuum.agent.base import BaseAgent
 from continuum.agent.execution.run_lifecycle import RunLifecycle
 from continuum.agent.types import (
     AgentResponse,
+    EventType,
     PrepareRunResult,
     ResponseStatus,
     RunContext,
@@ -187,6 +189,55 @@ async def test_run_stream_closed_early_still_closes_its_trace():
         await stream.__anext__()  # RUN_START, then the caller walks away
         await stream.aclose()
 
+        _assert_ambient_back()
+
+
+def _stream_runner():
+    """A runner whose run_stream starts on a run that owns a fresh trace."""
+    runner = _runner()
+    agent = _agent()
+    ctx = RunContext(run_id="r")
+    run_state = RunState(run_id="r")
+
+    async def prepare(*args, **kwargs):
+        run_state.owns_trace = await runner._lifecycle.start_trace(agent, ctx, run_state, "q")
+        return PrepareRunResult(success=True, context=ctx, run_state=run_state)
+
+    runner._prepare_run = prepare
+    return runner, agent
+
+
+async def test_run_stream_left_at_run_start_holds_no_policy_or_compressor(monkeypatch):
+    # A consumer that stops after the first event (with or without aclose())
+    # must not keep the abandoned run's ActivePolicy or Headroom compressor in
+    # its task: later llm_client.chat() calls there would be gated by them.
+    from continuum.config import settings
+    from continuum.llm.headroom import compressor as headroom
+    from continuum.security.policy_context import get_active_policy
+
+    monkeypatch.setattr(settings, "headroom_enabled", True)
+    monkeypatch.setattr(headroom, "new_run_compressor", lambda: object())
+    _ambient()
+    with patch.object(TracingManager, "_get_provider_manager", lambda self: _manager()):
+        runner, agent = _stream_runner()
+        stream = runner.run_stream(agent, "q")
+        first = await stream.__anext__()
+        assert first.type == EventType.RUN_START
+        assert get_active_policy() is None
+        assert headroom._run_compressor.get() is None
+        await stream.aclose()
+        _assert_ambient_back()
+
+
+async def test_run_stream_broken_out_of_inside_aclosing_closes_its_trace():
+    # The documented way to stop a stream early: break inside aclosing().
+    _ambient()
+    with patch.object(TracingManager, "_get_provider_manager", lambda self: _manager()):
+        runner, agent = _stream_runner()
+        async with contextlib.aclosing(runner.run_stream(agent, "q")) as stream:
+            async for _event in stream:
+                assert get_current_trace_id() is not None
+                break
         _assert_ambient_back()
 
 

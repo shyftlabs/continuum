@@ -57,6 +57,7 @@ from continuum.agent.types import (
     PrepareRunResult,
     ResponseStatus,
     RunContext,
+    RunState,
     generate_run_id,
 )
 from continuum.agent.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
@@ -1155,6 +1156,17 @@ class AgentRunner:
     # Run (streaming)
     # =========================================================================
 
+    def _close_abandoned_trace(self, ctx: RunContext, run_state: RunState) -> None:
+        """Close the trace of a stream the caller stopped early with ``aclose()``.
+
+        Such a stream never reached finalize or handle_error, so its trace is
+        still the current one; without this the next run in the same task
+        joins it. A plain ``break`` without ``aclose()`` is not covered: asyncio
+        finalizes the generator later, in another task's copied context.
+        """
+        if run_state.owns_trace and ctx.trace_id and get_current_trace_id() == ctx.trace_id:
+            self._lifecycle.restore_caller_context(ctx)
+
     async def run_stream(
         self,
         agent: BaseAgent,
@@ -1302,6 +1314,21 @@ class AgentRunner:
         assert ctx is not None  # _prepare_run always sets context on success
         run_state = result.run_state
 
+        # RUN_START goes out before the run's policy and compressor are bound,
+        # so a caller that stops at the first event holds neither. A caller
+        # that aclose()s here still gets its trace closed.
+        try:
+            yield AgentEvent(
+                type=EventType.RUN_START,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"input": input if isinstance(input, str) else "[messages]"},
+                trace_id=ctx.trace_id,
+            )
+        except BaseException:
+            self._close_abandoned_trace(ctx, run_state)
+            raise
+
         turn = 0
         # Publish the run's policy context so every llm_client.chat() in this
         # streaming run is gated by the data-label model-routing policy. A fresh
@@ -1313,14 +1340,6 @@ class AgentRunner:
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
         _hr_token = enter_run_compressor()
         try:
-            yield AgentEvent(
-                type=EventType.RUN_START,
-                agent_name=agent.name,
-                run_id=ctx.run_id,
-                data={"input": input if isinstance(input, str) else "[messages]"},
-                trace_id=ctx.trace_id,
-            )
-
             messages = list(run_state.messages) if run_state.messages else []
 
             # When output_scanners are configured, raw token deltas must NOT reach
@@ -2022,11 +2041,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
-            # A stream the caller stopped early (break / aclose()) never reached
-            # finalize or handle_error, so its trace is still the current one.
-            # Close it here, or the next run in the same task joins it.
-            if run_state.owns_trace and ctx.trace_id and get_current_trace_id() == ctx.trace_id:
-                self._lifecycle.restore_caller_context(ctx)
+            self._close_abandoned_trace(ctx, run_state)
             exit_run_compressor(_hr_token)
             try:
                 reset_active_policy(_policy_token)
