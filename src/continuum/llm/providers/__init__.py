@@ -70,9 +70,21 @@ _gateway_shadow_warned = False
 # it first, so the next asyncio.run() would fail with "Event loop is closed",
 # and a cached one would be shared by processes forked after it was built.
 _MAX_PROVIDERS_PER_LOOP = 32
-_loop_providers: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, OrderedDict[tuple[Any, ...], BaseProvider]
-] = weakref.WeakKeyDictionary()
+# Stores are kept only for loops that are running. A provider's pooled
+# connections hold its loop, so a loop that finished but was never closed
+# (new_event_loop() + run_until_complete() per request, without close()) would
+# otherwise never be freed, and each would keep a selector, a self-pipe and a
+# socket open. Dropping its store when another loop next asks for a provider
+# leaves it to the garbage collector after one request, as before reuse. A loop
+# run again later simply builds new providers. _MAX_LOOPS bounds the stores of
+# loops running at once (one per thread), least recently used dropped.
+_MAX_LOOPS = 64
+# id(loop) -> (weak reference to the loop, its providers by key). The weak
+# reference tells a live loop from a freed one whose id was reused.
+_loop_providers: OrderedDict[
+    int,
+    tuple[weakref.ref[asyncio.AbstractEventLoop], OrderedDict[tuple[Any, ...], BaseProvider]],
+] = OrderedDict()
 _providers_lock = threading.Lock()
 
 
@@ -84,14 +96,19 @@ def _reuse(cls: Callable[..., BaseProvider], **kwargs: Any) -> BaseProvider:
         return cls(**kwargs)
     key = (cls, tuple(sorted(kwargs.items())))
     with _providers_lock:
-        # A provider's pooled connections hold its loop, so the weak key alone
-        # never frees a finished loop (asyncio.run per request, async_to_sync).
-        # Drop the stores of closed loops here.
-        for old in [lp for lp in _loop_providers if lp.is_closed()]:
-            del _loop_providers[old]
-        store = _loop_providers.get(loop)
-        if store is None:
-            store = _loop_providers[loop] = OrderedDict()
+        # Drop the stores of loops that are not running: closed (asyncio.run
+        # per request, async_to_sync), freed, or finished and left unclosed.
+        for loop_id, (ref, _) in list(_loop_providers.items()):
+            old = ref()
+            if old is not loop and (old is None or not old.is_running()):
+                del _loop_providers[loop_id]
+        entry = _loop_providers.get(id(loop))
+        if entry is None or entry[0]() is not loop:
+            entry = _loop_providers[id(loop)] = (weakref.ref(loop), OrderedDict())
+        _loop_providers.move_to_end(id(loop))
+        while len(_loop_providers) > _MAX_LOOPS:
+            _loop_providers.popitem(last=False)
+        store = entry[1]
         provider = store.get(key)
         if provider is not None:
             store.move_to_end(key)
@@ -116,7 +133,7 @@ def _forget_providers_after_fork() -> None:
     # Rebind rather than clear, since another parent thread may have held the
     # lock at the moment of the fork.
     global _loop_providers, _providers_lock
-    _loop_providers = weakref.WeakKeyDictionary()
+    _loop_providers = OrderedDict()
     _providers_lock = threading.Lock()
 
 
