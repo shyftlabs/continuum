@@ -40,6 +40,27 @@ logger = get_logger(__name__)
 # Message fields that make up a summary cache key.
 _KEY_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
+# A reused summary and the messages kept after it must fit under this share of
+# the compression threshold. Fitting just under the threshold left no room for
+# the next tool step of the same turn, which then summarized the reused summary.
+_REUSE_BUDGET_RATIO = 0.75
+
+
+class _SummaryStatus:
+    """Set by _summarize_with_status for the _compress_summarize call around it."""
+
+    __slots__ = ("used_fallback",)
+
+    def __init__(self) -> None:
+        self.used_fallback = False
+
+
+# Lets _compress_summarize go through _summarize_messages (which subclasses and
+# tests override) and still learn whether the text fallback was used.
+_summary_status: ContextVar[_SummaryStatus | None] = ContextVar(
+    "continuum_summary_status", default=None
+)
+
 
 def _key_part(value: Any) -> bytes:
     """One newline-terminated line of canonical JSON for the summary cache key."""
@@ -120,7 +141,7 @@ class ContextManagementConfig:
     # since word for word, until there are more than this many of them; then
     # summarize the whole older history afresh. Saves a summary call on most
     # turns, but the model sees those messages verbatim. Only when the result
-    # fits under the compression threshold. 0 (default) = off, summarize every
+    # fits under three quarters of the compression threshold. 0 (default) = off, summarize every
     # turn the older history changes. Needs enable_caching.
     summary_reuse_messages: int = field(
         default_factory=lambda: settings.context_summary_reuse_messages
@@ -768,9 +789,10 @@ class ProgressiveContextManager:
 
         # Reuse an earlier turn's summary while few messages were added since:
         # those stay word for word after it, and no summary call is made. Only
-        # when the result fits the token budget: over it, a later truncation
-        # would drop the summary first (it is the oldest message), and a second
-        # compression would summarize the summary. Never when the kept messages
+        # when the result fits the token budget with headroom
+        # (_REUSE_BUDGET_RATIO): over it, a later truncation would drop the
+        # summary first (it is the oldest message), and a second compression
+        # would summarize the summary. Never when the kept messages
         # would start inside a tool exchange, which providers reject.
         reused = False
         if (
@@ -785,9 +807,8 @@ class ProgressiveContextManager:
                 tail = older_messages[covered:]
                 if len(tail) <= config.summary_reuse_messages and not _carries_tool_io(tail[0]):
                     candidate = system_messages + previous + tail + recent_messages
-                    if (
-                        self._context_window_manager.count_tokens(candidate, model)
-                        <= threshold_tokens
+                    if self._context_window_manager.count_tokens(candidate, model) <= int(
+                        threshold_tokens * _REUSE_BUDGET_RATIO
                     ):
                         summary_messages = previous + tail
                         reused = True
@@ -795,16 +816,24 @@ class ProgressiveContextManager:
         # Summarize if not cached
         summarized = False
         if not summary_messages:
-            summary_messages, summarized = await self._summarize_with_status(
-                messages=older_messages,
-                model=model,
-                config=config,
-            )
+            status = _SummaryStatus()
+            token = _summary_status.set(status)
+            try:
+                summary_messages = await self._summarize_messages(
+                    messages=older_messages,
+                    model=model,
+                    config=config,
+                )
+            finally:
+                _summary_status.reset(token)
+            summarized = not status.used_fallback
 
-        # Cache a new summary. Not the text fallback used when the summary call
-        # failed: the next turn should try the model again, not reuse that.
-        if cache and summary_messages and summarized:
-            cache.set(older_messages, summary_messages, namespace)
+            # Cache a new summary. With reuse on, not the text fallback used when
+            # the summary call failed: a later turn would reuse it instead of
+            # trying the model again. With reuse off the fallback is cached, as
+            # before, so the same history does not wait out the summarizer again.
+            if cache and summary_messages and (summarized or config.summary_reuse_messages <= 0):
+                cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
         compressed = system_messages + summary_messages + recent_messages
@@ -867,7 +896,10 @@ class ProgressiveContextManager:
         config: ContextManagementConfig,
     ) -> list[dict[str, Any]]:
         """Summarize a list of messages using LLM."""
-        summary, _ = await self._summarize_with_status(messages, model, config)
+        summary, summarized = await self._summarize_with_status(messages, model, config)
+        status = _summary_status.get()
+        if status is not None and not summarized:
+            status.used_fallback = True
         return summary
 
     async def _summarize_with_status(
@@ -935,6 +967,12 @@ SUMMARY:"""
                 )
 
                 summary_content = summary_response.content or ""
+                if not summary_content.strip():
+                    # An empty reply is no summary: use the text fallback, which
+                    # with reuse on is neither cached nor reused.
+                    logger.warning("Summarization returned no text, using text fallback")
+                    span.set_error("Empty summary")
+                    return self._text_summary(messages), False
 
                 # Create summary message
                 summary_message = {
