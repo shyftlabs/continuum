@@ -72,7 +72,11 @@ Each agent or workflow run through the gateway lists what the gateway did in
 event's `data["gateway_routing"]`). There is one entry per HTTP attempt, not
 per model call: when the SDK retries (a 503, then a 200), each attempt has its
 own entry. A workflow's list holds its steps' calls and its own (a merge, a
-completion check); the steps' own responses do not repeat them.
+completion check); the steps' own responses do not repeat them. This holds for
+`runner.fork` of a workflow and for a built-in workflow called directly on a
+new context too. A custom workflow's result is attached to only when it is an
+`AgentResponse` (on a copy); any other result is returned unchanged. A failed
+or cancelled run records nothing.
 
 ```python
 resp = await runner.run(agent, "What is NAV?")
@@ -86,7 +90,8 @@ Each entry has whichever of these the gateway sent: `router_mode`,
 `timing` (the gateway's per-phase milliseconds), `ratelimit`, `request_id`
 (to find the call in gateway logs) and `status`. `served_model` is the model
 named in the reply: read from a non-streamed body, or, for `run_stream`, from
-the stream's chunks. Timing values that are not finite numbers are dropped.
+the stream's chunks (tool-call turns and the model-tier router included).
+Timing values that are not finite numbers are dropped.
 Nothing is recorded for direct provider calls.
 
 ### Provider quirks (handled for you)

@@ -520,7 +520,9 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            stream_model: str | None = None  # a tool-call-only turn has no content chunk
             for chunk in response:
+                stream_model = chunk.model or stream_model
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -539,6 +541,7 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=stream_model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
@@ -569,7 +572,9 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            stream_model: str | None = None  # a tool-call-only turn has no content chunk
             async for chunk in response:
+                stream_model = chunk.model or stream_model
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -588,6 +593,7 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=stream_model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,

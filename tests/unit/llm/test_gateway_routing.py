@@ -18,12 +18,18 @@ Covers:
 - a workflow collects its steps' entries and its own, on its response and its
   streamed RUN_END; the steps' finalizers leave them in place
 - non-finite timing values are dropped; a streamed run's model comes from its
-  chunks
+  chunks, tool-call turns and the model-tier router stream included
+- a custom workflow may return anything; only an AgentResponse gets entries,
+  on a copy; a cancelled workflow leaves none behind
+- runner.fork of a workflow, and a workflow running Parallel.execute on a new
+  context, collect their steps' entries
+- a forked child gets a fresh lock and an empty store
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -420,7 +426,7 @@ def test_step_inside_a_workflow_leaves_its_entries():
         assert gateway_routing.claim_run("run-w") is None  # a step's finalizer
         with gateway_routing.collect_for_workflow("run-w") as nested:
             assert not nested  # the outer workflow collects
-    assert len(gateway_routing.claim_run("run-w")) == 1
+        assert len(gateway_routing.pop_run("run-w")) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -470,3 +476,265 @@ async def test_retries_give_one_entry_per_attempt():
         await _ask(client)
 
     assert [e["status"] for e in gateway_routing.pop_run("run-r")] == [503, 200]
+
+
+# ---------------------------------------------------------------------------
+# Round 2: custom results, shared responses, fork, new contexts, cancellation
+# ---------------------------------------------------------------------------
+
+
+def _returning_workflow(value):
+    from continuum.agent.base import BaseAgent
+
+    @dataclass
+    class Returning(BaseAgent):
+        async def execute(self, input_text, runner, context, llm_client=None):
+            gateway_routing.record(httpx.Response(200, headers=HEADERS))
+            return value
+
+    return Returning(name="custom")
+
+
+@pytest.mark.parametrize("value", ["plain text", {"answer": 1}, None, SimpleNamespace(x=1)])
+async def test_custom_workflow_result_is_returned_as_is(value):
+    runner = _routing_runner()
+
+    result = await runner.run(_returning_workflow(value), "q")
+
+    assert result is value
+    assert not gateway_routing._by_run
+
+
+async def test_shared_response_is_not_changed():
+    shared = AgentResponse(content="cached", agent_name="custom")
+    runner = _routing_runner()
+    workflow = _returning_workflow(shared)
+
+    first = await runner.run(workflow, "q")
+    second = await runner.run(workflow, "q")
+
+    assert shared.run_artifacts is None
+    assert len(first.run_artifacts["gateway_routing"]) == 1
+    assert len(second.run_artifacts["gateway_routing"]) == 1
+
+
+async def test_cancelled_workflow_leaves_no_entries():
+    import asyncio
+
+    from continuum.agent.base import BaseAgent
+
+    started = asyncio.Event()
+
+    @dataclass
+    class Hanging(BaseAgent):
+        async def execute(self, input_text, runner, context, llm_client=None):
+            gateway_routing.record(httpx.Response(200, headers=HEADERS))
+            started.set()
+            await asyncio.Event().wait()
+
+    runner = _routing_runner()
+    task = asyncio.create_task(runner.run(Hanging(name="h"), "q"))
+    await started.wait()
+    assert gateway_routing._by_run
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not gateway_routing._by_run
+
+
+async def test_fork_of_a_workflow_collects_its_steps_entries():
+    from continuum.agent.base import BaseAgent
+
+    @dataclass
+    class Resumable(BaseAgent):
+        steps: list = field(default_factory=list)
+
+        async def resume_from(self, *, parent_trace, from_step, override, runner, context):
+            outs = [await runner.run(step, "q", context=context) for step in self.steps]
+            return AgentResponse(content="|".join(o.content for o in outs), agent_name=self.name)
+
+    parent = SimpleNamespace(steps=[SimpleNamespace(step_id="s1", data_labels=[])], root_agent="wf")
+    store = MagicMock()
+    store.get = AsyncMock(return_value=parent)
+    runner = _routing_runner()
+    workflow = Resumable(
+        name="wf",
+        steps=[BaseAgent(name="a", instructions="x"), BaseAgent(name="b", instructions="y")],
+    )
+
+    with patch("continuum.agent.trace.config.get_trace_store", return_value=store):
+        response = await runner.fork("run-parent", "s1", agent=workflow)
+
+    ids = [e["request_id"] for e in response.run_artifacts["gateway_routing"]]
+    assert ids == ["step-1", "step-2"]
+    assert not gateway_routing._by_run
+
+
+async def test_parallel_execute_on_a_new_context_collects_its_workers():
+    from continuum.agent.base import BaseAgent
+    from continuum.agent.config import ParallelConfig
+    from continuum.agent.types import MergeStrategy
+    from continuum.agent.workflow.parallel import ParallelAgent
+
+    parallel = ParallelAgent(
+        name="par",
+        agents=[BaseAgent(name="a", instructions="x"), BaseAgent(name="b", instructions="y")],
+        parallel_config=ParallelConfig(merge_strategy=MergeStrategy.CONCATENATE),
+    )
+
+    @dataclass
+    class Outer(BaseAgent):
+        async def execute(self, input_text, runner, context, llm_client=None):
+            return await parallel.execute(input_text, runner, create_run_context())
+
+    runner = _routing_runner()
+    response = await runner.run(Outer(name="outer"), "q")
+
+    ids = sorted(e["request_id"] for e in response.run_artifacts["gateway_routing"])
+    assert ids == ["step-1", "step-2"]
+    assert not gateway_routing._by_run
+
+
+# ---------------------------------------------------------------------------
+# Streamed model for tool-call turns and the model-tier router
+# ---------------------------------------------------------------------------
+
+TOOL_STREAM = (
+    'data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini",'
+    '"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function",'
+    '"function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}\n\n'
+    'data: {"id":"c1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini",'
+    '"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+async def test_tool_call_stream_names_the_model():
+    from continuum.llm.config import LLMConfig
+    from continuum.llm.providers.gateway_provider import GatewayProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={**HEADERS, "content-type": "text/event-stream"}, text=TOOL_STREAM
+        )
+
+    provider = GatewayProvider("http://gateway.test", "test", None)
+    provider._async_client = AsyncOpenAI(
+        api_key="test",
+        base_url="http://gateway.test/v1",
+        http_client=gateway_routing.with_async_hook(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        ),
+    )
+    tool = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+
+    chunks = [
+        c
+        async for c in provider.astream(
+            [{"role": "user", "content": "q"}], LLMConfig(model="auto/mid"), tools=[tool]
+        )
+    ]
+
+    (tool_chunk,) = [c for c in chunks if c.tool_calls]
+    assert tool_chunk.model == "gpt-4o-mini"
+
+
+async def test_model_tier_stream_names_the_model():
+    from continuum.agent.config import RouterConfig
+    from continuum.agent.smart_layer import runner_facade
+    from continuum.agent.smart_layer.types import ProductTier
+    from continuum.agent.types import Route
+    from continuum.agent.workflow.router import RouterAgent
+    from continuum.llm.types import StreamChunk
+
+    async def chat_stream(messages, config, **kwargs):
+        gateway_routing.record(
+            httpx.Response(200, headers={**HEADERS, "content-type": "text/event-stream"})
+        )
+        yield StreamChunk(model="gpt-4o-mini", content="Paris.")
+
+    llm = MagicMock()
+    llm.chat_stream = chat_stream
+    router = RouterAgent(
+        name="tier",
+        routes=[Route(agent_name="geo", description="geo", condition="geo")],
+        router_config=RouterConfig(routing_strategy="model_tier"),
+    )
+    ctx = create_run_context()
+    set_trace_context(run_id=ctx.run_id)
+    outcome = SimpleNamespace(
+        tier=ProductTier.fast, classify_ms=0.0, skipped_classifier=True, skip_reason="test"
+    )
+
+    with patch.object(runner_facade, "classify_product_tier", AsyncMock(return_value=outcome)):
+        async for _ in runner_facade.stream_model_tier_turn(
+            router, llm, user_text="Capital of France?", ctx=ctx
+        ):
+            pass
+
+    (entry,) = gateway_routing.pop_run(ctx.run_id)
+    assert entry["served_model"] == "gpt-4o-mini"
+
+
+# ---------------------------------------------------------------------------
+# A forked child does not inherit a held lock
+# ---------------------------------------------------------------------------
+
+
+def test_after_fork_reset_gives_a_free_lock_and_empty_store():
+    set_trace_context(run_id="run-f")
+    gateway_routing.record(httpx.Response(200, headers=HEADERS))
+    held = gateway_routing._lock
+    held.acquire()
+    try:
+        gateway_routing._reset_after_fork()
+        assert gateway_routing._lock is not held
+        assert not gateway_routing._by_run
+        gateway_routing.record(httpx.Response(200, headers=HEADERS))  # does not block
+        assert len(gateway_routing.pop_run("run-f")) == 1
+    finally:
+        held.release()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_fork_while_another_thread_holds_the_lock_does_not_hang_the_child():
+    import threading
+    import warnings
+
+    holding, release = threading.Event(), threading.Event()
+
+    def hold():
+        with gateway_routing._lock:
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    holding.wait(5)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # fork with threads
+            pid = os.fork()
+        if pid == 0:  # child: record a gateway response, then leave
+            code = 1
+            try:
+                set_trace_context(run_id="run-child")
+                gateway_routing.record(httpx.Response(200, headers=HEADERS))
+                code = 0 if gateway_routing.pop_run("run-child") else 2
+            finally:
+                os._exit(code)
+        deadline = time.monotonic() + 10
+        while True:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            if time.monotonic() > deadline:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+                pytest.fail("the forked child hung on the gateway routing lock")
+            time.sleep(0.02)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        release.set()
+        holder.join()

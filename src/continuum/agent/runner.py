@@ -625,20 +625,17 @@ class AgentRunner:
         logger.info("Dispatching workflow agent '%s' to its execute() entry point", agent.name)
         # Steps share this run id; they leave their gateway routing entries for
         # the workflow, which collects them with its own calls' after execute().
+        # A failed or cancelled run's entries are dropped on the way out.
         with gateway_routing.collect_for_workflow(context.run_id) as collects_routing:
             try:
                 response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
-                if collects_routing and (routing := gateway_routing.pop_run(context.run_id)):
-                    artifacts = response.run_artifacts or {}
-                    response.run_artifacts = {
-                        **artifacts,
-                        "gateway_routing": [*artifacts.get("gateway_routing", []), *routing],
-                    }
+                if collects_routing:
+                    response = gateway_routing.attach(
+                        response, gateway_routing.pop_run(context.run_id)
+                    )
                 await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
                 return response
             except Exception as e:
-                if collects_routing:
-                    gateway_routing.pop_run(context.run_id)
                 # Attach the failure to the request trace (as an event) and, if we
                 # own it, mark it ERROR + tear it down — so a failing step surfaces
                 # on the workflow trace instead of escaping untraced and later
@@ -960,12 +957,16 @@ class AgentRunner:
             # Seed the forked run's taint from the resume step so the gates
             # (model-routing/telemetry) enforce as they did on the parent.
             resume_ctx.data_labels = set(step.data_labels or [])
-            return await orchestrator.resume_from(
-                parent_trace=parent,
-                from_step=from_step,
-                override=override,
-                runner=self,
-                context=resume_ctx,
+            # The workflow's steps leave their gateway routing for it, as in a run.
+            return await gateway_routing.collect_from(
+                resume_ctx.run_id,
+                orchestrator.resume_from(
+                    parent_trace=parent,
+                    from_step=from_step,
+                    override=override,
+                    runner=self,
+                    context=resume_ctx,
+                ),
             )
 
         # Guard: forking a step inside a return-to-parent handoff is unsupported.

@@ -20,6 +20,7 @@ from continuum.agent.smart_layer.defaults import MODEL_TIER_DEFAULT_INSTRUCTIONS
 from continuum.agent.types import Route, RunContext
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
@@ -140,6 +141,7 @@ If the request doesn't clearly fit any specialist, respond with "none".
 """
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,

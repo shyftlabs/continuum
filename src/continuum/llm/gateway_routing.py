@@ -18,16 +18,23 @@ There is one entry per HTTP attempt, not per model call: when the SDK retries
 
 Steps of a workflow share the workflow's run id. While a workflow runs, its
 steps leave their entries in place and the workflow collects them all after
-``execute()``, together with its own calls (a merge, a completion check).
+``execute()``, together with its own calls (a merge, a completion check). The
+runner does this for every workflow it dispatches and for ``runner.fork``; the
+built-in workflows' ``execute()`` also does it itself, for a workflow called
+directly on a new context. Entries are only attached to an ``AgentResponse``,
+on a copy; a failed or cancelled workflow drops them.
 """
 
 from __future__ import annotations
 
+import copy
+import functools
 import json
 import math
+import os
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -46,6 +53,22 @@ _MAX_RUNS = 1024
 
 _by_run: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
 _lock = threading.Lock()
+
+
+def _reset_after_fork() -> None:
+    """In a forked child: a fresh lock and an empty store.
+
+    A fork copies the lock as it was; if another thread held it, the child's
+    first gateway response would wait on it forever. The parent's runs do not
+    continue in the child, so their entries go too.
+    """
+    global _lock
+    _lock = threading.Lock()
+    _by_run.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 # Run ids whose entries an enclosing workflow will collect.
 _workflow_runs: ContextVar[frozenset[str]] = ContextVar(
@@ -161,6 +184,64 @@ def collect_for_workflow(run_id: str | None) -> Iterator[bool]:
         yield True
     finally:
         _workflow_runs.reset(token)
+        # Whatever was not collected (the workflow failed or was cancelled).
+        pop_run(run_id)
+
+
+def attach(result: Any, routing: list[dict[str, Any]] | None) -> Any:
+    """``result`` with ``routing`` added to its ``run_artifacts["gateway_routing"]``.
+
+    Only an ``AgentResponse`` whose ``run_artifacts`` is a dict (or None) gets
+    them, and on a copy: a workflow may return a response object it shares
+    across runs. Anything else (a custom workflow's str, dict, None) is
+    returned unchanged.
+    """
+    from continuum.agent.types import AgentResponse
+
+    if not routing or not isinstance(result, AgentResponse):
+        return result
+    artifacts = result.run_artifacts if result.run_artifacts is not None else {}
+    if not isinstance(artifacts, dict):
+        return result
+    earlier = artifacts.get("gateway_routing")
+    result = copy.copy(result)
+    result.run_artifacts = {
+        **artifacts,
+        "gateway_routing": [*(earlier if isinstance(earlier, list) else []), *routing],
+    }
+    return result
+
+
+async def collect_from(run_id: str | None, call: Awaitable[Any]) -> Any:
+    """Await a workflow ``call`` and attach the entries of ``run_id`` to its result.
+
+    Inside an enclosing workflow on the same run id, the result is returned as
+    is and the enclosing workflow collects.
+    """
+    with collect_for_workflow(run_id) as collects:
+        result = await call
+        return attach(result, pop_run(run_id)) if collects else result
+
+
+def collects_routing(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+    """Decorator for a workflow's ``execute()``: collect its run's entries.
+
+    The runner already collects for the workflows it dispatches; this covers a
+    workflow called directly, say a custom workflow running ``Parallel.execute``
+    on a new context. The ``RunContext`` is found among the call args, as
+    ``publish_active_policy`` does.
+    """
+
+    @functools.wraps(method)
+    async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        from continuum.agent.types import RunContext
+
+        ctx = kwargs.get("context")
+        if ctx is None:
+            ctx = next((a for a in args if isinstance(a, RunContext)), None)
+        return await collect_from(getattr(ctx, "run_id", None), method(self, *args, **kwargs))
+
+    return wrapper
 
 
 def _is_streaming(response: httpx.Response) -> bool:
