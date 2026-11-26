@@ -22,7 +22,8 @@ Covers:
 - a reused summary must fit under the threshold (small windows summarize afresh)
 - a reused summary leaves headroom under the threshold
 - a failed summary call's text fallback is not cached or reused (but is cached,
-  as before, with reuse off); an empty reply counts as failed
+  as before, with reuse off); an empty reply counts as failed only with reuse
+  on, and a tool-call message with ``content: None`` does not break the fallback
 - compression goes through _summarize_messages, so overrides apply
 - one agent's setting does not become the process-wide fallback
 - the kept messages never start inside a tool exchange
@@ -343,6 +344,68 @@ async def test_an_empty_summary_reply_is_not_cached_or_reused():
     assert not again.cache_hit
     assert not later.summary_reused
     assert llm.chat.await_count == 3
+
+
+def _chat_with_a_tool_call(turns: int) -> list[dict]:
+    """A chat whose first turn is a tool-call message with no text, as the
+    executor writes it (``content: None``)."""
+    return [
+        {"role": "user", "content": "look it up"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+        *_chat(turns),
+    ]
+
+
+async def test_an_empty_summary_reply_with_reuse_off_is_kept_and_cached():
+    """At the default (0) an empty reply gives what it always gave: an empty
+    summary, cached, so repeated passes call the summarizer once."""
+    config = ContextManagementConfig(keep_recent_messages=1, summary_reuse_messages=0)
+    manager, llm = _manager(config)
+    llm.chat = AsyncMock(return_value=MagicMock(content="", usage=None))
+    chat = _chat_with_a_tool_call(3)
+
+    first, _ = await _turn(manager, config, 0, chat=chat)
+    for _ in range(3):
+        again, result = await _turn(manager, config, 0, chat=chat)
+        assert result.cache_hit
+        assert again == first
+
+    assert first[0]["content"] == "[Previous conversation summary: ]"
+    assert llm.chat.await_count == 1
+
+
+async def test_an_empty_summary_reply_with_reuse_on_falls_back_to_text():
+    config = ContextManagementConfig(keep_recent_messages=1, summary_reuse_messages=4)
+    manager, llm = _manager(config)
+    llm.chat = AsyncMock(return_value=MagicMock(content="  ", usage=None))
+
+    first, _ = await _turn(manager, config, 0, chat=_chat_with_a_tool_call(3))
+
+    text = first[0]["content"]
+    assert text.startswith("Previous conversation (")
+    assert "1. user: look it up..." in text
+    assert "assistant: None" not in text
+
+
+async def test_a_failed_summary_over_a_tool_call_message_is_cached_with_reuse_off():
+    """The text fallback used to raise on ``content: None``, so the history was
+    truncated instead and the summarizer was tried again on every pass."""
+    config = ContextManagementConfig(keep_recent_messages=1, summary_reuse_messages=0)
+    manager, llm = _manager(config)
+    llm.chat = AsyncMock(side_effect=TimeoutError())
+    chat = _chat_with_a_tool_call(3)
+
+    first, _ = await _turn(manager, config, 0, chat=chat)
+    _, again = await _turn(manager, config, 0, chat=chat)
+
+    assert first[0]["content"].startswith("Previous conversation (")
+    assert again.cache_hit
+    assert llm.chat.await_count == 1
 
 
 async def test_compression_goes_through_summarize_messages():

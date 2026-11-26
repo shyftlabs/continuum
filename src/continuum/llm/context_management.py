@@ -967,9 +967,10 @@ SUMMARY:"""
                 )
 
                 summary_content = summary_response.content or ""
-                if not summary_content.strip():
-                    # An empty reply is no summary: use the text fallback, which
-                    # with reuse on is neither cached nor reused.
+                if not summary_content.strip() and config.summary_reuse_messages > 0:
+                    # With reuse on, an empty reply is no summary: use the text
+                    # fallback, which is then neither cached nor reused. With
+                    # reuse off the empty summary is kept and cached, as before.
                     logger.warning("Summarization returned no text, using text fallback")
                     span.set_error("Empty summary")
                     return self._text_summary(messages), False
@@ -1026,7 +1027,7 @@ SUMMARY:"""
         summary_lines = [f"Previous conversation ({len(messages)} messages):"]
         for i, msg in enumerate(messages[:10], 1):  # First 10 messages
             role = msg.get("role", "unknown")
-            content = msg.get("content", "")[:100]
+            content = (msg.get("content") or "")[:100]
             if content:
                 summary_lines.append(f"{i}. {role}: {content}...")
         if len(messages) > 10:
