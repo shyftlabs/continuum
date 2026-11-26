@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from continuum.connectors.base import BaseConnector, ConnectionMode
 from continuum.logging import get_logger
 from continuum.session.config import SessionConfig
+from continuum.session.providers.postgres import DSN_PARSE_ERROR
 
 logger = get_logger(__name__)
 
@@ -57,8 +58,11 @@ class PostgresConnector(BaseConnector[Any]):
                 "port": int(port) if port.isdigit() else None,
                 "database": pairs.get("dbname", "").strip("'") or None,
             }
+        # Keep only what follows the last "@": an unencoded "#", "?" or "/" in
+        # the password would otherwise make urlsplit cut the URL inside it.
+        scheme, _, rest = dsn.partition("://")
         try:
-            parts = urlsplit(dsn)
+            parts = urlsplit(f"{scheme}://{rest.rpartition('@')[2]}")
             return {
                 "host": parts.hostname,
                 "port": parts.port,
@@ -81,11 +85,16 @@ class PostgresConnector(BaseConnector[Any]):
             raise RuntimeError("PostgreSQL is not configured. Set SESSION_POSTGRES_DSN.")
         import asyncpg  # type: ignore[import-untyped]
 
-        return await asyncpg.connect(
-            self._config.postgres_dsn,
-            timeout=self._config.postgres_timeout_seconds,
-            command_timeout=self._config.postgres_timeout_seconds,
-        )
+        try:
+            return await asyncpg.connect(
+                self._config.postgres_dsn,
+                timeout=self._config.postgres_timeout_seconds,
+                command_timeout=self._config.postgres_timeout_seconds,
+            )
+        except ValueError:
+            # asyncpg's DSN parser quotes the text it failed on, which can be part
+            # of the password; report a fixed message instead.
+            raise ValueError(DSN_PARSE_ERROR) from None
 
     async def server_version(self) -> str:
         """Run one query and return the server version. Raises on any failure."""

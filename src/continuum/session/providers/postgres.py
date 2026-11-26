@@ -57,6 +57,11 @@ except ImportError:  # optional extra: pip install 'shyftlabs-continuum[postgres
 
 logger = get_logger(__name__)
 
+# Shown instead of asyncpg's own DSN parse error, which can quote part of the password.
+DSN_PARSE_ERROR = (
+    "SESSION_POSTGRES_DSN could not be parsed; percent-encode special characters in the password"
+)
+
 # Table names are interpolated into SQL, so the prefix must be a plain identifier.
 _IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,40}")
 
@@ -158,13 +163,18 @@ class PostgresSessionProvider(BaseSessionProvider):
             if self._pool is None:
                 if not self._config.postgres_dsn:
                     raise SessionConnectionError("SESSION_POSTGRES_DSN is not set")
-                self._pool = await asyncpg.create_pool(
-                    self._config.postgres_dsn,
-                    min_size=1,
-                    max_size=self._config.postgres_max_connections,
-                    timeout=self._timeout,
-                    command_timeout=self._timeout,
-                )
+                try:
+                    self._pool = await asyncpg.create_pool(
+                        self._config.postgres_dsn,
+                        min_size=1,
+                        max_size=self._config.postgres_max_connections,
+                        timeout=self._timeout,
+                        command_timeout=self._timeout,
+                    )
+                except ValueError:
+                    # asyncpg's DSN parser quotes the text it failed on, which can
+                    # be part of the password; report a fixed message instead.
+                    raise SessionConnectionError(DSN_PARSE_ERROR) from None
             if self._config.postgres_create_tables and not await self._tables_exist(self._pool):
                 await self._create_tables(self._pool)
             self._ready = True

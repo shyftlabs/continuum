@@ -826,3 +826,105 @@ def test_startup_log_names_the_postgres_store(monkeypatch):
     [line] = [x for x in lines if "Session:" in x]
     assert "postgres host=db.internal database=appdb" in line
     assert "redis" not in line and secret not in line and "app:" not in line
+
+
+def _unencoded_password_dsns():
+    """DSNs whose password holds an unencoded "#", "?" or "/", the fragments that
+    must never be shown, and whether asyncpg fails to parse the DSN. Built at run time so no literal credential is in git.
+    With "/" asyncpg reads "app:<digits>" as host and port, so it fails to resolve
+    rather than to parse; the password must still not be shown."""
+    head, tail, digits = "Sec7" + "Frag", "tail" + "99", "8604" + "13"
+    return [
+        (f"postgresql://app:{head}#{tail}@127.0.0.1:1/appdb", (head, tail), True),
+        (f"postgresql://app:{head}?{tail}@127.0.0.1:1/appdb", (head, tail), True),
+        (f"postgresql://app:{digits}/{head}@127.0.0.1:1/appdb", (digits, head), False),
+    ]
+
+
+@pytest.mark.parametrize(("dsn", "fragments", "parse_error"), _unencoded_password_dsns())
+async def test_unencoded_password_is_not_shown_by_the_session_store(
+    monkeypatch, caplog, dsn, fragments, parse_error
+):
+    import logging
+
+    from continuum.session.client import SessionClient
+
+    caplog.set_level(logging.DEBUG)
+    config = SessionConfig(provider="postgres", postgres_dsn=dsn, postgres_timeout_seconds=1.0)
+
+    provider = PostgresSessionProvider(config)
+    assert await provider.aping() is False
+    with pytest.raises(SessionConnectionError) as raised:
+        await provider.get_or_create_session(user_id="u1", conversation_id="c1")
+
+    client = SessionClient(config.model_copy(update={"fallback_mode": "degrade"}))
+    assert await client.get_or_create_session(user_id="u1", conversation_id="c1")
+    strict = SessionClient(config.model_copy(update={"fallback_mode": "fail"}))
+    with pytest.raises(SessionConnectionError) as strict_error:
+        await strict.get_or_create_session(user_id="u1", conversation_id="c1")
+
+    shown = " ".join(
+        [caplog.text, str(provider.last_probe_error), str(raised.value), str(strict_error.value)]
+    )
+    assert ("percent-encode" in shown) is parse_error
+    assert not [f for f in fragments if f in shown]
+
+
+@pytest.mark.parametrize(("dsn", "fragments", "parse_error"), _unencoded_password_dsns())
+async def test_unencoded_password_is_not_shown_by_health_or_describe(
+    monkeypatch, caplog, dsn, fragments, parse_error
+):
+    import logging
+
+    from continuum.config import settings
+    from continuum.connectors.postgres import PostgresConnector
+    from continuum.core.health import HealthCheck, HealthStatus
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(settings, "session_enabled", True)
+    monkeypatch.setattr(settings, "session_provider", "postgres")
+    monkeypatch.setattr(settings, "session_postgres_dsn", dsn)
+    monkeypatch.setattr(settings, "session_postgres_timeout_seconds", 1.0)
+    result = await HealthCheck().check_postgres()
+    assert result.status == HealthStatus.UNHEALTHY
+
+    connector = PostgresConnector(SessionConfig(provider="postgres", postgres_dsn=dsn))
+    assert await connector.aping() is False
+    described = connector.describe()
+    assert (described["host"], described["port"], described["database"]) == (
+        "127.0.0.1",
+        1,
+        "appdb",
+    )
+
+    shown = " ".join([caplog.text, result.message, str(result.details), str(described)])
+    assert ("percent-encode" in shown) is parse_error
+    assert not [f for f in fragments if f in shown]
+
+
+@pytest.mark.parametrize(("dsn", "fragments", "parse_error"), _unencoded_password_dsns())
+def test_unencoded_password_is_not_in_the_startup_log(monkeypatch, dsn, fragments, parse_error):
+    from continuum.core import lifecycle
+
+    class Client:
+        is_enabled = True
+        config = SessionConfig(provider="postgres", enabled=True, postgres_dsn=dsn)
+
+    lines: list[str] = []
+
+    class Logger:
+        def info(self, msg, *args):
+            lines.append(msg % args if args else msg)
+
+        def debug(self, *a, **k):
+            pass
+
+        warning = error = debug
+
+    _session_settings(monkeypatch)
+    monkeypatch.setattr(lifecycle, "logger", Logger())
+    monkeypatch.setattr("continuum.session.get_global_session_client", lambda: Client())
+    lifecycle.OrchestratorLifecycle()._log_service_configurations()
+    [line] = [x for x in lines if "Session:" in x]
+    assert "postgres host=127.0.0.1 database=appdb" in line
+    assert not [f for f in fragments if f in line]
