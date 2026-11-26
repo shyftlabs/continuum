@@ -90,15 +90,23 @@ _PYDANTIC_ECHO = re.compile(r"input_value=.*?input_type=", re.DOTALL)
 _STREAM_OPTIONS_REJECTION = re.compile(
     r"""stream_options\\?["'`]? is not allowed"""  # Joi
     r"|property stream_options should not exist"  # NestJS class-validator
-    r"|unknown field `stream_options`"  # serde
+    r"""|property ["'`]?stream_options["'`]? is unsupported"""  # Groq
+    r"""|unknown field [`"']stream_options[`"']"""  # serde, Go encoding/json
+    r'|unrecognized field "stream_options"'  # Jackson
+    r"""|unrecognized key\(s\) in object:[\w\s,'"]*?['"]stream_options['"]"""  # Zod
+    r"""|additionalProperty["']?\s*[:=]\s*["']stream_options["']"""  # AJV
+    # Python jsonschema / Connexion
+    r"""|additional properties are not allowed \([^)]*?['"]stream_options['"]"""
+    r"|\bstream_options(?:\.\w+)*\s+extra inputs are not permitted"  # str(ValidationError)
     r"|unrecognized request arguments? supplied:[\w\s,]*?\bstream_options\b"  # OpenAI-style
     r"""|unexpected keyword argument ["']stream_options["']""",  # Python kwargs
     re.IGNORECASE,
 )
 
 # Keys whose string value is a field name, so an exact ``stream_options`` there
-# names the rejected field (pydantic's ``loc``, an OpenAI-style ``param``).
-_FIELD_NAME_KEYS = frozenset({"loc", "param"})
+# names the rejected field (pydantic's ``loc``, an OpenAI-style ``param``, Zod's
+# ``keys``, AJV's ``additionalProperty``).
+_FIELD_NAME_KEYS = frozenset({"loc", "param", "keys", "additionalProperty"})
 
 
 def _text_rejects_stream_options(text: str) -> bool:

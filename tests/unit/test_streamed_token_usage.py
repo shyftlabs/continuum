@@ -534,6 +534,106 @@ class TestRound3:
         assert calls == [True, False, False]
 
     @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [
+            # Go encoding/json DisallowUnknownFields / grpc-gateway.
+            (400, {"code": 3, "message": 'json: unknown field "stream_options"'}),
+            # Jackson FAIL_ON_UNKNOWN_PROPERTIES.
+            (
+                400,
+                {
+                    "message": 'JSON parse error: Unrecognized field "stream_options" '
+                    "(class com.example.ChatRequest), not marked as ignorable"
+                },
+            ),
+            # Zod .strict(): message plus the structured keys list.
+            (
+                400,
+                {
+                    "error": [
+                        {
+                            "code": "unrecognized_keys",
+                            "keys": ["stream_options"],
+                            "path": [],
+                            "message": "Unrecognized key(s) in object: 'stream_options'",
+                        }
+                    ]
+                },
+            ),
+            # AJV additionalProperties: false.
+            (
+                400,
+                {
+                    "message": "body must NOT have additional properties, "
+                    'params.additionalProperty: "stream_options"',
+                    "errors": [
+                        {
+                            "keyword": "additionalProperties",
+                            "params": {"additionalProperty": "stream_options"},
+                            "message": "must NOT have additional properties",
+                        }
+                    ],
+                },
+            ),
+            # Python jsonschema / Connexion.
+            (
+                400,
+                {
+                    "detail": "Additional properties are not allowed "
+                    "('stream_options' was unexpected)",
+                    "status": 400,
+                    "title": "Bad Request",
+                },
+            ),
+            # str(pydantic.ValidationError) in a 400 message.
+            (
+                400,
+                {
+                    "object": "error",
+                    "message": "1 validation error for ChatCompletionRequest\n"
+                    "stream_options\n  Extra inputs are not permitted "
+                    "[type=extra_forbidden, input_value={'include_usage': True}, "
+                    "input_type=dict]",
+                    "code": 400,
+                },
+            ),
+            # Groq.
+            (
+                400,
+                {
+                    "error": {
+                        "message": "property 'stream_options' is unsupported",
+                        "type": "invalid_request_error",
+                    }
+                },
+            ),
+        ],
+        ids=["go-json", "jackson", "zod", "ajv", "jsonschema", "pydantic-str", "groq"],
+    )
+    async def test_strict_server_rejection_shapes_are_adapted(self, status, body, sync):
+        rejected = _api_error(status, body)
+        if not sync:
+            assert await self._stream_calls(rejected) == [True, False, False]
+            return
+        provider = OpenAIProvider(api_key="test-key")
+        calls = []
+
+        def create(**kwargs):
+            calls.append("stream_options" in kwargs)
+            if "stream_options" in kwargs:
+                raise rejected
+            return iter([_chunk("ok", finish="stop")])
+
+        provider._client = MagicMock()
+        provider._client.chat.completions.create = create
+        cfg = LLMConfig(model="shim-model")
+        for _ in range(2):
+            chunks = list(provider.stream([{"role": "user", "content": "hi"}], cfg))
+            assert chunks[-1].is_finished
+        assert calls == [True, False, False]
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
     async def test_missing_total_is_prompt_plus_completion(self, sync):
         chunks_in = [
             _chunk("ok", finish="stop"),
