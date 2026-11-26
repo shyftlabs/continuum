@@ -84,40 +84,63 @@ _MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PA
 # 400 message), so the echo is cut out before the text is searched.
 _PYDANTIC_ECHO = re.compile(r"input_value=.*?input_type=", re.DOTALL)
 
-# `stream_options` as a key whose value is an object — the echoed request
-# (``"stream_options": {"include_usage": true}``), not a complaint about it.
-_ECHOED_STREAM_OPTIONS = re.compile(r"""stream_options(?!['"]?\s*[:=]\s*\{)""")
+# How servers say they reject stream_options in free text. Only these count: a
+# message that merely mentions the field (an echoed prompt, a list of accepted
+# fields) is not a rejection.
+_STREAM_OPTIONS_REJECTION = re.compile(
+    r"""stream_options\\?["'`]? is not allowed"""  # Joi
+    r"|property stream_options should not exist"  # NestJS class-validator
+    r"|unknown field `stream_options`"  # serde
+    r"|unrecognized request arguments? supplied:[\w\s,]*?\bstream_options\b"  # OpenAI-style
+    r"""|unexpected keyword argument ["']stream_options["']""",  # Python kwargs
+    re.IGNORECASE,
+)
+
+# Keys whose string value is a field name, so an exact ``stream_options`` there
+# names the rejected field (pydantic's ``loc``, an OpenAI-style ``param``).
+_FIELD_NAME_KEYS = frozenset({"loc", "param"})
 
 
-def _text_names_stream_options(text: str) -> bool:
-    """True if `text` names stream_options other than in an echo of the request."""
-    return bool(_ECHOED_STREAM_OPTIONS.search(_PYDANTIC_ECHO.sub("", text)))
+def _text_rejects_stream_options(text: str) -> bool:
+    """True if free text says the server rejects stream_options."""
+    return bool(_STREAM_OPTIONS_REJECTION.search(_PYDANTIC_ECHO.sub("", text)))
 
 
-def _body_names_stream_options(body: Any) -> bool:
-    """True if an error body names stream_options outside an echoed request.
+def _body_names_stream_options(body: Any, *, field_names: bool = False) -> bool:
+    """True if an error body says stream_options was rejected.
 
-    Keys are checked as well as values — marshmallow/webargs name the field only
-    as a key (``{"errors": {"json": {"stream_options": ["Unknown field."]}}}``).
-    A key whose value is an object is the request echoed back, and so is
-    anything under ``input`` (a pydantic 422 echoes the request there); without
-    those skips any validation error on a streamed call would look like a
-    rejection of stream_options.
+    Exact matches count: a key ``stream_options`` whose value is not an object
+    (marshmallow/webargs: ``{"errors": {"json": {"stream_options": [...]}}}``)
+    and a ``loc``/``param`` entry equal to it (a pydantic 422 ``extra_forbidden``).
+    Other strings count only with rejection phrasing. Anything under ``input``
+    (a pydantic 422 echoes the request there) and a key whose value is an
+    object (the request echoed back) are skipped, so an unrelated validation
+    error on a streamed call is not taken for a rejection.
     """
     if isinstance(body, str):
-        return _text_names_stream_options(body)
+        if field_names and body == _STREAM_OPTIONS:
+            return True
+        return _text_rejects_stream_options(body)
     if isinstance(body, dict):
         for k, v in body.items():
             if k == "input":
                 continue
             if k == _STREAM_OPTIONS and not isinstance(v, dict):
                 return True
-            if _body_names_stream_options(v):
+            if _body_names_stream_options(v, field_names=k in _FIELD_NAME_KEYS):
                 return True
         return False
     if isinstance(body, (list, tuple)):
-        return any(_body_names_stream_options(v) for v in body)
+        return any(_body_names_stream_options(v, field_names=field_names) for v in body)
     return False
+
+
+def _stream_usage(raw: Any) -> Usage:
+    """Usage from a stream's usage chunk; a missing total is prompt + completion."""
+    prompt = getattr(raw, "prompt_tokens", None) or 0
+    completion = getattr(raw, "completion_tokens", None) or 0
+    total = getattr(raw, "total_tokens", None) or (prompt + completion)
+    return Usage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
 
 
 def _response_text(e: Exception) -> str:
@@ -388,11 +411,15 @@ class OpenAIProvider(BaseProvider):
 
         ``stream_options`` is added by Continuum rather than the caller, so it is
         also recognised from other OpenAI-compatible servers whose error names it
-        without OpenAI's code: in the parsed body (values or keys) or in the raw
-        response text. Echoed request input is ignored, so an unrelated
-        validation error on a streamed call is not taken for a rejection.
+        without OpenAI's code: in the parsed body or in the raw response text
+        (see _body_names_stream_options). Some shims answer the unknown field
+        with a 500 or 501; those count only when the error says stream_options
+        was rejected. Other 5xx, timeouts and connection errors never do.
         """
-        if not isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
+        if isinstance(e, openai.InternalServerError):
+            if getattr(e, "status_code", None) not in (500, 501):
+                return None
+        elif not isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
             return None
         param = cls._coded_param(e)
         if param is not None:
@@ -611,8 +638,12 @@ class OpenAIProvider(BaseProvider):
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
         # Ask for the usage chunk OpenAI-compatible servers send last. A server
-        # that rejects the field gets it dropped by _call_adapting, and remembered.
-        if self._server_key(kwargs["model"]) not in self._stream_options_rejected:
+        # that rejects the field gets it dropped by _call_adapting, and remembered;
+        # config.stream_include_usage=False never sends it.
+        if (
+            config.stream_include_usage
+            and self._server_key(kwargs["model"]) not in self._stream_options_rejected
+        ):
             kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — nothing has been yielded yet,
@@ -628,11 +659,7 @@ class OpenAIProvider(BaseProvider):
             for chunk in response:
                 model = chunk.model or model
                 if getattr(chunk, "usage", None):
-                    usage = Usage(
-                        prompt_tokens=chunk.usage.prompt_tokens or 0,
-                        completion_tokens=chunk.usage.completion_tokens or 0,
-                        total_tokens=chunk.usage.total_tokens or 0,
-                    )
+                    usage = _stream_usage(chunk.usage)
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -679,8 +706,12 @@ class OpenAIProvider(BaseProvider):
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
         # Ask for the usage chunk OpenAI-compatible servers send last. A server
-        # that rejects the field gets it dropped by _call_adapting, and remembered.
-        if self._server_key(kwargs["model"]) not in self._stream_options_rejected:
+        # that rejects the field gets it dropped by _call_adapting, and remembered;
+        # config.stream_include_usage=False never sends it.
+        if (
+            config.stream_include_usage
+            and self._server_key(kwargs["model"]) not in self._stream_options_rejected
+        ):
             kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — see the sync `stream` above.
@@ -696,11 +727,7 @@ class OpenAIProvider(BaseProvider):
             async for chunk in response:
                 model = chunk.model or model
                 if getattr(chunk, "usage", None):
-                    usage = Usage(
-                        prompt_tokens=chunk.usage.prompt_tokens or 0,
-                        completion_tokens=chunk.usage.completion_tokens or 0,
-                        total_tokens=chunk.usage.total_tokens or 0,
-                    )
+                    usage = _stream_usage(chunk.usage)
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:

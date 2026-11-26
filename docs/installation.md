@@ -137,6 +137,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `LLM_REQUEST_TIMEOUT` | `60` | Seconds |
 | `LLM_MAX_RETRIES` | `3` | |
 | `LLM_ENABLE_FALLBACK` | `true` | |
+| `LLM_STREAM_INCLUDE_USAGE` | `true` | Ask OpenAI-compatible servers for token usage on streams. Set `false` for a server that fails on `stream_options` |
 
 ### Memory (mem0 + Qdrant / Milvus)
 

@@ -167,6 +167,7 @@ A Pydantic model with full provider-agnostic settings.
 | `timeout` | `int` | `settings.llm_request_timeout` | Per-attempt seconds (not total). The whole call is hard-bounded at ~`timeout × (max_retries + 1)` + backoff via an overall deadline. |
 | `max_retries` | `int` | `settings.llm_max_retries` | SDK-level retries per call (wired into the provider client). Set `0` to make `timeout` a true single-attempt ceiling. |
 | `enable_fallback` | `bool` | `settings.llm_enable_fallback` | |
+| `stream_include_usage` | `bool` | `settings.llm_stream_include_usage` | Send `stream_options.include_usage` on OpenAI-compatible streams. `False` for a server that fails on the field |
 | `response_format` | `dict \| type[BaseModel] \| None` | `None` | Structured output |
 | `json_mode` | `bool` | `False` | Simple `json_object` mode |
 | `user` | `str \| None` | `None` | Forwarded for billing |

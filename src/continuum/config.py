@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     llm_request_timeout: int = 60
     llm_max_retries: int = 3
     llm_enable_fallback: bool = True
+    # Ask OpenAI-compatible servers for token usage on streams
+    # (stream_options.include_usage). Turn off for a server that fails on the field.
+    llm_stream_include_usage: bool = True
 
     # -------------------------------------------------------------------------
     # Langfuse Configuration (Self-Hosted)

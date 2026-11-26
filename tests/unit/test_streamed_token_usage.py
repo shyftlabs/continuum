@@ -362,6 +362,200 @@ class TestProviderStreamUsage:
             await provider.acomplete([{"role": "user", "content": "hi"}], LLMConfig(model="m"))
 
 
+def _api_error(status, body, text=None):
+    """The openai SDK error for `status`, as the client raises it."""
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    response = (
+        httpx.Response(status, request=request, text=text)
+        if text is not None
+        else httpx.Response(status, request=request, json=body)
+    )
+    cls = {
+        400: openai.BadRequestError,
+        422: openai.UnprocessableEntityError,
+        429: openai.RateLimitError,
+    }.get(status, openai.InternalServerError)
+    return cls(f"Error code: {status}", response=response, body=body)
+
+
+class TestRound3:
+    """Opt-out, 500/501 rejections, a missing total, and echoes that only mention the field."""
+
+    async def _stream_calls(self, rejected, model="shim-model", stream_twice=True):
+        provider = OpenAIProvider(api_key="test-key")
+        calls = []
+
+        async def create(**kwargs):
+            calls.append("stream_options" in kwargs)
+            if "stream_options" in kwargs:
+                raise rejected
+            return _aiter([_chunk("ok", finish="stop")])
+
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = create
+        cfg = LLMConfig(model=model)
+        msgs = [{"role": "user", "content": "hi"}]
+        for _ in range(2 if stream_twice else 1):
+            [c async for c in provider.astream(msgs, cfg)]
+        return calls
+
+    @pytest.mark.parametrize("via", ["setting", "config"])
+    def test_opt_out_never_sends_stream_options(self, via, monkeypatch):
+        from continuum.config import settings
+
+        if via == "setting":
+            monkeypatch.setattr(settings, "llm_stream_include_usage", False)
+            cfg = LLMConfig(model="m")
+        else:
+            cfg = LLMConfig(model="m", stream_include_usage=False)
+        provider = OpenAIProvider(api_key="test-key")
+        provider._client = MagicMock()
+        provider._client.chat.completions.create = MagicMock(
+            return_value=iter([_chunk("ok", finish="stop")])
+        )
+
+        list(provider.stream([{"role": "user", "content": "hi"}], cfg))
+
+        assert "stream_options" not in provider._client.chat.completions.create.call_args.kwargs
+
+    def test_include_usage_defaults_on(self):
+        assert LLMConfig(model="m").stream_include_usage is True
+
+    @pytest.mark.parametrize(
+        ("status", "body", "text"),
+        [
+            (500, {"detail": "create() got an unexpected keyword argument 'stream_options'"}, None),
+            (501, {"error": {"message": "property stream_options should not exist"}}, None),
+            # Body reduced to the status text; the field is named only in the raw text.
+            (
+                500,
+                "Internal Server Error",
+                "TypeError: unexpected keyword argument 'stream_options'",
+            ),
+        ],
+        ids=["500-kwarg", "501-nest", "500-text-only"],
+    )
+    async def test_500_or_501_naming_stream_options_is_dropped_and_remembered(
+        self, status, body, text
+    ):
+        calls = await self._stream_calls(_api_error(status, body, text))
+        assert calls == [True, False, False]
+
+    def test_sync_500_naming_stream_options_is_dropped(self):
+        provider = OpenAIProvider(api_key="test-key")
+        rejected = _api_error(500, {"detail": "unexpected keyword argument 'stream_options'"})
+        calls = []
+
+        def create(**kwargs):
+            calls.append("stream_options" in kwargs)
+            if "stream_options" in kwargs:
+                raise rejected
+            return iter([_chunk("ok", finish="stop")])
+
+        provider._client = MagicMock()
+        provider._client.chat.completions.create = create
+        chunks = list(provider.stream([{"role": "user", "content": "hi"}], LLMConfig(model="m")))
+        assert chunks[-1].is_finished
+        assert calls == [True, False]
+
+    @pytest.mark.parametrize(
+        ("status", "body"),
+        [
+            (500, {"message": "Internal Server Error"}),
+            (502, {"message": "unexpected keyword argument 'stream_options'"}),
+            (503, {"message": "Service Unavailable"}),
+            (429, {"message": "Rate limit reached"}),
+        ],
+        ids=["500-plain", "502-names-field", "503", "429"],
+    )
+    async def test_other_errors_are_not_retried_without_stream_options(self, status, body):
+        rejected = _api_error(status, body)
+        provider = OpenAIProvider(api_key="test-key")
+        create = AsyncMock(side_effect=rejected)
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = create
+
+        with pytest.raises(Exception):
+            [
+                c
+                async for c in provider.astream(
+                    [{"role": "user", "content": "hi"}], LLMConfig(model="m")
+                )
+            ]
+        assert create.await_count == 1
+        assert OpenAIProvider._stream_options_rejected == set()
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # FastAPI/vLLM: a validation error on another field echoes the request,
+            # whose user message names the field.
+            "[{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, When "
+            "using `tool_choice`, `tools` must be set.', 'input': {'model': 'm', "
+            "'messages': [{'role': 'user', 'content': 'How do I set stream_options "
+            "in the OpenAI API?'}], 'stream': True, 'stream_options': "
+            "{'include_usage': True}, 'tool_choice': 'required'}}]",
+            # serde: another unknown field, stream_options among the accepted ones.
+            "unknown field `foo`, expected one of `model`, `messages`, `stream_options`",
+            # Context-length error quoting the prompt.
+            "This model's maximum context length is 4096 tokens. Your messages "
+            "('How do I set stream_options?') resulted in 5000 tokens.",
+        ],
+        ids=["echoed-user-message", "serde-expected-list", "context-length-quote"],
+    )
+    async def test_message_that_only_mentions_stream_options_is_not_adapted(self, message):
+        rejected = _api_error(400, {"object": "error", "message": message, "code": 400})
+        provider = OpenAIProvider(api_key="test-key")
+        create = AsyncMock(side_effect=rejected)
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = create
+
+        with pytest.raises(Exception):
+            [
+                c
+                async for c in provider.astream(
+                    [{"role": "user", "content": "hi"}], LLMConfig(model="m")
+                )
+            ]
+        assert create.await_count == 1
+        assert OpenAIProvider._stream_options_rejected == set()
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "unknown field `stream_options`, expected one of `model`, `messages`",
+            "property stream_options should not exist",
+            "Unrecognized request arguments supplied: foo, stream_options",
+        ],
+        ids=["serde", "nest", "openai-plural"],
+    )
+    async def test_rejection_wording_in_free_text_is_adapted(self, message):
+        calls = await self._stream_calls(_api_error(400, {"message": message}))
+        assert calls == [True, False, False]
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    async def test_missing_total_is_prompt_plus_completion(self, sync):
+        chunks_in = [
+            _chunk("ok", finish="stop"),
+            _chunk(usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=None)),
+        ]
+        provider = OpenAIProvider(api_key="test-key")
+        msgs = [{"role": "user", "content": "hi"}]
+        cfg = LLMConfig(model="m")
+        if sync:
+            provider._client = MagicMock()
+            provider._client.chat.completions.create = MagicMock(return_value=iter(chunks_in))
+            chunks = list(provider.stream(msgs, cfg))
+        else:
+            provider._async_client = MagicMock()
+            provider._async_client.chat.completions.create = AsyncMock(
+                return_value=_aiter(chunks_in)
+            )
+            chunks = [c async for c in provider.astream(msgs, cfg)]
+
+        assert chunks[-1].usage == Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)
+
+
 # ---------------------------------------------------------------------------
 # run_stream
 # ---------------------------------------------------------------------------
