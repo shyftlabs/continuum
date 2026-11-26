@@ -108,6 +108,23 @@ def test_think_handoff_and_error_envelopes_are_skipped_whatever_the_filter():
     assert contexts_from_messages(NOISY, tools=["think", "handoff_to_specialist"]) == []
 
 
+def test_a_record_with_error_type_and_other_fields_is_kept():
+    # Only the SDK's own envelope keys mark a tool error; a log or incident record
+    # that happens to carry error_type is retrieved data.
+    record = '{"error": "E1042", "error_type": "SensorFault", "description": "Pump 3 tripped"}'
+    envelope = '{"error": "boom", "error_type": "TimeoutError", "is_error": true}'
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_call("l1", "log_search"), _call("l2", "log_search")],
+        },
+        {"role": "tool", "tool_call_id": "l1", "content": record},
+        {"role": "tool", "tool_call_id": "l2", "content": envelope},
+    ]
+    assert contexts_from_messages(messages) == [record]
+
+
 def test_tools_none_means_all_and_empty_means_none():
     assert len(contexts_from_messages(MESSAGES, tools=None)) == 2
     assert contexts_from_messages(MESSAGES, tools=[]) == []

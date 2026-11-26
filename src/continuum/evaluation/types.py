@@ -243,7 +243,9 @@ def contexts_from_messages(
 
     Whatever the filter, skipped are empty results, the ``think`` tool's,
     ``handoff_to_*`` results and tool-error envelopes (a JSON object with an
-    ``error_type`` key), which are not retrieved content and would skew the scores.
+    ``error_type`` key and no keys besides ``error``, ``error_type`` and
+    ``is_error``), which are not retrieved content and would skew the scores.
+    Other tool-error, approval and refusal strings are kept.
 
     Only the top-level agent's own tool results are covered. Given an
     ``AgentResponse`` from a handoff with ``return_to_parent=False``, the handed-off
@@ -292,8 +294,15 @@ def _run_messages(run: Any, _depth: int = 0) -> list[Any]:
     return messages
 
 
+_ERROR_ENVELOPE_KEYS = frozenset({"error", "error_type", "is_error"})
+
+
 def _is_error_envelope(content: str) -> bool:
-    """A tool-error result such as ``{"error": "...", "error_type": "TimeoutError"}``."""
+    """A tool-error result such as ``{"error": "...", "error_type": "TimeoutError"}``.
+
+    Only an object made of the SDK's envelope keys counts; a record that carries
+    ``error_type`` next to other fields (a log or incident entry) is data.
+    """
     text = content.lstrip()
     if not text.startswith("{"):
         return False
@@ -301,7 +310,7 @@ def _is_error_envelope(content: str) -> bool:
         data = json.loads(text)
     except ValueError:
         return False
-    return isinstance(data, dict) and "error_type" in data
+    return isinstance(data, dict) and "error_type" in data and set(data) <= _ERROR_ENVELOPE_KEYS
 
 
 def _message_dict(obj: Any) -> dict[str, Any]:
