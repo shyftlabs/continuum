@@ -246,8 +246,9 @@ becomes U+FFFD, because PostgreSQL text cannot hold either.
 `SESSION_PROVIDER` takes `redis` (the default), `postgres` or `memory`. Case
 and surrounding spaces are ignored and an empty value means `redis`; any other
 value stops the application when settings load. The health checks probe the
-store in use, including one set up in code with `SessionConfig(provider=...)`
-or `pool=`.
+store `SESSION_PROVIDER` names. `check_all_health()` also follows a store set
+up in code with `SessionConfig(provider=...)` or `pool=` on the container's
+session client; `connectors.health_check_all()` reads only the environment.
 
 ```python
 # From settings: SESSION_PROVIDER=postgres, SESSION_POSTGRES_DSN=postgresql://...
@@ -256,6 +257,10 @@ client = SessionClient(SessionConfig(provider="postgres"))
 # Or reuse the application's own asyncpg pool (never closed by the provider)
 from continuum.session.providers.postgres import PostgresSessionProvider
 client.set_provider(PostgresSessionProvider(SessionConfig(provider="postgres"), pool=app_pool))
+
+# Register the client so agents and check_all_health() use it
+from continuum.core.container import get_container
+get_container().set_session_client(client)
 ```
 
 To swap in a custom provider:

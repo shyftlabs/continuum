@@ -578,7 +578,7 @@ class Settings(BaseSettings):
         for field_name in type(self).model_fields:
             value = getattr(self, field_name)
             if any(
-                s in field_name for s in ("_key", "_secret", "_password", "api_key")
+                s in field_name for s in ("_key", "_secret", "_password", "_dsn", "api_key")
             ) and isinstance(value, str):
                 parts.append(f"{field_name}={mask_value(value)!r}")
             else:

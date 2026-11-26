@@ -80,14 +80,20 @@ class OverallHealthResult:
         }
 
 
-def _active_session() -> tuple[SessionConfig, BaseSessionProvider | None]:
+def _active_session() -> tuple[SessionConfig | None, BaseSessionProvider | None]:
     """The session config the application uses, and its provider once chosen.
 
     Read from the container's session client when there is one, else from the
     container's session settings. Observes only: never creates the client.
+    Returns no config when sessions are off or none could be read; callers then
+    use ``settings.session_provider``. It never builds ``SessionConfig()`` from
+    the environment itself, so an unrelated session setting (for example
+    ``SESSION_HASH_IDS`` without a strong secret) cannot fail a health check.
     """
     from continuum.session.config import SessionConfig
 
+    if not settings.session_enabled:
+        return None, None
     try:
         from continuum.core import container as container_module
 
@@ -95,18 +101,18 @@ def _active_session() -> tuple[SessionConfig, BaseSessionProvider | None]:
         # ContainerConfig the application passes to get_container() later.
         container = container_module._global_container
         if container is None:
-            return SessionConfig(), None
+            return None, None
         if container.has_session_client():
             client = container.session_client
             config = getattr(client, "config", None)
             if isinstance(config, SessionConfig):
                 return config, getattr(client, "active_provider", None)
         return container.configured_session_config(), None
-    except Exception:  # noqa: BLE001 — fall back to the environment
-        return SessionConfig(), None
+    except Exception:  # noqa: BLE001 — fall back to settings.session_provider
+        return None, None
 
 
-def _session_store_name(config: SessionConfig, provider: BaseSessionProvider | None) -> str:
+def _session_store_name(config: SessionConfig | None, provider: BaseSessionProvider | None) -> str:
     """'postgres' or 'redis': the durable store the session client uses or will use.
 
     A provider in use wins over the config (one injected with set_provider()),
@@ -115,7 +121,7 @@ def _session_store_name(config: SessionConfig, provider: BaseSessionProvider | N
     name = getattr(provider, "provider_name", None)
     if name in ("redis", "postgres"):
         return name
-    return config.provider
+    return config.provider if config is not None else settings.session_provider
 
 
 class HealthCheck:
@@ -408,7 +414,7 @@ class HealthCheck:
         start_time = time.time()
         config, provider = _active_session()
 
-        if not settings.session_enabled or not config.enabled:
+        if not settings.session_enabled or (config is not None and not config.enabled):
             return HealthCheckResult(
                 name="postgres",
                 status=HealthStatus.HEALTHY,
@@ -440,7 +446,11 @@ class HealthCheck:
 
         from continuum.connectors.postgres import PostgresConnector
 
-        connector = PostgresConnector(config.model_copy(update={"provider": "postgres"}))
+        # With no config read from the container, the connector builds one from
+        # settings; if that fails, the check reports it (it does not crash others).
+        connector = PostgresConnector(
+            config.model_copy(update={"provider": "postgres"}) if config is not None else None
+        )
         target = {k: v for k, v in connector.describe().items() if k in ("host", "port")}
         try:
             version = await connector.server_version()

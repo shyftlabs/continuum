@@ -58,7 +58,7 @@ except ImportError:  # optional extra: pip install 'shyftlabs-continuum[postgres
 logger = get_logger(__name__)
 
 # Table names are interpolated into SQL, so the prefix must be a plain identifier.
-_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,40}$")
+_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,40}")
 
 
 # A UTF-16 surrogate on its own (a split emoji in a truncated JSON body, say).
@@ -107,7 +107,7 @@ class PostgresSessionProvider(BaseSessionProvider):
                 "PostgresSessionProvider needs asyncpg: pip install 'shyftlabs-continuum[postgres]'"
             )
         prefix = config.postgres_table_prefix
-        if not _IDENTIFIER.match(prefix):
+        if not _IDENTIFIER.fullmatch(prefix):
             raise ValueError(
                 f"postgres_table_prefix must be a lowercase SQL identifier, got {prefix!r}"
             )

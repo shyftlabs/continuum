@@ -627,3 +627,68 @@ def test_custom_store_check_is_not_replaced(monkeypatch):
     health.register_check("postgres", mine)
     health._sync_session_store_check()
     assert health._checks["postgres"] is mine
+
+
+# ---------------------------------------------------------------------------
+# Round-3 review fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_health_check_survives_an_unusable_session_id_secret(monkeypatch, enabled):
+    # SESSION_HASH_IDS without a secret makes SessionConfig() raise; the health
+    # checks must not build it, so they report instead of crashing.
+    from continuum.config import settings
+    from continuum.core.health import HealthCheck
+
+    monkeypatch.setattr(settings, "session_enabled", enabled)
+    monkeypatch.setattr(settings, "session_provider", "postgres")
+    monkeypatch.setattr(settings, "session_hash_ids", True)
+    monkeypatch.setattr(settings, "session_id_secret", None)
+    with pytest.raises(Exception):  # noqa: B017 — the setting is indeed unusable
+        SessionConfig()
+    _container_with(monkeypatch)
+
+    health = HealthCheck()
+    health._checks = {"postgres": health._checks["postgres"]}
+    result = await health.check_all(timeout=5)
+    [check] = result.checks
+    assert check.name == "postgres"
+    if not enabled:
+        assert check.details == {"enabled": False}
+
+
+def test_custom_provider_keeps_its_mixed_case_name():
+    from continuum.session.client import SessionClient
+    from continuum.session.providers import PROVIDER_REGISTRY, register_provider
+    from continuum.session.providers.memory import MemorySessionProvider
+
+    class MyStore(MemorySessionProvider):
+        pass
+
+    register_provider("MyStore", MyStore)
+    try:
+        assert SessionConfig(provider="MyStore").provider == "MyStore"
+        client = SessionClient(SessionConfig(provider="MyStore"))
+        assert type(client.provider) is MyStore
+    finally:
+        PROVIDER_REGISTRY.pop("MyStore", None)
+
+
+def test_settings_repr_masks_the_postgres_dsn(monkeypatch):
+    from continuum.config import Settings
+
+    secret = "s3cret" + "pw"  # built at run time: no credential-like literal in the repo
+    dsn = "postgresql://app:" + secret + "@" + "db.internal:5432/app"
+    monkeypatch.setenv("SESSION_POSTGRES_DSN", dsn)
+    s = Settings()
+    assert s.session_postgres_dsn == dsn
+    assert secret not in repr(s)
+    config = SessionConfig(provider="postgres", postgres_dsn="host=db password=" + secret)
+    assert secret not in repr(config)
+
+
+@pytest.mark.parametrize("prefix", ["continuum_session\n", "abc\n"])
+def test_table_prefix_with_a_trailing_newline_is_rejected(prefix):
+    with pytest.raises(ValueError, match="postgres_table_prefix"):
+        PostgresSessionProvider(SessionConfig(provider="postgres", postgres_table_prefix=prefix))

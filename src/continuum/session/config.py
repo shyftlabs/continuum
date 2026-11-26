@@ -103,6 +103,8 @@ class SessionConfig(BaseModel):
     # PostgreSQL Configuration (for the postgres provider)
     postgres_dsn: str | None = Field(
         default_factory=lambda: settings.session_postgres_dsn,
+        # The DSN can carry the password; keep it out of repr(SessionConfig()).
+        repr=False,
         description="PostgreSQL DSN for session storage (provider='postgres')",
     )
     postgres_table_prefix: str = Field(
@@ -135,8 +137,14 @@ class SessionConfig(BaseModel):
     @classmethod
     def _normalize_provider(cls, v: object) -> object:
         # 'Redis', ' redis' and '' mean what SESSION_PROVIDER means for them.
+        # Any other name is kept as given: custom providers are registered and
+        # looked up case-sensitively.
         if isinstance(v, str):
-            return v.strip().lower() or "redis"
+            name = v.strip().lower()
+            if not name:
+                return "redis"
+            if name in SESSION_PROVIDERS:
+                return name
         return v
 
     @field_validator("redis_max_connections")
