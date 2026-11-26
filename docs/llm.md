@@ -71,10 +71,11 @@ Each agent or workflow run through the gateway lists what the gateway did in
 `response.run_artifacts["gateway_routing"]` (and in the streamed `RUN_END`
 event's `data["gateway_routing"]`). There is one entry per HTTP attempt, not
 per model call: when the SDK retries (a 503, then a 200), each attempt has its
-own entry. A workflow's list holds its steps' calls and its own (a merge, a
-completion check); the steps' own responses do not repeat them. This holds for
-`runner.fork` of a workflow and for a built-in workflow called directly on a
-new context too. A custom workflow's result is attached to only when it is an
+own entry. A workflow run through `runner.run` or `run_stream` lists its
+steps' calls and its own (a merge, a completion check); the steps' own
+responses do not repeat them. For `runner.fork` of a workflow, and for a
+built-in workflow's `execute()` called directly on a new context, only the
+steps' calls are listed, not the workflow's own. A custom workflow's result is attached to only when it is an
 `AgentResponse` (on a copy); any other result is returned unchanged. A failed
 or cancelled run records nothing.
 

@@ -24,6 +24,10 @@ Covers:
 - runner.fork of a workflow, and a workflow running Parallel.execute on a new
   context, collect their steps' entries
 - a forked child gets a fresh lock and an empty store
+- a streamed workflow whose run_artifacts is not a dict still ends with RUN_END
+- calls sent through either dispatcher are filed under their own run, started
+  lazily or at startup; entries per run are capped
+- a cancelled plain run and an early-closed plain stream leave no entries
 """
 
 from __future__ import annotations
@@ -738,3 +742,132 @@ def test_fork_while_another_thread_holds_the_lock_does_not_hang_the_child():
     finally:
         release.set()
         holder.join()
+
+
+# ---------------------------------------------------------------------------
+# Round 3: non-dict run_artifacts, dispatchers, per-run cap, cancelled runs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("gateway_on", [True, False])
+@pytest.mark.parametrize(
+    "artifacts", [["keep"], "keep", ("keep",), {"gateway_routing": "not a list"}]
+)
+async def test_stream_run_end_with_non_dict_run_artifacts(artifacts, gateway_on):
+    from continuum.agent.base import BaseAgent
+    from continuum.agent.types import EventType
+
+    @dataclass
+    class Odd(BaseAgent):
+        async def execute(self, input_text, runner, context, llm_client=None):
+            if gateway_on:
+                gateway_routing.record(httpx.Response(200, headers=HEADERS))
+            return AgentResponse(content="ok", agent_name=self.name, run_artifacts=artifacts)
+
+    events = [e async for e in _routing_runner().run_stream(Odd(name="odd"), "q")]
+
+    run_end = events[-1]
+    assert run_end.type == EventType.RUN_END
+    assert run_end.data["content"] == "ok"
+    if gateway_on and isinstance(artifacts, dict):
+        # A dict gets the run's entries; its non-list value is not kept.
+        assert len(run_end.data["gateway_routing"]) == 1
+    else:
+        assert "gateway_routing" not in run_end.data
+    assert not gateway_routing._by_run
+
+
+def _dispatching_runner(dispatcher):
+    """``_routing_runner`` whose LLM calls go through ``dispatcher``, as LLMClient does."""
+    runner = _routing_runner()
+    chat = runner.llm_client.chat.side_effect
+
+    async def dispatched_chat(*args, **kwargs):
+        if hasattr(dispatcher, "max_workers"):
+            return await dispatcher.dispatch(
+                lambda: chat(*args, **kwargs), stage_priority=5, request_priority=5
+            )
+        return await dispatcher.dispatch(lambda: chat(*args, **kwargs), priority=5)
+
+    runner.llm_client.chat.side_effect = dispatched_chat
+    return runner
+
+
+@pytest.mark.parametrize("started_at_startup", [False, True])
+@pytest.mark.parametrize("kind", ["priority", "two_level"])
+async def test_dispatched_calls_are_filed_under_their_own_run(kind, started_at_startup):
+    from continuum.agent.base import BaseAgent
+    from continuum.llm.dispatcher import PriorityDispatcher, TwoLevelDispatcher
+
+    dispatcher = (
+        PriorityDispatcher(max_concurrent=2) if kind == "priority" else TwoLevelDispatcher(2)
+    )
+    if started_at_startup:
+        await dispatcher.start()  # outside any run, as the module docstring shows
+    runner = _dispatching_runner(dispatcher)
+    try:
+        # Lazily started: run 1's first call starts the workers inside run 1.
+        responses = [await runner.run(BaseAgent(name="a", instructions="x"), "q") for _ in range(3)]
+    finally:
+        await dispatcher.stop()
+
+    ids = [[e["request_id"] for e in r.run_artifacts["gateway_routing"]] for r in responses]
+    assert ids == [["step-1"], ["step-2"], ["step-3"]]
+    assert not gateway_routing._by_run
+
+
+def test_entries_per_run_are_capped(monkeypatch):
+    monkeypatch.setattr(gateway_routing, "_MAX_ENTRIES_PER_RUN", 3)
+    set_trace_context(run_id="run-long")
+    for i in range(5):
+        gateway_routing.record(httpx.Response(200, headers={**HEADERS, "x-request-id": f"r{i}"}))
+
+    assert [e["request_id"] for e in gateway_routing._by_run["run-long"]] == ["r2", "r3", "r4"]
+
+
+async def test_cancelled_plain_run_leaves_no_entries():
+    import asyncio
+
+    from continuum.agent.base import BaseAgent
+
+    started = asyncio.Event()
+    runner = _routing_runner()
+
+    async def hanging_chat(*args, **kwargs):
+        gateway_routing.record(httpx.Response(200, headers=HEADERS))
+        started.set()
+        await asyncio.Event().wait()
+
+    runner.llm_client.chat.side_effect = hanging_chat
+    task = asyncio.create_task(runner.run(BaseAgent(name="a", instructions="x"), "q"))
+    await started.wait()
+    assert gateway_routing._by_run
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not gateway_routing._by_run
+
+
+async def test_early_closed_plain_stream_leaves_no_entries():
+    import asyncio
+
+    from continuum.agent.base import BaseAgent
+    from continuum.agent.types import EventType
+
+    runner = _routing_runner()
+
+    async def chat_stream(*args, **kwargs):
+        gateway_routing.record(httpx.Response(200, headers=HEADERS))
+        yield SimpleNamespace(content="hi", tool_calls=None, model="gpt-4o-mini", usage=None)
+        await asyncio.Event().wait()
+
+    runner.llm_client.chat_stream = chat_stream
+    stream = runner.run_stream(BaseAgent(name="a", instructions="x"), "q")
+    async for event in stream:
+        if event.data and event.data.get("content") == "hi" and event.type != EventType.RUN_END:
+            break
+    assert gateway_routing._by_run
+    await stream.aclose()
+
+    assert not gateway_routing._by_run

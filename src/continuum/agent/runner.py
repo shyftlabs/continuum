@@ -101,8 +101,11 @@ logger = get_logger(__name__)
 
 def _gateway_routing_data(response: AgentResponse) -> dict[str, Any]:
     """``{"gateway_routing": [...]}`` for a RUN_END event, or ``{}`` if none was recorded."""
-    routing = (response.run_artifacts or {}).get("gateway_routing")
-    return {"gateway_routing": routing} if routing else {}
+    artifacts = response.run_artifacts
+    # A custom workflow may return any run_artifacts (a list, a str); only a
+    # dict's non-empty list is routing.
+    routing = artifacts.get("gateway_routing") if isinstance(artifacts, dict) else None
+    return {"gateway_routing": routing} if isinstance(routing, list) and routing else {}
 
 
 class AgentRunner:
@@ -883,6 +886,9 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            # A cancelled run skips handle_error; drop its entries here (a no-op
+            # once the finalizer or handle_error claimed them).
+            gateway_routing.claim_run(ctx.run_id)
             exit_run_compressor(_hr_token)
             reset_active_policy(_policy_token)
 
@@ -2044,6 +2050,9 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            # A cancelled or early-closed stream skips handle_error; drop its
+            # entries here (a no-op once they were claimed).
+            gateway_routing.claim_run(ctx.run_id)
             exit_run_compressor(_hr_token)
             try:
                 reset_active_policy(_policy_token)

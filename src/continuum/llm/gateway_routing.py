@@ -18,11 +18,13 @@ There is one entry per HTTP attempt, not per model call: when the SDK retries
 
 Steps of a workflow share the workflow's run id. While a workflow runs, its
 steps leave their entries in place and the workflow collects them all after
-``execute()``, together with its own calls (a merge, a completion check). The
-runner does this for every workflow it dispatches and for ``runner.fork``; the
-built-in workflows' ``execute()`` also does it itself, for a workflow called
-directly on a new context. Entries are only attached to an ``AgentResponse``,
-on a copy; a failed or cancelled workflow drops them.
+``execute()``. For a workflow the runner dispatches (``runner.run`` /
+``run_stream``) that includes the workflow's own calls (a merge, a completion
+check). For ``runner.fork`` of a workflow, and for a built-in workflow whose
+``execute()`` is called directly on a new context, only the steps' calls are
+listed: the workflow's own calls may run without the run id, or after a step
+cleared it. Entries are only attached to an ``AgentResponse``, on a copy; a
+failed or cancelled run drops them.
 """
 
 from __future__ import annotations
@@ -50,6 +52,9 @@ logger = get_logger(__name__)
 # Runs whose calls have not been collected yet (a run that crashed before its
 # finalizer, a call outside any run that still had a run id). Oldest go first.
 _MAX_RUNS = 1024
+# Entries kept per run; past this the oldest go first. A long run (or calls
+# filed under a run id that is never collected) cannot grow without bound.
+_MAX_ENTRIES_PER_RUN = 1024
 
 _by_run: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
 _lock = threading.Lock()
@@ -126,7 +131,10 @@ def record(response: httpx.Response, served_model: str | None = None) -> None:
         if entry is None:
             return
         with _lock:
-            _by_run.setdefault(run_id, []).append(entry)
+            entries = _by_run.setdefault(run_id, [])
+            entries.append(entry)
+            if len(entries) > _MAX_ENTRIES_PER_RUN:
+                del entries[: len(entries) - _MAX_ENTRIES_PER_RUN]
             _by_run.move_to_end(run_id)
             while len(_by_run) > _MAX_RUNS:
                 _by_run.popitem(last=False)
