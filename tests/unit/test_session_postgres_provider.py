@@ -383,6 +383,8 @@ def test_ci_installs_postgres_extra_and_runs_integration_tests():
         ("  ", "redis"),
         ("POSTGRES", "postgres"),
         ("memory", "memory"),
+        ("postgresql", "postgres"),
+        (" PostgreSQL ", "postgres"),
     ],
 )
 def test_session_provider_env_is_normalized(monkeypatch, raw, expected):
@@ -392,24 +394,11 @@ def test_session_provider_env_is_normalized(monkeypatch, raw, expected):
     assert Settings(_env_file=None).session_provider == expected
 
 
-@pytest.mark.parametrize("raw", ["postgresql", "dynamodb", "redis-cluster"])
-def test_unknown_session_provider_fails_when_settings_load(monkeypatch, raw):
-    from pydantic import ValidationError
-
-    from continuum.config import Settings
-
-    monkeypatch.setenv("SESSION_PROVIDER", raw)
-    with pytest.raises(ValidationError) as excinfo:
-        Settings(_env_file=None)
-    message = str(excinfo.value)
-    assert "SESSION_PROVIDER" in message
-    assert all(f"'{name}'" in message for name in ("redis", "postgres", "memory"))
-
-
 def test_session_config_normalizes_provider():
     assert SessionConfig(provider=" Redis ").provider == "redis"
     assert SessionConfig(provider="").provider == "redis"
     assert SessionConfig(provider="Postgres").provider == "postgres"
+    assert SessionConfig(provider="postgresql").provider == "postgres"
     assert SessionConfig(provider="memory").is_configured() is True
     with pytest.raises(ValueError, match="'memory'"):
         SessionConfig(provider="dynamodb").is_configured()
@@ -692,3 +681,148 @@ def test_settings_repr_masks_the_postgres_dsn(monkeypatch):
 def test_table_prefix_with_a_trailing_newline_is_rejected(prefix):
     with pytest.raises(ValueError, match="postgres_table_prefix"):
         PostgresSessionProvider(SessionConfig(provider="postgres", postgres_table_prefix=prefix))
+
+
+# -----------------------------------------------------------------------------
+# Round-4 review fixes
+# -----------------------------------------------------------------------------
+
+
+def test_settings_str_masks_the_postgres_dsn(monkeypatch):
+    from continuum.config import Settings
+
+    secret = "s3cret" + "pw"  # built at run time: no credential-like literal in the repo
+    monkeypatch.setenv("SESSION_POSTGRES_DSN", "postgresql://app:" + secret + "@db.internal/app")
+    monkeypatch.setenv("SESSION_REDIS_PASSWORD", "redis" + secret)
+    s = Settings(_env_file=None)
+    assert secret not in str(s)
+    assert str(s) == repr(s)
+
+
+@pytest.mark.parametrize("raw", ["dynamodb", "MyStore", "redis-cluster"])
+def test_unknown_session_provider_does_not_fail_settings_load(monkeypatch, raw):
+    from continuum.config import Settings
+
+    monkeypatch.setenv("SESSION_PROVIDER", raw)
+    assert Settings(_env_file=None).session_provider == raw
+
+
+def test_import_continuum_with_an_unknown_provider_and_sessions_off():
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "SESSION_PROVIDER": "dynamodb", "SESSION_ENABLED": "false"}
+    result = subprocess.run(
+        [sys.executable, "-c", "import continuum"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_custom_provider_from_the_environment_is_configured(monkeypatch):
+    from continuum.config import settings
+    from continuum.session.providers import PROVIDER_REGISTRY, register_provider
+    from continuum.session.providers.memory import MemorySessionProvider
+
+    class MyStore(MemorySessionProvider):
+        pass
+
+    monkeypatch.setattr(settings, "session_provider", "MyStore")
+    register_provider("MyStore", MyStore)
+    try:
+        config = SessionConfig(enabled=True)
+        assert config.provider == "MyStore"
+        assert config.is_configured() is True
+    finally:
+        PROVIDER_REGISTRY.pop("MyStore", None)
+
+
+def _session_settings(monkeypatch, **values):
+    from continuum.config import settings
+
+    monkeypatch.setattr(settings, "session_enabled", True)
+    for name, value in values.items():
+        monkeypatch.setattr(settings, name, value)
+
+
+def _session_issues(found):
+    return {e.field: e.message for e in found if e.field.startswith("SESSION_")}
+
+
+def test_startup_validation_reports_an_unknown_provider(monkeypatch):
+    from continuum.core.lifecycle import validate_configuration
+
+    _session_settings(monkeypatch, session_provider="dynamodb")
+    errors, _ = validate_configuration()
+    message = _session_issues(errors)["SESSION_PROVIDER"]
+    assert "dynamodb" in message
+    assert all(f"'{name}'" in message for name in ("redis", "postgres", "memory"))
+
+    monkeypatch.setattr("continuum.config.settings.session_enabled", False)
+    errors, _ = validate_configuration()
+    assert "SESSION_PROVIDER" not in _session_issues(errors)
+
+
+async def test_first_session_call_reports_an_unknown_provider():
+    from continuum.session.client import SessionClient
+
+    client = SessionClient(SessionConfig(provider="dynamodb", enabled=True))
+    with pytest.raises(ValueError, match="'postgres'"):
+        await client.get_or_create_session(user_id="u1", conversation_id="c1")
+
+
+def test_startup_validation_postgres_needs_no_redis_host(monkeypatch):
+    from continuum.core.lifecycle import validate_configuration
+
+    _session_settings(
+        monkeypatch,
+        session_provider="postgres",
+        session_redis_host="",
+        session_postgres_dsn=None,
+    )
+    errors, warnings = validate_configuration()
+    assert _session_issues(errors) == {}
+    assert "SESSION_POSTGRES_DSN" in _session_issues(warnings)
+
+    _session_settings(monkeypatch, session_provider="redis", session_redis_host="")
+    errors, _ = validate_configuration()
+    assert "SESSION_REDIS_HOST" in _session_issues(errors)
+
+
+def test_startup_log_names_the_postgres_store(monkeypatch):
+    from continuum.core import lifecycle
+
+    secret = "s3cret" + "pw"
+    config = SessionConfig(
+        provider="postgres",
+        enabled=True,
+        redis_host="localhost",
+        postgres_dsn="postgresql://app:" + secret + "@db.internal:5432/appdb",
+    )
+
+    class Client:
+        is_enabled = True
+
+    Client.config = config
+    lines: list[str] = []
+
+    class Logger:
+        def info(self, msg, *args):
+            lines.append(msg % args if args else msg)
+
+        def debug(self, *a, **k):
+            pass
+
+        warning = error = debug
+
+    _session_settings(monkeypatch)
+    monkeypatch.setattr(lifecycle, "logger", Logger())
+    monkeypatch.setattr("continuum.session.get_global_session_client", lambda: Client())
+    lifecycle.OrchestratorLifecycle()._log_service_configurations()
+    [line] = [x for x in lines if "Session:" in x]
+    assert "postgres host=db.internal database=appdb" in line
+    assert "redis" not in line and secret not in line and "app:" not in line

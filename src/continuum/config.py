@@ -85,6 +85,29 @@ def _resolve_default_model(
 # Built-in session stores selectable with SESSION_PROVIDER.
 SESSION_PROVIDERS = ("redis", "postgres", "memory")
 
+# Other spellings of a built-in name. "postgresql" is the DSN scheme.
+_SESSION_PROVIDER_ALIASES = {"postgresql": "postgres"}
+
+
+def normalize_session_provider(value: object) -> object:
+    """Normalise a session provider name without rejecting any.
+
+    A built-in name (or alias) is matched ignoring case and surrounding
+    spaces, and an empty value means the default ("redis"). Any other string
+    is kept as given: custom providers are registered and looked up
+    case-sensitively, and an unknown name is reported where sessions are used
+    (startup validation, the session client), not when settings load.
+    """
+    if not isinstance(value, str):
+        return value
+    name = value.strip().lower()
+    if not name:
+        return "redis"
+    name = _SESSION_PROVIDER_ALIASES.get(name, name)
+    if name in SESSION_PROVIDERS:
+        return name
+    return value
+
 
 class Settings(BaseSettings):
     """
@@ -523,22 +546,15 @@ class Settings(BaseSettings):
 
     @field_validator("session_provider", mode="before")
     @classmethod
-    def _check_session_provider(cls, v: object) -> object:
-        """Normalize SESSION_PROVIDER and reject unknown names at startup.
+    def _normalize_session_provider(cls, v: object) -> object:
+        """Normalise SESSION_PROVIDER; never reject it here.
 
-        Case and surrounding spaces are ignored and an empty value means the
-        default, so a typo fails here, when settings load, rather than on the
-        first session call.
+        Settings load when ``continuum`` is imported, so raising here would
+        break the import (and ``continuum --help``) even with sessions off.
+        Unknown names are reported by startup validation and the session
+        client instead.
         """
-        if not isinstance(v, str):
-            return v
-        name = v.strip().lower() or "redis"
-        if name not in SESSION_PROVIDERS:
-            raise ValueError(
-                f"Unknown SESSION_PROVIDER {v!r}. "
-                f"Valid values: {', '.join(repr(p) for p in SESSION_PROVIDERS)}."
-            )
-        return name
+        return normalize_session_provider(v)
 
     @model_validator(mode="after")
     def _apply_provider_aware_defaults(self) -> "Settings":
@@ -584,6 +600,9 @@ class Settings(BaseSettings):
             else:
                 parts.append(f"{field_name}={value!r}")
         return f"Settings({', '.join(parts)})"
+
+    # pydantic's __str__ does not go through __repr__; print the masked form.
+    __str__ = __repr__
 
 
 @lru_cache

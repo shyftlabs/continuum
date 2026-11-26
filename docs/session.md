@@ -243,9 +243,23 @@ per `SESSION_FALLBACK_MODE` like an unreachable one. A pool passed in with
 metadata are dropped on write and a lone surrogate (half of a split emoji)
 becomes U+FFFD, because PostgreSQL text cannot hold either.
 
-`SESSION_PROVIDER` takes `redis` (the default), `postgres` or `memory`. Case
-and surrounding spaces are ignored and an empty value means `redis`; any other
-value stops the application when settings load. The health checks probe the
+A PostgreSQL session client belongs to one process and one event loop. Its
+asyncpg pool is created on first use and bound to the loop that was running
+then. Calls from another loop (for example `asyncio.run()` per request) or from
+a process forked after that first use fail, and with the default
+`SESSION_FALLBACK_MODE` the client then degrades to memory for the rest of the
+process. Create the client inside each worker process, after any fork, and use
+it from that process's one event loop.
+
+`SESSION_PROVIDER` takes `redis` (the default), `postgres` (or `postgresql`)
+or `memory`. Case and surrounding spaces are ignored and an empty value means
+`redis`. Any other value is kept as given, so a provider registered with
+`register_provider()` can be selected from the environment. A name that is
+neither built in nor registered is reported by startup validation and on the
+first session call, with the list of valid names; it does not stop the import.
+With `SESSION_PROVIDER=postgres`, startup validation does not need
+`SESSION_REDIS_HOST` and only warns when `SESSION_POSTGRES_DSN` is unset, since
+a provider given `pool=` has none. The health checks probe the
 store `SESSION_PROVIDER` names. `check_all_health()` also follows a store set
 up in code with `SessionConfig(provider=...)` or `pool=` on the container's
 session client; `connectors.health_check_all()` reads only the environment.

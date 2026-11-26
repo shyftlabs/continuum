@@ -18,7 +18,7 @@ from continuum.memory import MemoryClient
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
 from continuum.session.base import BaseSessionProvider
-from continuum.session.config import SessionConfig
+from continuum.session.config import SessionConfig, unknown_provider_message
 from continuum.session.exceptions import (
     SessionConnectionError,
     SessionError,
@@ -533,10 +533,11 @@ class SessionClient:
 
             if provider_name not in available:
                 logger.warning(
-                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'",
+                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'. %s",
                     provider_name,
                     available,
                     available[0],
+                    unknown_provider_message(provider_name),
                 )
                 provider_name = available[0]
 

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from continuum.config import SESSION_PROVIDERS, settings
+from continuum.config import SESSION_PROVIDERS, normalize_session_provider, settings
 from continuum.security.secrets_guard import (
     MIN_OFFLINE_SECRET_LENGTH,
     enforce_credential,
@@ -136,16 +136,10 @@ class SessionConfig(BaseModel):
     @field_validator("provider", mode="before")
     @classmethod
     def _normalize_provider(cls, v: object) -> object:
-        # 'Redis', ' redis' and '' mean what SESSION_PROVIDER means for them.
-        # Any other name is kept as given: custom providers are registered and
-        # looked up case-sensitively.
-        if isinstance(v, str):
-            name = v.strip().lower()
-            if not name:
-                return "redis"
-            if name in SESSION_PROVIDERS:
-                return name
-        return v
+        # 'Redis', ' redis', 'postgresql' and '' mean what SESSION_PROVIDER
+        # means for them. Any other name is kept as given: custom providers are
+        # registered and looked up case-sensitively.
+        return normalize_session_provider(v)
 
     @field_validator("redis_max_connections")
     @classmethod
@@ -359,16 +353,29 @@ class SessionConfig(BaseModel):
         if self.provider == "memory":
             return True
 
+        # A custom provider registered with register_provider() manages its
+        # own settings.
+        from continuum.session.providers import list_providers
+
+        if self.provider in list_providers():
+            return True
+
         # Unknown provider — fail explicitly rather than silently proceeding
         # and crashing later with a confusing error.
-        raise ValueError(
-            f"Unknown session provider: '{self.provider}'. "
-            f"Supported providers: {', '.join(repr(p) for p in SESSION_PROVIDERS)}. "
-            f"Check the SESSION_PROVIDER environment variable."
-        )
+        raise ValueError(unknown_provider_message(self.provider))
 
     def get_redis_url(self) -> str:
         """Get Redis connection URL."""
         auth = f":{self.redis_password}@" if self.redis_password else ""
         protocol = "rediss" if self.redis_ssl else "redis"
         return f"{protocol}://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+def unknown_provider_message(name: str) -> str:
+    """The error text for a SESSION_PROVIDER that names no known provider."""
+    return (
+        f"Unknown session provider: {name!r}. "
+        f"Valid values: {', '.join(repr(p) for p in SESSION_PROVIDERS)} "
+        "(or a name registered with register_provider()). "
+        "Check the SESSION_PROVIDER environment variable."
+    )

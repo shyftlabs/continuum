@@ -84,13 +84,40 @@ def validate_configuration() -> tuple[list[ConfigurationError], list[Configurati
 
     # Session configuration
     if settings.session_enabled:
-        if not settings.session_redis_host:
-            errors.append(
-                ConfigurationError(
-                    field="SESSION_REDIS_HOST",
-                    message="Required when SESSION_ENABLED=true",
+        provider = settings.session_provider
+        if provider == "redis":
+            if not settings.session_redis_host:
+                errors.append(
+                    ConfigurationError(
+                        field="SESSION_REDIS_HOST",
+                        message="Required when SESSION_ENABLED=true and SESSION_PROVIDER=redis",
+                    )
                 )
-            )
+        elif provider == "postgres":
+            # A pool passed in code (PostgresSessionProvider(pool=...)) needs
+            # no DSN, so a missing one is not an error here.
+            if not settings.session_postgres_dsn:
+                warnings.append(
+                    ConfigurationError(
+                        field="SESSION_POSTGRES_DSN",
+                        message=(
+                            "Not set; SESSION_PROVIDER=postgres needs it unless the "
+                            "provider is given a connection pool in code"
+                        ),
+                        severity="warning",
+                    )
+                )
+        elif provider != "memory":
+            from continuum.session.config import unknown_provider_message
+            from continuum.session.providers import list_providers
+
+            if provider not in list_providers():
+                errors.append(
+                    ConfigurationError(
+                        field="SESSION_PROVIDER",
+                        message=unknown_provider_message(provider),
+                    )
+                )
 
     # Langfuse configuration
     if settings.langfuse_enabled:
@@ -138,6 +165,20 @@ def validate_configuration() -> tuple[list[ConfigurationError], list[Configurati
         )
 
     return errors, warnings
+
+
+def _describe_session_store(config: Any) -> str:
+    """The active session store for the startup log. Never credentials."""
+    provider = config.provider
+    if provider == "redis":
+        return f"redis={config.redis_host}"
+    if provider == "postgres":
+        from continuum.connectors.postgres import PostgresConnector
+
+        target = PostgresConnector(config)._target()
+        parts = [f"{key}={target[key]}" for key in ("host", "database") if target[key]]
+        return " ".join(["postgres", *parts])
+    return str(provider)
 
 
 class LifecycleState(str, Enum):
@@ -506,8 +547,9 @@ class OrchestratorLifecycle:
 
                 session_client = get_global_session_client()
                 if session_client and session_client.is_enabled:
-                    redis_host = session_client.config.redis_host
-                    logger.info("  💬 Session: enabled | redis=%s", redis_host)
+                    logger.info(
+                        "  💬 Session: enabled | %s", _describe_session_store(session_client.config)
+                    )
                 else:
                     logger.info("  💬 Session: disabled or not initialized")
             except Exception as e:
