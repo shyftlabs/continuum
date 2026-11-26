@@ -137,3 +137,73 @@ def test_warning_uses_an_existing_container_client():
         assert _warned(None, _session(None))
     finally:
         container_module._global_container = None
+
+
+class _AdapterWithoutIsEnabled:
+    """A memory adapter with search/add/config but no is_enabled."""
+
+    def __init__(self):
+        from continuum.memory.types import MemoryEntry, MemorySearchResult
+
+        self.config = MagicMock(memory_isolation="user")
+        self.search = AsyncMock(
+            return_value=MemorySearchResult(
+                results=[MemoryEntry(id="m1", memory="prefers tea", user_id="u")],
+                query="q",
+                limit=5,
+            )
+        )
+        self.add = AsyncMock()
+
+
+async def test_container_client_without_is_enabled_is_recalled_by_default_runner():
+    # get_container().set_memory_client(adapter) + AgentRunner(): the warning
+    # check fell through to has_memory_client(), which read adapter.is_enabled
+    # and raised before the search, so nothing was recalled on any turn.
+    from continuum.agent.runner import AgentRunner
+    from continuum.core import container as container_module
+    from continuum.core.container import ContainerConfig, get_container
+
+    container_module.reset_container()
+    try:
+        container = get_container(ContainerConfig(enable_memory=True, enable_session=True))
+        adapter = _AdapterWithoutIsEnabled()
+        container.set_llm_client(MagicMock())
+        container.set_tool_executor(MagicMock())
+        container.set_memory_client(adapter)
+        container.set_session_client(_session(None))  # resolves memory from the container
+        runner = AgentRunner()
+        agent = BaseAgent(name="ask", instructions="x", model="m")
+        with patch.object(memory_service, "logger") as log:
+            for turn in range(3):
+                recalled = await runner._memory_service.retrieve_memories(
+                    agent, "q", RunContext(run_id=f"r{turn}", user_id="u")
+                )
+                assert [m["memory"] for m in recalled] == ["prefers tea"]
+        assert adapter.search.await_count == 3
+        assert not any("Failed to retrieve" in str(c.args[0]) for c in log.error.call_args_list)
+        warnings = [
+            c for c in log.warning.call_args_list if "declares no data provenance" in str(c.args[0])
+        ]
+        assert len(warnings) == 1
+    finally:
+        container_module.reset_container()
+
+
+def test_own_client_without_is_enabled_still_warns():
+    # AgentRunner(memory_client=adapter) with container memory off: the search
+    # runs, so the provenance warning applies.
+    assert _warned(_AdapterWithoutIsEnabled())
+
+
+def test_warning_check_survives_a_failing_container_check():
+    from continuum.core import container as container_module
+
+    container_module.reset_container()
+    try:
+        existing = MagicMock()
+        existing.has_memory_client.side_effect = AttributeError("is_enabled")
+        container_module._global_container = existing
+        assert not _warned(None, _session(None))
+    finally:
+        container_module._global_container = None

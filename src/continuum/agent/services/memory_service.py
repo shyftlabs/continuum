@@ -82,10 +82,14 @@ class MemoryService(IMemoryService):
         resolves from the global container is answered from a container that
         already exists and has already built its client -- creating the container
         or a ``MemoryClient`` just to decide on a log line is not acceptable.
+        So when neither exists yet, the first turn answers False and the warning
+        fires from turn 2, once that turn's session save has built them.
         """
 
         def live(client: Any | None) -> bool:
-            return client is not None and bool(getattr(client, "is_enabled", False))
+            # Same rule as the retrieve gate: a duck-typed client without
+            # is_enabled is searched, so it counts as live here too.
+            return client is not None and bool(getattr(client, "is_enabled", True))
 
         if live(self._memory_client):
             return True
@@ -102,7 +106,12 @@ class MemoryService(IMemoryService):
         from continuum.core import container as container_module
 
         existing = container_module._global_container
-        return existing is not None and bool(existing.has_memory_client())
+        if existing is None:
+            return False
+        try:
+            return bool(existing.has_memory_client())
+        except Exception:
+            return False  # a log check must never stop the memory search
 
     def _warn_if_provenance_undeclared(self, agent: BaseAgent, context: RunContext) -> None:
         """Say once that the memory-poisoning defences are configured off.
