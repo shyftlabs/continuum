@@ -249,28 +249,119 @@ async def test_run_stream_works_with_a_client_that_takes_no_context_config():
     assert "streamed answer" in "".join(deltas)
 
 
-async def test_run_stream_passes_the_agents_own_config():
+async def test_run_stream_publishes_the_agents_own_config():
+    """run_stream publishes the agent's config as run() does; no new kwarg reaches
+    chat_stream."""
     mine = ContextManagementConfig(keep_recent_messages=4)
     seen = {}
 
     class _Client:
         async def chat_stream(self, **kwargs):
             seen.update(kwargs)
+            seen["active"] = get_active_context_config()
             yield StreamChunk(content="ok", model="m")
 
     await _run_stream(_Client(), _stream_agent(context_management=mine))
 
-    assert seen["context_config"] is mine
+    assert seen["active"] is mine
+    assert "context_config" not in seen
+    assert get_active_context_config() is None
 
 
-def test_agent_context_kwargs_is_empty_without_an_agent_config():
-    from continuum.llm.context_management import agent_context_kwargs
+# --- run_stream publishes the agent's config (round 3) -----------------------------
 
-    mine = ContextManagementConfig()
-    assert agent_context_kwargs(MagicMock(config=MagicMock(context_management=None))) == {}
-    assert agent_context_kwargs(MagicMock(config=MagicMock(context_management=mine))) == {
-        "context_config": mine
-    }
+
+async def test_run_stream_works_with_a_strict_client_for_an_agent_with_a_config():
+    """A chat_stream with fixed parameters worked on dev for every agent; it must
+    keep working when the agent sets context_management."""
+    from continuum.agent.types import EventType
+
+    llm = _StrictStreamClient()
+    events = await _run_stream(
+        llm, _stream_agent(context_management=ContextManagementConfig(enabled=False))
+    )
+
+    assert llm.calls == 1
+    assert not [e for e in events if e.type == EventType.RUN_ERROR]
+
+
+async def test_config_less_streamed_child_under_a_parent_run_gets_the_process_wide_config():
+    """A parent run() publishes its config; a tool streams a child that sets none.
+    The child publishes None, as a non-streamed child does, so LLMClient falls
+    back to the process-wide config instead of the parent's."""
+    from continuum.agent.execution.executor import Executor
+
+    parent_config = ContextManagementConfig(enabled=False)
+    seen = {}
+
+    class _Client:
+        async def chat_stream(self, **kwargs):
+            seen["child"] = get_active_context_config()
+            yield StreamChunk(content="ok", model="m")
+
+    async def _parent_loop(agent, messages, context, run_state):
+        seen["parent_before"] = get_active_context_config()
+        await _run_stream(_Client(), _stream_agent(context_management=None))
+        seen["parent_after"] = get_active_context_config()
+
+    executor = MagicMock(_execute_loop_impl=_parent_loop)
+    parent = MagicMock(policy_store=None, config=MagicMock(context_management=parent_config))
+    parent.name = "parent"
+    await Executor.execute_loop(executor, parent, [], MagicMock(), MagicMock())
+
+    assert seen["parent_before"] is parent_config
+    assert seen["child"] is None
+    assert seen["parent_after"] is parent_config
+
+
+async def test_run_stream_structured_output_formatting_call_follows_the_agents_config():
+    """The blocking formatting chat() after a streamed answer that does not validate
+    runs inside run_stream's scope, so it uses the agent's config as in run()."""
+    from pydantic import BaseModel
+
+    class Answer(BaseModel):
+        value: int
+
+    mine = ContextManagementConfig(compression_threshold=0.99)
+    seen = {}
+
+    class _Client:
+        async def chat_stream(self, **kwargs):
+            yield StreamChunk(content="prose, not JSON", model="m")
+
+        async def chat(self, **kwargs):
+            seen["formatting"] = get_active_context_config()
+            return LLMResponse(content='{"value": 1}', model="m")
+
+    agent = _stream_agent(context_management=mine)
+    agent.output_schema = Answer
+    agent.output_schema_strict = False
+    await _run_stream(_Client(), agent)
+
+    assert seen["formatting"] is mine
+
+
+async def test_stream_executor_publishes_the_agents_config():
+    from continuum.agent.execution.stream_executor import StreamExecutor
+
+    mine = ContextManagementConfig(keep_recent_messages=3)
+    seen = {}
+
+    class _Client:
+        async def chat_stream(self, messages, tools=None, config=None, trace_metadata=None):
+            seen["active"] = get_active_context_config()
+            yield StreamChunk(content="ok", model="m")
+
+    ctx = MagicMock(max_turns=1, session_id=None, metadata={})
+    ctx.run_id, ctx.trace_id = "run-1", "trace-1"
+    with pytest.warns(DeprecationWarning):
+        async for _ in StreamExecutor(_Client()).execute_stream(
+            _stream_agent(context_management=mine), [], ctx, MagicMock()
+        ):
+            pass
+
+    assert seen["active"] is mine
+    assert get_active_context_config() is None
 
 
 # --- the message-builder pass (round 2) --------------------------------------------

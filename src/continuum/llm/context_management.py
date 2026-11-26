@@ -18,7 +18,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -134,10 +134,11 @@ class ContextManagementConfig:
         }
 
 
-# The running agent's context settings, published by the executor for the
-# duration of its loop so the compression pass in LLMClient.chat() follows that
-# agent's config rather than the process-wide manager's. Same ambient pattern
-# as continuum.security.policy_context.
+# The running agent's context settings, published by the executor and by
+# run_stream for the duration of the run so the compression pass in
+# LLMClient.chat()/chat_stream() follows that agent's config rather than the
+# process-wide manager's. Same ambient pattern as
+# continuum.security.policy_context.
 _active_context_config: ContextVar[ContextManagementConfig | None] = ContextVar(
     "continuum_active_context_config", default=None
 )
@@ -148,6 +149,20 @@ def get_active_context_config() -> ContextManagementConfig | None:
     return _active_context_config.get()
 
 
+def set_active_context_config(
+    config: ContextManagementConfig | None,
+) -> Token[ContextManagementConfig | None]:
+    """Publish ``config`` as the active context settings; returns the token for
+    :func:`reset_active_context_config`. For use with try/finally where a context
+    manager does not fit (a streaming generator)."""
+    return _active_context_config.set(config)
+
+
+def reset_active_context_config(token: Token[ContextManagementConfig | None]) -> None:
+    """Restore the previous active context settings."""
+    _active_context_config.reset(token)
+
+
 @contextmanager
 def use_context_config(config: ContextManagementConfig | None) -> Iterator[None]:
     """Publish ``config`` as the active context settings for the enclosed block.
@@ -155,28 +170,17 @@ def use_context_config(config: ContextManagementConfig | None) -> Iterator[None]
     ``None`` publishes nothing new: calls inside fall back to the process-wide
     manager's config, as before.
     """
-    token = _active_context_config.set(config)
+    token = set_active_context_config(config)
     try:
         yield
     finally:
-        _active_context_config.reset(token)
+        reset_active_context_config(token)
 
 
 def agent_context_config(agent: Any) -> ContextManagementConfig | None:
     """The agent's own ``ContextManagementConfig``, or None when it sets none."""
     agent_config = getattr(agent, "config", None)
     return getattr(agent_config, "context_management", None) if agent_config else None
-
-
-def agent_context_kwargs(agent: Any) -> dict[str, ContextManagementConfig]:
-    """``{"context_config": cfg}`` when the agent sets its own config, else ``{}``.
-
-    Spread into ``llm_client.chat_stream(...)`` so a client injected through
-    ``AgentRunner(llm_client=...)`` whose method takes no ``context_config``
-    keeps working for agents that set none.
-    """
-    config = agent_context_config(agent)
-    return {"context_config": config} if config is not None else {}
 
 
 @dataclass
