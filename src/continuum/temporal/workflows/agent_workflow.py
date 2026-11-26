@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from continuum.temporal.workflows.steps import (
         StepFailedError,
+        check_on_step_error,
         run_builtin_agent_step,
         step_retries_enabled,
     )
@@ -278,6 +279,7 @@ class AgentWorkflow:
 
     @workflow.run
     async def run(self, input: WorkflowInput) -> WorkflowResult:
+        check_on_step_error(input.on_step_error)
         self._last_output = input.initial_input
         self._total_steps = len(input.steps)
 

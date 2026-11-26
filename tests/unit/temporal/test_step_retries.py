@@ -748,8 +748,12 @@ async def test_non_dict_run_artifacts_do_not_break_a_successful_run(runner, arti
             ParallelAgentWorkflow.run,
             ParallelWorkflowInput(agent_names=["a"], initial_input="q", on_step_error="Fail"),
         ),
+        (
+            AgentWorkflow.run,
+            WorkflowInput(steps=_steps(), initial_input="q", on_step_error="Fail"),
+        ),
     ],
-    ids=["sequential", "loop", "parallel"],
+    ids=["sequential", "loop", "parallel", "agent"],
 )
 async def test_on_step_error_typo_fails_the_run(runner, workflow_run, arg):
     """Before: the worker could not decode the Literal and the run stayed RUNNING."""
@@ -760,3 +764,173 @@ async def test_on_step_error_typo_fails_the_run(runner, workflow_run, arg):
 
     assert "on_step_error" in str(exc.value.cause)
     assert sum(fake.calls.values()) == 0
+
+
+async def test_agent_workflow_on_step_error_typo_from_a_raw_dict_fails_the_run(runner):
+    """A non-Python client sends a dict; as a Literal the typo could not be decoded."""
+    fake = runner()
+    raw = {"steps": _steps(), "initial_input": "q", "on_step_error": "contnue"}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="step-retries",
+            workflows=WORKFLOWS,
+            activities=[run_agent_activity, send_notification_activity],
+        ):
+            with pytest.raises(WorkflowFailureError) as exc:
+                await asyncio.wait_for(
+                    env.client.execute_workflow(
+                        "AgentWorkflow",
+                        raw,
+                        id=f"step-retries-{uuid.uuid4().hex[:8]}",
+                        task_queue="step-retries",
+                    ),
+                    20,
+                )
+
+    assert "on_step_error" in str(exc.value.cause)
+    assert sum(fake.calls.values()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Round 3: no raw cause chain in history or logs, capped text, ApplicationError
+# ---------------------------------------------------------------------------
+
+
+def _secret() -> str:
+    # Built at run time, in shapes the redaction patterns know.
+    return "sk-" + uuid.uuid4().hex + uuid.uuid4().hex[:8]
+
+
+def _as_the_runner_raises(inner: Exception) -> AgentExecutionError:
+    """``raise AgentExecutionError(str(inner), original_error=inner) from inner``."""
+    try:
+        try:
+            raise inner
+        except Exception as caught:
+            raise AgentExecutionError(str(caught), original_error=caught) from caught
+    except AgentExecutionError as wrapped:
+        return wrapped
+
+
+def _retryable_with(secret: str) -> AgentExecutionError:
+    return _as_the_runner_raises(RuntimeError(f"401 Unauthorized: Bearer {secret} key {secret}"))
+
+
+def _permanent_with(secret: str) -> AgentExecutionError:
+    try:
+        try:
+            raise RuntimeError(f"Error code: 401 - invalid api key {secret}")
+        except RuntimeError as raw:
+            raise LLMAuthenticationError(f"auth failed: {secret}") from raw
+    except LLMAuthenticationError as auth:
+        return _as_the_runner_raises(auth)
+
+
+async def _run_with_history(workflow_run, arg):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="step-retries",
+            workflows=WORKFLOWS,
+            activities=[run_agent_activity, send_notification_activity],
+        ):
+            handle = await env.client.start_workflow(
+                workflow_run,
+                arg,
+                id=f"step-retries-{uuid.uuid4().hex[:8]}",
+                task_queue="step-retries",
+            )
+            result = await handle.result()
+            history = await handle.fetch_history()
+            return result, history.to_json()
+
+
+@pytest.mark.parametrize(
+    "make_error, attempts",
+    [(_retryable_with, 3), (_permanent_with, 1)],
+    ids=["retryable", "permanent"],
+)
+async def test_raw_secret_reaches_neither_history_nor_worker_log(
+    runner, caplog, make_error, attempts
+):
+    secret = _secret()
+    fake = runner(research=99)
+    fake.raises = make_error(secret)
+    assert secret not in str(fake.raises)  # the runner's text is redacted
+
+    with caplog.at_level("DEBUG"):
+        result, history = await _run_with_history(
+            SequentialAgentWorkflow.run, _seq("research", "write")
+        )
+
+    assert fake.calls["research"] == attempts
+    assert result.step_results[0].status == "error"
+    assert "[REDACTED]" in result.step_results[0].error
+    assert secret not in result.step_results[0].error
+    assert secret not in history
+    assert "Completing activity as failed" in caplog.text  # the SDK's traceback line
+    assert secret not in caplog.text
+    assert result.content == "q>write"
+
+
+async def test_cyclic_cause_chain_is_an_error_step(runner):
+    """A cyclic __cause__ made the failure converter recurse and fail the run."""
+    first, second = RuntimeError("first"), RuntimeError("second")
+    first.__cause__, second.__cause__ = second, first
+    fake = runner(research=99)
+    fake.raises = AgentExecutionError("cyclic", original_error=first)
+    fake.raises.__cause__ = first
+
+    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+
+    assert result.step_results[0].status == "error"
+    assert "cyclic" in result.step_results[0].error
+    assert result.content == "q>write"
+
+
+async def test_long_error_text_is_capped_in_the_failure_and_heartbeat(runner):
+    runner(research=99).raises = RuntimeError("x" * 1_500_000)
+    heartbeats: list[tuple] = []
+    env = ActivityEnvironment()
+    env.on_heartbeat = lambda *details: heartbeats.append(details)
+    params = AgentActivityParams(agent_name="research", input="q", raise_on_error=True)
+
+    with pytest.raises(ApplicationError) as exc:
+        await env.run(run_agent_activity, params)
+
+    assert exc.value.__cause__ is None
+    message = exc.value.message
+    assert len(message.encode()) <= 256 * 1024
+    assert message.endswith("[truncated]")
+    assert heartbeats[-1][1:] == (AGENT_ERROR_MARKER, message)
+
+
+async def test_long_error_text_still_completes_the_step(runner):
+    """At 1.5 MB the completion went over gRPC's 4 MB limit and timed out."""
+    runner(research=99).raises = RuntimeError("x" * 1_500_000)
+
+    result = await asyncio.wait_for(
+        _run(SequentialAgentWorkflow.run, _seq("research", "write")), 60
+    )
+
+    assert result.step_results[0].status == "error"
+    assert result.step_results[0].error.endswith("[truncated]")
+    assert result.content == "q>write"
+
+
+async def test_application_error_from_a_custom_runner_keeps_the_dev_text(runner):
+    """Only the breaker's marked ApplicationError is passed on as is; any other
+    one from a runner is an agent error, so the step records it and the run goes on."""
+    fake = runner(research=99)
+    fake.raises = ApplicationError("quota gone", type="MyAppError")
+    expected = (await _activity(raise_on_error=False)).error
+
+    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+
+    assert result.status == "completed"
+    assert result.step_results[0].status == "error"
+    assert result.step_results[0].error == expected
+    assert result.content == "q>write"
+    assert fake.calls["write"] == 1

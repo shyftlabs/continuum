@@ -215,7 +215,9 @@ class WorkflowInput(BaseModel):
     # What an agent step that still fails after its retries does to the run:
     # "continue" records the error result and runs the next step (the 2.x
     # behaviour); "fail" stops the run with status="failed".
-    on_step_error: OnStepError = "continue"
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; AgentWorkflow.run rejects anything else.
+    on_step_error: str = "continue"
 
 
 class WorkflowResult(BaseModel):

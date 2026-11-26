@@ -41,6 +41,12 @@ from continuum.temporal.types import (
 
 _HEARTBEAT_INTERVAL = 15  # seconds — must be less than heartbeat_timeout in the workflow
 
+# Longest agent error text the activity sends to Temporal, in UTF-8 bytes. The
+# failure and the last heartbeat each carry it, and a completion over gRPC's
+# 4 MB limit is never delivered, so the attempt would wait out its timeout.
+_MAX_ERROR_BYTES = 256 * 1024
+_TRUNCATED = " ... [truncated]"
+
 # Errors a retry cannot fix; with raise_on_error they fail the step at once.
 _PERMANENT_ERRORS: tuple[type, ...] = (
     AgentNotRegisteredError,
@@ -107,13 +113,24 @@ def _carried_agent_error() -> tuple[str, ...]:
     return ()
 
 
+def _capped(message: str) -> str:
+    """``message``, cut to ``_MAX_ERROR_BYTES`` and marked truncated if longer."""
+    data = message.encode("utf-8", errors="replace")
+    if len(data) <= _MAX_ERROR_BYTES:
+        return message
+    keep = _MAX_ERROR_BYTES - len(_TRUNCATED.encode())
+    return data[:keep].decode("utf-8", errors="ignore") + _TRUNCATED
+
+
 def _agent_error(message: str, **kwargs: Any) -> ApplicationError:
     """An ``ApplicationError`` the workflow can tell from the SDK's own errors.
 
     The marker goes in the error's details and, with the message, on a last
     heartbeat; later attempts carry that heartbeat on, so a last attempt that
-    times out still reports the agent error (``steps.agent_error``).
+    times out still reports the agent error (``steps.agent_error``). The
+    message is capped at ``_MAX_ERROR_BYTES``.
     """
+    message = _capped(message)
     activity.heartbeat("Agent failed", AGENT_ERROR_MARKER, message)
     return ApplicationError(message, AGENT_ERROR_MARKER, **kwargs)
 
@@ -179,7 +196,7 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
                 error=str(e),
                 agents_used=[params.agent_name],
             )
-        if isinstance(e, ApplicationError):
+        if isinstance(e, ApplicationError) and AGENT_ERROR_MARKER in e.details:
             raise  # already shaped for Temporal (the open circuit breaker above)
         permanent = _is_permanent(e)
         if permanent or _is_last_attempt(params):
@@ -187,7 +204,10 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
                 breaker.record_failure()
         attempt = activity.info().attempt
         activity.logger.error(f"Agent '{params.agent_name}' failed (attempt {attempt}): {e}")
-        raise _agent_error(str(e), type=type(e).__name__, non_retryable=permanent) from e
+        # ``from None``: Temporal serialises the cause chain (``__cause__``, or
+        # ``__context__`` without it) into history and the worker log prints it,
+        # and the wrapped errors hold the raw provider text that ``str(e)`` redacts.
+        raise _agent_error(str(e), type=type(e).__name__, non_retryable=permanent) from None
     finally:
         heartbeat_task.cancel()
 
