@@ -372,7 +372,9 @@ class AgentWorkflow:
     def _stops_on(result: AgentActivityResult, wf_input: WorkflowInput) -> bool:
         """True when a failed agent result should end the run (``on_step_error="fail"``)."""
         return (
-            result.status == "error" and wf_input.on_step_error == "fail" and step_retries_enabled()
+            result.status == "error"
+            and wf_input.on_step_error == "fail"
+            and step_retries_enabled(wf_input.retry_agent_errors, wf_input.on_step_error)
         )
 
     async def _run_agent_step(self, step: AgentStep, wf_input: WorkflowInput) -> None:
@@ -388,7 +390,8 @@ class AgentWorkflow:
             ),
             timeout=step.timeout,
             retries=step.retries,
-            raise_timeouts=wf_input.on_step_error == "continue",
+            retry_agent_errors=wf_input.retry_agent_errors,
+            on_step_error=wf_input.on_step_error,
         )
 
         self._step_results.append(result)
@@ -523,7 +526,8 @@ class AgentWorkflow:
                         ),
                         timeout=agent_step.timeout,
                         retries=agent_step.retries,
-                        raise_timeouts=wf_input.on_step_error == "continue",
+                        retry_agent_errors=wf_input.retry_agent_errors,
+                        on_step_error=wf_input.on_step_error,
                     )
                     for agent_step in step.agents
                 )
@@ -582,7 +586,8 @@ class AgentWorkflow:
             ),
             timeout=step.timeout,
             retries=step.retries,
-            raise_timeouts=wf_input.on_step_error == "continue",
+            retry_agent_errors=wf_input.retry_agent_errors,
+            on_step_error=wf_input.on_step_error,
         )
         self._step_results.append(condition_result)
         if self._stops_on(condition_result, wf_input):

@@ -47,6 +47,11 @@ class ParallelWorkflowInput:
     # Typed str, not OnStepError: the worker could not decode a typo, and the
     # run would stay RUNNING; run() rejects anything else with a clear error.
     on_step_error: str = "continue"
+    # False (default): an agent error comes back as status="error" on its first
+    # attempt, not retried, as in 2.1; timeouts are retried per the step's
+    # retries. True: agent errors are retried too. On the input, not a worker
+    # setting, so a replaying worker always takes the same path.
+    retry_agent_errors: bool = False
     # Agents that run once, never retried: agents with side effects.
     single_attempt_agents: list[str] = field(default_factory=list)
 
@@ -82,8 +87,8 @@ class ParallelAgentWorkflow:
                         ),
                         timeout=input.timeout_per_agent,
                         retries=1 if agent_name in input.single_attempt_agents else 3,
-                        # With "fail" a timed-out agent is a failed result and the others merge.
-                        raise_timeouts=input.on_step_error == "continue",
+                        retry_agent_errors=input.retry_agent_errors,
+                        on_step_error=input.on_step_error,
                     )
                     for agent_name in input.agent_names
                 )
@@ -111,7 +116,11 @@ class ParallelAgentWorkflow:
         else:
             content = "\n\n".join(r.content for r in results if r.content)
 
-        if failed and input.on_step_error == "fail" and step_retries_enabled():
+        if (
+            failed
+            and input.on_step_error == "fail"
+            and step_retries_enabled(input.retry_agent_errors, input.on_step_error)
+        ):
             self._status = "failed"
             return WorkflowResult(
                 status="failed",

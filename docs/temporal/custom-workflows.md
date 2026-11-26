@@ -66,7 +66,8 @@ class TranslationFanoutWorkflow:
 
 `run_agent_activity` returns an `AgentActivityResult` with `status="error"`
 when the agent fails, so `retry_policy` above only covers timeouts. To retry
-agent errors too, use `run_agent_step`, which the built-in workflows use. It
+agent errors too, use `run_agent_step`, which the built-in workflows use when
+the run sets `retry_agent_errors=True`. It
 sets `raise_on_error=True`, retries with backoff (`retries` is attempts in
 all; 1 runs once) and returns the error result after the last attempt:
 

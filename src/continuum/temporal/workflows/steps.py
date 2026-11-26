@@ -7,10 +7,13 @@ run out, an agent error comes back as an ``AgentActivityResult`` with
 decides what to do with it. Failures that are not the agent's (the worker has
 no such activity, a timeout) are raised as before.
 
-The built-in workflows go through ``run_builtin_agent_step``, which takes this
-path only behind the ``STEP_RETRIES_PATCH`` marker. A run started before the
-upgrade replays without the marker and keeps the old path, so its history
-stays deterministic.
+The built-in workflows go through ``run_builtin_agent_step``. With default
+inputs they run the agent as before: an agent error comes back as an error
+result and is not retried, and no marker is recorded, so a 2.1 worker can
+replay the run. Only a run that opts in (``retry_agent_errors=True`` or
+``on_step_error="fail"``) takes the new path, behind the ``STEP_RETRIES_PATCH``
+marker; a run started before the upgrade replays without the marker and keeps
+the old path, so its history stays deterministic.
 """
 
 from __future__ import annotations
@@ -47,8 +50,15 @@ class StepFailedError(Exception):
     """An agent step failed after its retries; ends the workflow as ``failed``."""
 
 
-def step_retries_enabled() -> bool:
-    """True unless this run is replaying a history from before the patch."""
+def step_retries_enabled(retry_agent_errors: bool, on_step_error: str) -> bool:
+    """True when this run takes the new step path.
+
+    A run with default inputs never does, and never calls ``workflow.patched``,
+    so its history has no marker and a 2.1 worker can replay it. An opted-in
+    run records the marker; replaying a history from before the patch gives False.
+    """
+    if not retry_agent_errors and on_step_error != "fail":
+        return False
     return workflow.patched(STEP_RETRIES_PATCH)
 
 
@@ -121,6 +131,7 @@ async def run_agent_step(
     timeout: int,
     retries: int,
     raise_timeouts: bool = False,
+    retry_agent_errors: bool = True,
 ) -> AgentActivityResult:
     """Run ``run_agent_activity`` with retries; a final agent error comes back as an error result.
 
@@ -129,13 +140,14 @@ async def run_agent_step(
     worker or SDK raised rather than the agent. With ``raise_timeouts`` a step
     that timed out on every attempt raises ``ActivityError`` instead of
     returning an error result; one that hit an agent error first returns it.
+    With ``retry_agent_errors=False`` an agent error comes back on the first
+    attempt, not retried; only timeouts are retried.
     """
+    update: dict[str, object] = {"max_attempts": max(1, retries)}
+    if retry_agent_errors:
+        update["raise_on_error"] = True
     try:
-        return await _execute(
-            params.model_copy(update={"raise_on_error": True, "max_attempts": max(1, retries)}),
-            timeout,
-            retries,
-        )
+        return await _execute(params.model_copy(update=update), timeout, retries)
     except ActivityError as e:
         if is_cancelled_exception(e):
             raise
@@ -159,16 +171,22 @@ async def run_builtin_agent_step(
     *,
     timeout: int,
     retries: int,
-    raise_timeouts: bool = True,
+    retry_agent_errors: bool,
+    on_step_error: str,
 ) -> AgentActivityResult:
     """``run_agent_step`` for the built-in workflows, behind ``STEP_RETRIES_PATCH``.
 
-    Without the patch (a run from before it) the agent runs as it did then: an
-    agent error comes back as an error result and is not retried, and a
-    timeout on the last attempt raises.
+    With default inputs, or without the patch (a run from before it), the agent
+    runs as on 2.1: an agent error comes back as an error result and is not
+    retried, and a timeout on the last attempt raises.
     """
-    if step_retries_enabled():
+    if step_retries_enabled(retry_agent_errors, on_step_error):
         return await run_agent_step(
-            params, timeout=timeout, retries=retries, raise_timeouts=raise_timeouts
+            params,
+            timeout=timeout,
+            retries=retries,
+            # With "fail" a timed-out step is a failed result, not a raised error.
+            raise_timeouts=on_step_error == "continue",
+            retry_agent_errors=retry_agent_errors,
         )
     return await _execute(params, timeout, retries)

@@ -138,8 +138,13 @@ RetryPolicy(
 Activities also use `heartbeat_timeout=60s`; `run_agent_activity` calls
 `activity.heartbeat()` so long-running agents don't get evicted.
 
-The policy covers agent errors as well as timeouts. Errors a retry cannot fix
-are not retried: an unregistered agent, max turns, a policy denial, a
+By default the policy covers timeouts only: an agent error comes back as a
+`status="error"` step on its first attempt, as in 2.1. Set
+`retry_agent_errors=True` on the workflow input (`WorkflowInput`,
+`SequentialWorkflowInput`, `ParallelWorkflowInput`, `LoopWorkflowInput`) to
+retry agent errors too. It is a field on the input, not a worker setting, so a
+replaying worker always takes the same path. Errors a retry cannot fix are not
+retried: an unregistered agent, max turns, a policy denial, a
 configuration error, a blocked input, an authentication, context-length,
 invalid-request or content-filter error from the model, and a session error
 other than a lost connection. An open circuit breaker is retried after its
@@ -148,8 +153,8 @@ cooldown, and a step's failed attempts count once toward the breaker. Set
 
 ### When a step still fails
 
-`WorkflowInput.on_step_error` decides what an agent step that still fails after
-its retries does to the run:
+`WorkflowInput.on_step_error` decides what an agent step that still fails (after
+its retries, with `retry_agent_errors=True`) does to the run:
 
 | Value | Behaviour |
 |---|---|
@@ -163,6 +168,11 @@ failed ones.
 `SequentialWorkflowInput.single_attempt_agents`,
 `ParallelWorkflowInput.single_attempt_agents` and
 `LoopWorkflowInput.single_attempt` run those agents once.
+
+A run that sets `retry_agent_errors=True` or `on_step_error="fail"` records the
+`continuum-step-retries` marker (`workflow.patched`), which a 2.1 worker cannot
+replay; a run with default inputs records none. Upgrade every worker before
+clients send either field.
 
 ### Parallel merge strategies
 

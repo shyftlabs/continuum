@@ -1,10 +1,13 @@
-"""Failed agent steps are retried; on_step_error decides whether the run goes on.
+"""Failed agent steps can be retried; on_step_error decides whether the run goes on.
 
 Before: run_agent_activity caught every error and returned status="error", so
-Temporal never retried it. Now ``run_agent_step`` sets ``raise_on_error`` and
-the step's retry policy applies; when the retries run out the failure comes
-back as an error result, and ``on_step_error`` ("continue" by default, the old
-behaviour, or "fail") decides what the workflow does with it.
+Temporal never retried it. That is still the default. A run that sets
+``retry_agent_errors=True`` goes through ``run_agent_step``, which sets
+``raise_on_error`` so the step's retry policy applies; when the retries run out
+the failure comes back as an error result, and ``on_step_error`` ("continue" by
+default, the old behaviour, or "fail") decides what the workflow does with it.
+Only such opted-in runs (or "fail" runs) record the ``continuum-step-retries``
+marker; a default run records none, so a 2.1 worker can replay it.
 
 Covers, with the real activity on Temporal's time-skipping test server:
 - the activity: raise_on_error off returns an error result as before; on, it
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import uuid
 from collections import Counter
 from datetime import timedelta
@@ -194,6 +198,10 @@ def test_defaults_keep_old_behaviour():
     assert SequentialWorkflowInput(agent_names=[], initial_input="q").on_step_error == "continue"
     assert LoopWorkflowInput(agent_name="a", initial_input="q").on_step_error == "continue"
     assert ParallelWorkflowInput(agent_names=[], initial_input="q").on_step_error == "continue"
+    assert WorkflowInput(steps=[], initial_input="q").retry_agent_errors is False
+    assert SequentialWorkflowInput(agent_names=[], initial_input="q").retry_agent_errors is False
+    assert LoopWorkflowInput(agent_name="a", initial_input="q").retry_agent_errors is False
+    assert ParallelWorkflowInput(agent_names=[], initial_input="q").retry_agent_errors is False
 
 
 async def test_activity_returns_error_result_without_raise_on_error(runner):
@@ -287,7 +295,9 @@ async def test_open_circuit_breaker_step_is_retried(runner):
     fake = runner(research=1)
     fake.breaker = True
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.status == "completed"
     assert result.content == "q>research>write"
@@ -302,7 +312,9 @@ async def test_open_circuit_breaker_step_is_retried(runner):
 async def test_failing_step_is_retried_then_completes(runner):
     fake = runner(research=2)
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.status == "completed"
     assert result.content == "q>research>write"
@@ -312,7 +324,9 @@ async def test_failing_step_is_retried_then_completes(runner):
 async def test_continue_runs_the_next_step_after_a_step_keeps_failing(runner):
     fake = runner(research=99)
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.status == "completed"
     assert result.content == "q>write"
@@ -326,7 +340,8 @@ async def test_fail_stops_the_workflow(runner):
     fake = runner(research=99)
 
     result = await _run(
-        SequentialAgentWorkflow.run, _seq("research", "write", on_step_error="fail")
+        SequentialAgentWorkflow.run,
+        _seq("research", "write", on_step_error="fail", retry_agent_errors=True),
     )
 
     assert result.status == "failed"
@@ -349,7 +364,8 @@ async def test_sequential_single_attempt_agents_run_once(runner):
     fake = runner(research=99)
 
     result = await _run(
-        SequentialAgentWorkflow.run, _seq("research", "write", single_attempt_agents=["research"])
+        SequentialAgentWorkflow.run,
+        _seq("research", "write", single_attempt_agents=["research"], retry_agent_errors=True),
     )
 
     assert result.status == "completed"
@@ -416,7 +432,9 @@ def _steps(**kw):
 async def test_agent_workflow_continue_runs_the_next_step(runner):
     fake = runner(research=99)
 
-    result = await _run(AgentWorkflow.run, WorkflowInput(steps=_steps(), initial_input="q"))
+    result = await _run(
+        AgentWorkflow.run, WorkflowInput(steps=_steps(), initial_input="q", retry_agent_errors=True)
+    )
 
     assert result.status == "completed"
     assert result.content == "q>write"
@@ -428,7 +446,9 @@ async def test_agent_workflow_fail_stops_the_run(runner):
 
     result = await _run(
         AgentWorkflow.run,
-        WorkflowInput(steps=_steps(), initial_input="q", on_step_error="fail"),
+        WorkflowInput(
+            steps=_steps(), initial_input="q", on_step_error="fail", retry_agent_errors=True
+        ),
     )
 
     assert result.status == "failed"
@@ -443,7 +463,12 @@ async def test_agent_step_retries_0_and_1_run_once(runner, retries):
 
     result = await _run(
         AgentWorkflow.run,
-        WorkflowInput(steps=_steps(retries=retries), initial_input="q", on_step_error="fail"),
+        WorkflowInput(
+            steps=_steps(retries=retries),
+            initial_input="q",
+            on_step_error="fail",
+            retry_agent_errors=True,
+        ),
     )
 
     assert result.status == "failed"
@@ -459,12 +484,17 @@ async def test_agent_workflow_condition_agent_failure(runner):
         "if_false": [{"type": "agent", "agent_name": "b"}],
     }
 
-    cont = await _run(AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q"))
+    cont = await _run(
+        AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q", retry_agent_errors=True)
+    )
     assert cont.status == "completed"
     assert cont.content == "q>b"
 
     failed = await _run(
-        AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q", on_step_error="fail")
+        AgentWorkflow.run,
+        WorkflowInput(
+            steps=[step], initial_input="q", on_step_error="fail", retry_agent_errors=True
+        ),
     )
     assert failed.status == "failed"
     assert "Condition agent 'a' failed" in failed.error
@@ -478,12 +508,17 @@ async def test_agent_workflow_parallel_step(runner):
         "agents": [{"agent_name": "a", "retries": 1}, {"agent_name": "b"}],
     }
 
-    cont = await _run(AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q"))
+    cont = await _run(
+        AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q", retry_agent_errors=True)
+    )
     assert cont.status == "completed"
     assert '"a": ""' in cont.content and '"q>b"' in cont.content  # the failed key stays
 
     failed = await _run(
-        AgentWorkflow.run, WorkflowInput(steps=[step], initial_input="q", on_step_error="fail")
+        AgentWorkflow.run,
+        WorkflowInput(
+            steps=[step], initial_input="q", on_step_error="fail", retry_agent_errors=True
+        ),
     )
     assert failed.status == "failed"
     assert "Parallel step failed: a:" in failed.error
@@ -503,6 +538,7 @@ async def test_parallel_workflow_continue_and_fail(runner):
             initial_input="q",
             merge_strategy="structured",
             single_attempt_agents=["a"],
+            retry_agent_errors=True,
         ),
     )
     assert cont.status == "completed"
@@ -513,7 +549,9 @@ async def test_parallel_workflow_continue_and_fail(runner):
     fake = runner(a=99)
     failed = await _run(
         ParallelAgentWorkflow.run,
-        ParallelWorkflowInput(agent_names=["a", "b"], initial_input="q", on_step_error="fail"),
+        ParallelWorkflowInput(
+            agent_names=["a", "b"], initial_input="q", on_step_error="fail", retry_agent_errors=True
+        ),
     )
     assert failed.status == "failed"
     assert failed.content == "q>b"  # the agents that worked still merge
@@ -525,7 +563,9 @@ async def test_loop_continue_and_fail(runner):
     fake = runner(looper=1)
     cont = await _run(
         LoopAgentWorkflow.run,
-        LoopWorkflowInput(agent_name="looper", initial_input="q", single_attempt=True),
+        LoopWorkflowInput(
+            agent_name="looper", initial_input="q", single_attempt=True, retry_agent_errors=True
+        ),
     )
     assert cont.status == "completed"
     assert [r.status for r in cont.step_results] == ["error", "success"]
@@ -534,7 +574,9 @@ async def test_loop_continue_and_fail(runner):
     runner(looper=99)
     failed = await _run(
         LoopAgentWorkflow.run,
-        LoopWorkflowInput(agent_name="looper", initial_input="q", on_step_error="fail"),
+        LoopWorkflowInput(
+            agent_name="looper", initial_input="q", on_step_error="fail", retry_agent_errors=True
+        ),
     )
     assert failed.status == "failed"
     assert "Iteration 1 (looper) failed" in failed.error
@@ -567,7 +609,7 @@ async def test_new_histories_replay(runner):
         ):
             handle = await env.client.start_workflow(
                 SequentialAgentWorkflow.run,
-                _seq("research", "write"),
+                _seq("research", "write", retry_agent_errors=True),
                 id=f"step-retries-{uuid.uuid4().hex[:8]}",
                 task_queue="step-retries",
             )
@@ -606,7 +648,9 @@ async def test_step_error_text_matches_the_old_path(runner, error):
     runner(research=99).raises = error
     expected = (await _activity(raise_on_error=False)).error
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.step_results[0].error == expected
     assert not expected.startswith(type(error).__name__)
@@ -650,7 +694,9 @@ async def test_agent_error_then_timeouts_is_an_error_step(runner, on_step_error)
     fake = runner(research=1)
     fake.hang_after_fail = True
 
-    result = await _run(AgentWorkflow.run, _timing_out_steps(on_step_error=on_step_error))
+    result = await _run(
+        AgentWorkflow.run, _timing_out_steps(on_step_error=on_step_error, retry_agent_errors=True)
+    )
 
     assert fake.calls["research"] == 3
     assert result.step_results[0].status == "error"
@@ -680,7 +726,7 @@ async def test_retries_count_once_toward_the_circuit_breaker(runner):
     """A step that fails all 3 attempts counts one failure, not 3 (threshold 3)."""
     fake = runner(research=99)
 
-    await _run(SequentialAgentWorkflow.run, _seq("research"))
+    await _run(SequentialAgentWorkflow.run, _seq("research", retry_agent_errors=True))
 
     assert fake.calls["research"] == 3
     assert fake.cb.failure_count == 1
@@ -691,7 +737,7 @@ async def test_a_permanent_error_counts_toward_the_circuit_breaker(runner):
     fake = runner(research=99)
     fake.raises = ConfigurationError("missing key")
 
-    await _run(SequentialAgentWorkflow.run, _seq("research"))
+    await _run(SequentialAgentWorkflow.run, _seq("research", retry_agent_errors=True))
 
     assert fake.calls["research"] == 1
     assert fake.cb.failure_count == 1
@@ -862,7 +908,7 @@ async def test_raw_secret_reaches_neither_history_nor_worker_log(
 
     with caplog.at_level("DEBUG"):
         result, history = await _run_with_history(
-            SequentialAgentWorkflow.run, _seq("research", "write")
+            SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
         )
 
     assert fake.calls["research"] == attempts
@@ -883,7 +929,9 @@ async def test_cyclic_cause_chain_is_an_error_step(runner):
     fake.raises = AgentExecutionError("cyclic", original_error=first)
     fake.raises.__cause__ = first
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.step_results[0].status == "error"
     assert "cyclic" in result.step_results[0].error
@@ -912,7 +960,7 @@ async def test_long_error_text_still_completes_the_step(runner):
     runner(research=99).raises = RuntimeError("x" * 1_500_000)
 
     result = await asyncio.wait_for(
-        _run(SequentialAgentWorkflow.run, _seq("research", "write")), 60
+        _run(SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)), 60
     )
 
     assert result.step_results[0].status == "error"
@@ -927,10 +975,130 @@ async def test_application_error_from_a_custom_runner_keeps_the_dev_text(runner)
     fake.raises = ApplicationError("quota gone", type="MyAppError")
     expected = (await _activity(raise_on_error=False)).error
 
-    result = await _run(SequentialAgentWorkflow.run, _seq("research", "write"))
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
 
     assert result.status == "completed"
     assert result.step_results[0].status == "error"
     assert result.step_results[0].error == expected
     assert result.content == "q>write"
     assert fake.calls["write"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Round 4: agent-error retries are opt-in; the marker only on opted-in runs
+# ---------------------------------------------------------------------------
+
+
+def _history(history_json: str) -> WorkflowHistory:
+    return WorkflowHistory.from_json("run", history_json)
+
+
+def _markers(history: WorkflowHistory) -> list[str]:
+    """The patch ids of the ``workflow.patched`` markers in ``history``."""
+    return [
+        json.loads(payload.data)["id"]
+        for e in history.events
+        if e.HasField("marker_recorded_event_attributes")
+        for payload in e.marker_recorded_event_attributes.details["patch-data"].payloads
+    ]
+
+
+def _commands(history: WorkflowHistory) -> list[tuple[str, ...]]:
+    """The commands in ``history``, in order: what a replaying worker checks its code against."""
+    commands: list[tuple[str, ...]] = []
+    for e in history.events:
+        if e.HasField("activity_task_scheduled_event_attributes"):
+            commands.append(
+                ("activity", e.activity_task_scheduled_event_attributes.activity_type.name)
+            )
+        elif e.HasField("timer_started_event_attributes"):
+            commands.append(("timer",))
+        elif e.HasField("marker_recorded_event_attributes"):
+            commands.append(("marker", e.marker_recorded_event_attributes.marker_name))
+        elif e.HasField("workflow_execution_completed_event_attributes"):
+            commands.append(("completed",))
+    return commands
+
+
+_DEFAULT_RUNS = [
+    (SequentialAgentWorkflow.run, _seq("research", "write"), "research", 1),
+    (
+        LoopAgentWorkflow.run,
+        LoopWorkflowInput(agent_name="looper", initial_input="q"),
+        "looper",
+        2,  # the failed iteration, then the one that says COMPLETE
+    ),
+    (
+        ParallelAgentWorkflow.run,
+        ParallelWorkflowInput(agent_names=["research", "b"], initial_input="q"),
+        "research",
+        1,
+    ),
+    (AgentWorkflow.run, WorkflowInput(steps=_steps(), initial_input="q"), "research", 1),
+]
+
+
+@pytest.mark.parametrize(
+    "workflow_run, arg, agent, calls",
+    _DEFAULT_RUNS,
+    ids=["sequential", "loop", "parallel", "agent"],
+)
+async def test_default_run_does_not_retry_agent_errors_and_records_no_marker(
+    runner, workflow_run, arg, agent, calls
+):
+    """As on dev: the agent error is a status="error" step on the first attempt,
+    the run goes on, and the history has no marker a 2.1 worker would not know."""
+    fake = runner(research=99, looper=1)
+
+    result, history_json = await _run_with_history(workflow_run, arg)
+
+    assert fake.calls[agent] == calls
+    assert result.status == "completed"
+    assert result.step_results[0].status == "error"
+    assert "model timeout" in result.step_results[0].error
+    assert _markers(_history(history_json)) == []
+    assert _commands(_history(history_json))[-1] == ("completed",)
+    await Replayer(workflows=WORKFLOWS).replay_workflow(_history(history_json))
+
+
+@pytest.mark.parametrize(
+    "opt_in, calls",
+    [({"retry_agent_errors": True}, 3), ({"on_step_error": "fail"}, 1)],
+    ids=["retry_agent_errors", "fail"],
+)
+async def test_opted_in_run_records_the_marker(runner, opt_in, calls):
+    """retry_agent_errors retries the agent; "fail" alone stops the run without retrying it."""
+    fake = runner(research=99)
+
+    result, history_json = await _run_with_history(
+        SequentialAgentWorkflow.run, _seq("research", "write", **opt_in)
+    )
+
+    assert fake.calls["research"] == calls
+    assert result.status == ("failed" if "on_step_error" in opt_in else "completed")
+    assert _markers(_history(history_json)) == [steps.STEP_RETRIES_PATCH]
+    await Replayer(workflows=WORKFLOWS).replay_workflow(_history(history_json))
+
+
+async def test_default_run_issues_the_same_commands_as_dev(runner):
+    """A default parallel run with one failing agent, against the history dev's
+    workflow code recorded for the same run: the same commands in the same
+    order, so a 2.1 worker replays it."""
+    runner(research=99)
+    recorded_on_dev = WorkflowHistory.from_json(
+        "dev", (HISTORIES / "parallel-one-failed-completed.json").read_text()
+    )
+
+    _, history_json = await _run_with_history(
+        ParallelAgentWorkflow.run,
+        ParallelWorkflowInput(agent_names=["research", "b"], initial_input="q"),
+    )
+
+    assert _commands(_history(history_json)) == _commands(recorded_on_dev)
+    assert _commands(recorded_on_dev) == [
+        ("activity", "run_agent_activity"),
+        ("activity", "run_agent_activity"),
+        ("completed",),
+    ]

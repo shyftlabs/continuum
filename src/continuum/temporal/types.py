@@ -218,6 +218,11 @@ class WorkflowInput(BaseModel):
     # Typed str, not OnStepError: the worker could not decode a typo, and the
     # run would stay RUNNING; AgentWorkflow.run rejects anything else.
     on_step_error: str = "continue"
+    # False (default): an agent error comes back as status="error" on its first
+    # attempt, not retried, as in 2.1; timeouts are retried per the step's
+    # retries. True: agent errors are retried too. On the input, not a worker
+    # setting, so a replaying worker always takes the same path.
+    retry_agent_errors: bool = False
 
 
 class WorkflowResult(BaseModel):
