@@ -118,7 +118,7 @@ def _serialize_output(output: Any) -> Any:
 
 
 def _record_generation(span: SpanScope, result: Any) -> None:
-    """Pass a model call's served model and usage to its generation, when present."""
+    """Pass the model and usage on a model call's result to its generation, when present."""
     try:
         span.set_generation(
             model=getattr(result, "model", None), usage=getattr(result, "usage", None)
@@ -149,7 +149,7 @@ def observe(
         metadata: Additional metadata to include
         level: Log level for the span
         manager: Optional TracingManager instance
-        as_type: "generation" for a model call: the served model and token usage
+        as_type: "generation" for a model call: the result's model and token usage
             are read from the result (or from streamed chunks) so the trace
             backend can price it
 

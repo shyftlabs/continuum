@@ -520,7 +520,7 @@ class SpanScope:
             self._output = {"_redacted": "redaction error"}
 
     def set_generation(self, *, model: str | None = None, usage: Any | None = None) -> None:
-        """Record the served model and token usage of a model call (generation only).
+        """Record the model and token usage of a model call (generation only).
 
         ``usage`` is anything with prompt_tokens / completion_tokens / total_tokens.
         """
