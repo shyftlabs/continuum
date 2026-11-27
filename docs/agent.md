@@ -173,6 +173,50 @@ async for event in runner.run_stream(agent, "Tell me a story"):
 > `CONTENT_DELTA` + `CONTENT_COMPLETE`, still wrapped in the normal
 > `RUN_START … RUN_END` events, so streaming callers keep working.
 
+Pass `stream_steps=True` to see a workflow's progress while it runs. Each step
+then sends `AGENT_START`, its tool calls (`TOOL_CALL_START` / `TOOL_CALL_END`
+with `tool_name` and `success`) and `AGENT_END` (with the step's `content` and
+`status`) as it happens, ahead of the final result. Step events carry
+`data["step"] = True` and `data["workflow"]` (the workflow's name), and use the
+workflow's `run_id`; `event.agent_name` is the step's agent. The final answer
+still arrives as the workflow's own `CONTENT_DELTA` / `CONTENT_COMPLETE`, so a UI
+that shows text should skip step events or show them as progress:
+
+```python
+async for event in runner.run_stream(pipeline, "Analyse fund X", stream_steps=True):
+    if event.data.get("step"):
+        if event.type == EventType.AGENT_START:
+            show_progress(f"{event.agent_name} working…")
+        elif event.type == EventType.TOOL_CALL_START:
+            show_progress(f"{event.agent_name}: {event.data['tool_name']}")
+    elif event.type == EventType.CONTENT_DELTA:
+        print(event.data["content"], end="")
+```
+
+Each step also has a `data["step_id"]` (1, 2, 3, ... in start order) on its
+`AGENT_START` / `AGENT_END` and on its tool events, so two steps of the same
+agent running at once (for example in a `ParallelAgent` or `DAGAgent`) can be
+told apart. A step that is cancelled (for example by a `ParallelAgent`
+timeout) still sends its `AGENT_END`, with `status` `"cancelled"`. A tool's
+`success` is the tool's final outcome, so a tool that failed on the agent's
+executor and then succeeded on the global one reports `success: True`. If the
+workflow raises, the stream sends `RUN_ERROR` and `RUN_END` with the same
+`run_id`, then raises the error.
+
+Closing or cancelling the stream early stops the workflow. A plain `break` out
+of the `async for` does not close the stream while it is still referenced, so
+the workflow keeps running. Wrap the stream in `contextlib.aclosing` to stop it
+when you leave the loop:
+
+```python
+from contextlib import aclosing
+
+async with aclosing(runner.run_stream(pipeline, "Analyse fund X", stream_steps=True)) as events:
+    async for event in events:
+        if event.type == EventType.AGENT_END and event.data.get("step"):
+            break  # aclosing closes the stream here, which stops the workflow
+```
+
 ### Runner methods
 
 - `register_agent(agent)` — required for handoff targets
