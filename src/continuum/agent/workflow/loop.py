@@ -26,6 +26,7 @@ from continuum.agent.types import (
 )
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger
 from continuum.system_one import (
     BinaryQuestion,
@@ -117,6 +118,7 @@ class LoopAgent(BaseAgent):
             require_backend(self.termination.system_one_backend, seam=f"LoopAgent '{self.name}'")
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,

@@ -45,6 +45,7 @@ from continuum.agent.workflow._quality_gate import (
     validate_gate_settings,
 )
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
 from continuum.system_one import require_backend
@@ -171,6 +172,7 @@ class SupervisedSequentialAgent(BaseAgent):
             )
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,
