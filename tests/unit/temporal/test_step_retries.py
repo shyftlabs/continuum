@@ -60,6 +60,7 @@ from continuum.llm.exceptions import (  # noqa: E402
     LLMContentFilterError,
     LLMContextLengthError,
     LLMInvalidRequestError,
+    LLMRateLimitError,
 )
 from continuum.session.exceptions import (  # noqa: E402
     SessionConnectionError,
@@ -1102,3 +1103,141 @@ async def test_default_run_issues_the_same_commands_as_dev(runner):
         ("activity", "run_agent_activity"),
         ("completed",),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Round 6: non_retryable honoured, rate-limit delay, returned errors count
+# ---------------------------------------------------------------------------
+
+
+def _declined() -> ApplicationError:
+    return ApplicationError("charge declined", type="PaymentError", non_retryable=True)
+
+
+def _raised_while_handling(error: Exception) -> RuntimeError:
+    """A RuntimeError whose ``__context__`` (not ``__cause__``) is ``error``."""
+    try:
+        try:
+            raise error
+        except Exception:
+            raise RuntimeError("tool cleanup failed")  # noqa: B904
+    except RuntimeError as outer:
+        return outer
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        _declined,
+        lambda: _as_the_runner_raises(_declined()),
+        lambda: _wrapped_twice(_declined()),
+        lambda: _raised_while_handling(_declined()),
+    ],
+    ids=["bare", "wrapped", "two-levels-deep", "context"],
+)
+async def test_non_retryable_application_error_runs_once(runner, make_error):
+    """A tool's ApplicationError(non_retryable=True) came out retryable, so the
+    step (and its side effects) ran three times."""
+    fake = runner(research=99)
+    fake.raises = make_error()
+
+    with pytest.raises(ApplicationError) as exc:
+        await _activity(raise_on_error=True)
+    assert exc.value.non_retryable
+    assert exc.value.__cause__ is None
+    expected = (await _activity(raise_on_error=False)).error  # dev's text
+
+    fake.calls.clear()
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
+
+    assert fake.calls["research"] == 1
+    assert result.step_results[0].status == "error"
+    assert result.step_results[0].error == expected
+    assert result.content == "q>write"
+
+
+async def test_retryable_application_error_is_still_retried(runner):
+    fake = runner(research=99)
+    fake.raises = _as_the_runner_raises(ApplicationError("busy", type="ToolBusy"))
+
+    await _run(SequentialAgentWorkflow.run, _seq("research", retry_agent_errors=True))
+
+    assert fake.calls["research"] == 3
+
+
+async def test_cyclic_context_chain_ends(runner):
+    first, second = RuntimeError("first"), RuntimeError("second")
+    first.__context__, second.__context__ = second, first
+    runner(research=99).raises = first
+
+    with pytest.raises(ApplicationError) as exc:
+        await _activity(raise_on_error=True)
+
+    assert not exc.value.non_retryable
+
+
+@pytest.mark.parametrize(
+    "retry_after, delay",
+    [(30, 30), (0.2, 1), (3600, 300)],
+    ids=["as-asked", "at-least-1s", "capped"],
+)
+async def test_rate_limit_waits_its_retry_after(runner, retry_after, delay):
+    """The three attempts were spent in about 3 s whatever retry_after said."""
+    runner(research=99).raises = _as_the_runner_raises(
+        LLMRateLimitError("slow down", retry_after=retry_after)
+    )
+
+    with pytest.raises(ApplicationError) as exc:
+        await _activity(raise_on_error=True)
+
+    assert not exc.value.non_retryable
+    assert exc.value.next_retry_delay == timedelta(seconds=delay)
+
+
+async def test_rate_limit_without_retry_after_uses_the_backoff(runner):
+    runner(research=99).raises = LLMRateLimitError("slow down")
+
+    with pytest.raises(ApplicationError) as exc:
+        await _activity(raise_on_error=True)
+
+    assert exc.value.next_retry_delay is None
+
+
+async def test_rate_limited_step_is_retried_after_retry_after(runner):
+    fake = runner(research=1)
+    fake.raises = LLMRateLimitError("slow down", retry_after=30)
+
+    result = await _run(
+        SequentialAgentWorkflow.run, _seq("research", "write", retry_agent_errors=True)
+    )
+
+    assert result.status == "completed"
+    assert fake.calls["research"] == 2
+
+
+@pytest.mark.parametrize("raise_on_error", [True, False])
+async def test_returned_error_responses_count_toward_the_circuit_breaker(runner, raise_on_error):
+    """A workflow agent whose sub-agents fail returns an error response; the
+    held failures were dropped, so five calls left the breaker at 0."""
+    fake = runner()
+    fake.cb = CircuitBreaker(threshold=10, cooldown=60)
+
+    async def run(agent, input, **kw):
+        fake.calls[agent.name] += 1
+        fake.cb.record_failure()  # a sub-agent failed
+        return AgentResponse(
+            content="All parallel agents failed",
+            agent_name=agent.name,
+            status=ResponseStatus.ERROR,
+            error="All parallel agents failed",
+        )
+
+    fake.run = run
+    for _ in range(5):
+        result = await _activity(raise_on_error=raise_on_error)
+        assert result.status == "error"
+
+    assert fake.calls["research"] == 5
+    assert fake.cb.failure_count == 5

@@ -28,6 +28,7 @@ from continuum.llm.exceptions import (
     LLMContentFilterError,
     LLMContextLengthError,
     LLMInvalidRequestError,
+    LLMRateLimitError,
 )
 from continuum.session.exceptions import SessionConnectionError, SessionError
 from continuum.temporal.exceptions import AgentNotRegisteredError
@@ -64,9 +65,16 @@ _PERMANENT_ERRORS: tuple[type, ...] = (
 # Subclasses of the above that a retry can fix: the session store may come back.
 _TRANSIENT_ERRORS: tuple[type, ...] = (SessionConnectionError,)
 
+# Longest wait before the next attempt that a rate limit's ``retry_after`` sets.
+_MAX_RATE_LIMIT_DELAY = 300.0  # seconds
 
-def _error_chain(error: BaseException) -> list[Any]:
-    """``error`` and every error it wraps (``original_error``, ``__cause__``), at any depth."""
+
+def _error_chain(error: BaseException, *, context: bool = False) -> list[Any]:
+    """``error`` and every error it wraps (``original_error``, ``__cause__``), at any depth.
+
+    With ``context``, the errors it was raised while handling (``__context__``)
+    too. Each error appears once, so a cyclic chain ends.
+    """
     chain: list[Any] = []
     todo: list[Any] = [error]
     while todo:
@@ -75,6 +83,8 @@ def _error_chain(error: BaseException) -> list[Any]:
             continue
         chain.append(e)
         todo += [getattr(e, "original_error", None), getattr(e, "__cause__", None)]
+        if context:
+            todo.append(getattr(e, "__context__", None))
     return chain
 
 
@@ -83,11 +93,32 @@ def _is_permanent(error: BaseException) -> bool:
 
     The runner and the LLM client wrap errors (``AgentExecutionError``,
     ``original_error``, ``raise ... from``), so the whole chain is checked.
+    An ``ApplicationError(non_retryable=True)`` anywhere in it, for example
+    from a tool, is honoured: its author asked for it not to run again.
     """
+    if any(
+        isinstance(e, ApplicationError) and e.non_retryable
+        for e in _error_chain(error, context=True)
+    ):
+        return True
     return any(
         isinstance(e, _PERMANENT_ERRORS) and not isinstance(e, _TRANSIENT_ERRORS)
         for e in _error_chain(error)
     )
+
+
+def _rate_limit_delay(error: BaseException) -> timedelta | None:
+    """The wait a rate limit in ``error``'s chain asks for, capped; else ``None``."""
+    for e in _error_chain(error):
+        retry_after = getattr(e, "retry_after", None) if isinstance(e, LLMRateLimitError) else None
+        if retry_after is not None:
+            try:
+                seconds = float(retry_after)
+            except (TypeError, ValueError):
+                continue
+            if seconds == seconds:  # not NaN
+                return timedelta(seconds=min(max(1.0, seconds), _MAX_RATE_LIMIT_DELAY))
+    return None
 
 
 def _is_last_attempt(params: AgentActivityParams) -> bool:
@@ -186,7 +217,12 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
                 type="CircuitBreakerOpen",
                 next_retry_delay=timedelta(seconds=max(1.0, float(retry_after))),
             )
-        return AgentActivityResult.from_agent_response(response)
+        result = AgentActivityResult.from_agent_response(response)
+        # A returned response is final (it is not retried), so failures held
+        # during the run, e.g. by a workflow agent's sub-agents, count now.
+        for breaker in held:
+            breaker.record_failure()
+        return result
     except Exception as e:
         if not params.raise_on_error:
             activity.logger.error(f"Agent '{params.agent_name}' failed: {e}")
@@ -207,7 +243,12 @@ async def run_agent_activity(params: AgentActivityParams) -> AgentActivityResult
         # ``from None``: Temporal serialises the cause chain (``__cause__``, or
         # ``__context__`` without it) into history and the worker log prints it,
         # and the wrapped errors hold the raw provider text that ``str(e)`` redacts.
-        raise _agent_error(str(e), type=type(e).__name__, non_retryable=permanent) from None
+        raise _agent_error(
+            str(e),
+            type=type(e).__name__,
+            non_retryable=permanent,
+            next_retry_delay=None if permanent else _rate_limit_delay(e),
+        ) from None
     finally:
         heartbeat_task.cancel()
 

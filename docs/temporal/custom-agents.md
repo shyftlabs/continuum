@@ -131,8 +131,13 @@ applies. Errors a retry cannot fix are not
 retried: an unregistered agent, max turns, a policy denial, a configuration
 error, a blocked input, an authentication, context-length, invalid-request or
 content-filter error from the model, and a session error other than a lost
-connection, also when the runner wraps them. An open circuit breaker is retried
-after its cooldown, and a step's failed attempts count once toward the breaker.
+connection, also when the runner wraps them, and an `ApplicationError` raised
+with `non_retryable=True` (for example by a tool). A rate limit with
+`retry_after` waits that long (at most 5 minutes) before the next attempt. An
+open circuit breaker is retried after its cooldown, and a step's failed
+attempts count once toward the breaker. Only raised errors are retried: an
+error response the agent returns (a validation failure, an invalid id, a
+workflow agent's error response) is the step's result on its first attempt.
 When the retries run out, the step's `error` text is the same as without
 retries, and `WorkflowInput.on_step_error` decides what happens: `"continue"` (default)
 records the error result and runs the next step, `"fail"` stops the run with

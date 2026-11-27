@@ -83,6 +83,12 @@ if result.status == "error":
     return WorkflowResult(status="failed", content=None, step_results=[result], error=result.error)
 ```
 
+`run_agent_step` retries agent errors by default (`retry_agent_errors=True`)
+and has no `workflow.patched` gate of its own. If you switch a workflow that
+already has runs open to it, put the new call behind your own
+`workflow.patched("<your-id>")` so those runs replay on the old path, or pass
+`retry_agent_errors=False` to keep the old behaviour (only timeouts retried).
+
 If you set `raise_on_error=True` yourself, also pass a `retry_policy` with
 `maximum_attempts`: without one Temporal retries a failing agent forever.
 

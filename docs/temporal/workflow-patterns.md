@@ -147,8 +147,13 @@ replaying worker always takes the same path. Errors a retry cannot fix are not
 retried: an unregistered agent, max turns, a policy denial, a
 configuration error, a blocked input, an authentication, context-length,
 invalid-request or content-filter error from the model, and a session error
-other than a lost connection. An open circuit breaker is retried after its
-cooldown, and a step's failed attempts count once toward the breaker. Set
+other than a lost connection, and an `ApplicationError` raised with
+`non_retryable=True` (for example by a tool). A rate limit with `retry_after`
+waits that long (at most 5 minutes) before the next attempt. An open circuit
+breaker is retried after its cooldown, and a step's failed attempts count once
+toward the breaker. Only raised errors are retried: an error response the agent
+returns (a validation failure, an invalid id, a workflow agent's error
+response) is the step's result on its first attempt. Set
 `retries: 1` on a step with side effects (an email, a payment) so it runs once.
 
 ### When a step still fails
