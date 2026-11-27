@@ -43,6 +43,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import itertools
 import time
 from collections.abc import Callable, Coroutine
@@ -71,9 +72,15 @@ class PriorityDispatcher:
 
     def __init__(self, max_concurrent: int = 10) -> None:
         self.max_concurrent = max_concurrent
-        # Items: (-priority, seq, call_fn, future)
+        # Items: (-priority, seq, ctx, call_fn, future)
         self._queue: asyncio.PriorityQueue[
-            tuple[int, int, Callable[..., Coroutine[Any, Any, Any]], asyncio.Future[Any]]
+            tuple[
+                int,
+                int,
+                contextvars.Context,
+                Callable[..., Coroutine[Any, Any, Any]],
+                asyncio.Future[Any],
+            ]
         ] = asyncio.PriorityQueue()
         self._workers: list[asyncio.Task[None]] = []
 
@@ -107,7 +114,10 @@ class PriorityDispatcher:
 
         future: asyncio.Future[T] = asyncio.get_event_loop().create_future()
         seq = next(_seq_counter)
-        await self._queue.put((-priority, seq, call_fn, future))
+        # The call runs in the caller's context (its run id, trace), not the
+        # worker's, which is whatever context started the dispatcher.
+        ctx = contextvars.copy_context()
+        await self._queue.put((-priority, seq, ctx, call_fn, future))
 
         queue_depth = self._queue.qsize()
         if queue_depth > 5:
@@ -118,10 +128,12 @@ class PriorityDispatcher:
     async def _worker_loop(self) -> None:
         while True:
             try:
-                _neg_priority, _seq, call_fn, future = await self._queue.get()
+                _neg_priority, _seq, ctx, call_fn, future = await self._queue.get()
                 start = time.monotonic()
                 try:
-                    result = await call_fn()
+                    # ctx.run(call_fn) would only create the coroutine in ctx; a
+                    # task created with context=ctx runs its body there.
+                    result = await asyncio.create_task(call_fn(), context=ctx)
                     if not future.done():
                         future.set_result(result)
                 except Exception as exc:
@@ -160,9 +172,16 @@ class TwoLevelDispatcher:
 
     def __init__(self, max_workers: int = 4) -> None:
         self.max_workers = max_workers
-        # Items: (-stage_priority, -request_priority, seq, call_fn, future)
+        # Items: (-stage_priority, -request_priority, seq, ctx, call_fn, future)
         self._queue: asyncio.PriorityQueue[
-            tuple[int, int, int, Callable[..., Coroutine[Any, Any, Any]], asyncio.Future[Any]]
+            tuple[
+                int,
+                int,
+                int,
+                contextvars.Context,
+                Callable[..., Coroutine[Any, Any, Any]],
+                asyncio.Future[Any],
+            ]
         ] = asyncio.PriorityQueue()
         self._workers: list[asyncio.Task[None]] = []
 
@@ -198,7 +217,9 @@ class TwoLevelDispatcher:
 
         future: asyncio.Future[T] = asyncio.get_event_loop().create_future()
         seq = next(_seq_counter)
-        await self._queue.put((-stage_priority, -request_priority, seq, call_fn, future))
+        # The call runs in the caller's context, as in PriorityDispatcher.
+        ctx = contextvars.copy_context()
+        await self._queue.put((-stage_priority, -request_priority, seq, ctx, call_fn, future))
 
         queue_depth = self._queue.qsize()
         if queue_depth > 5:
@@ -214,10 +235,12 @@ class TwoLevelDispatcher:
     async def _worker_loop(self) -> None:
         while True:
             try:
-                _neg_stage, _neg_req, _seq, call_fn, future = await self._queue.get()
+                _neg_stage, _neg_req, _seq, ctx, call_fn, future = await self._queue.get()
                 start = time.monotonic()
                 try:
-                    result = await call_fn()
+                    # ctx.run(call_fn) would only create the coroutine in ctx; a
+                    # task created with context=ctx runs its body there.
+                    result = await asyncio.create_task(call_fn(), context=ctx)
                     if not future.done():
                         future.set_result(result)
                 except Exception as exc:

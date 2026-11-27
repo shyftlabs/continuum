@@ -363,11 +363,10 @@ def _sync_response_hook(response: httpx.Response) -> None:
     elapsed = _elapsed_ms(response)  # before the body read, always
     usage = None
     if not _is_streaming(response):
-        try:
-            response.read()  # httpx caches it; the SDK re-reads for free
-            usage = _parse_usage(response)
-        except Exception:  # noqa: BLE001
-            pass
+        # A failed read must raise so the SDK can retry it; _parse_usage
+        # guards itself.
+        response.read()  # httpx caches it; the SDK re-reads for free
+        usage = _parse_usage(response)
     _record(response, client_ms=elapsed, usage=usage)
 
 
@@ -379,11 +378,10 @@ async def _async_response_hook(response: httpx.Response) -> None:
     elapsed = _elapsed_ms(response)  # before the body read, always
     usage = None
     if not _is_streaming(response):
-        try:
-            await response.aread()
-            usage = _parse_usage(response)
-        except Exception:  # noqa: BLE001
-            pass
+        # A failed read must raise so the SDK can retry it; _parse_usage
+        # guards itself.
+        await response.aread()
+        usage = _parse_usage(response)
     _record(response, client_ms=elapsed, usage=usage)
 
 
