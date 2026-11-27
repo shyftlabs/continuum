@@ -7,6 +7,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **`EvalCase.from_run` and `contexts_from_messages`.** RAGAS faithfulness and context metrics need the retrieved text, and `EvalCase.context` had to be filled by hand, which meant re-running retrieval outside the agent and possibly scoring against different chunks from the ones the agent saw. `EvalCase.from_run(question, response, tools=["vector_search"])` takes the context from the run's own tool results (optionally only from named tools; `tools=None` means all). The `think` tool's results, `handoff_to_*` results and `error_type` envelopes (a JSON object with only the keys `error`, `error_type` and `is_error`) are skipped; other SDK tool-error strings (such as `Tool execution error: ...` or `Error executing tool '...': ...`), tool-approval denials and policy refusals can still end up in the context. It covers a non-streamed `run()` (`run_stream()` returns no messages) and the top-level agent's own tool results, plus the handed-off agent's when `return_to_parent=False` (a result the child's messages repeat from the parent's history, with the same `tool_call_id` and content, is kept once). Anything other than a message list or an `AgentResponse` (a `str`, `response.to_dict()`, a generator) raises `TypeError`. Tool output is copied verbatim, with no redaction or data-label check, so a case sent to Langfuse or RAGAS carries it as-is.
+
 ### Fixed
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 
