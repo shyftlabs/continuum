@@ -9,6 +9,7 @@ EvalStatus   — outcome enum
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -59,6 +60,38 @@ class EvalCase:
             "context": self.context,
             "metadata": self.metadata,
         }
+
+    @classmethod
+    def from_run(
+        cls,
+        input_text: str,
+        run: Any,
+        *,
+        tools: list[str] | tuple[str, ...] | set[str] | None = None,
+        expected_output: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> EvalCase:
+        """A case whose context is what the agent's tools actually returned.
+
+        RAGAS faithfulness and context metrics need the retrieved text. Filling it
+        in by hand meant re-running the retrieval outside the agent, which can
+        return something different from what the agent saw. Pass the run's
+        ``AgentResponse`` or its messages (``AgentResponse.messages``); ``tools``
+        keeps only those tools' results (matched on the tool name or its last
+        ``__`` segment, so ``"vector_search"`` matches ``"docs__vector_search"``).
+        See ``contexts_from_messages`` for what is skipped and what is covered.
+
+        Covers a non-streamed ``run()``: ``run_stream()`` returns no messages.
+        Tool output is copied verbatim, with no redaction or data-label check, so
+        a case passed to ``LangfuseDatasetClient.add_case`` or ``RagasEvaluator``
+        sends it as-is to Langfuse or the judge model.
+        """
+        return cls(
+            input_text=input_text,
+            expected_output=expected_output,
+            context=contexts_from_messages(run, tools=tools),
+            metadata=dict(metadata or {}),
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvalCase:
@@ -190,3 +223,97 @@ class EvalResult:
             langfuse_trace_id=data.get("langfuse_trace_id"),
             metadata=data.get("metadata", {}),
         )
+
+
+# Tool results that are not retrieved content: the think tool's acknowledgement
+# and a handoff's result (the child's answer, or "Handoff failed: ...").
+_NON_CONTEXT_TOOLS = ("think",)
+_HANDOFF_TOOL_PREFIX = "handoff_to_"
+
+
+def contexts_from_messages(
+    messages: Any, *, tools: list[str] | tuple[str, ...] | set[str] | None = None
+) -> list[str]:
+    """Tool results from a run's messages, in order, as eval context strings.
+
+    ``messages`` is a list of messages or an ``AgentResponse``. Each tool result is
+    paired with the assistant tool call that asked for it (by ``tool_call_id``) to
+    know which tool produced it. ``tools=None`` keeps every tool's results; a list
+    keeps only those tools (``[]`` keeps none).
+
+    Whatever the filter, skipped are empty results, the ``think`` tool's,
+    ``handoff_to_*`` results and tool-error envelopes (a JSON object with an
+    ``error_type`` key and no keys besides ``error``, ``error_type`` and
+    ``is_error``), which are not retrieved content and would skew the scores.
+    Other tool-error, approval and refusal strings are kept.
+
+    Only the top-level agent's own tool results are covered. Given an
+    ``AgentResponse`` from a handoff with ``return_to_parent=False``, the handed-off
+    agent's results (``handoff_result.response.messages``) are included too; with
+    the default ``return_to_parent=True`` the parent keeps only the child's
+    answer, so the child's tool results are not available.
+    """
+    if isinstance(tools, str):
+        raise TypeError("tools must be a list of tool names, not a str")
+    wanted = None if tools is None else set(tools)
+    names: dict[str, str] = {}
+    contexts: list[str] = []
+    for message in _run_messages(messages):
+        m = message if isinstance(message, dict) else _message_dict(message)
+        if m.get("role") == "assistant":
+            for call in m.get("tool_calls") or []:
+                call = call if isinstance(call, dict) else _message_dict(call)
+                fn = call.get("function") or {}
+                fn = fn if isinstance(fn, dict) else _message_dict(fn)
+                names[call.get("id") or ""] = fn.get("name") or ""
+        elif m.get("role") == "tool":
+            name = names.get(m.get("tool_call_id") or "", "")
+            short = name.split("__")[-1]
+            if short in _NON_CONTEXT_TOOLS or short.startswith(_HANDOFF_TOOL_PREFIX):
+                continue
+            if wanted is not None and name not in wanted and short not in wanted:
+                continue
+            content = m.get("content")
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            if content.strip() and not _is_error_envelope(content):
+                contexts.append(content)
+    return contexts
+
+
+def _run_messages(run: Any, _depth: int = 0) -> list[Any]:
+    """The messages of a run: a message list, or an AgentResponse and its handoff child."""
+    if isinstance(run, (list, tuple)):
+        return list(run)
+    messages = list(getattr(run, "messages", None) or [])
+    handoff = getattr(run, "handoff_result", None)
+    child = getattr(handoff, "response", None)
+    # Bounded: a handoff chain is limited by the runner's max depth anyway.
+    if child is not None and child is not run and _depth < 32:
+        messages.extend(_run_messages(child, _depth + 1))
+    return messages
+
+
+_ERROR_ENVELOPE_KEYS = frozenset({"error", "error_type", "is_error"})
+
+
+def _is_error_envelope(content: str) -> bool:
+    """A tool-error result such as ``{"error": "...", "error_type": "TimeoutError"}``.
+
+    Only an object made of the SDK's envelope keys counts; a record that carries
+    ``error_type`` next to other fields (a log or incident entry) is data.
+    """
+    text = content.lstrip()
+    if not text.startswith("{"):
+        return False
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(data, dict) and "error_type" in data and set(data) <= _ERROR_ENVELOPE_KEYS
+
+
+def _message_dict(obj: Any) -> dict[str, Any]:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return dict(getattr(obj, "__dict__", {}))
