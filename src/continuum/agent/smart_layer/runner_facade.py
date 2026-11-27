@@ -26,6 +26,7 @@ from continuum.agent.smart_layer.types import (
 )
 from continuum.agent.workflow.router import RouterAgent
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger
 
@@ -116,12 +117,17 @@ async def run_model_tier_turn(
     if ctx is not None:
         cfg = _enrich_config_for_gateway(cfg, ctx)
 
+    served_model: str | None = None
     async for chunk in llm_client.chat_stream(
         messages=messages,
         config=cfg,
     ):
+        served_model = chunk.model or served_model
         if chunk.content:
             parts.append(chunk.content)
+    if ctx is not None:
+        # The hook does not read a streamed body; the chunks name the model.
+        gateway_routing.note_streamed_model(ctx.run_id, served_model)
 
     content = "".join(parts).strip()
     llm_ms = (time.perf_counter() - t_llm) * 1000
@@ -208,10 +214,15 @@ async def stream_model_tier_turn(
     if ctx is not None:
         cfg = _enrich_config_for_gateway(cfg, ctx)
 
+    served_model: str | None = None
     async for chunk in llm_client.chat_stream(messages=messages, config=cfg):
+        served_model = chunk.model or served_model
         if chunk.content:
             parts.append(chunk.content)
             yield StreamYield(kind="content_delta", text=chunk.content)
+    if ctx is not None:
+        # The hook does not read a streamed body; the chunks name the model.
+        gateway_routing.note_streamed_model(ctx.run_id, served_model)
 
     content = "".join(parts).strip()
     llm_ms = (time.perf_counter() - t_llm) * 1000

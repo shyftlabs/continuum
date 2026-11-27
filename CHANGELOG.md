@@ -7,7 +7,11 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- **`AgentConfig.after_tool_round`.** A product rule called after each round of tool calls with what the tools returned (`ToolRound`). A returned string is added as a system message before the next model call, at most `after_tool_round_max_nudges` times a run (default 1); it is not saved to the session. Typical use: when every lookup came back empty, tell the model to try the search tools it has not used instead of answering "nothing found". Works the same in `run` and `run_stream`: `think`, Headroom retrieve and handoff calls are left out of a round in both. A failing rule is logged and ignored.
+
 ### Fixed
+- **The timing probe (`CONTINUUM_TIMING_LOG=1`) no longer hides a failed body read.** A reply whose body dropped mid-read was swallowed by the probe, so the SDK did not retry it and later failed with a different error; the read now raises where the SDK retries it.
 - **Two lower bounds could not be installed on Python 3.13**, the only supported version: `tiktoken>=0.7.0` (0.7.0 has no 3.13 wheel and fails to build) and `pymilvus>=2.4.0` (2.4.0 requires `grpcio<=1.60.0`; grpcio has no 3.13 wheel before 1.66.2). The floors are now `tiktoken>=0.8.0` and `pymilvus>=2.6.0`, and `openai>=1.90.0` / `pydantic>=2.11.0`, which other dependencies already forced. `pytest-asyncio>=1.0.0` for contributors: 0.24 failed the async tests on 3.13.
 - **Each agent's summary-cache setting applies to its own compression.** `get_progressive_context_manager()` returns one manager per process, and its summary cache was built from the config of the first agent that asked, so a later agent with `enable_caching=False` was still served cached summaries (and one with caching on got none if the first had it off). Whether a call uses the cache now follows that call's `ContextManagementConfig`, and agents with different summarization model, temperature or max tokens no longer share summaries.
 - **Conversations that start alike no longer share a summary.** The summary cache key hashed only the first 100 characters of each message, so two conversations built from the same template or pasted document could be given each other's summary — in a multi-tenant product, one client's summary in another client's context. Each message's role, full content, `tool_calls`, `tool_call_id` and `name` are now hashed.
@@ -20,6 +24,9 @@ and Continuum adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - **An agent with `enable_caching=False` costs more when it compresses.** It used to be served cached summaries whenever the process-wide manager had caching on (the default); it now re-summarizes each time compression runs, one summarization-model call per compression.
 - **Every dependency has a ceiling below its next major** (next minor for a 0.x package) — `mem0ai>=1.0.0` met mem0ai 2.0 and broke installs, and `openai`, `anthropic`, `google-genai`, `pymilvus`, `redis` and `sentence-transformers` had each since released a major Continuum was never tested on. Each ceiling sits above the version CI tests, so no tested version is excluded; raising one is a deliberate, tested change. `requirements.txt` now matches `pyproject.toml` (it had no `httpx` and an uncapped `mcp`), and `tests/unit/test_dependency_ranges.py` keeps both true.
 - **CI tests the lowest allowed versions too** (`Tests (3.13, lowest deps)`), and Dependabot opens a PR when a release falls outside a range.
+
+### Added
+- **Which model the gateway ran, per run.** Calls through the Smart Gateway now record the gateway's routing headers (router mode and attempts, cache status, timing, rate limits, request id) and the model that answered, in `AgentResponse.run_artifacts["gateway_routing"]` and the streamed `RUN_END` event — one entry per HTTP attempt, so retries show. A workflow run through `runner.run` / `run_stream` lists its steps' calls and its own; for `runner.fork` and a direct `execute()` call, only the steps' calls. Calls sent through a `PriorityDispatcher` or `TwoLevelDispatcher` now run in the caller's context, so they are filed under the caller's run. Before, these were only written to a file with `CONTINUUM_TIMING_LOG=1`.
 
 ## [2.1.0] — 2026-10-07
 

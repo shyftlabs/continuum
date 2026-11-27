@@ -17,6 +17,7 @@ from continuum.agent.types import AgentResponse, ResponseStatus, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.agent.workflow._quality_gate import system_one_approves
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger, log_content
 from continuum.system_one import require_backend
 
@@ -98,6 +99,7 @@ class ReflectionAgent(BaseAgent):
             )
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,
