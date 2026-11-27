@@ -15,7 +15,9 @@ product's knowledge -- so it offers the seam and the product supplies the rule::
     AgentConfig(after_tool_round=dead_end)
 
 A returned string is added as a system message before the next model call, at most
-``after_tool_round_max_nudges`` times per run (default 1). System messages are not
+``after_tool_round_max_nudges`` times per run (default 1). The hook is still called
+after every round once that cap is reached; what it returns is then ignored, so a
+rule can keep observing the run (``nudges_sent`` says how many went in). System messages are not
 saved to the session, so the nudge steers this run without entering chat history.
 A hook that raises is logged and ignored.
 
@@ -84,6 +86,29 @@ def _call_name_args_id(tc: Any) -> tuple[str, dict[str, Any], str]:
     return name or "", args if isinstance(args, dict) else {"_raw": args}, tc_id or ""
 
 
+def _as_text(content: Any) -> str:
+    """A tool result as text for the hook. Never raises: a result that is not
+    JSON-serialisable must not fail the run."""
+    if isinstance(content, str):
+        return content
+    try:
+        return json.dumps(content, default=str)
+    except (TypeError, ValueError):  # e.g. a circular reference
+        return str(content)
+
+
+def _round_replies(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The tool messages of the latest round: those after the last assistant
+    message with tool calls (every tool message if there is none)."""
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls"):
+            start = i + 1
+            break
+    return [m for m in messages[start:] if isinstance(m, dict) and m.get("role") == "tool"]
+
+
 def _is_internal_call(agent: Any, name: str) -> bool:
     """``think``, the Headroom retrieve and handoffs are plumbing, not lookups."""
     from continuum.llm.headroom.compressor import RETRIEVE_TOOL_NAME
@@ -122,35 +147,34 @@ class ToolRoundTracker:
         ``messages`` as a system message and return it."""
         if self._hook is None:
             return None
-        by_id = {
-            m.get("tool_call_id"): m
-            for m in messages
-            if isinstance(m, dict) and m.get("role") == "tool"
-        }
+        # Pair each call with its own reply, so two calls that share an id (or
+        # have none) each get theirs. Replies with one id are taken from the
+        # end, last call first: results come in call order, and in run the
+        # think / retrieve replies sit before the regular tools' results.
+        by_id: dict[str, list[dict[str, Any]]] = {}
+        for m in _round_replies(messages):
+            by_id.setdefault(m.get("tool_call_id") or "", []).append(m)
+        calls = [_call_name_args_id(tc) for tc in tool_calls]
+        replies: list[dict[str, Any] | None] = [None] * len(calls)
+        for i in range(len(calls) - 1, -1, -1):
+            same_id = by_id.get(calls[i][2])
+            if same_id:
+                replies[i] = same_id.pop()
         results = []
-        for tc in tool_calls:
-            name, args, tc_id = _call_name_args_id(tc)
+        for (name, args, _tc_id), reply in zip(calls, replies, strict=True):
             # Left out here, once, so run (whose executor already drops them)
             # and run_stream (which passes every call) hand the hook the same
             # rounds: their results are not lookup results.
             if _is_internal_call(self._agent, name):
                 continue
-            reply = by_id.get(tc_id)
             if reply is None:
                 continue  # no tool result (e.g. a call that was not executed)
-            content = reply.get("content")
             results.append(
-                ToolRoundResult(
-                    name=name,
-                    arguments=args,
-                    content=content if isinstance(content, str) else json.dumps(content),
-                )
+                ToolRoundResult(name=name, arguments=args, content=_as_text(reply.get("content")))
             )
         if not results:
             return None
         self._history.extend(results)
-        if self._nudges >= self._max:
-            return None
         round_ = ToolRound(
             agent_name=self._agent_name,
             turn=turn,
@@ -166,6 +190,16 @@ class ToolRoundTracker:
             logger.warning("after_tool_round hook failed for agent %s: %s", self._agent_name, e)
             return None
         if not nudge or not isinstance(nudge, str):
+            return None
+        if self._nudges >= self._max:
+            # Cap reached: the hook still observes every round, but its
+            # guidance no longer goes in.
+            logger.debug(
+                "after_tool_round: agent %s nudge after turn %s ignored (cap %s reached)",
+                self._agent_name,
+                turn,
+                self._max,
+            )
             return None
         self._nudges += 1
         messages.append({"role": "system", "content": nudge})

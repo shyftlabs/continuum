@@ -310,3 +310,72 @@ def test_bad_max_nudges_only_matters_when_a_hook_is_set():
     ToolRoundTracker(_agent(None, max_nudges="one"))  # no hook: never read
     with pytest.raises(ValueError):
         ToolRoundTracker(_agent(dead_end, max_nudges="one"))
+
+
+async def test_hook_keeps_being_called_after_the_cap_but_its_nudge_is_ignored():
+    seen: list[ToolRound] = []
+
+    def hook(r):
+        seen.append(r)
+        return "try again"
+
+    tracker = ToolRoundTracker(_agent(hook, max_nudges=1))
+    msgs = [{"role": "tool", "tool_call_id": "c1", "content": EMPTY}]
+    assert await tracker.after_round(1, [_tc("c1", "sql_query")], msgs) == "try again"
+    for turn, call_id in ((2, "c2"), (3, "c3")):
+        msgs.append({"role": "tool", "tool_call_id": call_id, "content": EMPTY})
+        assert await tracker.after_round(turn, [_tc(call_id, "sql_query")], msgs) is None
+    assert [r.turn for r in seen] == [1, 2, 3]
+    assert [r.nudges_sent for r in seen] == [0, 1, 1]
+    assert sum(1 for m in msgs if m["role"] == "system") == 1
+
+    # max_nudges=0: the rule still observes every round; nothing goes in.
+    seen.clear()
+    tracker = ToolRoundTracker(_agent(hook, max_nudges=0))
+    msgs = [{"role": "tool", "tool_call_id": "c1", "content": EMPTY}]
+    assert await tracker.after_round(1, [_tc("c1", "sql_query")], msgs) is None
+    assert len(seen) == 1 and msgs[-1]["role"] == "tool"
+
+
+async def test_non_serialisable_tool_result_does_not_fail_the_run():
+    seen: list[ToolRound] = []
+    tracker = ToolRoundTracker(_agent(lambda r: seen.append(r)))
+    circular: list = []
+    circular.append(circular)
+    msgs = [
+        {"role": "tool", "tool_call_id": "c1", "content": {"at": object()}},
+        {"role": "tool", "tool_call_id": "c2", "content": circular},
+    ]
+
+    await tracker.after_round(1, [_tc("c1", "a"), _tc("c2", "b")], msgs)
+
+    [round_] = seen
+    assert [r.name for r in round_.results] == ["a", "b"]
+    assert "object at" in round_.results[0].content
+    assert all(isinstance(r.content, str) for r in round_.results)
+
+
+async def test_calls_with_the_same_or_no_id_each_get_their_own_result():
+    seen: list[ToolRound] = []
+    tracker = ToolRoundTracker(_agent(lambda r: seen.append(r)))
+    msgs = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "tool_calls": [{"id": "old"}]},
+        {"role": "tool", "tool_call_id": "dup", "content": "from an earlier round"},
+        {"role": "assistant", "tool_calls": [{"id": "dup"}, {"id": "dup"}, {"id": ""}, {}]},
+        {"role": "tool", "tool_call_id": "dup", "content": "first"},
+        {"role": "tool", "tool_call_id": "dup", "content": "second"},
+        {"role": "tool", "tool_call_id": "", "content": "third"},
+        {"role": "tool", "content": "fourth"},
+    ]
+    calls = [_tc("dup", "a"), _tc("dup", "b"), _tc("", "c"), _tc("", "d")]
+
+    await tracker.after_round(2, calls, msgs)
+
+    [round_] = seen
+    assert [(r.name, r.content) for r in round_.results] == [
+        ("a", "first"),
+        ("b", "second"),
+        ("c", "third"),
+        ("d", "fourth"),
+    ]
