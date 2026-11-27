@@ -68,6 +68,51 @@ class MemoryService(IMemoryService):
         """Get memory client."""
         return self._memory_client
 
+    def _memory_is_live(self) -> bool:
+        """True when a long-term memory write can actually happen.
+
+        Mirrors the gate in ``SessionClient.add_message``: memory is reached
+        either through this service's own client or through the session
+        client's, and only an enabled client writes anything.
+
+        The agent's own client is checked first, so the session client is only
+        looked at for session-only memory. That look must stay side-effect free:
+        a session client that follows ``ISessionClient`` without subclassing
+        ``SessionClient`` has no resolver and is treated as unknown, and one that
+        resolves from the global container is answered from a container that
+        already exists and has already built its client -- creating the container
+        or a ``MemoryClient`` just to decide on a log line is not acceptable.
+        So when neither exists yet, the first turn answers False and the warning
+        fires from turn 2, once that turn's session save has built them.
+        """
+
+        def live(client: Any | None) -> bool:
+            # Same rule as the retrieve gate: a duck-typed client without
+            # is_enabled is searched, so it counts as live here too.
+            return client is not None and bool(getattr(client, "is_enabled", True))
+
+        if live(self._memory_client):
+            return True
+
+        sc = self._session_client
+        if sc is None or not getattr(sc, "is_enabled", False):
+            return False
+        resolve = getattr(sc, "_resolve_memory_client", None)
+        if resolve is None:
+            return False  # not a SessionClient: its memory path is unknown
+        if getattr(sc, "_explicit_memory_client", False):
+            return live(resolve())  # the injected client, no container involved
+
+        from continuum.core import container as container_module
+
+        existing = container_module._global_container
+        if existing is None:
+            return False
+        try:
+            return bool(existing.has_memory_client())
+        except Exception:
+            return False  # a log check must never stop the memory search
+
     def _warn_if_provenance_undeclared(self, agent: BaseAgent, context: RunContext) -> None:
         """Say once that the memory-poisoning defences are configured off.
 
@@ -92,6 +137,11 @@ class MemoryService(IMemoryService):
         one people filter out.
         """
         if getattr(agent, "_warned_provenance_undeclared", False):
+            return
+        if not self._memory_is_live():
+            # MEMORY_ENABLED=false (or no store configured): the agent's memory
+            # flags default to on, but nothing is read or written, so there is
+            # nothing to protect and the warning would be false.
             return
 
         mem_cfg = getattr(agent, "memory_config", None)
@@ -139,11 +189,16 @@ class MemoryService(IMemoryService):
         """
         self._warn_if_provenance_undeclared(agent, context)
 
-        if not agent.memory_config.search_memories or not self._memory_client:
+        # getattr: IMemoryClient requires is_enabled, but a duck-typed client
+        # without it was searched before this check existed and still is.
+        client_usable = bool(self._memory_client) and getattr(
+            self._memory_client, "is_enabled", True
+        )
+        if not agent.memory_config.search_memories or not client_usable:
             logger.debug(
                 "💾 Skipping memory search: search_memories=%s, memory_client=%s",
                 agent.memory_config.search_memories,
-                "available" if self._memory_client else "not available",
+                "available" if client_usable else "not available",
             )
             return []
 
