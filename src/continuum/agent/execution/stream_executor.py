@@ -95,7 +95,8 @@ class StreamExecutor(IStreamExecutor):
                 reset_active_context_config(token)
             except ValueError:
                 # Generator finalized in a different context than it started in
-                # (abandoned without aclose()); nothing to leak, best-effort.
+                # (abandoned without aclose()). The token can't be reset there,
+                # so the agent's config stays active in the caller's task.
                 pass
 
     async def _execute_stream_impl(

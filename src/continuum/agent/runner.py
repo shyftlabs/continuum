@@ -2035,6 +2035,8 @@ class AgentRunner:
                 # Generator finalized in a different context than it started in
                 # (caller abandoned the stream without `aclosing()`, so the GC
                 # finalizer runs this `finally`). The token can't be reset across
-                # contexts; the per-task context copy means there's nothing to
-                # leak, so this is best-effort.
+                # contexts, so the agent's context config and policy stay active
+                # in the caller's task: a later direct `LLMClient.chat()` there
+                # uses them. Wrap the stream in `contextlib.aclosing()` (see
+                # docs/agent.md) so this `finally` runs in the caller's context.
                 pass
