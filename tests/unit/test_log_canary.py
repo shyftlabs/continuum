@@ -50,7 +50,14 @@ def logged(monkeypatch):
 
     rendered: list[str] = []
 
-    _STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
+    # ``message`` and ``asctime`` are standard too: logging.Formatter sets them
+    # on the record when any handler formats it first, which depends on which
+    # libraries installed handlers -- not on what the SDK logged. Counting them
+    # as extras duplicated every line under some dependency versions.
+    _STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+        "message",
+        "asctime",
+    }
 
     class Collector(logging.Handler):
         """Sees what a *third-party* handler sees, which is more than a formatter.

@@ -31,6 +31,7 @@ from continuum.agent.workflow._forkable import (
     resumed_input,
     segment_by_markers,
 )
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger, log_content
 
 if TYPE_CHECKING:
@@ -106,6 +107,7 @@ class ParallelAgent(BaseAgent):
             raise AgentConfigurationError("ParallelAgent requires at least one agent")
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,

@@ -42,6 +42,7 @@ from continuum.agent.config import AgentConfig, AgentMemoryConfig
 from continuum.agent.types import AgentResponse, ResponseStatus, RunContext, TokenUsage
 from continuum.agent.utils.context_utils import publish_active_policy
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger
 from continuum.observability.trace_context import SpanScope
 
@@ -163,6 +164,7 @@ class DebateAgent(BaseAgent):
             )
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,
