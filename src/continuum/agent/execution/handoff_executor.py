@@ -365,8 +365,10 @@ class HandoffExecutor(IHandoffExecutor):
                 )
 
             # Create new context for target
+            from continuum.agent.execution.executor import GATEWAY_METADATA_KEY
             from continuum.agent.types import RunContext
 
+            source_metadata = getattr(context, "metadata", None) or {}
             target_context = RunContext(
                 run_id=context.run_id,
                 session_id=context.session_id,
@@ -384,6 +386,17 @@ class HandoffExecutor(IHandoffExecutor):
                 # Propagate the fork guard so handed-off sub-agents of a forked
                 # (what-if) run also never write to long-term memory.
                 disable_memory_writes=context.disable_memory_writes,
+                # Carry the caller's gateway labels and tags so the target's model
+                # calls are attributed like the source's. Only the gateway entry:
+                # the rest of ``metadata`` holds per-agent state such as
+                # ``_filtered_tools``, which would give the target the source's tools.
+                # A caller-built context may have no tags or metadata (or None).
+                tags=list(getattr(context, "tags", None) or []),
+                metadata=(
+                    {GATEWAY_METADATA_KEY: source_metadata[GATEWAY_METADATA_KEY]}
+                    if GATEWAY_METADATA_KEY in source_metadata
+                    else {}
+                ),
             )
 
             # Log target agent details (mirrors message_builder output for top-level runs)
