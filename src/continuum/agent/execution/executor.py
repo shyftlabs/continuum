@@ -183,18 +183,61 @@ def _warn_once_per_run(context: RunContext, kind: str, msg: str, *args: Any) -> 
     logger.warning(msg, *args)
 
 
+def _gateway_tags(context: RunContext) -> str:
+    """The run's tags, comma-joined, at most 512 characters.
+
+    Only whole tags are sent: a tag that would cross the limit is dropped, not
+    cut. A tag containing a comma would read as two tags, so it is skipped.
+    Both are logged once per run.
+    """
+    kept: list[str] = []
+    length = 0
+    with_comma = 0
+    dropped = 0
+    for tag in context.tags or []:
+        text = str(tag)
+        if "," in text:
+            with_comma += 1
+            continue
+        added = len(text) + (1 if kept else 0)
+        if length + added > _GATEWAY_MAX_VALUE_LEN:
+            dropped += 1
+            continue
+        kept.append(text)
+        length += added
+    if with_comma:
+        _warn_once_per_run(
+            context,
+            "tag_comma",
+            "Skipped %d gateway tag(s) containing a comma: tags are sent comma-joined",
+            with_comma,
+        )
+    if dropped:
+        _warn_once_per_run(
+            context,
+            "tags_dropped",
+            "Dropped %d gateway tag(s): at most %d characters of tags are sent",
+            dropped,
+            _GATEWAY_MAX_VALUE_LEN,
+        )
+    return ",".join(kept)
+
+
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
     """Tag each model call for the Smart Gateway (``body.metadata``) so it can attribute cost.
 
     Sends the session (or run) id, the trace id, the run's tags, and the labels
     the caller passed as ``run(..., metadata={"gateway_metadata": {...}})`` --
     for example a tenant, fund or feature -- as strings. The agent's own
-    ``extra_body["metadata"]`` is kept and counts as labels; a caller label of
-    the same name wins over it, and the ids win over both. The rest of the
-    agent's ``extra_body`` is kept as is.
+    ``extra_body["metadata"]`` is kept and counts as labels; the caller's
+    labels get the free slots first and win over an agent label of the same
+    name, and the ids win over both. The rest of the agent's ``extra_body`` is
+    kept as is.
 
     Labels are capped at 16 keys in all (ids and tags included), 64-character
-    keys and 512-character values; nested values are sent as JSON. A
+    keys and 512-character values; nested values are sent as JSON. Tags are
+    sent whole: tags past 512 characters, and tags containing a comma, are
+    dropped. A
     ``gateway_metadata`` that is not a mapping is ignored, and dropped or
     clashing labels are logged, each once per run. Labels and tags leave the
     process, so they must not hold personal data.
@@ -217,8 +260,9 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
     own_labels = own if isinstance(own, Mapping) else {}
 
     reserved: dict[str, Any] = {}
-    if context.tags:
-        reserved["tags"] = _gateway_value(",".join(str(tag) for tag in context.tags))
+    tags = _gateway_tags(context)
+    if tags:
+        reserved["tags"] = tags
     reserved["session_id"] = context.session_id or context.run_id
     reserved["trace_id"] = context.trace_id
 
@@ -227,19 +271,27 @@ def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMCon
     room = _GATEWAY_MAX_KEYS - len(reserved)
     dropped = 0
     clashes: set[str] = set()
-    for k, v in [*own_labels.items(), *labels.items()]:
-        name = str(k)
-        key = name[:_GATEWAY_MAX_KEY_LEN]
-        if v is None or not key or key in reserved:
-            continue
-        if key in metadata:
-            if source_key[key] != name:
-                clashes.add(key)
-        elif len(metadata) >= room:
-            dropped += 1
-            continue
-        metadata[key] = _gateway_value(v)
-        source_key[key] = name
+    # The caller's per-run labels take the free slots first; the agent's own
+    # metadata fills what is left and never replaces a caller label.
+    caller_keys: set[str] = set()
+    for from_caller, items in ((True, labels.items()), (False, own_labels.items())):
+        for k, v in items:
+            name = str(k)
+            key = name[:_GATEWAY_MAX_KEY_LEN]
+            if v is None or not key or key in reserved:
+                continue
+            if key in metadata:
+                if source_key[key] != name:
+                    clashes.add(key)
+                if not from_caller and key in caller_keys:
+                    continue
+            elif len(metadata) >= room:
+                dropped += 1
+                continue
+            metadata[key] = _gateway_value(v)
+            source_key[key] = name
+            if from_caller:
+                caller_keys.add(key)
     if clashes:
         _warn_once_per_run(
             context,

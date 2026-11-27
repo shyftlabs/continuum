@@ -289,3 +289,52 @@ async def test_handoff_works_when_the_context_has_no_tags_or_metadata(missing):
         a for a in inner.execute_loop.call_args.args if hasattr(a, "is_handoff")
     )
     assert target_context.tags == [] and target_context.metadata == {}
+
+
+def test_caller_labels_take_the_slots_before_the_agents_metadata(gateway):
+    """14 static agent keys plus two per-run labels: the per-run labels are sent."""
+    own = {f"own{i:02d}": "x" for i in range(14)}
+    cfg = LLMConfig(model="auto", extra_body={"metadata": own})
+    ctx = RunContext(
+        run_id="r",
+        session_id="s",
+        metadata={"gateway_metadata": {"org_id": "org-7", "fund_id": "F-12"}},
+    )
+    with patch.object(executor, "logger") as log:
+        meta = _enrich_config_for_gateway(cfg, ctx).extra_body["metadata"]
+    assert len(meta) == 16
+    assert meta["org_id"] == "org-7" and meta["fund_id"] == "F-12"
+    assert sum(k.startswith("own") for k in meta) == 12  # 16 - ids (2) - caller labels (2)
+    assert any(
+        "Dropped 2 gateway label" in (c.args[0] % c.args[1:]) for c in log.warning.call_args_list
+    )
+
+    # An agent key cut to the same 64 characters as a caller key does not replace it.
+    prefix = "k" * 64
+    cfg = LLMConfig(model="auto", extra_body={"metadata": {prefix + "-agent": "agent"}})
+    ctx = RunContext(run_id="r", metadata={"gateway_metadata": {prefix + "-caller": "caller"}})
+    with patch.object(executor, "logger") as log:
+        meta = _enrich_config_for_gateway(cfg, ctx).extra_body["metadata"]
+    assert meta[prefix] == "caller"
+    assert any("same 64 characters" in c.args[0] for c in log.warning.call_args_list)
+
+
+def test_tags_are_cut_at_a_tag_boundary_and_the_drop_is_logged(gateway):
+    tags = [f"tag-{i:04d}" for i in range(100)]  # 8 characters each
+    ctx = RunContext(run_id="r", tags=tags)
+    with patch.object(executor, "logger") as log:
+        meta = _enrich_config_for_gateway(LLMConfig(model="auto"), ctx).extra_body["metadata"]
+    sent = meta["tags"].split(",")
+    assert len(meta["tags"]) <= 512
+    assert sent == tags[: len(sent)]  # only whole tags, in order
+    assert len(sent) == 57  # 57 tags of 8 characters and 56 commas: exactly 512
+    messages = [c.args[0] % c.args[1:] for c in log.warning.call_args_list]
+    assert any(f"Dropped {100 - len(sent)} gateway tag" in m for m in messages)
+
+
+def test_tag_containing_a_comma_is_skipped_and_logged(gateway):
+    ctx = RunContext(run_id="r", tags=["ask", "a,b", "fund"])
+    with patch.object(executor, "logger") as log:
+        meta = _enrich_config_for_gateway(LLMConfig(model="auto"), ctx).extra_body["metadata"]
+    assert meta["tags"] == "ask,fund"
+    assert any("containing a comma" in c.args[0] for c in log.warning.call_args_list)
