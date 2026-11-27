@@ -167,6 +167,7 @@ A Pydantic model with full provider-agnostic settings.
 | `timeout` | `int` | `settings.llm_request_timeout` | Per-attempt seconds (not total). The whole call is hard-bounded at ~`timeout × (max_retries + 1)` + backoff via an overall deadline. |
 | `max_retries` | `int` | `settings.llm_max_retries` | SDK-level retries per call (wired into the provider client). Set `0` to make `timeout` a true single-attempt ceiling. |
 | `enable_fallback` | `bool` | `settings.llm_enable_fallback` | |
+| `stream_include_usage` | `bool` | `settings.llm_stream_include_usage` | Send `stream_options.include_usage` on OpenAI-compatible streams. `False` for a server that fails on the field. Applies to direct `LLMClient` calls; agents (`run_stream`) follow `LLM_STREAM_INCLUDE_USAGE` |
 | `response_format` | `dict \| type[BaseModel] \| None` | `None` | Structured output |
 | `json_mode` | `bool` | `False` | Simple `json_object` mode |
 | `user` | `str \| None` | `None` | Forwarded for billing |
@@ -227,6 +228,16 @@ ChatMessage(
 - `tool_calls: list[ToolCall] | None`
 - `finish_reason: str | None`
 - `is_finished: bool`
+- `usage: Usage | None` — on the closing chunk of an OpenAI-compatible stream
+
+OpenAI-compatible providers send `stream_options.include_usage` on every stream so the
+closing chunk carries token usage. If the stream fails to open with a 400, 422 or 501
+(or a 500 that names `stream_options`), the call is retried once without the field. If
+that retry opens, the server and model are remembered for the rest of the process and
+later streams to them skip the field (and report no usage); if it fails too, its error is
+raised and nothing is remembered. A server that accepts the request and rejects the field
+only after the stream has started (a 200, then an error event) is not adapted: set
+`LLM_STREAM_INCLUDE_USAGE=false` for it.
 
 ### `ToolDefinition`
 ```python

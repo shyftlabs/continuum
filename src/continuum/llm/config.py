@@ -39,6 +39,8 @@ class LLMConfig(BaseModel):
     timeout: int = Field(default_factory=lambda: settings.llm_request_timeout)
     max_retries: int = Field(default_factory=lambda: settings.llm_max_retries)
     enable_fallback: bool = Field(default_factory=lambda: settings.llm_enable_fallback)
+    # Send stream_options.include_usage on OpenAI-compatible streams.
+    stream_include_usage: bool = Field(default_factory=lambda: settings.llm_stream_include_usage)
 
     # Response Format
     # Accepts a dict (json_object / json_schema) or a Pydantic model class; a

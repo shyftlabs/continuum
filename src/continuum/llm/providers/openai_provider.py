@@ -35,6 +35,7 @@ from continuum.llm.types import (
     LLMResponse,
     StreamChunk,
     ToolCall,
+    Usage,
     provider_extras,
 )
 from continuum.logging import get_logger
@@ -65,10 +66,41 @@ _RENAMED_PARAMS = {"max_tokens": "max_completion_tokens"}
 # `param` field names the offending kwarg, so no message parsing is needed.
 _UNSUPPORTED_PARAM_CODES = frozenset({"unsupported_parameter", "unsupported_value"})
 
+# Sent by Continuum on every stream to ask for the usage chunk, so a server that
+# rejects it in any shape must not break streaming.
+_STREAM_OPTIONS = "stream_options"
+
 # Upper bound on adaptation retries for one call. Each 400 names a single
 # parameter, so an unrecognised reasoning model needs one round trip per
-# rejected parameter — at most every param we know how to drop, plus the rename.
-_MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 1
+# rejected parameter — at most every param we know how to drop, plus the rename
+# and stream_options.
+_MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 2
+
+
+def _mentions_stream_options(e: Exception) -> bool:
+    """True if the error body or the raw response text contains ``stream_options``."""
+    return _STREAM_OPTIONS in f"{getattr(e, 'body', '')} {_response_text(e)}"
+
+
+def _stream_usage(raw: Any) -> Usage:
+    """Usage from a stream's usage chunk; a missing total is prompt + completion."""
+    prompt = getattr(raw, "prompt_tokens", None) or 0
+    completion = getattr(raw, "completion_tokens", None) or 0
+    total = getattr(raw, "total_tokens", None) or (prompt + completion)
+    return Usage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
+
+
+def _response_text(e: Exception) -> str:
+    """The raw response body of an API error, or "" if there is none to read.
+
+    Some servers' bodies reach the SDK in a shape it reduces to just the status
+    text (``e.body`` is ``Internal Server Error``), so the field name is only in
+    the raw response.
+    """
+    try:
+        return getattr(getattr(e, "response", None), "text", "") or ""
+    except Exception:  # an unread streamed response raises on .text
+        return ""
 
 
 def _is_reasoning_model(model: str) -> bool:
@@ -99,6 +131,12 @@ class OpenAIProvider(BaseProvider):
     # is a property of the model, not of the client/key). Mirrors
     # AnthropicProvider._temp_unsupported.
     _unsupported_params: dict[str, set[str]] = {}
+
+    # (base URL, model) pairs whose server rejected ``stream_options``. Kept
+    # apart from _unsupported_params and keyed by server too: whether the field
+    # is accepted is a property of the server, so one strict proxy must not turn
+    # usage off for the same model name on every other backend.
+    _stream_options_rejected: set[tuple[str, str]] = set()
 
     def __init__(
         self,
@@ -147,6 +185,7 @@ class OpenAIProvider(BaseProvider):
 
         self._client = OpenAI(**sync_kwargs)
         self._async_client = AsyncOpenAI(**async_kwargs)
+        self._base_url = str(self._client.base_url)
 
     @staticmethod
     def supports_native_schema() -> bool:
@@ -292,12 +331,14 @@ class OpenAIProvider(BaseProvider):
         self._warn_if_budget_consumed(model, finish_reason, bool(content))
 
     @staticmethod
-    def _rejected_param(e: Exception) -> str | None:
-        """Return the parameter name a 400 rejected, or None if it is not one.
+    def _coded_param(e: Exception) -> str | None:
+        """Return the parameter an OpenAI-coded 400 rejected, or None.
 
         OpenAI reports these in structured form — ``code`` is
         ``unsupported_parameter``/``unsupported_value`` and ``param`` names the
         kwarg — so this reads the body instead of pattern-matching the message.
+        A param under ``stream_options`` (``stream_options.include_usage``) is
+        reported as ``stream_options``, the kwarg that can be dropped.
         """
         if not isinstance(e, openai.BadRequestError):
             return None
@@ -305,7 +346,29 @@ class OpenAIProvider(BaseProvider):
         if body.get("code") not in _UNSUPPORTED_PARAM_CODES:
             return None
         param = body.get("param")
-        return param if isinstance(param, str) and param else None
+        if not isinstance(param, str) or not param:
+            return None
+        if param.split(".", 1)[0] == _STREAM_OPTIONS:
+            return _STREAM_OPTIONS
+        return param
+
+    @staticmethod
+    def _may_reject_stream_options(e: Exception) -> bool:
+        """True if a stream-open error may be the server refusing ``stream_options``.
+
+        Servers word this in too many ways to recognise (and some never name the
+        field), so any 400 or 422 counts. A 501 counts too, and a 500 only when
+        its body or raw response text names the field (a shim that crashes on
+        the unknown kwarg). Other 5xx, 429, auth, timeouts and connection errors
+        never do. A yes only earns one retry without the field; it is remembered
+        only if that stream then opens (see _call_adapting).
+        """
+        if isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
+            return True
+        if isinstance(e, openai.InternalServerError):
+            status = getattr(e, "status_code", None)
+            return status == 501 or (status == 500 and _mentions_stream_options(e))
+        return False
 
     def _call_adapting(self, make_call: Callable[[], Any], kwargs: dict[str, Any]) -> Any:
         """Run `make_call`, adapting away rejected parameters and retrying.
@@ -316,30 +379,55 @@ class OpenAIProvider(BaseProvider):
         succeeds or nothing further can be adapted. Bounded by the number of
         parameters we could ever drop, so a persistently failing call cannot spin.
         `kwargs` is mutated in place, so `make_call` sees each adaptation.
+
+        A dropped ``stream_options`` is remembered for the server and model only
+        once a call without it succeeds, so a call that fails either way (a
+        context-length or moderation error) leaves the memo untouched.
         """
+        sent_stream_options = _STREAM_OPTIONS in kwargs
         for attempt in range(_MAX_PARAM_ADAPT_ATTEMPTS):
             try:
-                return make_call()
+                result = make_call()
             except Exception as e:
                 if attempt == _MAX_PARAM_ADAPT_ATTEMPTS - 1 or not self._adapt_after_rejection(
                     kwargs, e
                 ):
                     raise
+            else:
+                self._remember_stream_options_rejection(kwargs, sent_stream_options)
+                return result
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _acall_adapting(
         self, make_call: Callable[[], Awaitable[Any]], kwargs: dict[str, Any]
     ) -> Any:
         """Async counterpart of `_call_adapting`."""
+        sent_stream_options = _STREAM_OPTIONS in kwargs
         for attempt in range(_MAX_PARAM_ADAPT_ATTEMPTS):
             try:
-                return await make_call()
+                result = await make_call()
             except Exception as e:
                 if attempt == _MAX_PARAM_ADAPT_ATTEMPTS - 1 or not self._adapt_after_rejection(
                     kwargs, e
                 ):
                     raise
+            else:
+                self._remember_stream_options_rejection(kwargs, sent_stream_options)
+                return result
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _remember_stream_options_rejection(
+        self, kwargs: dict[str, Any], sent_stream_options: bool
+    ) -> None:
+        """After a successful call, remember a ``stream_options`` that had to be dropped."""
+        if sent_stream_options and _STREAM_OPTIONS not in kwargs:
+            model = kwargs.get("model", "")
+            self._stream_options_rejected.add(self._server_key(model))
+            logger.warning(
+                "Server rejected 'stream_options' for model '%s'; streaming without "
+                "token usage for this server and model for the rest of this process.",
+                model,
+            )
 
     def _adapt_after_rejection(self, kwargs: dict[str, Any], e: Exception) -> bool:
         """Drop (or rename) the parameter a 400 rejected and remember the model.
@@ -347,11 +435,27 @@ class OpenAIProvider(BaseProvider):
         Returns True if `kwargs` changed, so a retry is worth attempting; False
         otherwise (nothing to adjust — let the error surface).
         """
-        param = self._rejected_param(e)
-        if param is None or param not in kwargs:
-            return False
-
         model = kwargs.get("model", "")
+        param = self._coded_param(e)
+        if param is None or param not in kwargs:
+            # Not an OpenAI-coded rejection of a parameter we sent. If we sent
+            # stream_options, retry once without it; _call_adapting remembers
+            # that only if the retry succeeds.
+            if _STREAM_OPTIONS in kwargs and self._may_reject_stream_options(e):
+                kwargs.pop(_STREAM_OPTIONS)
+                logger.info(
+                    "Stream open for model '%s' failed (%s); retrying once without "
+                    "'stream_options'.",
+                    model,
+                    type(e).__name__,
+                )
+                return True
+            return False
+        if param == _STREAM_OPTIONS:
+            kwargs.pop(param)
+            logger.info("Model '%s' rejected 'stream_options'; retrying without it.", model)
+            return True
+
         self._unsupported_params.setdefault(model, set()).add(param)
 
         value = kwargs.pop(param)
@@ -374,6 +478,10 @@ class OpenAIProvider(BaseProvider):
                 param,
             )
         return True
+
+    def _server_key(self, model: str) -> tuple[str, str]:
+        """Key for the stream_options memo: the server this provider calls, and the model."""
+        return (getattr(self, "_base_url", ""), model)
 
     def _handle_exception(self, e: Exception, model: str) -> None:
         provider = self._provider_label
@@ -399,7 +507,7 @@ class OpenAIProvider(BaseProvider):
             # its message contains "token" (e.g. "'max_tokens' is not supported
             # with this model"), which the substring check below would otherwise
             # misclassify — hiding the real cause behind a context-length error.
-            if self._rejected_param(e) is None and (
+            if self._coded_param(e) is None and (
                 "context" in msg.lower() or "token" in msg.lower()
             ):
                 raise LLMContextLengthError(
@@ -501,6 +609,15 @@ class OpenAIProvider(BaseProvider):
     ) -> Iterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
+        # Ask for the usage chunk OpenAI-compatible servers send last. If the
+        # stream fails to open with it, _call_adapting retries once without it and
+        # remembers that only if the retry opens; config.stream_include_usage=False
+        # never sends it.
+        if (
+            config.stream_include_usage
+            and self._server_key(kwargs["model"]) not in self._stream_options_rejected
+        ):
+            kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — nothing has been yielded yet,
             # so a retry here cannot emit a chunk twice.
@@ -510,7 +627,12 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            usage: Usage | None = None
+            model: str | None = None
             for chunk in response:
+                model = chunk.model or model
+                if getattr(chunk, "usage", None):
+                    usage = _stream_usage(chunk.usage)
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -529,14 +651,20 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
+                    usage=usage,
                 )
             elif finish_reason:
                 # Same silent-empty case as the non-streaming path.
                 self._warn_if_budget_consumed(kwargs["model"], finish_reason, emitted_content)
-                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
+                yield StreamChunk(
+                    model=model, finish_reason=finish_reason, is_finished=True, usage=usage
+                )
+            elif usage:
+                yield StreamChunk(model=model, is_finished=True, usage=usage)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
@@ -550,6 +678,15 @@ class OpenAIProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
+        # Ask for the usage chunk OpenAI-compatible servers send last. If the
+        # stream fails to open with it, _call_adapting retries once without it and
+        # remembers that only if the retry opens; config.stream_include_usage=False
+        # never sends it.
+        if (
+            config.stream_include_usage
+            and self._server_key(kwargs["model"]) not in self._stream_options_rejected
+        ):
+            kwargs["stream_options"] = {"include_usage": True}
         try:
             # Only the stream *open* is retried — see the sync `stream` above.
             response = await self._acall_adapting(
@@ -559,7 +696,12 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            usage: Usage | None = None
+            model: str | None = None
             async for chunk in response:
+                model = chunk.model or model
+                if getattr(chunk, "usage", None):
+                    usage = _stream_usage(chunk.usage)
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -578,14 +720,20 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
+                    usage=usage,
                 )
             elif finish_reason:
                 # Same silent-empty case as the non-streaming path.
                 self._warn_if_budget_consumed(kwargs["model"], finish_reason, emitted_content)
-                yield StreamChunk(finish_reason=finish_reason, is_finished=True)
+                yield StreamChunk(
+                    model=model, finish_reason=finish_reason, is_finished=True, usage=usage
+                )
+            elif usage:
+                yield StreamChunk(model=model, is_finished=True, usage=usage)
         except Exception as e:
             self._handle_exception(e, config.model)
             raise
