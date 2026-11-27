@@ -96,9 +96,9 @@ class OpenAIProvider(BaseProvider):
     # when an unrecognised model returns an unsupported-parameter 400, so a
     # future model id costs one retry instead of blocking every call.
     #
-    # CLASS-level on purpose: get_provider() constructs a fresh OpenAIProvider on
-    # every LLM call, so an instance-level cache would never survive between
-    # requests and every call would re-pay the retry. A class attribute persists
+    # CLASS-level on purpose: get_provider() reuses a provider only within one
+    # event loop and builds a new one for sync calls, so an instance-level cache
+    # would be lost between loops and sync calls and each would re-pay the retry. A class attribute persists
     # for the process lifetime and is shared across all instances (the rejection
     # is a property of the model, not of the client/key). Mirrors
     # AnthropicProvider._temp_unsupported.

@@ -22,9 +22,14 @@ Resolution order in get_provider():
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import threading
+import weakref
+from collections import OrderedDict
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from continuum.llm.config import LLMConfig
 from continuum.llm.providers.base import BaseProvider
@@ -50,6 +55,90 @@ _default_factory: ProviderFactory | None = None
 # when the Smart Gateway short-circuit silently shadows custom registrations.
 _BUILTIN_PREFIXES: frozenset[str] = frozenset()
 _gateway_shadow_warned = False
+
+
+# Built-in providers are reused, not rebuilt per call. Each one owns SDK clients
+# with their own connection pools, so a new provider per call meant a new TCP
+# and TLS handshake to the provider or gateway on every model call (~0.5 s to
+# the gateway, measured). Async SDK clients belong to the event loop they were
+# first used on, so there is one store per running loop. Keyed by the provider
+# class and its constructor arguments, so a changed key or setting gets a new
+# provider.
+#
+# Only calls inside a running loop reuse. A provider built outside one is new
+# each time, as before: its async client would be bound to whichever loop used
+# it first, so the next asyncio.run() would fail with "Event loop is closed",
+# and a cached one would be shared by processes forked after it was built.
+_MAX_PROVIDERS_PER_LOOP = 32
+# Stores are kept only for loops that are running. A provider's pooled
+# connections hold its loop, so a loop that finished but was never closed
+# (new_event_loop() + run_until_complete() per request, without close()) would
+# otherwise never be freed, and each would keep a selector, a self-pipe and a
+# socket open. Dropping its store when another loop next asks for a provider
+# leaves it to the garbage collector after one request, as before reuse. A loop
+# run again later simply builds new providers. _MAX_LOOPS bounds the stores of
+# loops running at once (one per thread), least recently used dropped.
+_MAX_LOOPS = 64
+# id(loop) -> (weak reference to the loop, its providers by key). The weak
+# reference tells a live loop from a freed one whose id was reused.
+_loop_providers: OrderedDict[
+    int,
+    tuple[weakref.ref[asyncio.AbstractEventLoop], OrderedDict[tuple[Any, ...], BaseProvider]],
+] = OrderedDict()
+_providers_lock = threading.Lock()
+
+
+def _reuse(cls: Callable[..., BaseProvider], **kwargs: Any) -> BaseProvider:
+    """The provider ``cls(**kwargs)`` already built for this event loop, or a new one."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return cls(**kwargs)
+    key = (cls, tuple(sorted(kwargs.items())))
+    with _providers_lock:
+        # Drop the stores of loops that are not running: closed (asyncio.run
+        # per request, async_to_sync), freed, or finished and left unclosed.
+        for loop_id, (ref, _) in list(_loop_providers.items()):
+            old = ref()
+            if old is not loop and (old is None or not old.is_running()):
+                del _loop_providers[loop_id]
+        entry = _loop_providers.get(id(loop))
+        if entry is None or entry[0]() is not loop:
+            entry = _loop_providers[id(loop)] = (weakref.ref(loop), OrderedDict())
+        _loop_providers.move_to_end(id(loop))
+        while len(_loop_providers) > _MAX_LOOPS:
+            _loop_providers.popitem(last=False)
+        store = entry[1]
+        provider = store.get(key)
+        if provider is not None:
+            store.move_to_end(key)
+            return provider
+        provider = store[key] = cls(**kwargs)
+        # Many distinct keys or bases would otherwise each keep a provider and
+        # a socket for the life of the loop. Least recently used goes first.
+        while len(store) > _MAX_PROVIDERS_PER_LOOP:
+            store.popitem(last=False)
+        return provider
+
+
+def clear_provider_cache() -> None:
+    """Forget reused providers (tests, or after rotating credentials in place)."""
+    with _providers_lock:
+        _loop_providers.clear()
+
+
+def _forget_providers_after_fork() -> None:
+    # A forked child must not share the parent's providers: both processes
+    # would read from the same sockets and could get each other's responses.
+    # Rebind rather than clear, since another parent thread may have held the
+    # lock at the moment of the fork.
+    global _loop_providers, _providers_lock
+    _loop_providers = OrderedDict()
+    _providers_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_providers_after_fork)
 
 
 def register_provider(prefix: str, factory: ProviderFactory) -> None:
@@ -112,7 +201,8 @@ def get_provider(config: LLMConfig) -> BaseProvider:
             mode,
             settings.smart_gateway_url,
         )
-        return GatewayProvider(
+        return _reuse(
+            GatewayProvider,
             gateway_url=settings.smart_gateway_url,
             api_key=settings.smart_gateway_api_key,
             router_mode=mode,
@@ -148,19 +238,22 @@ def get_provider(config: LLMConfig) -> BaseProvider:
 def _make_gemini(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.gemini_provider import GeminiProvider
 
-    return GeminiProvider(api_key=settings.gemini_api_key, max_retries=config.max_retries)
+    return _reuse(GeminiProvider, api_key=settings.gemini_api_key, max_retries=config.max_retries)
 
 
 def _make_anthropic(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.anthropic_provider import AnthropicProvider
 
-    return AnthropicProvider(api_key=settings.anthropic_api_key, max_retries=config.max_retries)
+    return _reuse(
+        AnthropicProvider, api_key=settings.anthropic_api_key, max_retries=config.max_retries
+    )
 
 
 def _make_openai(config: LLMConfig, settings: Settings) -> BaseProvider:
     from continuum.llm.providers.openai_provider import OpenAIProvider
 
-    return OpenAIProvider(
+    return _reuse(
+        OpenAIProvider,
         api_key=config.api_key or settings.openai_api_key,
         organization=settings.openai_organization,
         api_base=config.api_base,
@@ -183,6 +276,7 @@ _BUILTIN_PREFIXES = frozenset(_PROVIDERS)
 __all__ = [
     "BaseProvider",
     "ProviderFactory",
+    "clear_provider_cache",
     "get_provider",
     "register_provider",
     "register_default_provider",

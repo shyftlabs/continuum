@@ -573,6 +573,38 @@ for prompt in big_batch:
   names no shape, so it stays a system-prompt instruction.
 - **Gemini + tools + JSON**: not supported simultaneously; the framework
   drops `json_mode` automatically when `tools` are present.
+- **Built-in providers are reused within an event loop.** Inside a running
+  loop, `get_provider()` returns the same OpenAI, Anthropic, Gemini or Smart
+  Gateway provider for the same client settings, so calls keep their
+  connections. Calls outside a loop get a new provider each time. Providers
+  are kept only while their loop is running, so a loop that is finished and
+  never closed does not hold them. Consequences:
+  - Everything read when a provider is built stays fixed in it until the
+    provider is dropped or `clear_provider_cache()` is called: a key read from
+    the environment, `CONTINUUM_TIMING_LOG`, the proxy variables
+    (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`) and the SDK's own defaults such
+    as `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`. After changing any of them in
+    a running process, call `clear_provider_cache()`.
+  - Calls in one loop with the same client settings share one SDK client, so
+    they share its connection pool: at most 1,000 requests in flight at once
+    (the OpenAI and Anthropic SDK default); more wait for a free connection.
+    Before, each call had its own client, so there was no shared limit. To
+    allow more, use more client settings or loops, or build your own client
+    with a larger `httpx` limit.
+  - A test that patches `OpenAI` / `AsyncOpenAI` (or the Anthropic client)
+    can get a provider an earlier test built in the same loop, with that
+    test's mock. Clear the cache around each test:
+
+    ```python
+    import pytest
+    from continuum.llm.providers import clear_provider_cache
+
+    @pytest.fixture(autouse=True)
+    def _fresh_providers():
+        clear_provider_cache()
+        yield
+        clear_provider_cache()
+    ```
 - **`session_id` in `chat()`** triggers automatic Redis history loading
   *and* persistence. Pass `auto_session=False` if you want to manage
   history yourself.
