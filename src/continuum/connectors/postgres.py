@@ -10,7 +10,6 @@ is optional and a Redis-only install must still import this module.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -20,9 +19,6 @@ from continuum.session.config import SessionConfig
 from continuum.session.providers.postgres import DSN_PARSE_ERROR
 
 logger = get_logger(__name__)
-
-# One keyword=value pair of a libpq connection string; the value may be quoted.
-_KEYWORD_PAIR = re.compile(r"(\w+)\s*=\s*('(?:[^'\\]|\\.)*'|\S+)")
 
 
 class PostgresConnector(BaseConnector[Any]):
@@ -49,18 +45,18 @@ class PostgresConnector(BaseConnector[Any]):
         if not dsn:
             return empty
         if "://" not in dsn:
-            # libpq keyword form: "host=db port=5432 dbname=app password=...".
-            # urlsplit would put the whole string, password included, in path.
-            pairs = dict(_KEYWORD_PAIR.findall(dsn))
-            port = pairs.get("port", "").strip("'")
-            return {
-                "host": pairs.get("host", "").strip("'") or None,
-                "port": int(port) if port.isdigit() else None,
-                "database": pairs.get("dbname", "").strip("'") or None,
-            }
-        # Keep only what follows the last "@": an unencoded "#", "?" or "/" in
-        # the password would otherwise make urlsplit cut the URL inside it.
+            # libpq keyword form ("host=db dbname=app ..."): asyncpg does not accept
+            # it, so there is no target to report.
+            return empty
+        # An unencoded "#", "?" or "/" in the password makes urlsplit cut the URL
+        # inside it, so keep only what follows the last "@". That split is safe
+        # only when every "@" comes before the first "?" or "#": an "@" after
+        # one is either in a query value (password=...) or in a password that
+        # also holds "?" or "#", and the two cannot be told apart.
         scheme, _, rest = dsn.partition("://")
+        query_at = min((i for i in (rest.find("?"), rest.find("#")) if i >= 0), default=len(rest))
+        if "@" in rest[query_at:]:
+            return empty
         try:
             parts = urlsplit(f"{scheme}://{rest.rpartition('@')[2]}")
             return {

@@ -593,8 +593,11 @@ class Settings(BaseSettings):
         parts: list[str] = []
         for field_name in type(self).model_fields:
             value = getattr(self, field_name)
-            if any(
-                s in field_name for s in ("_key", "_secret", "_password", "_dsn", "api_key")
+            if "_dsn" in field_name and isinstance(value, str):
+                # A DSN can end in its password (?password=...): show none of it.
+                parts.append(f"{field_name}='****'")
+            elif any(
+                s in field_name for s in ("_key", "_secret", "_password", "api_key")
             ) and isinstance(value, str):
                 parts.append(f"{field_name}={mask_value(value)!r}")
             else:

@@ -238,7 +238,10 @@ left; lower it when sessions hold many messages.
 
 Connecting, each query and waiting for a pooled connection time out after
 `SESSION_POSTGRES_TIMEOUT_SECONDS` (default 5), so a hung database fails over
-per `SESSION_FALLBACK_MODE` like an unreachable one. A pool passed in with
+per `SESSION_FALLBACK_MODE` like an unreachable one. With the default
+`degrade`, one lock-wait or pool-acquire timeout moves the process to in-memory
+sessions until it restarts, and existing sessions then read as not found; set
+`SESSION_FALLBACK_MODE=fail` when sessions must stay durable. A pool passed in with
 `pool=` keeps its own `command_timeout`. NUL characters in message content and
 metadata are dropped on write and a lone surrogate (half of a split emoji)
 becomes U+FFFD, because PostgreSQL text cannot hold either.

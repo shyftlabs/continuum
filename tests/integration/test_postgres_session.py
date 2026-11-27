@@ -161,7 +161,8 @@ async def test_concurrent_writers_keep_every_message(provider):
 
 async def test_keyed_ids_migrate_plaintext_sessions():
     prefix = f"t_{uuid.uuid4().hex[:8]}_session"
-    plain = PostgresSessionProvider(_config(postgres_table_prefix=prefix))
+    # Pin plaintext ids: SESSION_HASH_IDS=true in the environment must not change it.
+    plain = PostgresSessionProvider(_config(postgres_table_prefix=prefix, hash_session_ids=False))
     keyed = PostgresSessionProvider(
         _config(postgres_table_prefix=prefix, hash_session_ids=True, session_id_secret="s" * 32)
     )

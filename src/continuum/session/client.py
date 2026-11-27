@@ -53,6 +53,16 @@ def _display_name(provider: str) -> str:
     return _DISPLAY_NAMES.get(provider, provider)
 
 
+def _not_installed_message(provider: str) -> str:
+    """Why a built-in provider whose package is missing cannot be used."""
+    if provider == "postgres":
+        return (
+            "the PostgreSQL session provider needs asyncpg, which is not installed. "
+            "Install the [postgres] extra: pip install 'shyftlabs-continuum[postgres]'"
+        )
+    return f"the {_display_name(provider)} session provider's package is not installed"
+
+
 def _in_temporal_activity() -> bool:
     """Return True if executing inside a Temporal activity right now.
 
@@ -284,6 +294,9 @@ class SessionClient:
         # Redis host/credentials not configured — degrade (or fail) per policy.
         if not cfg.is_configured():
             return self._fallback_or_fail(f"{_display_name(cfg.provider)} is not configured")
+
+        if cfg.provider in _DISPLAY_NAMES and cfg.provider not in list_providers():
+            return self._fallback_or_fail(_not_installed_message(cfg.provider))
 
         # Configured: build the Redis provider lazily and probe it once.
         try:
@@ -531,6 +544,13 @@ class SessionClient:
                 )
                 return
 
+            if provider_name in _DISPLAY_NAMES and provider_name not in available:
+                # A built-in store whose package is missing: same policy as the
+                # async path, with the real cause rather than "unknown provider".
+                self._provider = self._fallback_or_fail(_not_installed_message(provider_name))
+                self._provider_resolved = True
+                return
+
             if provider_name not in available:
                 logger.warning(
                     "Provider '%s' not available. Available providers: %s. Falling back to '%s'. %s",
@@ -546,8 +566,9 @@ class SessionClient:
 
         except ImportError as e:
             logger.error("Failed to import session provider: %s", e)
-        except InsecureConfigurationError:
-            # Fail closed on an insecure secret rather than silently leaving the
+        except (InsecureConfigurationError, SessionConnectionError):
+            # Fail closed on an insecure secret, or a missing store with
+            # SESSION_FALLBACK_MODE=fail, rather than silently leaving the
             # provider unset (which surfaces later as a confusing "not available").
             raise
         except Exception as e:

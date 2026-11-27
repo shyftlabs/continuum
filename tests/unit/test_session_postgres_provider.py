@@ -481,7 +481,8 @@ def test_connector_describe_hides_a_keyword_dsn_password():
     dsn = f"host=db-host port=5433 dbname=app user=app password={secret} sslmode=require"
     d = PostgresConnector(SessionConfig(provider="postgres", postgres_dsn=dsn)).describe()
     assert secret not in str(d) and "password" not in str(d)
-    assert (d["host"], d["port"], d["database"]) == ("db-host", 5433, "app")
+    # asyncpg rejects the keyword form, so no target is reported for it.
+    assert (d["host"], d["port"], d["database"]) == (None, None, None)
 
 
 def _probe_provider(*, reachable: bool, fail_calls: bool = False):
@@ -832,13 +833,18 @@ def _unencoded_password_dsns():
     """DSNs whose password holds an unencoded "#", "?" or "/", the fragments that
     must never be shown, and whether asyncpg fails to parse the DSN. Built at run time so no literal credential is in git.
     With "/" asyncpg reads "app:<digits>" as host and port, so it fails to resolve
-    rather than to parse; the password must still not be shown."""
+    rather than to parse; the password must still not be shown. With "#" or "?"
+    the "@" after it could equally be in a query value, so no target is shown."""
     head, tail, digits = "Sec7" + "Frag", "tail" + "99", "8604" + "13"
     return [
         (f"postgresql://app:{head}#{tail}@127.0.0.1:1/appdb", (head, tail), True),
         (f"postgresql://app:{head}?{tail}@127.0.0.1:1/appdb", (head, tail), True),
         (f"postgresql://app:{digits}/{head}@127.0.0.1:1/appdb", (digits, head), False),
     ]
+
+
+def _expected_target(parse_error):
+    return (None, None, None) if parse_error else ("127.0.0.1", 1, "appdb")
 
 
 @pytest.mark.parametrize(("dsn", "fragments", "parse_error"), _unencoded_password_dsns())
@@ -891,10 +897,8 @@ async def test_unencoded_password_is_not_shown_by_health_or_describe(
     connector = PostgresConnector(SessionConfig(provider="postgres", postgres_dsn=dsn))
     assert await connector.aping() is False
     described = connector.describe()
-    assert (described["host"], described["port"], described["database"]) == (
-        "127.0.0.1",
-        1,
-        "appdb",
+    assert (described["host"], described["port"], described["database"]) == _expected_target(
+        parse_error
     )
 
     shown = " ".join([caplog.text, result.message, str(result.details), str(described)])
@@ -926,5 +930,119 @@ def test_unencoded_password_is_not_in_the_startup_log(monkeypatch, dsn, fragment
     monkeypatch.setattr("continuum.session.get_global_session_client", lambda: Client())
     lifecycle.OrchestratorLifecycle()._log_service_configurations()
     [line] = [x for x in lines if "Session:" in x]
-    assert "postgres host=127.0.0.1 database=appdb" in line
+    shown = "postgres" if parse_error else "postgres host=127.0.0.1 database=appdb"
+    assert line.endswith(f"Session: enabled | {shown}")
     assert not [f for f in fragments if f in line]
+
+
+# -----------------------------------------------------------------------------
+# Round-6 review fixes
+# -----------------------------------------------------------------------------
+
+
+def _query_password_dsns():
+    """A password passed as a query parameter, with an "@" in it, and the parts
+    of it that must never be shown. Built at run time: no credential in git."""
+    head, tail = "S3cr3t" + "Qp", "W0rd" + "XY"
+    scheme, userinfo = "postgresql" + "://", "app" + ":" + "pw" + "@"
+    return [
+        (f"{scheme}localhost:5432/app?user=app&password={head}@{tail}", (head, tail)),
+        (f"{scheme}{userinfo}db.internal/app?password={head}@{tail}", (head, tail)),
+        (f"{scheme}db.internal/app#{head}@{tail}", (head, tail)),
+    ]
+
+
+@pytest.mark.parametrize(("dsn", "fragments"), _query_password_dsns())
+def test_query_password_with_an_at_sign_is_not_reported_as_the_host(monkeypatch, dsn, fragments):
+    from continuum.connectors.postgres import PostgresConnector
+    from continuum.core import lifecycle
+
+    config = SessionConfig(provider="postgres", enabled=True, postgres_dsn=dsn)
+    described = PostgresConnector(config).describe()
+    assert (described["host"], described["port"], described["database"]) == (None, None, None)
+    startup = lifecycle._describe_session_store(config)
+    assert startup == "postgres"
+    shown = (str(described) + startup).lower()
+    assert not [f for f in fragments if f.lower() in shown]
+
+
+def test_an_at_sign_only_in_the_userinfo_still_gives_the_target():
+    from continuum.connectors.postgres import PostgresConnector
+
+    secret = "p" + "@" + "ss" + "Word"
+    dsn = "postgresql" + "://app:" + secret + "@db.internal:5433/app?sslmode=require"
+    d = PostgresConnector(SessionConfig(provider="postgres", postgres_dsn=dsn)).describe()
+    assert (d["host"], d["port"], d["database"]) == ("db.internal", 5433, "app")
+
+
+def test_settings_repr_shows_no_part_of_the_dsn(monkeypatch):
+    from continuum.config import Settings
+
+    secret = "hunt" + "er2"  # built at run time: no credential-like literal in the repo
+    dsn = "postgresql://app@db.internal/app?sslmode=require&password=" + secret
+    monkeypatch.setenv("SESSION_POSTGRES_DSN", dsn)
+    s = Settings()
+    for text in (repr(s), str(s)):
+        assert "session_postgres_dsn='****'" in text
+        assert secret[-4:] not in text and "db.internal" not in text
+
+
+def _without_asyncpg(monkeypatch):
+    import continuum.session.client as client_module
+
+    monkeypatch.setattr(
+        client_module, "list_providers", lambda: [p for p in list_providers() if p != "postgres"]
+    )
+
+
+def test_sync_provider_without_asyncpg_honours_fail_mode(monkeypatch):
+    from continuum.session.client import SessionClient
+
+    _without_asyncpg(monkeypatch)
+    client = SessionClient(
+        SessionConfig(
+            provider="postgres",
+            enabled=True,
+            postgres_dsn="postgresql://db.internal/app",
+            fallback_mode="fail",
+        )
+    )
+    with pytest.raises(SessionConnectionError, match=r"asyncpg.*\[postgres\]"):
+        client.provider  # noqa: B018 - the property resolves the provider
+
+
+def test_sync_provider_without_asyncpg_degrades_with_the_real_cause(monkeypatch):
+    from continuum.session.client import SessionClient
+    from continuum.session.providers import MemorySessionProvider
+
+    _without_asyncpg(monkeypatch)
+    seen = _warnings(monkeypatch)
+    client = SessionClient(
+        SessionConfig(
+            provider="postgres",
+            enabled=True,
+            postgres_dsn="postgresql://db.internal/app",
+            fallback_mode="degrade",
+        )
+    )
+    assert isinstance(client.provider, MemorySessionProvider)
+    assert client.persistence_degraded is True
+    text = "\n".join(seen)
+    assert "asyncpg, which is not installed" in text and "[postgres]" in text
+    assert "Unknown session provider" not in text
+
+
+async def test_async_provider_without_asyncpg_names_the_missing_package(monkeypatch):
+    from continuum.session.client import SessionClient
+
+    _without_asyncpg(monkeypatch)
+    client = SessionClient(
+        SessionConfig(
+            provider="postgres",
+            enabled=True,
+            postgres_dsn="postgresql://db.internal/app",
+            fallback_mode="fail",
+        )
+    )
+    with pytest.raises(SessionConnectionError, match="asyncpg, which is not installed"):
+        await client.get_or_create_session(user_id="u1", conversation_id="c1")
