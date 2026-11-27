@@ -40,7 +40,7 @@ AgentStep(
     agent_name: str,                       # required
     input: str | None = None,              # default: pass the previous step's output
     timeout: int = 300,
-    retries: int = 3,
+    retries: int = 3,                      # attempts in all; 1 runs once (side effects), 0 counts as 1
     metadata: dict[str, Any] = {},
 )
 
@@ -128,7 +128,7 @@ result = await handle.result()
 
 ```python
 RetryPolicy(
-    maximum_attempts=step.retries,         # default 3
+    maximum_attempts=max(1, step.retries), # default 3
     initial_interval=timedelta(seconds=1),
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=60),
@@ -137,6 +137,47 @@ RetryPolicy(
 
 Activities also use `heartbeat_timeout=60s`; `run_agent_activity` calls
 `activity.heartbeat()` so long-running agents don't get evicted.
+
+By default the policy covers timeouts only: an agent error comes back as a
+`status="error"` step on its first attempt, as in 2.1. Set
+`retry_agent_errors=True` on the workflow input (`WorkflowInput`,
+`SequentialWorkflowInput`, `ParallelWorkflowInput`, `LoopWorkflowInput`) to
+retry agent errors too. It is a field on the input, not a worker setting, so a
+replaying worker always takes the same path. Errors a retry cannot fix are not
+retried: an unregistered agent, max turns, a policy denial, a
+configuration error, a blocked input, an authentication, context-length,
+invalid-request or content-filter error from the model, and a session error
+other than a lost connection, and an `ApplicationError` raised with
+`non_retryable=True` (for example by a tool). A rate limit with `retry_after`
+waits that long (at most 5 minutes) before the next attempt. An open circuit
+breaker is retried after its cooldown, and a step's failed attempts count once
+toward the breaker. Only raised errors are retried: an error response the agent
+returns (a validation failure, an invalid id, a workflow agent's error
+response) is the step's result on its first attempt. Set
+`retries: 1` on a step with side effects (an email, a payment) so it runs once.
+
+### When a step still fails
+
+`WorkflowInput.on_step_error` decides what an agent step that still fails (after
+its retries, with `retry_agent_errors=True`) does to the run:
+
+| Value | Behaviour |
+|---|---|
+| `"continue"` *(default)* | The error result goes into `step_results` and the next step runs. A step that timed out on every attempt fails the run; one that hit an agent error first is an error result. |
+| `"fail"` | The run stops with `status="failed"` and `error` naming the step. A parallel step stops the run if any agent failed. |
+
+`SequentialWorkflowInput`, `LoopWorkflowInput` and `ParallelWorkflowInput` take
+the same field. For `ParallelAgentWorkflow`, `"fail"` returns `status="failed"`
+when any agent failed, with the others still merged and `error` naming the
+failed ones.
+`SequentialWorkflowInput.single_attempt_agents`,
+`ParallelWorkflowInput.single_attempt_agents` and
+`LoopWorkflowInput.single_attempt` run those agents once.
+
+A run that sets `retry_agent_errors=True` or `on_step_error="fail"` records the
+`continuum-step-retries` marker (`workflow.patched`), which a 2.1 worker cannot
+replay; a run with default inputs records none. Upgrade every worker before
+clients send either field.
 
 ### Parallel merge strategies
 

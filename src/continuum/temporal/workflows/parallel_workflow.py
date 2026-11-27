@@ -7,12 +7,10 @@ Takes a list of agent names, runs them all concurrently, merges results.
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 from typing import Any
 
 try:
     from temporalio import workflow
-    from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
@@ -24,9 +22,14 @@ with workflow.unsafe.imports_passed_through():
         AgentActivityResult,
         WorkflowResult,
     )
+    from continuum.temporal.workflows.steps import (
+        check_on_step_error,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -39,6 +42,18 @@ class ParallelWorkflowInput:
     user_id: str | None = None
     merge_strategy: str = "concatenate"
     timeout_per_agent: int = 300
+    # "continue" completes with whatever merged (the 2.x behaviour); "fail"
+    # returns status="failed" naming the failed agents, with the rest merged.
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; run() rejects anything else with a clear error.
+    on_step_error: str = "continue"
+    # False (default): an agent error comes back as status="error" on its first
+    # attempt, not retried, as in 2.1; timeouts are retried per the step's
+    # retries. True: agent errors are retried too. On the input, not a worker
+    # setting, so a replaying worker always takes the same path.
+    retry_agent_errors: bool = False
+    # Agents that run once, never retried: agents with side effects.
+    single_attempt_agents: list[str] = field(default_factory=list)
 
 
 @workflow.defn(sandboxed=False)
@@ -59,32 +74,30 @@ class ParallelAgentWorkflow:
 
     @workflow.run
     async def run(self, input: ParallelWorkflowInput) -> WorkflowResult:
-        handles = []
-        for agent_name in input.agent_names:
-            handle = workflow.start_activity(
-                "run_agent_activity",
-                AgentActivityParams(
-                    agent_name=agent_name,
-                    input=input.initial_input,
-                    session_id=input.session_id,
-                    user_id=input.user_id,
-                ),
-                start_to_close_timeout=timedelta(seconds=input.timeout_per_agent),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3,
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=60),
-                ),
-                heartbeat_timeout=timedelta(seconds=60),
-                result_type=AgentActivityResult,
+        check_on_step_error(input.on_step_error)
+        results: list[AgentActivityResult] = list(
+            await asyncio.gather(
+                *(
+                    run_builtin_agent_step(
+                        AgentActivityParams(
+                            agent_name=agent_name,
+                            input=input.initial_input,
+                            session_id=input.session_id,
+                            user_id=input.user_id,
+                        ),
+                        timeout=input.timeout_per_agent,
+                        retries=1 if agent_name in input.single_attempt_agents else 3,
+                        retry_agent_errors=input.retry_agent_errors,
+                        on_step_error=input.on_step_error,
+                    )
+                    for agent_name in input.agent_names
+                )
             )
-            handles.append(handle)
-
-        raw_results = await asyncio.gather(*handles)
-        results: list[AgentActivityResult] = [
-            r if isinstance(r, AgentActivityResult) else AgentActivityResult.model_validate(r)
-            for r in raw_results
+        )
+        failed = [
+            f"{r.agents_used[0] if r.agents_used else '?'}: {r.error}"
+            for r in results
+            if r.status == "error"
         ]
 
         # Merge
@@ -102,6 +115,19 @@ class ParallelAgentWorkflow:
             content = str(parts)
         else:
             content = "\n\n".join(r.content for r in results if r.content)
+
+        if (
+            failed
+            and input.on_step_error == "fail"
+            and step_retries_enabled(input.retry_agent_errors, input.on_step_error)
+        ):
+            self._status = "failed"
+            return WorkflowResult(
+                status="failed",
+                content=content,
+                step_results=results,
+                error="; ".join(failed),
+            )
 
         self._status = "completed"
         return WorkflowResult(

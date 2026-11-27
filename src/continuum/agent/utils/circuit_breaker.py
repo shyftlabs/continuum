@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 
 
@@ -19,6 +22,30 @@ class CircuitBreakerOpen(Exception):
     def __init__(self, remaining_cooldown: float):
         self.remaining_cooldown = remaining_cooldown
         super().__init__(f"Circuit breaker is open. Retry after {remaining_cooldown:.1f}s")
+
+
+# Set by hold_failures(): record_failure() appends the breaker here instead of counting.
+_held_failures: ContextVar[list[CircuitBreaker] | None] = ContextVar(
+    "continuum_circuit_breaker_held_failures", default=None
+)
+
+
+@contextmanager
+def hold_failures() -> Iterator[list[CircuitBreaker]]:
+    """Hold back the failures that breakers record inside this block.
+
+    Yields a list of the breakers whose ``record_failure()`` was held. The
+    caller counts them after the block (``breaker.record_failure()``) only if
+    the failure should count, for example on the last attempt of a call that
+    is retried, so one failing call counts once however many attempts it
+    takes. A breaker that is half-open still counts its failure at once.
+    """
+    held: list[CircuitBreaker] = []
+    token = _held_failures.set(held)
+    try:
+        yield held
+    finally:
+        _held_failures.reset(token)
 
 
 class CircuitBreaker:
@@ -72,7 +99,14 @@ class CircuitBreaker:
             self._opened_at = None
 
     def record_failure(self) -> None:
-        """Record a failed call. Opens the breaker if threshold is reached."""
+        """Record a failed call. Opens the breaker if threshold is reached.
+
+        Inside ``hold_failures()`` the failure is held for the caller instead.
+        """
+        held = _held_failures.get()
+        if held is not None and self.state != CircuitState.HALF_OPEN:
+            held.append(self)
+            return
         with self._lock:
             self._failures += 1
             if self._failures >= self._threshold:

@@ -12,7 +12,6 @@ from typing import Any
 
 try:
     from temporalio import workflow
-    from temporalio.common import RetryPolicy
 except ImportError as _err:
     raise ImportError(
         "temporalio is required for Temporal support. Install it with: pip install -e '.[temporal]'"
@@ -26,9 +25,13 @@ with workflow.unsafe.imports_passed_through():
         NotificationParams,
         WorkflowResult,
     )
+    from continuum.temporal.workflows.steps import (
+        check_on_step_error,
+        run_builtin_agent_step,
+        step_retries_enabled,
+    )
 
-import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -41,6 +44,18 @@ class SequentialWorkflowInput:
     user_id: str | None = None
     approval_between_steps: bool = False
     approval_timeout: int = 86400
+    # "continue" runs the next agent after one fails (the 2.x behaviour);
+    # "fail" stops the run with status="failed".
+    # Typed str, not OnStepError: the worker could not decode a typo, and the
+    # run would stay RUNNING; run() rejects anything else with a clear error.
+    on_step_error: str = "continue"
+    # False (default): an agent error comes back as status="error" on its first
+    # attempt, not retried, as in 2.1; timeouts are retried per the step's
+    # retries. True: agent errors are retried too. On the input, not a worker
+    # setting, so a replaying worker always takes the same path.
+    retry_agent_errors: bool = False
+    # Agents that run once, never retried: steps with side effects.
+    single_attempt_agents: list[str] = field(default_factory=list)
 
 
 @workflow.defn(sandboxed=False)
@@ -73,6 +88,7 @@ class SequentialAgentWorkflow:
 
     @workflow.run
     async def run(self, input: SequentialWorkflowInput) -> WorkflowResult:
+        check_on_step_error(input.on_step_error)
         last_output = input.initial_input
 
         for i, agent_name in enumerate(input.agent_names):
@@ -99,30 +115,32 @@ class SequentialAgentWorkflow:
                         approval_decisions=self._approval_decisions,
                     )
 
-            raw = await workflow.execute_activity(
-                "run_agent_activity",
+            result = await run_builtin_agent_step(
                 AgentActivityParams(
                     agent_name=agent_name,
                     input=last_output,
                     session_id=input.session_id,
                     user_id=input.user_id,
                 ),
-                start_to_close_timeout=timedelta(seconds=300),
-                retry_policy=RetryPolicy(
-                    maximum_attempts=3,
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=60),
-                ),
-                heartbeat_timeout=timedelta(seconds=60),
-                result_type=AgentActivityResult,
-            )
-            result = (
-                raw
-                if isinstance(raw, AgentActivityResult)
-                else AgentActivityResult.model_validate(raw)
+                timeout=300,
+                retries=1 if agent_name in input.single_attempt_agents else 3,
+                retry_agent_errors=input.retry_agent_errors,
+                on_step_error=input.on_step_error,
             )
             self._step_results.append(result)
+            if (
+                result.status == "error"
+                and input.on_step_error == "fail"
+                and step_retries_enabled(input.retry_agent_errors, input.on_step_error)
+            ):
+                self._status = "failed"
+                return WorkflowResult(
+                    status="failed",
+                    content=last_output,
+                    step_results=self._step_results,
+                    approval_decisions=self._approval_decisions,
+                    error=f"Step {i + 1} ({agent_name}) failed: {result.error}",
+                )
             if result.content:
                 last_output = result.content
 
@@ -140,7 +158,7 @@ class SequentialAgentWorkflow:
         context: str,
         timeout: int,
     ) -> bool:
-        request_id = f"seq-approval-{uuid.uuid4().hex[:12]}"
+        request_id = f"seq-approval-{workflow.uuid4().hex[:12]}"
         info: dict[str, Any] = {
             "request_id": request_id,
             "workflow_id": workflow.info().workflow_id,

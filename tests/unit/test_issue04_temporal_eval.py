@@ -33,8 +33,10 @@ class TestRetryPolicyExplicit:
         import importlib
         import inspect
 
-        mod = importlib.import_module(module_path)
-        source = inspect.getsource(mod)
+        # Every workflow runs agents through run_builtin_agent_step (steps.py),
+        # which holds the policy.
+        assert "run_builtin_agent_step(" in inspect.getsource(importlib.import_module(module_path))
+        source = inspect.getsource(importlib.import_module("continuum.temporal.workflows.steps"))
         assert "initial_interval" in source, f"{module_path} missing initial_interval"
         assert "backoff_coefficient" in source, f"{module_path} missing backoff_coefficient"
         assert "maximum_interval" in source, f"{module_path} missing maximum_interval"
