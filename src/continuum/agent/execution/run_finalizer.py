@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from continuum.agent.types import ResponseStatus, RunStatus
 from continuum.agent.utils.validation_utils import apply_output_scanners, last_user_prompt
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger, log_id
 from continuum.observability.metrics import get_metrics_collector
 
@@ -59,6 +60,10 @@ class RunFinalizer:
         response.handoff_chain = [h.get("to_agent", "") for h in run_state.handoff_chain]
 
         self.attach_run_artifacts(agent, response)
+        # None for a workflow step: the workflow collects its steps' entries.
+        routing = gateway_routing.claim_run(context.run_id)
+        if routing:
+            response.run_artifacts = {**(response.run_artifacts or {}), "gateway_routing": routing}
 
         await self._finalize_decision_trace(context, response)
 
@@ -174,6 +179,7 @@ class RunFinalizer:
         start_time: float,
     ) -> None:
         """Shared error handling for run() and run_stream()."""
+        gateway_routing.claim_run(context.run_id)
         metrics = get_metrics_collector()
         metrics.track_error(
             "agent_run",
