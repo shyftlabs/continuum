@@ -32,6 +32,7 @@ from continuum.agent.execution.run_finalizer import RunFinalizer
 from continuum.agent.execution.run_lifecycle import RunLifecycle
 from continuum.agent.execution.stream_executor import StreamExecutor
 from continuum.agent.execution.tool_handler import ToolHandler
+from continuum.agent.execution.tool_round import ToolRoundTracker
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     latest_step_payload,
@@ -73,6 +74,11 @@ from continuum.config import settings as app_settings
 from continuum.core.container import Container, get_container
 from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
+from continuum.llm.context_management import (
+    agent_context_config,
+    reset_active_context_config,
+    set_active_context_config,
+)
 from continuum.llm.structured_output import (
     coerce_and_validate,
     is_pydantic_schema,
@@ -1339,11 +1345,15 @@ class AgentRunner:
         # Publish the run's policy context so every llm_client.chat() in this
         # streaming run is gated by the data-label model-routing policy. A fresh
         # Headroom compressor rides the same boundary so CCR retrieve
-        # authorization (issued_hashes) is isolated to this run.
+        # authorization (issued_hashes) is isolated to this run. The agent's
+        # context_management is published the same way (None when it sets none),
+        # so every chat()/chat_stream() compression pass in this run, the
+        # structured-output formatting call included, follows it as in run().
         from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _ctx_config_token = set_active_context_config(agent_context_config(agent))
         _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
@@ -1519,6 +1529,7 @@ class AgentRunner:
 
             content = ""
             turn = 0
+            tool_rounds = ToolRoundTracker(agent)
             while turn < ctx.max_turns:
                 turn += 1
                 # Filtered tools set by message_builder via apply_tool_attention.
@@ -1940,6 +1951,7 @@ class AgentRunner:
                                 }
                             )
 
+                    await tool_rounds.after_round(turn, tool_calls, messages)
                     continue
                 break
 
@@ -2055,6 +2067,7 @@ class AgentRunner:
             gateway_routing.claim_run(ctx.run_id)
             exit_run_compressor(_hr_token)
             try:
+                reset_active_context_config(_ctx_config_token)
                 reset_active_policy(_policy_token)
             except ValueError:
                 # Generator finalized in a different context than it started in

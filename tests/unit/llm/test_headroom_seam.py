@@ -102,7 +102,7 @@ class TestChatSeam:
             class config:
                 enabled = True
 
-            async def compress_if_needed(self, messages, model):
+            async def compress_if_needed(self, messages, model, config=None):
                 seen_by_summarizer["messages"] = messages
                 result = MagicMock()
                 result.was_compressed = False
