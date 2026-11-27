@@ -167,6 +167,32 @@ async for event in runner.run_stream(agent, "Tell me a story"):
         ...
 ```
 
+> **Close the stream if you stop early.** `run_stream()` makes the agent's
+> `context_management` the active one for the compression pass inside
+> `LLMClient.chat()` / `chat_stream()`, and restores the previous one when the
+> stream ends. If you `break` out of the loop, the stream ends only when it is
+> closed; left to garbage collection, the restore cannot run in your task, so
+> the agent's config stays active there and a later direct `LLMClient.chat()`
+> in the same task (a CLI loop, a queue worker) uses it. Wrap the stream in
+> `contextlib.aclosing()`:
+>
+> ```python
+> from contextlib import aclosing
+>
+> async with aclosing(runner.run_stream(agent, "Tell me a story")) as stream:
+>     async for event in stream:
+>         if event.type == EventType.CONTENT_COMPLETE:
+>             break
+> ```
+>
+> Known limits, none of which raises; the compression pass then uses another
+> context config: driving the stream with a new task per `__anext__()` (for
+> example a heartbeat with `asyncio.wait`) makes `chat_stream()` see no agent
+> config, so the process-wide one is used; two streams advanced alternately in
+> one task see each other's config; and your own `LLMClient.chat()` call
+> between events runs with the streaming agent's config. Pass
+> `context_config=` to such a call to choose its config.
+
 > Workflow agents (Sequential, Reflection, …) have no token-level stream — their
 > orchestration runs in `execute()` and returns a complete result. `run_stream()`
 > runs them to completion and emits the final result as a single
