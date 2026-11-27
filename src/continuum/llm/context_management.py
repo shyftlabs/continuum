@@ -13,14 +13,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from continuum.config import settings
-from continuum.llm import LLMClient
+from continuum.llm.client import LLMClient
 from continuum.llm.context_window import (
     ContextWindowManager,
     TruncationStrategy,
@@ -32,6 +36,14 @@ from continuum.observability.metrics import get_metrics_collector
 from continuum.observability.trace_context import SpanScope, truncate_data
 
 logger = get_logger(__name__)
+
+# Message fields that make up a summary cache key.
+_KEY_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
+
+
+def _key_part(value: Any) -> bytes:
+    """One newline-terminated line of canonical JSON for the summary cache key."""
+    return (json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) + "\n").encode()
 
 
 def _carries_tool_io(msg: dict[str, Any]) -> bool:
@@ -122,6 +134,55 @@ class ContextManagementConfig:
         }
 
 
+# The running agent's context settings, published by the executor and by
+# run_stream for the duration of the run so the compression pass in
+# LLMClient.chat()/chat_stream() follows that agent's config rather than the
+# process-wide manager's. Same ambient pattern as
+# continuum.security.policy_context.
+_active_context_config: ContextVar[ContextManagementConfig | None] = ContextVar(
+    "continuum_active_context_config", default=None
+)
+
+
+def get_active_context_config() -> ContextManagementConfig | None:
+    """The context settings of the agent currently executing, if one published them."""
+    return _active_context_config.get()
+
+
+def set_active_context_config(
+    config: ContextManagementConfig | None,
+) -> Token[ContextManagementConfig | None]:
+    """Publish ``config`` as the active context settings; returns the token for
+    :func:`reset_active_context_config`. For use with try/finally where a context
+    manager does not fit (a streaming generator)."""
+    return _active_context_config.set(config)
+
+
+def reset_active_context_config(token: Token[ContextManagementConfig | None]) -> None:
+    """Restore the previous active context settings."""
+    _active_context_config.reset(token)
+
+
+@contextmanager
+def use_context_config(config: ContextManagementConfig | None) -> Iterator[None]:
+    """Publish ``config`` as the active context settings for the enclosed block.
+
+    ``None`` publishes nothing new: calls inside fall back to the process-wide
+    manager's config, as before.
+    """
+    token = set_active_context_config(config)
+    try:
+        yield
+    finally:
+        reset_active_context_config(token)
+
+
+def agent_context_config(agent: Any) -> ContextManagementConfig | None:
+    """The agent's own ``ContextManagementConfig``, or None when it sets none."""
+    agent_config = getattr(agent, "config", None)
+    return getattr(agent_config, "context_management", None) if agent_config else None
+
+
 @dataclass
 class CompressionResult:
     """Result of context compression operation."""
@@ -167,8 +228,8 @@ class SummaryCache:
         self._ttl = ttl_seconds
         self._max_size = max_size
 
-    def _generate_key(self, messages: list[dict[str, Any]]) -> str:
-        """Generate cache key from messages."""
+    def _generate_key(self, messages: list[dict[str, Any]], namespace: str = "") -> str:
+        """Generate cache key from messages and the settings that shaped the summary."""
         # Create hash of message content (excluding timestamps/metadata).
         # Non-security cache key for summary dedup only — no trust boundary.
         # It is logged through log_id(), not sliced: an unkeyed digest of the
@@ -177,11 +238,17 @@ class SummaryCache:
         # characters of it gave them 32 bits to compare against. The keyed
         # pseudonym still lets a cache hit be matched to its store.
         # Uses sha256 (not md5) so static analysis never flags a weak-hash finding here.
-        content = []
+        # Each message is hashed whole: keying on a prefix let two conversations
+        # that start alike (a shared template, a pasted document) share a summary.
+        # Each part is one line of canonical JSON (JSON escapes newlines inside
+        # strings), so message boundaries are unambiguous, and
+        # tool_calls / tool_call_id / name are included so the same text with a
+        # different tool exchange is a different key. The namespace keeps agents
+        # with different summarization settings apart.
+        digest = hashlib.sha256(_key_part(namespace))
         for msg in messages:
-            content.append(f"{msg.get('role')}:{(msg.get('content') or '')[:100]}")
-        content_str = "|".join(content)
-        return hashlib.sha256(content_str.encode()).hexdigest()
+            digest.update(_key_part({f: msg.get(f) for f in _KEY_FIELDS}))
+        return digest.hexdigest()
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
@@ -196,9 +263,11 @@ class SummaryCache:
             oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
             del self._cache[oldest_key]
 
-    def get(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    def get(
+        self, messages: list[dict[str, Any]], namespace: str = ""
+    ) -> list[dict[str, Any]] | None:
         """Get cached summary if available and not expired."""
-        key = self._generate_key(messages)
+        key = self._generate_key(messages, namespace)
         with self._lock:
             if key in self._cache:
                 cached_messages, timestamp = self._cache[key]
@@ -212,9 +281,14 @@ class SummaryCache:
                     del self._cache[key]
         return None
 
-    def set(self, messages: list[dict[str, Any]], summary: list[dict[str, Any]]) -> None:
+    def set(
+        self,
+        messages: list[dict[str, Any]],
+        summary: list[dict[str, Any]],
+        namespace: str = "",
+    ) -> None:
         """Cache a summary."""
-        key = self._generate_key(messages)
+        key = self._generate_key(messages, namespace)
         with self._lock:
             self._cache[key] = (summary, time.time())
             self._evict_expired_and_lru()
@@ -269,17 +343,35 @@ class ProgressiveContextManager:
         self._config = config or ContextManagementConfig()
         self._llm_client = llm_client
         self._context_window_manager = context_window_manager or get_context_window_manager()
-        self._cache = (
-            SummaryCache(ttl_seconds=self._config.cache_ttl_seconds)
-            if self._config.enable_caching
-            else None
-        )
+        # One cache per TTL. Whether a call uses it follows that call's config,
+        # not the config of whichever agent created this (process-wide) manager.
+        self._caches: dict[int, SummaryCache] = {}
+        self._caches_lock = threading.Lock()
+        self._cache = self._cache_for(self._config)
         self._metrics = get_metrics_collector()
 
     @property
     def config(self) -> ContextManagementConfig:
         """Get current configuration."""
         return self._config
+
+    def _cache_for(self, config: ContextManagementConfig) -> SummaryCache | None:
+        """The summary cache a call with this config may use, or None when it opts out."""
+        if not config.enable_caching:
+            return None
+        with self._caches_lock:
+            cache = self._caches.get(config.cache_ttl_seconds)
+            if cache is None:
+                cache = SummaryCache(ttl_seconds=config.cache_ttl_seconds)
+                self._caches[config.cache_ttl_seconds] = cache
+            return cache
+
+    @staticmethod
+    def _cache_namespace(config: ContextManagementConfig) -> str:
+        return (
+            f"{config.summarization_model}|{config.summarization_temperature}"
+            f"|{config.summarization_max_tokens}"
+        )
 
     def _get_llm_client(self) -> LLMClient | None:
         """Get LLM client for summarization."""
@@ -617,8 +709,10 @@ class ProgressiveContextManager:
         # Check cache
         summary_messages = None
         cache_hit = False
-        if self._cache:
-            summary_messages = self._cache.get(older_messages)
+        cache = self._cache_for(config)
+        namespace = self._cache_namespace(config)
+        if cache:
+            summary_messages = cache.get(older_messages, namespace)
             if summary_messages:
                 cache_hit = True
                 logger.debug("Using cached summary")
@@ -632,8 +726,8 @@ class ProgressiveContextManager:
             )
 
             # Cache the summary
-            if self._cache and summary_messages:
-                self._cache.set(older_messages, summary_messages)
+            if cache and summary_messages:
+                cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
         compressed = system_messages + summary_messages + recent_messages
@@ -831,8 +925,12 @@ def get_progressive_context_manager(
     """
     Get the global progressive context manager.
 
+    One manager serves the process. Pass each agent's own config to
+    ``compress_if_needed``: thresholds, summarization settings and whether the
+    summary cache is used all follow that per-call config.
+
     Args:
-        config: Optional configuration override
+        config: Defaults for calls that pass no config (first call only)
 
     Returns:
         ProgressiveContextManager instance

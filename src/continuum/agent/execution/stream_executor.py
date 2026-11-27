@@ -15,6 +15,11 @@ from continuum.agent.execution.executor import _enrich_config_for_gateway
 from continuum.agent.interfaces.executor_interface import IStreamExecutor
 from continuum.agent.types import AgentEvent, EventType, RunContext, RunState
 from continuum.llm.config import LLMConfig
+from continuum.llm.context_management import (
+    agent_context_config,
+    reset_active_context_config,
+    set_active_context_config,
+)
 from continuum.logging import get_logger
 
 if TYPE_CHECKING:
@@ -79,6 +84,27 @@ class StreamExecutor(IStreamExecutor):
             DeprecationWarning,
             stacklevel=2,
         )
+        # Publish the agent's context_management (None when it sets none) for the
+        # compression pass inside chat_stream(), as run() and run_stream() do.
+        token = set_active_context_config(agent_context_config(agent))
+        try:
+            async for event in self._execute_stream_impl(agent, messages, context, run_state):
+                yield event
+        finally:
+            try:
+                reset_active_context_config(token)
+            except ValueError:
+                # Generator finalized in a different context than it started in
+                # (abandoned without aclose()); nothing to leak, best-effort.
+                pass
+
+    async def _execute_stream_impl(
+        self,
+        agent: BaseAgent,
+        messages: list[dict[str, Any]],
+        context: RunContext,
+        run_state: RunState,
+    ) -> AsyncIterator[AgentEvent]:
         turn = 0
 
         # Emit run start

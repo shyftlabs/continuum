@@ -234,14 +234,18 @@ class Executor(IExecutor):
         turns, reasoning pass, ReAct loop, structured-format — is gated
         automatically without threading policy params through each call. On
         handoff, the executor is re-entered for the new agent, refreshing the
-        ambient policy to that agent's store/name.
+        ambient policy to that agent's store/name. The agent's own
+        ``ContextManagementConfig`` is published the same way, so the compression
+        pass inside ``llm_client.chat()`` follows it.
         """
+        from continuum.llm.context_management import agent_context_config, use_context_config
         from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
         with (
             use_active_policy(getattr(agent, "policy_store", None), agent.name, context),
             use_run_compressor_if_enabled(),
+            use_context_config(agent_context_config(agent)),
         ):
             return await self._execute_loop_impl(agent, messages, context, run_state)
 
