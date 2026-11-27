@@ -205,6 +205,7 @@ import time. **Restart your shell or re-`source` the venv after editing
 | `CONTEXT_SUMMARIZATION_MAX_RETRIES` | `2` | |
 | `CONTEXT_KEEP_RECENT_MESSAGES` | `10` | Always keep the N most recent |
 | `CONTEXT_ENABLE_CACHING` | `true` | |
+| `CONTEXT_SUMMARY_REUSE_MESSAGES` | `0` | Off by default. Set it (e.g. `10`) to switch reuse on: with caching on, a long chat reuses its last summary and keeps the messages added since word for word, until more than this many were added or the result no longer fits under three quarters of the compression threshold; then it summarizes afresh. Fewer summary calls, but more of the chat reaches the model verbatim. This setting is the switch: it covers every compression pass, while a per-agent `summary_reuse_messages` does not reach `LLMClient.chat()` calls made outside an agent run |
 | `CONTEXT_CACHE_TTL_SECONDS` | `3600` | 1 hour |
 
 ### Headroom compression *(optional, requires `[headroom-local]` extra)*

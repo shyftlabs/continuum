@@ -40,6 +40,27 @@ logger = get_logger(__name__)
 # Message fields that make up a summary cache key.
 _KEY_FIELDS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
+# A reused summary and the messages kept after it must fit under this share of
+# the compression threshold. Fitting just under the threshold left no room for
+# the next tool step of the same turn, which then summarized the reused summary.
+_REUSE_BUDGET_RATIO = 0.75
+
+
+class _SummaryStatus:
+    """Set by _summarize_with_status for the _compress_summarize call around it."""
+
+    __slots__ = ("used_fallback",)
+
+    def __init__(self) -> None:
+        self.used_fallback = False
+
+
+# Lets _compress_summarize go through _summarize_messages (which subclasses and
+# tests override) and still learn whether the text fallback was used.
+_summary_status: ContextVar[_SummaryStatus | None] = ContextVar(
+    "continuum_summary_status", default=None
+)
+
 
 def _key_part(value: Any) -> bytes:
     """One newline-terminated line of canonical JSON for the summary cache key."""
@@ -116,6 +137,15 @@ class ContextManagementConfig:
     # Caching
     enable_caching: bool = field(default_factory=lambda: settings.context_enable_caching)
     cache_ttl_seconds: int = field(default_factory=lambda: settings.context_cache_ttl_seconds)
+    # Reuse the summary cached for an earlier turn and keep the messages added
+    # since word for word, until there are more than this many of them; then
+    # summarize the whole older history afresh. Saves a summary call on most
+    # turns, but the model sees those messages verbatim. Only when the result
+    # fits under three quarters of the compression threshold. 0 (default) = off, summarize every
+    # turn the older history changes. Needs enable_caching.
+    summary_reuse_messages: int = field(
+        default_factory=lambda: settings.context_summary_reuse_messages
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -131,6 +161,7 @@ class ContextManagementConfig:
             "compression_strategy": self.compression_strategy.value,
             "enable_caching": self.enable_caching,
             "cache_ttl_seconds": self.cache_ttl_seconds,
+            "summary_reuse_messages": self.summary_reuse_messages,
         }
 
 
@@ -198,6 +229,7 @@ class CompressionResult:
     summarization_used: bool = False
     truncation_used: bool = False
     cache_hit: bool = False
+    summary_reused: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -213,6 +245,7 @@ class CompressionResult:
             "summarization_used": self.summarization_used,
             "truncation_used": self.truncation_used,
             "cache_hit": self.cache_hit,
+            "summary_reused": self.summary_reused,
         }
 
 
@@ -249,6 +282,34 @@ class SummaryCache:
         for msg in messages:
             digest.update(_key_part({f: msg.get(f) for f in _KEY_FIELDS}))
         return digest.hexdigest()
+
+    def _prefix_keys(self, messages: list[dict[str, Any]], namespace: str = "") -> list[str]:
+        """Keys of ``messages[:1]``, ``messages[:2]``, ... — each equal to ``_generate_key``."""
+        digest = hashlib.sha256(_key_part(namespace))
+        keys = []
+        for msg in messages:
+            digest.update(_key_part({f: msg.get(f) for f in _KEY_FIELDS}))
+            keys.append(digest.copy().hexdigest())
+        return keys
+
+    def get_longest_prefix(
+        self, messages: list[dict[str, Any]], namespace: str = ""
+    ) -> tuple[int, list[dict[str, Any]]] | None:
+        """The summary cached for the longest proper prefix of ``messages``.
+
+        Returns ``(n, summary)`` where the summary covers ``messages[:n]``, or
+        None. In a chat the older part grows by a few messages a turn, so the
+        previous turn's summary is usually here.
+        """
+        keys = self._prefix_keys(messages[:-1], namespace)
+        now = time.time()
+        with self._lock:
+            for n in range(len(keys), 0, -1):
+                entry = self._cache.get(keys[n - 1])
+                if entry is not None and now - entry[1] < self._ttl:
+                    self._cache[keys[n - 1]] = (entry[0], now)
+                    return n, entry[0]
+        return None
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
@@ -491,6 +552,7 @@ class ProgressiveContextManager:
                         messages=messages,
                         model=model,
                         config=effective_config,
+                        threshold_tokens=threshold_tokens,
                     )
                 else:  # TRUNCATE_OLDEST
                     compressed, result = await self._compress_truncate(
@@ -514,6 +576,7 @@ class ProgressiveContextManager:
                         "compression_ratio": result.compression_ratio,
                         "summarization_used": result.summarization_used,
                         "cache_hit": result.cache_hit,
+                        "summary_reused": result.summary_reused,
                     },
                 )
 
@@ -603,6 +666,7 @@ class ProgressiveContextManager:
                 messages=messages,
                 model=model,
                 config=config,
+                threshold_tokens=threshold_tokens,
             )
 
             # Check if summarization was sufficient
@@ -646,8 +710,14 @@ class ProgressiveContextManager:
         messages: list[dict[str, Any]],
         model: str,
         config: ContextManagementConfig,
+        threshold_tokens: int | None = None,
     ) -> tuple[list[dict[str, Any]], CompressionResult]:
-        """Compress by summarizing older messages."""
+        """Compress by summarizing older messages.
+
+        ``threshold_tokens`` is the budget an earlier turn's reused summary must
+        fit under, with the messages kept after it; without one, no summary is
+        reused.
+        """
         if not messages:
             return [], CompressionResult(
                 original_token_count=0,
@@ -717,16 +787,52 @@ class ProgressiveContextManager:
                 cache_hit = True
                 logger.debug("Using cached summary")
 
-        # Summarize if not cached
-        if not summary_messages:
-            summary_messages = await self._summarize_messages(
-                messages=older_messages,
-                model=model,
-                config=config,
-            )
+        # Reuse an earlier turn's summary while few messages were added since:
+        # those stay word for word after it, and no summary call is made. Only
+        # when the result fits the token budget with headroom
+        # (_REUSE_BUDGET_RATIO): over it, a later truncation would drop the
+        # summary first (it is the oldest message), and a second compression
+        # would summarize the summary. Never when the kept messages
+        # would start inside a tool exchange, which providers reject.
+        reused = False
+        if (
+            not summary_messages
+            and cache
+            and config.summary_reuse_messages > 0
+            and threshold_tokens is not None
+        ):
+            earlier = cache.get_longest_prefix(older_messages, namespace)
+            if earlier is not None:
+                covered, previous = earlier
+                tail = older_messages[covered:]
+                if len(tail) <= config.summary_reuse_messages and not _carries_tool_io(tail[0]):
+                    candidate = system_messages + previous + tail + recent_messages
+                    if self._context_window_manager.count_tokens(candidate, model) <= int(
+                        threshold_tokens * _REUSE_BUDGET_RATIO
+                    ):
+                        summary_messages = previous + tail
+                        reused = True
 
-            # Cache the summary
-            if cache and summary_messages:
+        # Summarize if not cached
+        summarized = False
+        if not summary_messages:
+            status = _SummaryStatus()
+            token = _summary_status.set(status)
+            try:
+                summary_messages = await self._summarize_messages(
+                    messages=older_messages,
+                    model=model,
+                    config=config,
+                )
+            finally:
+                _summary_status.reset(token)
+            summarized = not status.used_fallback
+
+            # Cache a new summary. With reuse on, not the text fallback used when
+            # the summary call failed: a later turn would reuse it instead of
+            # trying the model again. With reuse off the fallback is cached, as
+            # before, so the same history does not wait out the summarizer again.
+            if cache and summary_messages and (summarized or config.summary_reuse_messages <= 0):
                 cache.set(older_messages, summary_messages, namespace)
 
         # Combine: system + summary + recent
@@ -746,6 +852,7 @@ class ProgressiveContextManager:
             latency_ms=0.0,  # Will be set by caller
             summarization_used=True,
             cache_hit=cache_hit,
+            summary_reused=reused,
         )
 
     async def _compress_truncate(
@@ -789,10 +896,23 @@ class ProgressiveContextManager:
         config: ContextManagementConfig,
     ) -> list[dict[str, Any]]:
         """Summarize a list of messages using LLM."""
+        summary, summarized = await self._summarize_with_status(messages, model, config)
+        status = _summary_status.get()
+        if status is not None and not summarized:
+            status.used_fallback = True
+        return summary
+
+    async def _summarize_with_status(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        config: ContextManagementConfig,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Summarize with the LLM. The flag is False when the text fallback was used."""
         llm_client = self._get_llm_client()
         if not llm_client:
             logger.warning("No LLM client available for summarization, using text fallback")
-            return self._text_summary(messages)
+            return self._text_summary(messages), False
 
         # Build summarization prompt
         conversation_text = self._format_messages_for_summary(messages)
@@ -847,6 +967,13 @@ SUMMARY:"""
                 )
 
                 summary_content = summary_response.content or ""
+                if not summary_content.strip() and config.summary_reuse_messages > 0:
+                    # With reuse on, an empty reply is no summary: use the text
+                    # fallback, which is then neither cached nor reused. With
+                    # reuse off the empty summary is kept and cached, as before.
+                    logger.warning("Summarization returned no text, using text fallback")
+                    span.set_error("Empty summary")
+                    return self._text_summary(messages), False
 
                 # Create summary message
                 summary_message = {
@@ -856,7 +983,7 @@ SUMMARY:"""
 
                 span.set_output(truncate_data({"summary_length": len(summary_content)}))
 
-                return [summary_message]
+                return [summary_message], True
 
             except TimeoutError:
                 logger.warning("Summarization timed out, using text fallback")
@@ -870,7 +997,7 @@ SUMMARY:"""
                         "timeout": config.summarization_timeout,
                     },
                 )
-                return self._text_summary(messages)
+                return self._text_summary(messages), False
             except Exception as e:
                 logger.warning("Summarization failed: %s, using text fallback", e)
                 span.set_error(str(e))
@@ -883,7 +1010,7 @@ SUMMARY:"""
                         "original_model": model,
                     },
                 )
-                return self._text_summary(messages)
+                return self._text_summary(messages), False
 
     def _format_messages_for_summary(self, messages: list[dict[str, Any]]) -> str:
         """Format messages for summarization prompt."""
@@ -900,7 +1027,7 @@ SUMMARY:"""
         summary_lines = [f"Previous conversation ({len(messages)} messages):"]
         for i, msg in enumerate(messages[:10], 1):  # First 10 messages
             role = msg.get("role", "unknown")
-            content = msg.get("content", "")[:100]
+            content = (msg.get("content") or "")[:100]
             if content:
                 summary_lines.append(f"{i}. {role}: {content}...")
         if len(messages) > 10:
