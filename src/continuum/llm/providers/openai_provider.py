@@ -539,6 +539,11 @@ class OpenAIProvider(BaseProvider):
                         role=delta.role,
                         is_finished=False,
                     )
+            if self._records_gateway_routing:
+                # The hook does not read a streamed body; the chunks name the model.
+                gateway_routing.note_streamed_model(
+                    getattr(response, "response", None), stream_model
+                )
             if tc_acc:
                 yield StreamChunk(
                     model=stream_model,
@@ -591,6 +596,11 @@ class OpenAIProvider(BaseProvider):
                         role=delta.role,
                         is_finished=False,
                     )
+            if self._records_gateway_routing:
+                # The hook does not read a streamed body; the chunks name the model.
+                gateway_routing.note_streamed_model(
+                    getattr(response, "response", None), stream_model
+                )
             if tc_acc:
                 yield StreamChunk(
                     model=stream_model,
