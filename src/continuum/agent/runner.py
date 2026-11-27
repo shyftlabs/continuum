@@ -720,6 +720,15 @@ class AgentRunner:
                     tags=tags,
                     require_session=require_session,
                 )
+            except asyncio.CancelledError:
+                # Cancelled from outside (a ParallelAgent timeout, a closed
+                # stream): end the step so a progress UI stops waiting on it.
+                sink.emit(
+                    EventType.AGENT_END,
+                    agent.name,
+                    {"step": True, "status": ResponseStatus.CANCELLED.value},
+                )
+                raise
             except Exception as e:
                 sink.emit(
                     EventType.AGENT_END,

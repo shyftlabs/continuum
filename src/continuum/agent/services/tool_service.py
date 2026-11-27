@@ -196,11 +196,20 @@ class ToolService(IToolService):
                 {"step": True, "tool_name": tool_name, "success": False, "error": str(e)[:100]},
             )
             raise
+        # exec_metadata["success"] is the outcome. "error" can hold an earlier
+        # attempt's failure (the agent's executor failed, then the global one
+        # succeeded), so it decides only when "success" is missing.
         error = exec_metadata.get("error")
+        success = bool(exec_metadata["success"]) if "success" in exec_metadata else not error
         emit_step_event(
             EventType.TOOL_CALL_END,
             agent.name,
-            {"step": True, "tool_name": tool_name, "success": not error, "error": error},
+            {
+                "step": True,
+                "tool_name": tool_name,
+                "success": success,
+                "error": None if success else error,
+            },
         )
         return result, exec_metadata
 

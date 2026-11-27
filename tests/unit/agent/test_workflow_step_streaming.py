@@ -313,3 +313,57 @@ async def test_concurrent_steps_of_one_agent_have_distinct_step_ids():
         ]
         tool = evs[1].data["tool_name"]
         assert evs[3].data["content"] == tool.removeprefix("tool_")
+
+
+async def test_step_cancelled_by_parallel_timeout_still_ends():
+    from continuum.agent.config import ParallelConfig
+    from continuum.agent.types import MergeStrategy
+    from continuum.agent.workflow.parallel import ParallelAgent
+
+    runner = _make_runner()
+    real = runner._run_impl
+
+    async def fake(agent, input, **kw):
+        if callable(getattr(type(agent), "execute", None)):
+            return await real(agent, input, **kw)
+        if agent.name == "slow":
+            await asyncio.sleep(30)
+        return AgentResponse(content=agent.name, agent_name=agent.name, turn_count=1)
+
+    runner._run_impl = fake
+    wf = ParallelAgent(
+        name="fan",
+        agents=[BaseAgent(name="fast"), BaseAgent(name="slow")],
+        parallel_config=ParallelConfig(merge_strategy=MergeStrategy.CONCATENATE, timeout=0.2),
+    )
+
+    events = [e async for e in runner.run_stream(wf, "q", stream_steps=True)]
+
+    steps = [e for e in events if e.data.get("step")]
+    slow = [e for e in steps if e.agent_name == "slow"]
+    assert [e.type for e in slow] == [EventType.AGENT_START, EventType.AGENT_END]
+    assert slow[1].data["status"] == ResponseStatus.CANCELLED.value
+    assert slow[1].data["step_id"] == slow[0].data["step_id"]
+    assert events[-1].type == EventType.RUN_END
+
+
+async def test_tool_end_success_comes_from_exec_metadata():
+    from continuum.agent.services.tool_service import ToolService
+
+    service = ToolService.__new__(ToolService)
+    # The agent's executor failed ("error" set), then the global one succeeded.
+    service._execute_tool_call = AsyncMock(
+        return_value=(
+            {"role": "tool", "content": "ok"},
+            {"tool_name": "search", "success": True, "error": "agent executor down"},
+        )
+    )
+    sink = StepSink(workflow_name="pipeline", run_id="r1")
+
+    with open_step_sink(sink):
+        await service.execute_tool_call(BaseAgent(name="research"), _tool_call(), MagicMock())
+
+    events = [sink.queue.get_nowait() for _ in range(sink.queue.qsize())]
+    end = events[-1]
+    assert end.type == EventType.TOOL_CALL_END
+    assert end.data["success"] is True and end.data["error"] is None
