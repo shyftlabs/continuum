@@ -237,7 +237,9 @@ class TestProviderStreamUsage:
         assert chunks[-1].is_finished
         assert ["stream_options" in c for c in calls] == [True, False]
 
-    async def _assert_not_adapted(self, rejected, model="strict-model"):
+    async def _assert_not_remembered(self, rejected, model="strict-model"):
+        # A 400/422 that is not about stream_options is retried once without it,
+        # fails again, and leaves nothing remembered.
         provider = OpenAIProvider(api_key="test-key")
         create = AsyncMock(side_effect=rejected)
         provider._async_client = MagicMock()
@@ -250,17 +252,15 @@ class TestProviderStreamUsage:
                     [{"role": "user", "content": "hi"}], LLMConfig(model=model)
                 )
             ]
-        assert create.await_count == 1
+        assert ["stream_options" in c.kwargs for c in create.await_args_list] == [True, False]
         assert OpenAIProvider._unsupported_params == {}
         assert OpenAIProvider._stream_options_rejected == set()
 
-    async def test_unrelated_422_whose_echoed_input_quotes_stream_options_is_not_adapted(self):
-        # A 422 for another field echoes the whole request under "input". Here
-        # the echo names stream_options in a plain string (the user's own
-        # message), so only the skip of "input" keeps it from looking like a
-        # rejection of stream_options.
+    async def test_unrelated_422_whose_echoed_input_quotes_stream_options_is_not_remembered(self):
+        # A 422 for another field echoes the whole request under "input", here
+        # with a user message that names stream_options. The retry fails too.
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
-        await self._assert_not_adapted(
+        await self._assert_not_remembered(
             openai.UnprocessableEntityError(
                 "Error code: 422",
                 response=httpx.Response(422, request=request),
@@ -296,10 +296,10 @@ class TestProviderStreamUsage:
         ],
         ids=["pydantic-str", "errors-repr"],
     )
-    async def test_vllm_400_that_echoes_the_request_is_not_adapted(self, message):
+    async def test_vllm_400_that_echoes_the_request_is_not_remembered(self, message):
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
         body = {"object": "error", "message": message, "type": "BadRequestError", "code": 400}
-        await self._assert_not_adapted(
+        await self._assert_not_remembered(
             openai.BadRequestError(
                 "Error code: 400",
                 response=httpx.Response(400, request=request, json=body),
@@ -379,7 +379,7 @@ def _api_error(status, body, text=None):
 
 
 class TestRound3:
-    """Opt-out, 500/501 rejections, a missing total, and echoes that only mention the field."""
+    """Opt-out, 500/501 rejections, a missing total, and errors that only mention the field."""
 
     async def _stream_calls(self, rejected, model="shim-model", stream_twice=True):
         provider = OpenAIProvider(api_key="test-key")
@@ -503,7 +503,7 @@ class TestRound3:
         ],
         ids=["echoed-user-message", "serde-expected-list", "context-length-quote"],
     )
-    async def test_message_that_only_mentions_stream_options_is_not_adapted(self, message):
+    async def test_message_that_only_mentions_stream_options_is_not_remembered(self, message):
         rejected = _api_error(400, {"object": "error", "message": message, "code": 400})
         provider = OpenAIProvider(api_key="test-key")
         create = AsyncMock(side_effect=rejected)
@@ -517,7 +517,8 @@ class TestRound3:
                     [{"role": "user", "content": "hi"}], LLMConfig(model="m")
                 )
             ]
-        assert create.await_count == 1
+        # Retried once without the field; that fails too, so nothing is remembered.
+        assert create.await_count == 2
         assert OpenAIProvider._stream_options_rejected == set()
 
     @pytest.mark.parametrize(
@@ -654,6 +655,207 @@ class TestRound3:
             chunks = [c async for c in provider.astream(msgs, cfg)]
 
         assert chunks[-1].usage == Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)
+
+
+def _stub_provider(sync, create_impl):
+    """A provider whose (a)sync create runs `create_impl(kwargs)`; returns (provider, calls)."""
+    provider = OpenAIProvider(api_key="test-key")
+    calls: list[dict] = []
+    if sync:
+
+        def create(**kwargs):
+            calls.append(dict(kwargs))
+            return iter(create_impl(kwargs))
+
+        provider._client = MagicMock()
+        provider._client.chat.completions.create = create
+    else:
+
+        async def acreate(**kwargs):
+            calls.append(dict(kwargs))
+            return _aiter(create_impl(kwargs))
+
+        provider._async_client = MagicMock()
+        provider._async_client.chat.completions.create = acreate
+    return provider, calls
+
+
+async def _consume(provider, sync, content="hi", model="shim-model"):
+    msgs = [{"role": "user", "content": content}]
+    cfg = LLMConfig(model=model)
+    if sync:
+        return list(provider.stream(msgs, cfg))
+    return [c async for c in provider.astream(msgs, cfg)]
+
+
+class TestRound6:
+    """Any 400/422/501 at stream open earns one retry without stream_options;
+    the rejection is remembered only if that retry opens."""
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    @pytest.mark.parametrize(
+        ("status", "body", "text"),
+        [
+            # OpenAI's own unknown_parameter code, naming the nested field.
+            (
+                400,
+                {
+                    "error": {
+                        "message": "Unknown parameter: 'stream_options.include_usage'.",
+                        "type": "invalid_request_error",
+                        "param": "stream_options.include_usage",
+                        "code": "unknown_parameter",
+                    }
+                },
+                None,
+            ),
+            (400, {"error": {"message": "Unknown parameter: 'stream_options'."}}, None),
+            # Zod 4.
+            (
+                400,
+                {
+                    "error": [
+                        {
+                            "code": "unrecognized_keys",
+                            "message": 'Unrecognized key: "stream_options"',
+                        }
+                    ]
+                },
+                None,
+            ),
+            # pydantic v1.
+            (422, {"detail": "stream_options\n  extra fields not permitted"}, None),
+            # Unquoted, as JSON detail and as plain text.
+            (400, {"detail": "unknown field stream_options"}, None),
+            (400, "Bad Request", "unknown field stream_options"),
+            # Bodies that never name the field.
+            (400, {"message": "body must NOT have additional properties"}, None),
+            (400, "Bad Request", "Bad Request"),
+            # 501.
+            (501, {"error": {"message": "stream_options is not implemented"}}, None),
+            (501, "Not Implemented", "Not Implemented"),
+        ],
+        ids=[
+            "openai-unknown-parameter",
+            "unknown-parameter-no-param",
+            "zod4",
+            "pydantic-v1",
+            "unquoted-json",
+            "unquoted-text",
+            "ajv-default",
+            "plain-bad-request",
+            "501-not-implemented",
+            "501-plain",
+        ],
+    )
+    async def test_rejection_shapes_are_adapted_and_remembered(self, status, body, text, sync):
+        rejected = _api_error(status, body, text)
+
+        def impl(kwargs):
+            if "stream_options" in kwargs:
+                raise rejected
+            return [_chunk("ok", finish="stop")]
+
+        provider, calls = _stub_provider(sync, impl)
+        for _ in range(2):
+            chunks = await _consume(provider, sync)
+            assert chunks[-1].is_finished
+        assert ["stream_options" in c for c in calls] == [True, False, False]
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    @pytest.mark.parametrize("status", [400, 500])
+    async def test_failure_echoing_rejection_wording_does_not_poison_the_memo(self, status, sync):
+        # The prompt carries rejection wording; the server fails on it with or
+        # without stream_options, echoing it each time.
+        prompt = 'what does the error: unknown field "stream_options" mean?'
+        healthy = {"on": False}
+
+        def impl(kwargs):
+            if not healthy["on"]:
+                raise _api_error(status, {"message": f"moderation failed for: {prompt}"})
+            return [
+                _chunk("ok", finish="stop"),
+                _chunk(usage=SimpleNamespace(prompt_tokens=3, completion_tokens=1, total_tokens=4)),
+            ]
+
+        provider, calls = _stub_provider(sync, impl)
+        with pytest.raises(Exception):
+            await _consume(provider, sync, content=prompt)
+        assert ["stream_options" in c for c in calls] == [True, False]
+        assert OpenAIProvider._stream_options_rejected == set()
+
+        healthy["on"] = True
+        chunks = await _consume(provider, sync)
+        assert calls[-1]["stream_options"] == {"include_usage": True}
+        assert chunks[-1].usage == Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4)
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    async def test_failed_retry_raises_the_retry_error(self, sync):
+        first = _api_error(400, {"message": "first"})
+        second = _api_error(400, {"message": "second"})
+
+        def impl(kwargs):
+            raise first if "stream_options" in kwargs else second
+
+        provider, _ = _stub_provider(sync, impl)
+        with pytest.raises(Exception) as info:
+            await _consume(provider, sync)
+        err = info.value
+        assert err is second or err.__cause__ is second
+        assert OpenAIProvider._stream_options_rejected == set()
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    @pytest.mark.parametrize(
+        "make_error",
+        [
+            lambda: _api_error(429, {"message": "stream_options rate limited"}),
+            lambda: _api_error(500, {"message": "Internal Server Error"}),
+            lambda: _api_error(502, {"message": "unknown field stream_options"}),
+            lambda: _api_error(503, {"message": "Service Unavailable"}),
+            lambda: openai.AuthenticationError(
+                "Error code: 401",
+                response=httpx.Response(
+                    401, request=httpx.Request("POST", "https://example.test/v1")
+                ),
+                body={"message": "stream_options: invalid api key"},
+            ),
+            lambda: openai.APITimeoutError(
+                request=httpx.Request("POST", "https://example.test/v1")
+            ),
+            lambda: openai.APIConnectionError(
+                request=httpx.Request("POST", "https://example.test/v1")
+            ),
+        ],
+        ids=["429", "500-plain", "502", "503", "401", "timeout", "connection"],
+    )
+    async def test_other_errors_are_not_retried(self, make_error, sync):
+        error = make_error()
+
+        def impl(kwargs):
+            raise error
+
+        provider, calls = _stub_provider(sync, impl)
+        with pytest.raises(Exception):
+            await _consume(provider, sync)
+        assert len(calls) == 1
+        assert OpenAIProvider._stream_options_rejected == set()
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["astream", "stream"])
+    async def test_coded_rejection_of_another_param_keeps_stream_options(self, sync):
+        rejected = _api_error(
+            400, {"code": "unsupported_parameter", "param": "temperature", "message": "no"}
+        )
+
+        def impl(kwargs):
+            if "temperature" in kwargs:
+                raise rejected
+            return [_chunk("ok", finish="stop")]
+
+        provider, calls = _stub_provider(sync, impl)
+        await _consume(provider, sync)
+        assert ["stream_options" in c for c in calls] == [True, True]
+        assert "temperature" not in calls[-1]
+        assert OpenAIProvider._stream_options_rejected == set()
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,6 @@ the o-series reasoning models, and Azure OpenAI.
 
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from copy import deepcopy
 from typing import Any
@@ -79,68 +77,9 @@ _STREAM_OPTIONS = "stream_options"
 _MAX_PARAM_ADAPT_ATTEMPTS = len(_REASONING_UNSUPPORTED_PARAMS) + len(_RENAMED_PARAMS) + 2
 
 
-# Echoed request input inside an error *message*: pydantic's
-# ``input_value=... input_type=`` repr (vLLM puts ``str(ValidationError)`` in its
-# 400 message), so the echo is cut out before the text is searched.
-_PYDANTIC_ECHO = re.compile(r"input_value=.*?input_type=", re.DOTALL)
-
-# How servers say they reject stream_options in free text. Only these count: a
-# message that merely mentions the field (an echoed prompt, a list of accepted
-# fields) is not a rejection.
-_STREAM_OPTIONS_REJECTION = re.compile(
-    r"""stream_options\\?["'`]? is not allowed"""  # Joi
-    r"|property stream_options should not exist"  # NestJS class-validator
-    r"""|property ["'`]?stream_options["'`]? is unsupported"""  # Groq
-    r"""|unknown field [`"']stream_options[`"']"""  # serde, Go encoding/json
-    r'|unrecognized field "stream_options"'  # Jackson
-    r"""|unrecognized key\(s\) in object:[\w\s,'"]*?['"]stream_options['"]"""  # Zod
-    r"""|additionalProperty["']?\s*[:=]\s*["']stream_options["']"""  # AJV
-    # Python jsonschema / Connexion
-    r"""|additional properties are not allowed \([^)]*?['"]stream_options['"]"""
-    r"|\bstream_options(?:\.\w+)*\s+extra inputs are not permitted"  # str(ValidationError)
-    r"|unrecognized request arguments? supplied:[\w\s,]*?\bstream_options\b"  # OpenAI-style
-    r"""|unexpected keyword argument ["']stream_options["']""",  # Python kwargs
-    re.IGNORECASE,
-)
-
-# Keys whose string value is a field name, so an exact ``stream_options`` there
-# names the rejected field (pydantic's ``loc``, an OpenAI-style ``param``, Zod's
-# ``keys``, AJV's ``additionalProperty``).
-_FIELD_NAME_KEYS = frozenset({"loc", "param", "keys", "additionalProperty"})
-
-
-def _text_rejects_stream_options(text: str) -> bool:
-    """True if free text says the server rejects stream_options."""
-    return bool(_STREAM_OPTIONS_REJECTION.search(_PYDANTIC_ECHO.sub("", text)))
-
-
-def _body_names_stream_options(body: Any, *, field_names: bool = False) -> bool:
-    """True if an error body says stream_options was rejected.
-
-    Exact matches count: a key ``stream_options`` whose value is not an object
-    (marshmallow/webargs: ``{"errors": {"json": {"stream_options": [...]}}}``)
-    and a ``loc``/``param`` entry equal to it (a pydantic 422 ``extra_forbidden``).
-    Other strings count only with rejection phrasing. Anything under ``input``
-    (a pydantic 422 echoes the request there) and a key whose value is an
-    object (the request echoed back) are skipped, so an unrelated validation
-    error on a streamed call is not taken for a rejection.
-    """
-    if isinstance(body, str):
-        if field_names and body == _STREAM_OPTIONS:
-            return True
-        return _text_rejects_stream_options(body)
-    if isinstance(body, dict):
-        for k, v in body.items():
-            if k == "input":
-                continue
-            if k == _STREAM_OPTIONS and not isinstance(v, dict):
-                return True
-            if _body_names_stream_options(v, field_names=k in _FIELD_NAME_KEYS):
-                return True
-        return False
-    if isinstance(body, (list, tuple)):
-        return any(_body_names_stream_options(v, field_names=field_names) for v in body)
-    return False
+def _mentions_stream_options(e: Exception) -> bool:
+    """True if the error body or the raw response text contains ``stream_options``."""
+    return _STREAM_OPTIONS in f"{getattr(e, 'body', '')} {_response_text(e)}"
 
 
 def _stream_usage(raw: Any) -> Usage:
@@ -155,8 +94,8 @@ def _response_text(e: Exception) -> str:
     """The raw response body of an API error, or "" if there is none to read.
 
     Some servers' bodies reach the SDK in a shape it reduces to just the status
-    text (a Joi/Boom 400 leaves ``e.body`` as ``Bad Request``), so the field
-    name is only in the raw response.
+    text (``e.body`` is ``Internal Server Error``), so the field name is only in
+    the raw response.
     """
     try:
         return getattr(getattr(e, "response", None), "text", "") or ""
@@ -413,36 +352,23 @@ class OpenAIProvider(BaseProvider):
             return _STREAM_OPTIONS
         return param
 
-    @classmethod
-    def _rejected_param(cls, e: Exception) -> str | None:
-        """Return the parameter a 400/422 rejected, or None if it is not one.
+    @staticmethod
+    def _may_reject_stream_options(e: Exception) -> bool:
+        """True if a stream-open error may be the server refusing ``stream_options``.
 
-        ``stream_options`` is added by Continuum rather than the caller, so it is
-        also recognised from other OpenAI-compatible servers whose error names it
-        without OpenAI's code: in the parsed body or in the raw response text
-        (see _body_names_stream_options). Some shims answer the unknown field
-        with a 500 or 501; those count only when the error says stream_options
-        was rejected. Other 5xx, timeouts and connection errors never do.
+        Servers word this in too many ways to recognise (and some never name the
+        field), so any 400 or 422 counts. A 501 counts too, and a 500 only when
+        its body or raw response text names the field (a shim that crashes on
+        the unknown kwarg). Other 5xx, 429, auth, timeouts and connection errors
+        never do. A yes only earns one retry without the field; it is remembered
+        only if that stream then opens (see _call_adapting).
         """
+        if isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
+            return True
         if isinstance(e, openai.InternalServerError):
-            if getattr(e, "status_code", None) not in (500, 501):
-                return None
-        elif not isinstance(e, (openai.BadRequestError, openai.UnprocessableEntityError)):
-            return None
-        param = cls._coded_param(e)
-        if param is not None:
-            return param
-        if _body_names_stream_options(e.body):
-            return _STREAM_OPTIONS
-        text = _response_text(e)
-        if text:
-            try:
-                parsed: Any = json.loads(text)
-            except ValueError:
-                parsed = text
-            if _body_names_stream_options(parsed):
-                return _STREAM_OPTIONS
-        return None
+            status = getattr(e, "status_code", None)
+            return status == 501 or (status == 500 and _mentions_stream_options(e))
+        return False
 
     def _call_adapting(self, make_call: Callable[[], Any], kwargs: dict[str, Any]) -> Any:
         """Run `make_call`, adapting away rejected parameters and retrying.
@@ -453,30 +379,55 @@ class OpenAIProvider(BaseProvider):
         succeeds or nothing further can be adapted. Bounded by the number of
         parameters we could ever drop, so a persistently failing call cannot spin.
         `kwargs` is mutated in place, so `make_call` sees each adaptation.
+
+        A dropped ``stream_options`` is remembered for the server and model only
+        once a call without it succeeds, so a call that fails either way (a
+        context-length or moderation error) leaves the memo untouched.
         """
+        sent_stream_options = _STREAM_OPTIONS in kwargs
         for attempt in range(_MAX_PARAM_ADAPT_ATTEMPTS):
             try:
-                return make_call()
+                result = make_call()
             except Exception as e:
                 if attempt == _MAX_PARAM_ADAPT_ATTEMPTS - 1 or not self._adapt_after_rejection(
                     kwargs, e
                 ):
                     raise
+            else:
+                self._remember_stream_options_rejection(kwargs, sent_stream_options)
+                return result
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _acall_adapting(
         self, make_call: Callable[[], Awaitable[Any]], kwargs: dict[str, Any]
     ) -> Any:
         """Async counterpart of `_call_adapting`."""
+        sent_stream_options = _STREAM_OPTIONS in kwargs
         for attempt in range(_MAX_PARAM_ADAPT_ATTEMPTS):
             try:
-                return await make_call()
+                result = await make_call()
             except Exception as e:
                 if attempt == _MAX_PARAM_ADAPT_ATTEMPTS - 1 or not self._adapt_after_rejection(
                     kwargs, e
                 ):
                     raise
+            else:
+                self._remember_stream_options_rejection(kwargs, sent_stream_options)
+                return result
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _remember_stream_options_rejection(
+        self, kwargs: dict[str, Any], sent_stream_options: bool
+    ) -> None:
+        """After a successful call, remember a ``stream_options`` that had to be dropped."""
+        if sent_stream_options and _STREAM_OPTIONS not in kwargs:
+            model = kwargs.get("model", "")
+            self._stream_options_rejected.add(self._server_key(model))
+            logger.warning(
+                "Server rejected 'stream_options' for model '%s'; streaming without "
+                "token usage for this server and model for the rest of this process.",
+                model,
+            )
 
     def _adapt_after_rejection(self, kwargs: dict[str, Any], e: Exception) -> bool:
         """Drop (or rename) the parameter a 400 rejected and remember the model.
@@ -484,15 +435,28 @@ class OpenAIProvider(BaseProvider):
         Returns True if `kwargs` changed, so a retry is worth attempting; False
         otherwise (nothing to adjust — let the error surface).
         """
-        param = self._rejected_param(e)
-        if param is None or param not in kwargs:
-            return False
-
         model = kwargs.get("model", "")
+        param = self._coded_param(e)
+        if param is None or param not in kwargs:
+            # Not an OpenAI-coded rejection of a parameter we sent. If we sent
+            # stream_options, retry once without it; _call_adapting remembers
+            # that only if the retry succeeds.
+            if _STREAM_OPTIONS in kwargs and self._may_reject_stream_options(e):
+                kwargs.pop(_STREAM_OPTIONS)
+                logger.info(
+                    "Stream open for model '%s' failed (%s); retrying once without "
+                    "'stream_options'.",
+                    model,
+                    type(e).__name__,
+                )
+                return True
+            return False
         if param == _STREAM_OPTIONS:
-            self._stream_options_rejected.add(self._server_key(model))
-        else:
-            self._unsupported_params.setdefault(model, set()).add(param)
+            kwargs.pop(param)
+            logger.info("Model '%s' rejected 'stream_options'; retrying without it.", model)
+            return True
+
+        self._unsupported_params.setdefault(model, set()).add(param)
 
         value = kwargs.pop(param)
         renamed = _RENAMED_PARAMS.get(param)
@@ -645,9 +609,10 @@ class OpenAIProvider(BaseProvider):
     ) -> Iterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
-        # Ask for the usage chunk OpenAI-compatible servers send last. A server
-        # that rejects the field gets it dropped by _call_adapting, and remembered;
-        # config.stream_include_usage=False never sends it.
+        # Ask for the usage chunk OpenAI-compatible servers send last. If the
+        # stream fails to open with it, _call_adapting retries once without it and
+        # remembers that only if the retry opens; config.stream_include_usage=False
+        # never sends it.
         if (
             config.stream_include_usage
             and self._server_key(kwargs["model"]) not in self._stream_options_rejected
@@ -713,9 +678,10 @@ class OpenAIProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         kwargs = self._build_kwargs(config, tools, tool_choice)
         kwargs["stream"] = True
-        # Ask for the usage chunk OpenAI-compatible servers send last. A server
-        # that rejects the field gets it dropped by _call_adapting, and remembered;
-        # config.stream_include_usage=False never sends it.
+        # Ask for the usage chunk OpenAI-compatible servers send last. If the
+        # stream fails to open with it, _call_adapting retries once without it and
+        # remembers that only if the retry opens; config.stream_include_usage=False
+        # never sends it.
         if (
             config.stream_include_usage
             and self._server_key(kwargs["model"]) not in self._stream_options_rejected
