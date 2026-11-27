@@ -9,7 +9,8 @@ application could not tell which model answered a question.
 Gateway clients get an httpx response hook that reads those headers and files
 them under the current run's id. On a non-streamed reply it also reads the
 body's ``model`` (the model that answered); a streamed body is never touched,
-and ``run_stream`` fills the model in from the stream's chunks instead.
+and the provider fills the model in from the stream's chunks instead, on the
+entry of that stream's own HTTP response.
 The run finalizer then puts the list on
 ``AgentResponse.run_artifacts["gateway_routing"]``.
 
@@ -23,8 +24,11 @@ steps leave their entries in place and the workflow collects them all after
 check). For ``runner.fork`` of a workflow, and for a built-in workflow whose
 ``execute()`` is called directly on a new context, only the steps' calls are
 listed: the workflow's own calls may run without the run id, or after a step
-cleared it. Entries are only attached to an ``AgentResponse``, on a copy; a
-failed or cancelled run drops them.
+cleared it. Entries are only attached to an ``AgentResponse``, on a copy. A
+failed or cancelled run returns no response, and its entries are removed when
+it ends; a call whose HTTP response arrives after that (a step of a cancelled
+``ParallelAgent`` still in flight), or a call made after the run under its
+still-current run id, is filed under that run and stays until evicted.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ import json
 import math
 import os
 import threading
+import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
@@ -57,6 +62,11 @@ _MAX_RUNS = 1024
 _MAX_ENTRIES_PER_RUN = 1024
 
 _by_run: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+# The entry filed for each streamed HTTP response, so the model named in that
+# stream's chunks fills its own entry, not another call's under the same run.
+_by_response: weakref.WeakKeyDictionary[httpx.Response, dict[str, Any]] = (
+    weakref.WeakKeyDictionary()
+)
 _lock = threading.Lock()
 
 
@@ -70,6 +80,7 @@ def _reset_after_fork() -> None:
     global _lock
     _lock = threading.Lock()
     _by_run.clear()
+    _by_response.clear()
 
 
 if hasattr(os, "register_at_fork"):
@@ -133,6 +144,8 @@ def record(response: httpx.Response, served_model: str | None = None) -> None:
         with _lock:
             entries = _by_run.setdefault(run_id, [])
             entries.append(entry)
+            if _is_streaming(response):
+                _by_response[response] = entry
             if len(entries) > _MAX_ENTRIES_PER_RUN:
                 del entries[: len(entries) - _MAX_ENTRIES_PER_RUN]
             _by_run.move_to_end(run_id)
@@ -150,23 +163,24 @@ def pop_run(run_id: str | None) -> list[dict[str, Any]] | None:
         return _by_run.pop(run_id, None)
 
 
-def note_streamed_model(run_id: str | None, model: str | None) -> None:
-    """Set ``served_model`` from a streamed reply's chunks on the run's last entry.
+def note_streamed_model(response: httpx.Response | None, model: str | None) -> None:
+    """Set ``served_model`` from a streamed reply's chunks on that reply's entry.
 
     A streamed body is not read by the hook, so its entry has no model. The
-    stream's own chunks name it; the caller passes it once the stream ends.
-    Only the latest entry is filled, and only if it has no model yet and
-    succeeded, which is the attempt that produced the stream.
+    stream's own chunks name it; the provider passes the stream's HTTP response
+    and the model once the stream ends. Only the entry filed for that response
+    is filled, so two streams overlapping under one run id each get their own
+    model. Never raises.
     """
-    if not run_id or not model:
+    if response is None or not model:
         return
-    with _lock:
-        entries = _by_run.get(run_id)
-        if not entries:
-            return
-        last = entries[-1]
-        if "served_model" not in last and last.get("status", 0) < 400:
-            last["served_model"] = model
+    try:
+        with _lock:
+            entry = _by_response.pop(response, None)
+            if entry is not None and "served_model" not in entry:
+                entry["served_model"] = model
+    except Exception:  # noqa: BLE001 - not a weakref-able response
+        logger.debug("gateway routing: failed to note a streamed model", exc_info=True)
 
 
 def claim_run(run_id: str | None) -> list[dict[str, Any]] | None:

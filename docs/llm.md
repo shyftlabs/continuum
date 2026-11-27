@@ -77,7 +77,12 @@ responses do not repeat them. For `runner.fork` of a workflow, and for a
 built-in workflow's `execute()` called directly on a new context, only the
 steps' calls are listed, not the workflow's own. A custom workflow's result is attached to only when it is an
 `AgentResponse` (on a copy); any other result is returned unchanged. A failed
-or cancelled run records nothing.
+or cancelled run returns no response, so it lists nothing, and its entries are
+removed when it ends. Two cases stay in the in-process store until evicted
+(it keeps the latest 1024 runs): a call whose HTTP response arrives after a
+cancel (a step of a `ParallelAgent` cut off by its timeout), and, with an
+application trace context set, a direct `LLMClient.chat()` after
+`runner.run()` in the same task, which is filed under the finished run's id.
 
 ```python
 resp = await runner.run(agent, "What is NAV?")
@@ -90,8 +95,9 @@ Each entry has whichever of these the gateway sent: `router_mode`,
 `model@provider:status` per attempt, so failovers show), `cache_status`,
 `timing` (the gateway's per-phase milliseconds), `ratelimit`, `request_id`
 (to find the call in gateway logs) and `status`. `served_model` is the model
-named in the reply: read from a non-streamed body, or, for `run_stream`, from
-the stream's chunks (tool-call turns and the model-tier router included).
+named in the reply: read from a non-streamed body, or, for a streamed reply,
+from that stream's chunks (tool-call turns and the model-tier router included),
+so streams that overlap under one run each name their own model.
 Timing values that are not finite numbers are dropped.
 Nothing is recorded for direct provider calls.
 

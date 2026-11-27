@@ -1579,7 +1579,6 @@ class AgentRunner:
 
                 if last_seen_model and settings.smart_gateway_url:
                     logger.info("🎯 Gateway selected model: %s", last_seen_model)
-                    gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
 
                 content = "".join(content_parts)
 
@@ -1633,7 +1632,6 @@ class AgentRunner:
                                 tool_calls = chunk.tool_calls
                         if last_seen_model and settings.smart_gateway_url:
                             logger.info("🎯 Gateway selected model: %s", last_seen_model)
-                            gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
                         content = "".join(content_parts)
                 else:
                     pass  # CONTENT_DELTA already yielded live in the streaming loop above

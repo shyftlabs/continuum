@@ -448,16 +448,74 @@ def test_non_finite_timing_values_are_dropped():
     json.dumps(entry, allow_nan=False)  # strict encoders accept it
 
 
-def test_streamed_model_fills_the_last_entry():
+def test_streamed_model_fills_the_entry_of_its_own_response():
     set_trace_context(run_id="run-s")
-    gateway_routing.record(httpx.Response(503, headers=HEADERS))
-    gateway_routing.record(httpx.Response(200, headers=HEADERS))
+    sse = {**HEADERS, "content-type": "text/event-stream"}
+    failed = httpx.Response(503, headers=HEADERS)
+    first = httpx.Response(200, headers=sse)
+    second = httpx.Response(200, headers=sse)
+    for response in (failed, first, second):
+        gateway_routing.record(response)
 
-    gateway_routing.note_streamed_model("run-s", "gpt-4o-mini")
+    gateway_routing.note_streamed_model(first, "gpt-4o-mini")
 
-    failed, served = gateway_routing.pop_run("run-s")
-    assert "served_model" not in failed
-    assert served["served_model"] == "gpt-4o-mini"
+    entries = gateway_routing.pop_run("run-s")
+    assert [e.get("served_model") for e in entries] == [None, "gpt-4o-mini", None]
+
+
+def _model_stream(model: str) -> str:
+    chunk = json.dumps(
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": None}],
+        }
+    )
+    return f"data: {chunk}\n\ndata: {chunk}\n\ndata: [DONE]\n\n"
+
+
+def _gateway_provider(handler):
+    from continuum.llm.providers.gateway_provider import GatewayProvider
+
+    provider = GatewayProvider("http://gateway.test", "test", None)
+    provider._async_client = AsyncOpenAI(
+        api_key="test",
+        base_url="http://gateway.test/v1",
+        http_client=gateway_routing.with_async_hook(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        ),
+    )
+    return provider
+
+
+async def test_overlapping_streams_under_one_run_each_name_their_own_model():
+    """``first`` starts and ends before ``second`` ends; each entry keeps its model."""
+    from continuum.llm.config import LLMConfig
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = "served-" + json.loads(request.content)["messages"][0]["content"]
+        return httpx.Response(
+            200, headers={**HEADERS, "content-type": "text/event-stream"}, text=_model_stream(model)
+        )
+
+    provider = _gateway_provider(handler)
+    set_trace_context(run_id="run-o")
+
+    def ask(text: str):
+        return provider.astream([{"role": "user", "content": text}], LLMConfig(model="auto/mid"))
+
+    first, second = ask("first"), ask("second")
+    await first.__anext__()  # first's HTTP response is filed
+    await second.__anext__()  # then second's
+    async for _ in first:  # first ends while second is still open
+        pass
+    async for _ in second:
+        pass
+
+    entries = gateway_routing.pop_run("run-o")
+    assert [e.get("served_model") for e in entries] == ["served-first", "served-second"]
 
 
 async def test_retries_give_one_entry_per_attempt():
@@ -632,6 +690,7 @@ async def test_tool_call_stream_names_the_model():
         ),
     )
     tool = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+    set_trace_context(run_id="run-tc")
 
     chunks = [
         c
@@ -642,6 +701,8 @@ async def test_tool_call_stream_names_the_model():
 
     (tool_chunk,) = [c for c in chunks if c.tool_calls]
     assert tool_chunk.model == "gpt-4o-mini"
+    (entry,) = gateway_routing.pop_run("run-tc")
+    assert entry["served_model"] == "gpt-4o-mini"  # filled by the provider, not the runner
 
 
 async def test_model_tier_stream_names_the_model():
@@ -650,16 +711,17 @@ async def test_model_tier_stream_names_the_model():
     from continuum.agent.smart_layer.types import ProductTier
     from continuum.agent.types import Route
     from continuum.agent.workflow.router import RouterAgent
-    from continuum.llm.types import StreamChunk
 
-    async def chat_stream(messages, config, **kwargs):
-        gateway_routing.record(
-            httpx.Response(200, headers={**HEADERS, "content-type": "text/event-stream"})
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={**HEADERS, "content-type": "text/event-stream"},
+            text=_model_stream("gpt-4o-mini"),
         )
-        yield StreamChunk(model="gpt-4o-mini", content="Paris.")
 
+    provider = _gateway_provider(handler)
     llm = MagicMock()
-    llm.chat_stream = chat_stream
+    llm.chat_stream = lambda messages, config, **kwargs: provider.astream(messages, config)
     router = RouterAgent(
         name="tier",
         routes=[Route(agent_name="geo", description="geo", condition="geo")],
