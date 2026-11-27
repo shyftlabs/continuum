@@ -58,6 +58,7 @@ from continuum.agent.types import (
     PrepareRunResult,
     ResponseStatus,
     RunContext,
+    RunState,
     generate_run_id,
 )
 from continuum.agent.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
@@ -87,6 +88,7 @@ from continuum.llm.structured_output import (
     to_openai_response_format,
 )
 from continuum.logging import get_logger, log_content, log_id
+from continuum.observability.trace_context import get_current_trace_id
 from continuum.tools.tool_attention.router import _tool_name
 from continuum.utils.sanitization import (
     InvalidIdentifierError,
@@ -1055,6 +1057,9 @@ class AgentRunner:
         ctx.recorder.trace.edit = {"override": override, "label": label}
 
         run_state = await self._context_service.create_run_state(target, ctx)
+        # fork() never calls start_trace, so it opens no trace of its own and
+        # must not tear down the caller's trace context when it finishes.
+        run_state.owns_trace = False
         run_state.agent_stack = resume_stack
         run_state.current_agent = target.name
         run_state.messages = list(messages)
@@ -1181,6 +1186,17 @@ class AgentRunner:
     # =========================================================================
     # Run (streaming)
     # =========================================================================
+
+    def _close_abandoned_trace(self, ctx: RunContext, run_state: RunState) -> None:
+        """Close the trace of a stream the caller stopped early with ``aclose()``.
+
+        Such a stream never reached finalize or handle_error, so its trace is
+        still the current one; without this the next run in the same task
+        joins it. A plain ``break`` without ``aclose()`` is not covered: asyncio
+        finalizes the generator later, in another task's copied context.
+        """
+        if run_state.owns_trace and ctx.trace_id and get_current_trace_id() == ctx.trace_id:
+            self._lifecycle.restore_caller_context(ctx)
 
     async def run_stream(
         self,
@@ -1333,13 +1349,20 @@ class AgentRunner:
         assert ctx is not None  # _prepare_run always sets context on success
         run_state = result.run_state
 
-        yield AgentEvent(
-            type=EventType.RUN_START,
-            agent_name=agent.name,
-            run_id=ctx.run_id,
-            data={"input": input if isinstance(input, str) else "[messages]"},
-            trace_id=ctx.trace_id,
-        )
+        # RUN_START goes out before the run's policy and compressor are bound,
+        # so a caller that stops at the first event holds neither. A caller
+        # that aclose()s here still gets its trace closed.
+        try:
+            yield AgentEvent(
+                type=EventType.RUN_START,
+                agent_name=agent.name,
+                run_id=ctx.run_id,
+                data={"input": input if isinstance(input, str) else "[messages]"},
+                trace_id=ctx.trace_id,
+            )
+        except BaseException:
+            self._close_abandoned_trace(ctx, run_state)
+            raise
 
         turn = 0
         # Publish the run's policy context so every llm_client.chat() in this
@@ -2062,6 +2085,7 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            self._close_abandoned_trace(ctx, run_state)
             # A cancelled or early-closed stream skips handle_error; drop its
             # entries here (a no-op once they were claimed).
             gateway_routing.claim_run(ctx.run_id)

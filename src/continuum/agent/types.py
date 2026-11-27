@@ -1009,6 +1009,12 @@ class RunContext:
     # the trace spans the whole run. None when DECISION_TRACE_ENABLED is false.
     recorder: Any = field(default=None, repr=False, compare=False)
 
+    # Trace context values from before this run created its own trace, put
+    # back when the run ends so the caller's ambient user_id/session_id
+    # survive. Set only by the run that creates the trace (workflow steps
+    # share the parent's RunContext and must not overwrite it). Runtime-only.
+    trace_context_snapshot: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {

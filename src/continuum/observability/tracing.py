@@ -851,6 +851,14 @@ class TracingManager:
             except Exception as e:
                 logger.warning("Failed to create trace via ProviderManager: %s", e)
 
+        # The provider assigns its own trace id. Use it, so the id callers get
+        # back (AgentResponse.trace_id, events) is the trace that holds the run;
+        # a separate random id sent spans that look the trace up by id (tool
+        # calls) to an orphan trace and could not be linked to the run.
+        provider_id = getattr(langfuse_trace, "id", None)
+        if isinstance(provider_id, str) and provider_id:
+            data.id = provider_id
+
         trace = Trace(langfuse_trace, data)
 
         # Set trace context globally (async-safe)
