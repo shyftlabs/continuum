@@ -18,7 +18,7 @@ from continuum.memory import MemoryClient
 from continuum.observability.decorators import observe
 from continuum.observability.error_reporter import report_error
 from continuum.session.base import BaseSessionProvider
-from continuum.session.config import SessionConfig
+from continuum.session.config import SessionConfig, unknown_provider_message
 from continuum.session.exceptions import (
     SessionConnectionError,
     SessionError,
@@ -35,6 +35,32 @@ from continuum.session.providers.memory import MemorySessionProvider
 from continuum.session.types import ChatMessage, SessionMetadata
 
 logger = get_logger(__name__)
+
+# How each durable store is named in fallback messages, and what to set to make it
+# durable. Keeps the long-standing "Redis probe failed" wording for Redis users.
+_DISPLAY_NAMES = {"redis": "Redis", "postgres": "PostgreSQL"}
+_DURABLE_HINTS = {
+    "redis": "configure Redis (SESSION_REDIS_HOST / SESSION_REDIS_PORT)",
+    "postgres": "configure PostgreSQL (SESSION_POSTGRES_DSN, and the [postgres] extra)",
+}
+
+
+# Bound on closing a provider the client drops, so a hung store cannot stall a request.
+_CLOSE_TIMEOUT_SECONDS = 5.0
+
+
+def _display_name(provider: str) -> str:
+    return _DISPLAY_NAMES.get(provider, provider)
+
+
+def _not_installed_message(provider: str) -> str:
+    """Why a built-in provider whose package is missing cannot be used."""
+    if provider == "postgres":
+        return (
+            "the PostgreSQL session provider needs asyncpg, which is not installed. "
+            "Install the [postgres] extra: pip install 'shyftlabs-continuum[postgres]'"
+        )
+    return f"the {_display_name(provider)} session provider's package is not installed"
 
 
 def _in_temporal_activity() -> bool:
@@ -226,6 +252,11 @@ class SessionClient:
         """
         return self._degraded
 
+    @property
+    def active_provider(self) -> BaseSessionProvider | None:
+        """The provider in use once chosen (or injected), else None. Never resolves one."""
+        return self._provider if self._provider_resolved else None
+
     def set_provider(self, provider: BaseSessionProvider) -> None:
         """Set the session provider explicitly (trusted; never probed/swapped)."""
         self._provider = provider
@@ -262,7 +293,10 @@ class SessionClient:
 
         # Redis host/credentials not configured — degrade (or fail) per policy.
         if not cfg.is_configured():
-            return self._fallback_or_fail("Redis is not configured")
+            return self._fallback_or_fail(f"{_display_name(cfg.provider)} is not configured")
+
+        if cfg.provider in _DISPLAY_NAMES and cfg.provider not in list_providers():
+            return self._fallback_or_fail(_not_installed_message(cfg.provider))
 
         # Configured: build the Redis provider lazily and probe it once.
         try:
@@ -272,7 +306,9 @@ class SessionClient:
             # outage — never degrade to in-memory, regardless of fallback_mode.
             raise
         except Exception as e:  # provider class missing (e.g. redis not installed)
-            return self._fallback_or_fail(f"Redis provider unavailable ({e})")
+            return self._fallback_or_fail(
+                f"{_display_name(cfg.provider)} provider unavailable ({e})"
+            )
 
         aping = getattr(redis_provider, "aping", None)
         reachable = await aping() if aping is not None else True
@@ -287,8 +323,11 @@ class SessionClient:
         # Prefer the concrete cause the probe recorded (auth/TLS/config error);
         # fall back to the generic wording only when none was supplied.
         reason = getattr(redis_provider, "last_probe_error", None)
+        name = _display_name(cfg.provider)
+        # The probe may have opened a pool; it is not used, so release it.
+        await self._close_dropped(redis_provider)
         return self._fallback_or_fail(
-            f"Redis probe failed: {reason}" if reason else "Redis is unreachable"
+            f"{name} probe failed: {reason}" if reason else f"{name} is unreachable"
         )
 
     def _fallback_or_fail(self, reason: str) -> BaseSessionProvider:
@@ -308,9 +347,12 @@ class SessionClient:
         logger.warning(
             "Session persistence falling back to non-durable in-memory store: %s. "
             "Sessions will not survive a restart and are not shared across workers. "
-            "Set SESSION_ENABLED=false to silence this, or configure Redis "
-            "(SESSION_REDIS_HOST / SESSION_REDIS_PORT) for durable sessions.",
+            "Set SESSION_ENABLED=false to silence this, or %s for durable sessions.",
             reason,
+            _DURABLE_HINTS.get(
+                self._session_config.provider,
+                f"configure the {self._session_config.provider} session provider",
+            ),
         )
         # Mark the health signal: we are now serving non-durable in-memory state.
         self._degraded = True
@@ -332,17 +374,29 @@ class SessionClient:
         except Exception:  # noqa: BLE001 — metrics are best-effort
             pass
 
-    def _degrade_to_memory(self, reason: str) -> None:
+    async def _degrade_to_memory(self, reason: str) -> None:
         """Swap the active provider to in-memory after a mid-session connection loss.
 
         Idempotent: once degraded, further connection errors don't re-warn. The
         warning is emitted exactly once, so a Redis that dies mid-session costs
-        one log line, not an error per request.
+        one log line, not an error per request. The dropped provider is closed,
+        so its pooled connections do not stay open.
         """
-        if isinstance(self._provider, MemorySessionProvider):
+        dropped = self._provider
+        if isinstance(dropped, MemorySessionProvider):
             return
+        # Swap before awaiting, so a concurrent caller sees the swap and returns.
         self._provider = self._make_memory_fallback(reason)
         self._provider_resolved = True
+        if dropped is not None:
+            await self._close_dropped(dropped)
+
+    async def _close_dropped(self, provider: BaseSessionProvider) -> None:
+        """Close a provider the client no longer uses. Never raises."""
+        try:
+            await asyncio.wait_for(provider.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except Exception as e:  # noqa: BLE001 — cleanup must not mask the fallback
+            logger.debug("Closing the dropped session provider failed: %s", e)
 
     # -------------------------------------------------------------------------
     # Session ownership
@@ -465,7 +519,9 @@ class SessionClient:
                 or self._session_config.fallback_mode == "fail"
             ):
                 raise
-            self._degrade_to_memory(f"Redis became unreachable mid-session ({e})")
+            await self._degrade_to_memory(
+                f"{_display_name(provider.provider_name)} became unreachable mid-session ({e})"
+            )
             return await getattr(self._provider, method)(*args, **kwargs)
 
     def _initialize_provider(self) -> None:
@@ -488,12 +544,20 @@ class SessionClient:
                 )
                 return
 
+            if provider_name in _DISPLAY_NAMES and provider_name not in available:
+                # A built-in store whose package is missing: same policy as the
+                # async path, with the real cause rather than "unknown provider".
+                self._provider = self._fallback_or_fail(_not_installed_message(provider_name))
+                self._provider_resolved = True
+                return
+
             if provider_name not in available:
                 logger.warning(
-                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'",
+                    "Provider '%s' not available. Available providers: %s. Falling back to '%s'. %s",
                     provider_name,
                     available,
                     available[0],
+                    unknown_provider_message(provider_name),
                 )
                 provider_name = available[0]
 
@@ -502,8 +566,9 @@ class SessionClient:
 
         except ImportError as e:
             logger.error("Failed to import session provider: %s", e)
-        except InsecureConfigurationError:
-            # Fail closed on an insecure secret rather than silently leaving the
+        except (InsecureConfigurationError, SessionConnectionError):
+            # Fail closed on an insecure secret, or a missing store with
+            # SESSION_FALLBACK_MODE=fail, rather than silently leaving the
             # provider unset (which surfaces later as a confusing "not available").
             raise
         except Exception as e:

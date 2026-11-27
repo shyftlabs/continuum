@@ -44,7 +44,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,postgres]"
       - name: Unit tests
         # Legacy issue-investigation tests (test_issue*.py) are excluded: they
         # require optional extras (temporalio/deepeval) and an outdated asyncio
@@ -66,6 +66,39 @@ jobs:
       - name: Install (lowest direct dependencies)
         run: |
           python -m pip install --upgrade pip uv
-          uv pip install --system --resolution lowest-direct -e ".[dev]"
+          uv pip install --system --resolution lowest-direct -e ".[dev,postgres]"
       - name: Unit tests
         run: pytest tests/unit --ignore-glob='tests/unit/test_issue*.py' -q
+
+  test-postgres:
+    name: Tests (3.13, PostgreSQL sessions)
+    # Runs the PostgresSessionProvider integration tests against a real server.
+    # Trust auth keeps any password out of the DSN; the container is reachable
+    # only from this job.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CONTINUUM_TEST_POSTGRES_DSN: postgresql://postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,postgres]"
+      - name: PostgreSQL integration tests
+        run: pytest tests/integration/test_postgres_session.py -m postgres -q

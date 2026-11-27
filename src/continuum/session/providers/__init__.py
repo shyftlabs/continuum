@@ -6,6 +6,7 @@ available provider implementations.
 
 Available Providers:
     - RedisSessionProvider: Uses Redis for session storage
+    - PostgresSessionProvider: Uses PostgreSQL (asyncpg, the [postgres] extra)
 
 Adding New Providers:
     1. Create a new file in this directory (e.g., dynamodb.py)
@@ -32,6 +33,17 @@ try:
 except ImportError:
     RedisSessionProvider = None  # type: ignore
     _REDIS_AVAILABLE = False
+
+
+try:
+    import asyncpg  # noqa: F401
+
+    from continuum.session.providers.postgres import PostgresSessionProvider
+
+    _POSTGRES_AVAILABLE = True
+except ImportError:
+    PostgresSessionProvider = None  # type: ignore
+    _POSTGRES_AVAILABLE = False
 
 
 def register_provider(name: str, provider_class: type[BaseSessionProvider]) -> None:
@@ -98,6 +110,8 @@ def is_redis_available() -> bool:
 register_provider("memory", MemorySessionProvider)
 if _REDIS_AVAILABLE and RedisSessionProvider is not None:
     register_provider("redis", RedisSessionProvider)
+if _POSTGRES_AVAILABLE and PostgresSessionProvider is not None:
+    register_provider("postgres", PostgresSessionProvider)
 
 
 __all__ = [
@@ -115,4 +129,5 @@ __all__ = [
     "MemorySessionProvider",
     # Providers (conditional)
     "RedisSessionProvider",
+    "PostgresSessionProvider",
 ]

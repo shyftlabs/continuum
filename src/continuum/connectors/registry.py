@@ -52,17 +52,19 @@ def all_connectors() -> dict[str, BaseConnector[Any]]:
 
 
 def register_default_connectors(*, replace: bool = True) -> None:
-    """Register the built-in connectors (redis, vector_store, temporal).
+    """Register the built-in connectors (redis, postgres, vector_store, temporal).
 
     Idempotent by default (``replace=True``). Each is constructed from the
     global settings; consumers can re-register with a custom-config instance.
     """
     from continuum.connectors.langfuse import LangfuseConnector
+    from continuum.connectors.postgres import PostgresConnector
     from continuum.connectors.redis import RedisConnector
     from continuum.connectors.temporal import TemporalConnector
     from continuum.connectors.vector_store import VectorStoreConnector
 
     register_connector("redis", RedisConnector(), replace=replace)
+    register_connector("postgres", PostgresConnector(), replace=replace)
     register_connector("vector_store", VectorStoreConnector(), replace=replace)
     register_connector("temporal", TemporalConnector(), replace=replace)
     register_connector("langfuse", LangfuseConnector(), replace=replace)

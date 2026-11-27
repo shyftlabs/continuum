@@ -219,6 +219,67 @@ connection error. It serves two roles: an explicit zero-dependency provider for
 ephemeral or test flows, and the automatic fallback target when Redis is
 unreachable (see §10).
 
+The third is `PostgresSessionProvider` (`provider="postgres"`, install
+`shyftlabs-continuum[postgres]`): durable sessions in a PostgreSQL database the
+product already runs, so chat history sits under the same backups, access
+rules and data-residency controls as the rest of its data, with no second
+store to secure. Two tables, `continuum_sessions` and
+`continuum_session_messages` (prefix from `SESSION_POSTGRES_TABLE_PREFIX`),
+created on first use when they are missing. If they already exist the DDL is
+skipped, so an application role that does not own them needs only `SELECT`,
+`INSERT`, `UPDATE`, `DELETE` on both tables and `USAGE` on the messages id
+sequence; set `SESSION_POSTGRES_CREATE_TABLES=false` to skip the check as well.
+Deterministic ids, TTL refreshed on every touch and sliding-window trim work as
+with Redis. Retention does not: an expired row reads as missing but stays in
+the database until `purge_expired()` runs (call it from a periodic job) or the
+session is reopened or deleted. `purge_expired()` deletes `batch_size` sessions
+(default 1000) per statement, each under the query timeout, until none are
+left; lower it when sessions hold many messages.
+
+Connecting, each query and waiting for a pooled connection time out after
+`SESSION_POSTGRES_TIMEOUT_SECONDS` (default 5), so a hung database fails over
+per `SESSION_FALLBACK_MODE` like an unreachable one. With the default
+`degrade`, one lock-wait or pool-acquire timeout moves the process to in-memory
+sessions until it restarts, and existing sessions then read as not found; set
+`SESSION_FALLBACK_MODE=fail` when sessions must stay durable. A pool passed in with
+`pool=` keeps its own `command_timeout`. NUL characters in message content and
+metadata are dropped on write and a lone surrogate (half of a split emoji)
+becomes U+FFFD, because PostgreSQL text cannot hold either.
+
+A PostgreSQL session client belongs to one process and one event loop. Its
+asyncpg pool is created on first use and bound to the loop that was running
+then. Calls from another loop (for example `asyncio.run()` per request) or from
+a process forked after that first use fail, and with the default
+`SESSION_FALLBACK_MODE` the client then degrades to memory for the rest of the
+process. Create the client inside each worker process, after any fork, and use
+it from that process's one event loop.
+
+`SESSION_PROVIDER` takes `redis` (the default), `postgres` (or `postgresql`)
+or `memory`. Case and surrounding spaces are ignored and an empty value means
+`redis`. Any other value is kept as given, so a provider registered with
+`register_provider()` can be selected from the environment. A name that is
+neither built in nor registered is reported by startup validation and on the
+first session call, with the list of valid names; it does not stop the import.
+With `SESSION_PROVIDER=postgres`, startup validation does not need
+`SESSION_REDIS_HOST` and only warns when `SESSION_POSTGRES_DSN` is unset, since
+a provider given `pool=` has none. The health checks probe the
+store `SESSION_PROVIDER` names. `check_all_health()` also follows a store set
+up in code with `SessionConfig(provider=...)` or `pool=` on the container's
+session client; `connectors.health_check_all()` reads only the environment.
+
+```python
+# From settings: SESSION_PROVIDER=postgres, SESSION_POSTGRES_DSN=postgresql://...
+client = SessionClient(SessionConfig(provider="postgres"))
+
+# Or reuse the application's own asyncpg pool (never closed by the provider)
+from continuum.session.providers.postgres import PostgresSessionProvider
+client.set_provider(PostgresSessionProvider(SessionConfig(provider="postgres"), pool=app_pool))
+
+# Register the client so agents and check_all_health() use it
+from continuum.core.container import get_container
+get_container().set_session_client(client)
+```
+
 To swap in a custom provider:
 
 ```python

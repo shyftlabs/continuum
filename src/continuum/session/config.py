@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from continuum.config import settings
+from continuum.config import SESSION_PROVIDERS, normalize_session_provider, settings
 from continuum.security.secrets_guard import (
     MIN_OFFLINE_SECRET_LENGTH,
     enforce_credential,
@@ -53,8 +53,8 @@ class SessionConfig(BaseModel):
 
     # Provider Selection
     provider: str = Field(
-        default="redis",
-        description="Session provider to use: 'redis', 'dynamodb', etc.",
+        default_factory=lambda: settings.session_provider,
+        description="Session provider to use: 'redis', 'postgres' or 'memory'.",
     )
 
     # Session Enable/Disable
@@ -100,11 +100,46 @@ class SessionConfig(BaseModel):
         ),
     )
 
+    # PostgreSQL Configuration (for the postgres provider)
+    postgres_dsn: str | None = Field(
+        default_factory=lambda: settings.session_postgres_dsn,
+        # The DSN can carry the password; keep it out of repr(SessionConfig()).
+        repr=False,
+        description="PostgreSQL DSN for session storage (provider='postgres')",
+    )
+    postgres_table_prefix: str = Field(
+        default_factory=lambda: settings.session_postgres_table_prefix,
+        description="Table name prefix: <prefix>s and <prefix>_messages",
+    )
+    postgres_max_connections: int = Field(
+        default_factory=lambda: settings.session_postgres_max_connections,
+        description="Pool size when the provider opens its own pool",
+    )
+    postgres_create_tables: bool = Field(
+        default_factory=lambda: settings.session_postgres_create_tables,
+        description="Create the session tables on first use if they are missing",
+    )
+    postgres_timeout_seconds: float = Field(
+        default_factory=lambda: settings.session_postgres_timeout_seconds,
+        gt=0,
+        # Check the value from the environment too, not only one passed in.
+        validate_default=True,
+        description="Timeout for connecting, each query and acquiring a pooled connection",
+    )
+
     # Connection Pool Configuration
     redis_max_connections: int = Field(
         default_factory=lambda: settings.session_redis_max_connections,
         description="Maximum Redis connections in pool (floored at the safe minimum)",
     )
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, v: object) -> object:
+        # 'Redis', ' redis', 'postgresql' and '' mean what SESSION_PROVIDER
+        # means for them. Any other name is kept as given: custom providers are
+        # registered and looked up case-sensitively.
+        return normalize_session_provider(v)
 
     @field_validator("redis_max_connections")
     @classmethod
@@ -313,20 +348,34 @@ class SessionConfig(BaseModel):
         # Provider-specific configuration checks
         if self.provider == "redis":
             return bool(self.redis_host)
-        # Add checks for other providers as they're added
-        # elif self.provider == "dynamodb":
-        #     return bool(self.dynamodb_table_name)
+        if self.provider == "postgres":
+            return bool(self.postgres_dsn)
+        if self.provider == "memory":
+            return True
+
+        # A custom provider registered with register_provider() manages its
+        # own settings.
+        from continuum.session.providers import list_providers
+
+        if self.provider in list_providers():
+            return True
 
         # Unknown provider — fail explicitly rather than silently proceeding
         # and crashing later with a confusing error.
-        raise ValueError(
-            f"Unknown session provider: '{self.provider}'. "
-            f"Supported providers: 'redis'. "
-            f"Check the SESSION_PROVIDER environment variable."
-        )
+        raise ValueError(unknown_provider_message(self.provider))
 
     def get_redis_url(self) -> str:
         """Get Redis connection URL."""
         auth = f":{self.redis_password}@" if self.redis_password else ""
         protocol = "rediss" if self.redis_ssl else "redis"
         return f"{protocol}://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+def unknown_provider_message(name: str) -> str:
+    """The error text for a SESSION_PROVIDER that names no known provider."""
+    return (
+        f"Unknown session provider: {name!r}. "
+        f"Valid values: {', '.join(repr(p) for p in SESSION_PROVIDERS)} "
+        "(or a name registered with register_provider()). "
+        "Check the SESSION_PROVIDER environment variable."
+    )

@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load .env file into os.environ BEFORE creating Settings
@@ -80,6 +80,33 @@ def _resolve_default_model(
     if has_gemini:
         return gemini_model
     return "gpt-4o-mini"
+
+
+# Built-in session stores selectable with SESSION_PROVIDER.
+SESSION_PROVIDERS = ("redis", "postgres", "memory")
+
+# Other spellings of a built-in name. "postgresql" is the DSN scheme.
+_SESSION_PROVIDER_ALIASES = {"postgresql": "postgres"}
+
+
+def normalize_session_provider(value: object) -> object:
+    """Normalise a session provider name without rejecting any.
+
+    A built-in name (or alias) is matched ignoring case and surrounding
+    spaces, and an empty value means the default ("redis"). Any other string
+    is kept as given: custom providers are registered and looked up
+    case-sensitively, and an unknown name is reported where sessions are used
+    (startup validation, the session client), not when settings load.
+    """
+    if not isinstance(value, str):
+        return value
+    name = value.strip().lower()
+    if not name:
+        return "redis"
+    name = _SESSION_PROVIDER_ALIASES.get(name, name)
+    if name in SESSION_PROVIDERS:
+        return name
+    return value
 
 
 class Settings(BaseSettings):
@@ -302,6 +329,7 @@ class Settings(BaseSettings):
     # Session Configuration (Redis for short-term memory)
     # -------------------------------------------------------------------------
     session_enabled: bool = True  # Enable/disable session management
+    session_provider: str = "redis"  # Session store: one of SESSION_PROVIDERS
     session_redis_host: str = "localhost"  # Redis host for sessions
     session_redis_port: int = 6380  # Redis port for sessions (different from Langfuse Redis)
     session_redis_password: str | None = None  # Redis password (matches docker-compose default)
@@ -322,6 +350,14 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 86400 * 7  # Session TTL: 7 days (configurable)
     session_max_messages: int = 1000  # Maximum messages per session (configurable, for scalability)
     session_key_prefix: str = "orchestrator:session"  # Redis key prefix for sessions
+    # PostgreSQL session store (SESSION_PROVIDER=postgres, needs the [postgres] extra)
+    session_postgres_dsn: str | None = None  # e.g. postgresql://app@db-host:5432/app
+    session_postgres_table_prefix: str = "continuum_session"  # tables <prefix>s, <prefix>_messages
+    session_postgres_max_connections: int = 10  # pool size when the provider opens its own pool
+    session_postgres_create_tables: bool = True  # create the tables on first use if missing
+    # Bounds connecting, each query and waiting for a pooled connection, so a hung
+    # database or an exhausted pool fails over like an unreachable one.
+    session_postgres_timeout_seconds: float = Field(default=5.0, gt=0)
     # Long-term memory (mem0) write timing: 'sync' (await before returning) or
     # 'background' (fire-and-forget, faster responses, eventual consistency).
     # Default 'background' — the mem0 fact-extraction (an LLM call) is kept off
@@ -508,6 +544,18 @@ class Settings(BaseSettings):
     # When True: Only flush Langfuse traces, don't shutdown client. Don't close Redis connections.
     # When False: Fully shutdown Langfuse and close Redis connections on shutdown.
 
+    @field_validator("session_provider", mode="before")
+    @classmethod
+    def _normalize_session_provider(cls, v: object) -> object:
+        """Normalise SESSION_PROVIDER; never reject it here.
+
+        Settings load when ``continuum`` is imported, so raising here would
+        break the import (and ``continuum --help``) even with sessions off.
+        Unknown names are reported by startup validation and the session
+        client instead.
+        """
+        return normalize_session_provider(v)
+
     @model_validator(mode="after")
     def _apply_provider_aware_defaults(self) -> "Settings":
         """Make the OpenAI-model defaults provider-aware (TL-65).
@@ -545,13 +593,19 @@ class Settings(BaseSettings):
         parts: list[str] = []
         for field_name in type(self).model_fields:
             value = getattr(self, field_name)
-            if any(
+            if "_dsn" in field_name and isinstance(value, str):
+                # A DSN can end in its password (?password=...): show none of it.
+                parts.append(f"{field_name}='****'")
+            elif any(
                 s in field_name for s in ("_key", "_secret", "_password", "api_key")
             ) and isinstance(value, str):
                 parts.append(f"{field_name}={mask_value(value)!r}")
             else:
                 parts.append(f"{field_name}={value!r}")
         return f"Settings({', '.join(parts)})"
+
+    # pydantic's __str__ does not go through __repr__; print the masked form.
+    __str__ = __repr__
 
 
 @lru_cache

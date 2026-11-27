@@ -2,7 +2,7 @@
 Health Check Module - Comprehensive dependency health monitoring.
 
 Provides health checks for all SDK dependencies:
-- Redis (Session storage)
+- Redis or PostgreSQL (Session storage, per SESSION_PROVIDER)
 - Qdrant (Vector storage for memory)
 - Langfuse (Observability)
 - LLM Providers (OpenAI, Anthropic, Gemini)
@@ -17,10 +17,14 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from continuum.config import resolve_milvus_uri, settings
 from continuum.logging import get_logger
+
+if TYPE_CHECKING:
+    from continuum.session.base import BaseSessionProvider
+    from continuum.session.config import SessionConfig
 
 logger = get_logger(__name__)
 
@@ -76,6 +80,50 @@ class OverallHealthResult:
         }
 
 
+def _active_session() -> tuple[SessionConfig | None, BaseSessionProvider | None]:
+    """The session config the application uses, and its provider once chosen.
+
+    Read from the container's session client when there is one, else from the
+    container's session settings. Observes only: never creates the client.
+    Returns no config when sessions are off or none could be read; callers then
+    use ``settings.session_provider``. It never builds ``SessionConfig()`` from
+    the environment itself, so an unrelated session setting (for example
+    ``SESSION_HASH_IDS`` without a strong secret) cannot fail a health check.
+    """
+    from continuum.session.config import SessionConfig
+
+    if not settings.session_enabled:
+        return None, None
+    try:
+        from continuum.core import container as container_module
+
+        # Do not create the global container: one made here would ignore the
+        # ContainerConfig the application passes to get_container() later.
+        container = container_module._global_container
+        if container is None:
+            return None, None
+        if container.has_session_client():
+            client = container.session_client
+            config = getattr(client, "config", None)
+            if isinstance(config, SessionConfig):
+                return config, getattr(client, "active_provider", None)
+        return container.configured_session_config(), None
+    except Exception:  # noqa: BLE001 — fall back to settings.session_provider
+        return None, None
+
+
+def _session_store_name(config: SessionConfig | None, provider: BaseSessionProvider | None) -> str:
+    """'postgres' or 'redis': the durable store the session client uses or will use.
+
+    A provider in use wins over the config (one injected with set_provider()),
+    except the in-memory fallback, which stands in for the configured store.
+    """
+    name = getattr(provider, "provider_name", None)
+    if name in ("redis", "postgres"):
+        return name
+    return config.provider if config is not None else settings.session_provider
+
+
 class HealthCheck:
     """
     Health checker for all SDK dependencies.
@@ -105,7 +153,10 @@ class HealthCheck:
 
     def _register_default_checks(self) -> None:
         """Register default health checks based on configuration."""
-        self._checks["redis"] = self._check_redis
+        # Probe the session store actually in use: a PostgreSQL-only setup has no
+        # Redis, and reporting it unhealthy would mark the whole service unhealthy.
+        # check_all() looks again, since the store can be set up after this runs.
+        self._sync_session_store_check()
         # Use configured vector store provider instead of always Qdrant
         if settings.vector_store_provider == "milvus":
             self._checks["milvus"] = self._check_milvus
@@ -115,6 +166,22 @@ class HealthCheck:
         self._checks["llm"] = self._check_llm
         self._checks["temporal"] = self._check_temporal
         self._checks["session_persistence"] = self._check_session_persistence
+
+    def _sync_session_store_check(self) -> None:
+        """Register the Redis or the PostgreSQL check, whichever store is in use.
+
+        Only the built-in checks are swapped; one registered under the same name
+        with register_check() is left alone.
+        """
+        defaults = {"redis": self._check_redis, "postgres": self._check_postgres}
+        if any(name in self._checks and self._checks[name] != fn for name, fn in defaults.items()):
+            return
+        config, provider = _active_session()
+        wanted = "postgres" if _session_store_name(config, provider) == "postgres" else "redis"
+        for name in defaults:
+            if name != wanted:
+                self._checks.pop(name, None)
+        self._checks.setdefault(wanted, defaults[wanted])
 
     def register_check(
         self,
@@ -142,6 +209,7 @@ class HealthCheck:
         """
         start_time = time.time()
         checks: list[HealthCheckResult] = []
+        self._sync_session_store_check()
 
         # Run all checks concurrently with timeout
         tasks = []
@@ -336,6 +404,77 @@ class HealthCheck:
                     "error": str(e),
                 },
             )
+
+    async def check_postgres(self) -> HealthCheckResult:
+        """Check PostgreSQL connectivity (the postgres session provider)."""
+        return await self._check_postgres()
+
+    async def _check_postgres(self) -> HealthCheckResult:
+        """Internal PostgreSQL health check: connect and run one query."""
+        start_time = time.time()
+        config, provider = _active_session()
+
+        if not settings.session_enabled or (config is not None and not config.enabled):
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.HEALTHY,
+                message="PostgreSQL disabled (SESSION_ENABLED=false)",
+                details={"enabled": False},
+            )
+
+        # A provider already in use (for example one given the application's pool
+        # with pool=) is probed itself: there may be no DSN to connect with.
+        if getattr(provider, "provider_name", None) == "postgres":
+            ok = await provider.aping()  # type: ignore[union-attr]
+            latency = (time.time() - start_time) * 1000
+            if ok:
+                return HealthCheckResult(
+                    name="postgres",
+                    status=HealthStatus.HEALTHY,
+                    message="PostgreSQL connection successful",
+                    latency_ms=latency,
+                    details={"enabled": True},
+                )
+            error = getattr(provider, "last_probe_error", None) or "probe failed"
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.UNHEALTHY,
+                message=f"PostgreSQL connection failed: {error}",
+                latency_ms=latency,
+                details={"error": error},
+            )
+
+        from continuum.connectors.postgres import PostgresConnector
+
+        # With no config read from the container, the connector builds one from
+        # settings; if that fails, the check reports it (it does not crash others).
+        connector = PostgresConnector(
+            config.model_copy(update={"provider": "postgres"}) if config is not None else None
+        )
+        target = {k: v for k, v in connector.describe().items() if k in ("host", "port")}
+        try:
+            version = await connector.server_version()
+        except ImportError:
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.UNHEALTHY,
+                message="asyncpg package not installed (pip install 'shyftlabs-continuum[postgres]')",
+            )
+        except Exception as e:
+            return HealthCheckResult(
+                name="postgres",
+                status=HealthStatus.UNHEALTHY,
+                message=f"PostgreSQL connection failed: {type(e).__name__}: {e}",
+                latency_ms=(time.time() - start_time) * 1000,
+                details={**target, "error": f"{type(e).__name__}: {e}"},
+            )
+        return HealthCheckResult(
+            name="postgres",
+            status=HealthStatus.HEALTHY,
+            message="PostgreSQL connection successful",
+            latency_ms=(time.time() - start_time) * 1000,
+            details={"enabled": True, **target, "server_version": version},
+        )
 
     async def check_vector_store(self) -> HealthCheckResult:
         """Check vector store connectivity (dispatches to configured provider)."""
