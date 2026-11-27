@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar
 
 import openai
 from openai import AsyncOpenAI, OpenAI
 
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
 from continuum.llm.exceptions import (
     LLMAuthenticationError,
@@ -87,6 +88,9 @@ def _is_reasoning_model(model: str) -> bool:
 class OpenAIProvider(BaseProvider):
     """Calls OpenAI (or Azure OpenAI) directly via the openai SDK."""
 
+    # Read the gateway's routing headers into gateway_routing (GatewayProvider).
+    _records_gateway_routing: ClassVar[bool] = False
+
     # Parameters each model has been observed to reject, keyed by normalized
     # model name. Seeded by the static prefix match above; extended at runtime
     # when an unrecognised model returns an unsupported-parameter 400, so a
@@ -140,9 +144,15 @@ class OpenAIProvider(BaseProvider):
         # shared dict cannot carry both.
         sync_kwargs = dict(kwargs)
         async_kwargs = dict(kwargs)
-        if (sync_http := build_sync_http_client()) is not None:
+        sync_http = build_sync_http_client()
+        async_http = build_async_http_client()
+        if self._records_gateway_routing:
+            # The gateway says which model it ran in response headers; keep them.
+            sync_http = gateway_routing.with_sync_hook(sync_http)
+            async_http = gateway_routing.with_async_hook(async_http)
+        if sync_http is not None:
             sync_kwargs["http_client"] = sync_http
-        if (async_http := build_async_http_client()) is not None:
+        if async_http is not None:
             async_kwargs["http_client"] = async_http
 
         self._client = OpenAI(**sync_kwargs)
@@ -510,7 +520,9 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            stream_model: str | None = None  # a tool-call-only turn has no content chunk
             for chunk in response:
+                stream_model = chunk.model or stream_model
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -529,6 +541,7 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=stream_model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,
@@ -559,7 +572,9 @@ class OpenAIProvider(BaseProvider):
             tc_acc: dict[int, dict[str, str]] = {}
             finish_reason: str | None = None
             emitted_content = False
+            stream_model: str | None = None  # a tool-call-only turn has no content chunk
             async for chunk in response:
+                stream_model = chunk.model or stream_model
                 choice = chunk.choices[0] if chunk.choices else None
                 delta = choice.delta if choice else None
                 if choice and choice.finish_reason:
@@ -578,6 +593,7 @@ class OpenAIProvider(BaseProvider):
                     )
             if tc_acc:
                 yield StreamChunk(
+                    model=stream_model,
                     tool_calls=self._build_tool_calls_from_acc(tc_acc),
                     finish_reason=finish_reason or "tool_calls",
                     is_finished=True,

@@ -65,6 +65,36 @@ To disable the gateway (direct provider calls), set `SMART_GATEWAY_URL=`
 to the prefix table. Deleting the var from a shell after it was exported is
 not enough if it's still exported elsewhere; prefer the empty value.
 
+#### Which model the gateway ran
+
+Each agent or workflow run through the gateway lists what the gateway did in
+`response.run_artifacts["gateway_routing"]` (and in the streamed `RUN_END`
+event's `data["gateway_routing"]`). There is one entry per HTTP attempt, not
+per model call: when the SDK retries (a 503, then a 200), each attempt has its
+own entry. A workflow run through `runner.run` or `run_stream` lists its
+steps' calls and its own (a merge, a completion check); the steps' own
+responses do not repeat them. For `runner.fork` of a workflow, and for a
+built-in workflow's `execute()` called directly on a new context, only the
+steps' calls are listed, not the workflow's own. A custom workflow's result is attached to only when it is an
+`AgentResponse` (on a copy); any other result is returned unchanged. A failed
+or cancelled run records nothing.
+
+```python
+resp = await runner.run(agent, "What is NAV?")
+for call in (resp.run_artifacts or {}).get("gateway_routing", []):
+    print(call.get("served_model"), call.get("router_attempts"), call.get("request_id"))
+```
+
+Each entry has whichever of these the gateway sent: `router_mode`,
+`router_complexity`, `router_domain`, `router_attempts` (served
+`model@provider:status` per attempt, so failovers show), `cache_status`,
+`timing` (the gateway's per-phase milliseconds), `ratelimit`, `request_id`
+(to find the call in gateway logs) and `status`. `served_model` is the model
+named in the reply: read from a non-streamed body, or, for `run_stream`, from
+the stream's chunks (tool-call turns and the model-tier router included).
+Timing values that are not finite numbers are dropped.
+Nothing is recorded for direct provider calls.
+
 ### Provider quirks (handled for you)
 
 - **Gemini** does not support tools and JSON mode simultaneously — the
@@ -378,7 +408,13 @@ new_messages, result = await mgr.compress_if_needed(messages, model="gpt-4o-mini
 `compressed_token_count`, `was_compressed`, `strategy_used`,
 `compression_ratio`, `latency_ms`, `cache_hit`, etc.
 
-To override per-agent: set `agent.config.context_management = cfg`.
+To override per-agent: set `agent.config.context_management = cfg`. The
+runner applies it both when it builds the agent's messages and in the
+compression pass inside `LLMClient.chat()` / `chat_stream()` on each turn.
+`get_progressive_context_manager()` returns one manager per process, and
+`compress_if_needed(config=None)` falls back to that manager's config, and so
+do both passes for an agent that sets no `context_management`. A direct
+`LLMClient.chat()` / `chat_stream()` call can pass `context_config=cfg`.
 
 ### Headroom compression (optional)
 

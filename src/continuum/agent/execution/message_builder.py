@@ -431,19 +431,18 @@ class MessageBuilder(IMessageBuilder):
         # Apply context management (proactive compression) if enabled
         try:
             from continuum.llm.context_management import (
-                ContextManagementConfig,
+                agent_context_config,
                 get_progressive_context_manager,
             )
 
-            # Get agent-specific config or use global defaults
-            context_config = None
-            if agent.config and agent.config.context_management:
-                context_config = agent.config.context_management
-            else:
-                context_config = ContextManagementConfig()
+            # The agent's own config, else the process-wide manager's (set with
+            # get_progressive_context_manager(config=...), defaults otherwise).
+            # The agent's config is not handed to get_progressive_context_manager:
+            # that would make it every other agent's process-wide default.
+            context_manager = get_progressive_context_manager()
+            context_config = agent_context_config(agent) or context_manager.config
 
             if context_config.enabled:
-                context_manager = get_progressive_context_manager(config=context_config)
                 messages, compression_result = await context_manager.compress_if_needed(
                     messages=messages,
                     model=agent.model,

@@ -15,6 +15,7 @@ from continuum.agent.exceptions import (
     StructuredOutputError,
 )
 from continuum.agent.execution.message_builder import CACHE_BREAKPOINT_KEY
+from continuum.agent.execution.tool_round import ToolRoundTracker
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     record_llm_turn,
@@ -233,14 +234,18 @@ class Executor(IExecutor):
         turns, reasoning pass, ReAct loop, structured-format — is gated
         automatically without threading policy params through each call. On
         handoff, the executor is re-entered for the new agent, refreshing the
-        ambient policy to that agent's store/name.
+        ambient policy to that agent's store/name. The agent's own
+        ``ContextManagementConfig`` is published the same way, so the compression
+        pass inside ``llm_client.chat()`` follows it.
         """
+        from continuum.llm.context_management import agent_context_config, use_context_config
         from continuum.llm.headroom.compressor import use_run_compressor_if_enabled
         from continuum.security.policy_context import use_active_policy
 
         with (
             use_active_policy(getattr(agent, "policy_store", None), agent.name, context),
             use_run_compressor_if_enabled(),
+            use_context_config(agent_context_config(agent)),
         ):
             return await self._execute_loop_impl(agent, messages, context, run_state)
 
@@ -289,6 +294,7 @@ class Executor(IExecutor):
                 reasoning_usage.total_tokens,
             )
 
+        tool_rounds = ToolRoundTracker(agent)
         while turn < context.max_turns:
             turn += 1
             run_state.turn_count = turn
@@ -867,6 +873,9 @@ class Executor(IExecutor):
                                         "content": f"Handoff failed: {handoff_result.error or 'Unknown error'}",
                                     }
                                 )
+
+                    if regular_tool_calls:
+                        await tool_rounds.after_round(turn, regular_tool_calls, messages)
 
                     # Update state
                     from continuum.agent.utils.message_utils import message_to_dict
