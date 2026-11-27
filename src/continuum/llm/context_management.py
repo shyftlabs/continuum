@@ -62,6 +62,26 @@ _summary_status: ContextVar[_SummaryStatus | None] = ContextVar(
 )
 
 
+# After a summary call fails with reuse on, the same older history (or one that
+# starts with it, as in the next tool step) gets the text fallback without a new
+# call for this long. Its fallback is not cached, so without this every tool
+# step of a turn waited out the summarizer again during an outage.
+_FAILED_SUMMARY_TTL_SECONDS = 60.0
+
+
+def _reuse_budget(config: ContextManagementConfig, threshold_tokens: int) -> dict[str, int]:
+    """``threshold_tokens=`` for _compress_summarize, only when summary reuse is on.
+
+    A subclass that overrides _compress_summarize with the older
+    ``(messages, model, config)`` signature keeps working with reuse off (the
+    default): passing the keyword always made it raise TypeError, which the
+    callers catch and answer with truncation, so summarization was lost.
+    """
+    if config.summary_reuse_messages > 0:
+        return {"threshold_tokens": threshold_tokens}
+    return {}
+
+
 def _key_part(value: Any) -> bytes:
     """One newline-terminated line of canonical JSON for the summary cache key."""
     return (json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) + "\n").encode()
@@ -257,6 +277,8 @@ class SummaryCache:
 
     def __init__(self, ttl_seconds: int = 3600, max_size: int = DEFAULT_MAX_SIZE):
         self._cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
+        # Keys of older histories whose summary call failed, with the time.
+        self._failed: dict[str, float] = {}
         self._lock = threading.Lock()
         self._ttl = ttl_seconds
         self._max_size = max_size
@@ -310,6 +332,32 @@ class SummaryCache:
                     self._cache[keys[n - 1]] = (entry[0], now)
                     return n, entry[0]
         return None
+
+    def mark_failed(self, messages: list[dict[str, Any]], namespace: str = "") -> None:
+        """Record that summarizing ``messages`` just failed (see failed_recently)."""
+        key = self._generate_key(messages, namespace)
+        now = time.time()
+        with self._lock:
+            self._failed = {
+                k: t for k, t in self._failed.items() if now - t < _FAILED_SUMMARY_TTL_SECONDS
+            }
+            self._failed.pop(key, None)
+            self._failed[key] = now
+            while len(self._failed) > self._max_size:
+                self._failed.pop(next(iter(self._failed)))
+
+    def failed_recently(self, messages: list[dict[str, Any]], namespace: str = "") -> bool:
+        """True when summarizing ``messages``, or a prefix of them, failed in the
+        last ``_FAILED_SUMMARY_TTL_SECONDS``. The time is not refreshed, so the
+        summarizer is tried again after that."""
+        if not self._failed:
+            return False
+        keys = self._prefix_keys(messages, namespace)
+        now = time.time()
+        with self._lock:
+            return any(
+                now - self._failed.get(k, float("-inf")) < _FAILED_SUMMARY_TTL_SECONDS for k in keys
+            )
 
     def _evict_expired_and_lru(self) -> None:
         """Evict expired entries, then oldest if still over max_size. Must be called under lock."""
@@ -552,7 +600,7 @@ class ProgressiveContextManager:
                         messages=messages,
                         model=model,
                         config=effective_config,
-                        threshold_tokens=threshold_tokens,
+                        **_reuse_budget(effective_config, threshold_tokens),
                     )
                 else:  # TRUNCATE_OLDEST
                     compressed, result = await self._compress_truncate(
@@ -666,7 +714,7 @@ class ProgressiveContextManager:
                 messages=messages,
                 model=model,
                 config=config,
-                threshold_tokens=threshold_tokens,
+                **_reuse_budget(config, threshold_tokens),
             )
 
             # Check if summarization was sufficient
@@ -716,7 +764,9 @@ class ProgressiveContextManager:
 
         ``threshold_tokens`` is the budget an earlier turn's reused summary must
         fit under, with the messages kept after it; without one, no summary is
-        reused.
+        reused. The callers pass it only when ``summary_reuse_messages`` is above
+        0, so an override with the ``(messages, model, config)`` signature still
+        works with reuse off.
         """
         if not messages:
             return [], CompressionResult(
@@ -815,6 +865,18 @@ class ProgressiveContextManager:
 
         # Summarize if not cached
         summarized = False
+        if (
+            not summary_messages
+            and cache
+            and config.summary_reuse_messages > 0
+            and cache.failed_recently(older_messages, namespace)
+        ):
+            # The summarizer failed on this history (or the start of it) moments
+            # ago, e.g. in the previous tool step: use the text fallback, uncached,
+            # instead of calling it again.
+            logger.debug("Summary call failed recently for this history, using text fallback")
+            summary_messages = self._text_summary(older_messages)
+
         if not summary_messages:
             status = _SummaryStatus()
             token = _summary_status.set(status)
@@ -834,6 +896,8 @@ class ProgressiveContextManager:
             # before, so the same history does not wait out the summarizer again.
             if cache and summary_messages and (summarized or config.summary_reuse_messages <= 0):
                 cache.set(older_messages, summary_messages, namespace)
+            elif cache and not summarized:
+                cache.mark_failed(older_messages, namespace)
 
         # Combine: system + summary + recent
         compressed = system_messages + summary_messages + recent_messages

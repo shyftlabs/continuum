@@ -26,6 +26,11 @@ Covers:
   on, and a tool-call message with ``content: None`` does not break the fallback
 - compression goes through _summarize_messages, so overrides apply
 - one agent's setting does not become the process-wide fallback
+- with reuse on, a summary call that just failed is not repeated for the same
+  older history, or one that starts with it, for _FAILED_SUMMARY_TTL_SECONDS:
+  a tool loop during a summarizer outage makes no more calls than with reuse off
+- with reuse off, an override of _compress_summarize with the older
+  ``(messages, model, config)`` signature still summarizes
 - the kept messages never start inside a tool exchange
 """
 
@@ -35,6 +40,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from continuum.config import Settings, settings
 from continuum.llm.context_management import (
+    _FAILED_SUMMARY_TTL_SECONDS,
+    CompressionStrategy,
     ContextManagementConfig,
     ProgressiveContextManager,
     SummaryCache,
@@ -254,6 +261,12 @@ async def test_compress_if_needed_on_a_small_window_keeps_the_summary():
     assert reused  # reuse still happens when it fits
 
 
+def _expire_failures(manager) -> None:
+    """Age the recorded summary failures past _FAILED_SUMMARY_TTL_SECONDS."""
+    for cache in manager._caches.values():
+        cache._failed = {k: t - _FAILED_SUMMARY_TTL_SECONDS - 1 for k, t in cache._failed.items()}
+
+
 async def test_failed_summary_is_not_cached_or_reused():
     config = ContextManagementConfig(keep_recent_messages=1, summary_reuse_messages=4)
     manager, llm = _manager(config)
@@ -262,12 +275,14 @@ async def test_failed_summary_is_not_cached_or_reused():
     first, _ = await _turn(manager, config, 3)
     assert first[0]["content"].startswith("Previous conversation (")  # text fallback
 
-    # same history again: no cache hit, the model is tried again
+    # same history again, after the failure window: no cache hit, the model is tried again
+    _expire_failures(manager)
     _, again = await _turn(manager, config, 3)
     assert not again.cache_hit
     assert llm.chat.await_count == 2
 
     # next turn: nothing to reuse, the model is tried again
+    _expire_failures(manager)
     _, later = await _turn(manager, config, 4)
     assert not later.summary_reused
     assert llm.chat.await_count == 3
@@ -339,7 +354,9 @@ async def test_an_empty_summary_reply_is_not_cached_or_reused():
     first, _ = await _turn(manager, config, 3)
     assert first[0]["content"].startswith("Previous conversation (")  # text fallback
 
+    _expire_failures(manager)
     _, again = await _turn(manager, config, 3)
+    _expire_failures(manager)
     _, later = await _turn(manager, config, 4)
     assert not again.cache_hit
     assert not later.summary_reused
@@ -471,3 +488,112 @@ async def test_one_agents_reuse_setting_is_not_the_process_wide_fallback(monkeyp
     await builder.prepare_messages(agent, "hello", create_run_context())
 
     assert cm.get_progressive_context_manager().config.summary_reuse_messages == 0
+
+
+def _tool_loop_step(step: int) -> list[dict]:
+    """A chat of 4 turns, then the current turn's question and ``step`` tool exchanges."""
+    msgs = _chat(4) + [{"role": "user", "content": "current question"}]
+    for i in range(1, step + 1):
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "t"}}],
+            }
+        )
+        msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result {i}"})
+    return msgs
+
+
+async def _tool_loop_summary_calls(reuse: int) -> int:
+    config = ContextManagementConfig(
+        keep_recent_messages=2,
+        summary_reuse_messages=reuse,
+        compression_strategy=CompressionStrategy.SUMMARIZE_OLD,
+    )
+    manager, llm = _manager(config)
+    llm.chat = AsyncMock(side_effect=TimeoutError())
+    manager._context_window_manager.count_tokens = MagicMock(return_value=10_000)
+    manager._context_window_manager.get_model_limits = MagicMock(
+        return_value=MagicMock(effective_input_limit=10_000)
+    )
+    for step in range(1, 7):
+        await manager.compress_if_needed(_tool_loop_step(step), "gpt-4o-mini", config=config)
+    return llm.chat.await_count
+
+
+async def test_a_failing_summarizer_is_not_called_on_every_tool_step_with_reuse_on():
+    """6-step tool loop while the summarizer times out: with reuse on, the failed
+    history is not summarized again within the turn, so it makes no more calls
+    than with reuse off (each call can wait out summarization_timeout)."""
+    with_reuse = await _tool_loop_summary_calls(4)
+    without_reuse = await _tool_loop_summary_calls(0)
+    assert with_reuse <= without_reuse
+    assert with_reuse == 1
+
+
+async def test_a_recent_failure_covers_longer_histories_until_it_expires():
+    config = ContextManagementConfig(keep_recent_messages=1, summary_reuse_messages=4)
+    manager, llm = _manager(config)
+    llm.chat = AsyncMock(side_effect=RuntimeError("summarizer down"))
+
+    first, _ = await _turn(manager, config, 3)
+    _, same = await _turn(manager, config, 3)
+    longer, _ = await _turn(manager, config, 4)
+    assert llm.chat.await_count == 1
+    assert longer[0]["content"].startswith("Previous conversation (")  # text fallback
+
+    # another config namespace is not covered
+    other = ContextManagementConfig(
+        keep_recent_messages=1, summary_reuse_messages=4, summarization_model="other-model"
+    )
+    await _turn(manager, other, 3)
+    assert llm.chat.await_count == 2
+
+    _expire_failures(manager)
+    await _turn(manager, config, 4)
+    assert llm.chat.await_count == 3
+
+
+def test_failure_records_are_bounded():
+    cache = SummaryCache(max_size=3)
+    for i in range(10):
+        cache.mark_failed([{"role": "user", "content": f"m{i}"}])
+    assert len(cache._failed) == 3
+    assert cache.failed_recently(
+        [{"role": "user", "content": "m9"}, {"role": "user", "content": "x"}]
+    )
+    assert not cache.failed_recently([{"role": "user", "content": "m0"}])
+
+
+class _DevSignature(ProgressiveContextManager):
+    """Overrides _compress_summarize with the signature it has on dev."""
+
+    calls = 0
+
+    async def _compress_summarize(self, messages, model, config):
+        _DevSignature.calls += 1
+        return await super()._compress_summarize(messages, model, config)
+
+
+async def test_an_override_with_the_dev_signature_still_summarizes_at_default_settings():
+    for strategy in (CompressionStrategy.SMART, CompressionStrategy.SUMMARIZE_OLD):
+        _DevSignature.calls = 0
+        config = ContextManagementConfig(
+            keep_recent_messages=1, summary_reuse_messages=0, compression_strategy=strategy
+        )
+        llm = MagicMock()
+        llm.chat = AsyncMock(return_value=MagicMock(content="the summary", usage=None))
+        manager = _DevSignature(config=config, llm_client=llm)
+        manager._context_window_manager = MagicMock(
+            count_tokens=MagicMock(side_effect=lambda msgs, _model: 1000 * len(msgs)),
+            get_model_limits=MagicMock(return_value=MagicMock(effective_input_limit=10_000)),
+        )
+
+        compressed, result = await manager.compress_if_needed(
+            _chat(6) + [{"role": "user", "content": "latest"}], "gpt-4o-mini", config=config
+        )
+
+        assert _DevSignature.calls == 1, strategy
+        assert result.summarization_used, strategy
+        assert "the summary" in compressed[0]["content"], strategy
