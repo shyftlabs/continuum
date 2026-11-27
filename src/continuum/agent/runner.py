@@ -32,6 +32,7 @@ from continuum.agent.execution.run_finalizer import RunFinalizer
 from continuum.agent.execution.run_lifecycle import RunLifecycle
 from continuum.agent.execution.stream_executor import StreamExecutor
 from continuum.agent.execution.tool_handler import ToolHandler
+from continuum.agent.execution.tool_round import ToolRoundTracker
 from continuum.agent.execution.trace_capture import (
     capture_snapshot,
     latest_step_payload,
@@ -72,7 +73,13 @@ from continuum.agent.workflow.router import RouterAgent
 from continuum.config import settings
 from continuum.config import settings as app_settings
 from continuum.core.container import Container, get_container
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
+from continuum.llm.context_management import (
+    agent_context_config,
+    reset_active_context_config,
+    set_active_context_config,
+)
 from continuum.llm.structured_output import (
     coerce_and_validate,
     is_pydantic_schema,
@@ -98,6 +105,15 @@ if TYPE_CHECKING:
     from continuum.tools import ToolExecutor
 
 logger = get_logger(__name__)
+
+
+def _gateway_routing_data(response: AgentResponse) -> dict[str, Any]:
+    """``{"gateway_routing": [...]}`` for a RUN_END event, or ``{}`` if none was recorded."""
+    artifacts = response.run_artifacts
+    # A custom workflow may return any run_artifacts (a list, a str); only a
+    # dict's non-empty list is routing.
+    routing = artifacts.get("gateway_routing") if isinstance(artifacts, dict) else None
+    return {"gateway_routing": routing} if isinstance(routing, list) and routing else {}
 
 
 class AgentRunner:
@@ -618,25 +634,33 @@ class AgentRunner:
         owns_trace = await self._lifecycle.start_trace(agent, context, None, input_text[:500])
 
         logger.info("Dispatching workflow agent '%s' to its execute() entry point", agent.name)
-        try:
-            response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
-            await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
-            return response
-        except Exception as e:
-            # Attach the failure to the request trace (as an event) and, if we
-            # own it, mark it ERROR + tear it down — so a failing step surfaces
-            # on the workflow trace instead of escaping untraced and later
-            # spawning an orphan "error-UNKNOWN_ERROR" trace.
-            await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
-            if isinstance(e, AgentError):
-                raise
-            raise AgentExecutionError(
-                str(e),
-                agent_name=agent.name,
-                run_id=context.run_id,
-                trace_id=context.trace_id,
-                original_error=e,
-            ) from e
+        # Steps share this run id; they leave their gateway routing entries for
+        # the workflow, which collects them with its own calls' after execute().
+        # A failed or cancelled run's entries are dropped on the way out.
+        with gateway_routing.collect_for_workflow(context.run_id) as collects_routing:
+            try:
+                response: AgentResponse = await agent.execute(input_text, self, context)  # type: ignore[attr-defined]
+                if collects_routing:
+                    response = gateway_routing.attach(
+                        response, gateway_routing.pop_run(context.run_id)
+                    )
+                await self._lifecycle.end_trace(agent, context, response, owns_trace=owns_trace)
+                return response
+            except Exception as e:
+                # Attach the failure to the request trace (as an event) and, if we
+                # own it, mark it ERROR + tear it down — so a failing step surfaces
+                # on the workflow trace instead of escaping untraced and later
+                # spawning an orphan "error-UNKNOWN_ERROR" trace.
+                await self._lifecycle.report_error(agent, context, e, None, owns_trace=owns_trace)
+                if isinstance(e, AgentError):
+                    raise
+                raise AgentExecutionError(
+                    str(e),
+                    agent_name=agent.name,
+                    run_id=context.run_id,
+                    trace_id=context.trace_id,
+                    original_error=e,
+                ) from e
 
     # =========================================================================
     # Run (non-streaming)
@@ -870,6 +894,9 @@ class AgentRunner:
                 original_error=e,
             ) from e
         finally:
+            # A cancelled run skips handle_error; drop its entries here (a no-op
+            # once the finalizer or handle_error claimed them).
+            gateway_routing.claim_run(ctx.run_id)
             exit_run_compressor(_hr_token)
             reset_active_policy(_policy_token)
 
@@ -944,12 +971,16 @@ class AgentRunner:
             # Seed the forked run's taint from the resume step so the gates
             # (model-routing/telemetry) enforce as they did on the parent.
             resume_ctx.data_labels = set(step.data_labels or [])
-            return await orchestrator.resume_from(
-                parent_trace=parent,
-                from_step=from_step,
-                override=override,
-                runner=self,
-                context=resume_ctx,
+            # The workflow's steps leave their gateway routing for it, as in a run.
+            return await gateway_routing.collect_from(
+                resume_ctx.run_id,
+                orchestrator.resume_from(
+                    parent_trace=parent,
+                    from_step=from_step,
+                    override=override,
+                    runner=self,
+                    context=resume_ctx,
+                ),
             )
 
         # Guard: forking a step inside a return-to-parent handoff is unsupported.
@@ -1267,7 +1298,11 @@ class AgentRunner:
                 type=EventType.RUN_END,
                 agent_name=agent.name,
                 run_id=_run_id,
-                data={"content": _content, "turn_count": response.turn_count},
+                data={
+                    "content": _content,
+                    "turn_count": response.turn_count,
+                    **_gateway_routing_data(response),
+                },
                 trace_id=response.trace_id,
             )
             return
@@ -1333,11 +1368,15 @@ class AgentRunner:
         # Publish the run's policy context so every llm_client.chat() in this
         # streaming run is gated by the data-label model-routing policy. A fresh
         # Headroom compressor rides the same boundary so CCR retrieve
-        # authorization (issued_hashes) is isolated to this run.
+        # authorization (issued_hashes) is isolated to this run. The agent's
+        # context_management is published the same way (None when it sets none),
+        # so every chat()/chat_stream() compression pass in this run, the
+        # structured-output formatting call included, follows it as in run().
         from continuum.llm.headroom.compressor import enter_run_compressor, exit_run_compressor
         from continuum.security.policy_context import reset_active_policy, set_active_policy
 
         _policy_token = set_active_policy(getattr(agent, "policy_store", None), agent.name, ctx)
+        _ctx_config_token = set_active_context_config(agent_context_config(agent))
         _hr_token = enter_run_compressor()
         try:
             messages = list(run_state.messages) if run_state.messages else []
@@ -1506,13 +1545,14 @@ class AgentRunner:
                     type=EventType.RUN_END,
                     agent_name=agent.name,
                     run_id=ctx.run_id,
-                    data={"content": content, "turn_count": 1},
+                    data={"content": content, "turn_count": 1, **_gateway_routing_data(response)},
                     trace_id=ctx.trace_id,
                 )
                 return
 
             content = ""
             turn = 0
+            tool_rounds = ToolRoundTracker(agent)
             while turn < ctx.max_turns:
                 turn += 1
                 # Filtered tools set by message_builder via apply_tool_attention.
@@ -1573,6 +1613,7 @@ class AgentRunner:
 
                 if last_seen_model and settings.smart_gateway_url:
                     logger.info("🎯 Gateway selected model: %s", last_seen_model)
+                    gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
 
                 content = "".join(content_parts)
 
@@ -1626,6 +1667,7 @@ class AgentRunner:
                                 tool_calls = chunk.tool_calls
                         if last_seen_model and settings.smart_gateway_url:
                             logger.info("🎯 Gateway selected model: %s", last_seen_model)
+                            gateway_routing.note_streamed_model(ctx.run_id, last_seen_model)
                         content = "".join(content_parts)
                 else:
                     pass  # CONTENT_DELTA already yielded live in the streaming loop above
@@ -1932,6 +1974,7 @@ class AgentRunner:
                                 }
                             )
 
+                    await tool_rounds.after_round(turn, tool_calls, messages)
                     continue
                 break
 
@@ -2009,6 +2052,7 @@ class AgentRunner:
                     if structured_output
                     else None,
                     "structured_output_error": structured_output_error,
+                    **_gateway_routing_data(response),
                 },
                 trace_id=ctx.trace_id,
             )
@@ -2042,8 +2086,12 @@ class AgentRunner:
             ) from e
         finally:
             self._close_abandoned_trace(ctx, run_state)
+            # A cancelled or early-closed stream skips handle_error; drop its
+            # entries here (a no-op once they were claimed).
+            gateway_routing.claim_run(ctx.run_id)
             exit_run_compressor(_hr_token)
             try:
+                reset_active_context_config(_ctx_config_token)
                 reset_active_policy(_policy_token)
             except ValueError:
                 # Generator finalized in a different context than it started in

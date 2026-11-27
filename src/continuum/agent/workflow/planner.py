@@ -28,6 +28,7 @@ from continuum.agent.types import (
     TokenUsage,
 )
 from continuum.agent.utils.context_utils import publish_active_policy
+from continuum.llm import gateway_routing
 from continuum.llm.config import LLMConfig
 from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
@@ -128,6 +129,7 @@ class PlannerAgent(BaseAgent):
         return "single" if self.agent else "pool"
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,

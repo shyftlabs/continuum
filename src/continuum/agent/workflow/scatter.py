@@ -58,6 +58,7 @@ from continuum.agent.workflow._forkable import (
     segment_by_markers,
 )
 from continuum.config import settings
+from continuum.llm import gateway_routing
 from continuum.logging import get_logger, log_content
 from continuum.observability.trace_context import SpanScope
 
@@ -146,6 +147,7 @@ class ScatterAgent(BaseAgent):
             raise AgentConfigurationError("ScatterAgent requires at least one agent")
 
     @publish_active_policy
+    @gateway_routing.collects_routing
     async def execute(
         self,
         input_text: str,

@@ -310,6 +310,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
+        context_config: "ContextManagementConfig | None" = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """
@@ -321,6 +322,10 @@ class LLMClient:
         are folded into the policy subjects and the target model is checked as
         ``llm:<model>`` before any provider is selected; a deny raises
         ModelAccessDeniedError. Mirrors the tool-access gate.
+
+        context_config: the calling agent's context settings for the compression
+        pass. Defaults to the ones the running agent published
+        (``use_context_config``), then to the process-wide manager's config.
         """
         effective_config = config or self.default_config
         effective_session_id = session_id or get_current_session_id()
@@ -376,13 +381,25 @@ class LLMClient:
 
         # Context compression
         try:
-            from continuum.llm.context_management import get_progressive_context_manager
+            from continuum.llm.context_management import (
+                get_active_context_config,
+                get_progressive_context_manager,
+            )
 
             context_manager = get_progressive_context_manager()
-            if context_manager.config.enabled:
+            compress_config = (
+                context_config or get_active_context_config() or context_manager.config
+            )
+            if compress_config.enabled:
+                # config= only when it is not the manager's own, so a manager
+                # override whose compress_if_needed takes no config still runs.
+                extra = (
+                    {} if compress_config is context_manager.config else {"config": compress_config}
+                )
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
+                    **extra,
                 )
                 if compression_result.was_compressed:
                     logger.info(
@@ -551,6 +568,7 @@ class LLMClient:
         policy_store: Any | None = None,
         policy_subject: str | None = None,
         data_labels: set[str] | None = None,
+        context_config: "ContextManagementConfig | None" = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming chat completion. Auto-traced via @observe."""
@@ -569,13 +587,25 @@ class LLMClient:
 
         # Context compression before streaming
         try:
-            from continuum.llm.context_management import get_progressive_context_manager
+            from continuum.llm.context_management import (
+                get_active_context_config,
+                get_progressive_context_manager,
+            )
 
             context_manager = get_progressive_context_manager()
-            if context_manager.config.enabled:
+            compress_config = (
+                context_config or get_active_context_config() or context_manager.config
+            )
+            if compress_config.enabled:
+                # config= only when it is not the manager's own, so a manager
+                # override whose compress_if_needed takes no config still runs.
+                extra = (
+                    {} if compress_config is context_manager.config else {"config": compress_config}
+                )
                 messages_dict, compression_result = await context_manager.compress_if_needed(
                     messages=messages_dict,
                     model=effective_config.model,
+                    **extra,
                 )
                 if compression_result.was_compressed:
                     logger.info(
@@ -691,3 +721,9 @@ class LLMClient:
     ) -> Iterator[StreamChunk]:
         """Alias for chat_stream_sync."""
         yield from self.chat_stream_sync(messages, config, **kwargs)
+
+
+# Imported last: context_management imports LLMClient from this module. Bound at
+# module level so the context_config hints on chat() / chat_stream() resolve at
+# runtime (typing.get_type_hints).
+from continuum.llm.context_management import ContextManagementConfig  # noqa: E402
