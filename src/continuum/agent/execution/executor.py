@@ -7,6 +7,8 @@ Extracted from AgentRunner to provide clean separation of concerns.
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from continuum.agent.exceptions import (
@@ -137,18 +139,127 @@ def _handoff_payload_key(reason: str | None, context: str | None) -> str:
 _MAX_STRUCTURED_OUTPUT_RETRIES = 1
 
 
+# Key in run(metadata=...) whose values are sent to the gateway with every model call.
+GATEWAY_METADATA_KEY = "gateway_metadata"
+
+# Limits on body.metadata, matching OpenAI's request metadata (16 keys, 64-character
+# keys, 512-character values) in case the gateway forwards it. The ids and tags
+# count towards the 16 keys; caller labels beyond that are dropped.
+_GATEWAY_MAX_KEYS = 16
+_GATEWAY_MAX_KEY_LEN = 64
+_GATEWAY_MAX_VALUE_LEN = 512
+
+
+def _gateway_value(value: Any) -> str:
+    """A label value as a string, at most 512 characters; nested values as JSON."""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        if isinstance(value, (set, frozenset)):
+            value = sorted(value, key=str)
+        try:
+            text = json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            # Keys that are not strings or cannot be sorted together, or a value
+            # that contains itself: a label must never fail the run.
+            text = str(value)
+    else:
+        text = str(value)
+    return text[:_GATEWAY_MAX_VALUE_LEN]
+
+
+# Label warnings already logged, by (run id, kind): each is logged once per run,
+# not on every model call. Bounded so a long-lived process does not grow it.
+_GATEWAY_WARNED: OrderedDict[tuple[str, str], None] = OrderedDict()
+_GATEWAY_WARNED_MAX = 1024
+
+
+def _warn_once_per_run(context: RunContext, kind: str, msg: str, *args: Any) -> None:
+    key = (str(context.run_id), kind)
+    if key in _GATEWAY_WARNED:
+        return
+    _GATEWAY_WARNED[key] = None
+    if len(_GATEWAY_WARNED) > _GATEWAY_WARNED_MAX:
+        _GATEWAY_WARNED.popitem(last=False)
+    logger.warning(msg, *args)
+
+
 def _enrich_config_for_gateway(config: LLMConfig, context: RunContext) -> LLMConfig:
-    """Inject gateway metadata into body.metadata when Smart Gateway is configured."""
+    """Tag each model call for the Smart Gateway (``body.metadata``) so it can attribute cost.
+
+    Sends the session (or run) id, the trace id, the run's tags, and the labels
+    the caller passed as ``run(..., metadata={"gateway_metadata": {...}})`` --
+    for example a tenant, fund or feature -- as strings. The agent's own
+    ``extra_body["metadata"]`` is kept and counts as labels; a caller label of
+    the same name wins over it, and the ids win over both. The rest of the
+    agent's ``extra_body`` is kept as is.
+
+    Labels are capped at 16 keys in all (ids and tags included), 64-character
+    keys and 512-character values; nested values are sent as JSON. A
+    ``gateway_metadata`` that is not a mapping is ignored, and dropped or
+    clashing labels are logged, each once per run. Labels and tags leave the
+    process, so they must not hold personal data.
+    """
     if not settings.smart_gateway_url:
         return config
-    return config.with_overrides(
-        extra_body={
-            "metadata": {
-                "session_id": context.session_id or context.run_id,
-                "trace_id": context.trace_id,
-            }
-        }
-    )
+    labels = (context.metadata or {}).get(GATEWAY_METADATA_KEY) or {}
+    if not isinstance(labels, Mapping):
+        _warn_once_per_run(
+            context,
+            "not_mapping",
+            "Ignoring run metadata %r: expected a mapping of labels, got %s",
+            GATEWAY_METADATA_KEY,
+            type(labels).__name__,
+        )
+        labels = {}
+
+    extra_body = dict(config.extra_body or {})
+    own = extra_body.get("metadata")
+    own_labels = own if isinstance(own, Mapping) else {}
+
+    reserved: dict[str, Any] = {}
+    if context.tags:
+        reserved["tags"] = _gateway_value(",".join(str(tag) for tag in context.tags))
+    reserved["session_id"] = context.session_id or context.run_id
+    reserved["trace_id"] = context.trace_id
+
+    metadata: dict[str, Any] = {}
+    source_key: dict[str, str] = {}
+    room = _GATEWAY_MAX_KEYS - len(reserved)
+    dropped = 0
+    clashes: set[str] = set()
+    for k, v in [*own_labels.items(), *labels.items()]:
+        name = str(k)
+        key = name[:_GATEWAY_MAX_KEY_LEN]
+        if v is None or not key or key in reserved:
+            continue
+        if key in metadata:
+            if source_key[key] != name:
+                clashes.add(key)
+        elif len(metadata) >= room:
+            dropped += 1
+            continue
+        metadata[key] = _gateway_value(v)
+        source_key[key] = name
+    if clashes:
+        _warn_once_per_run(
+            context,
+            "clash",
+            "Gateway labels %s: different keys cut to the same 64 characters; the last one is sent",
+            sorted(clashes),
+        )
+    if dropped:
+        _warn_once_per_run(
+            context,
+            "dropped",
+            "Dropped %d gateway label(s): at most %d keys are sent, ids and tags included",
+            dropped,
+            _GATEWAY_MAX_KEYS,
+        )
+    metadata.update(reserved)
+
+    extra_body["metadata"] = metadata
+    return config.with_overrides(extra_body=extra_body)
 
 
 def _usage_with_model(response: Any, fallback_model: str | None) -> TokenUsage:

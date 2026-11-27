@@ -65,6 +65,32 @@ To disable the gateway (direct provider calls), set `SMART_GATEWAY_URL=`
 to the prefix table. Deleting the var from a shell after it was exported is
 not enough if it's still exported elsewhere; prefer the empty value.
 
+Each agent model call carries `body.metadata` for the gateway's cost and
+budget reports: `session_id`, `trace_id`, the run's `tags`, and any labels
+passed under `gateway_metadata` (sent as strings; the ids win over a label of
+the same name). An agent's own `extra_body["metadata"]` is kept and counts as
+labels; a caller label of the same name wins over it:
+
+```python
+await runner.run(agent, question, metadata={"gateway_metadata": {"org_id": org.id, "fund_id": fund.id}})
+```
+
+A handoff target's calls carry the same labels and tags. Nested values are sent
+as JSON, or as text when JSON cannot encode them (keys that are not strings, a
+value that contains itself). At most 16 keys are sent in all (the ids, tags and
+the agent's own metadata count), with keys cut to 64 characters and values to
+512; extra labels are dropped, and keys that are the same in their first 64
+characters keep the last value. Each of these, and a `gateway_metadata` that is
+not a mapping (ignored), is logged as a warning once per run. Labels and
+tags leave the process, so keep personal data (names, emails, free text) out of
+them; use opaque ids.
+
+Only agent model calls are labelled. Internal model calls carry neither the
+labels nor the session or trace id, so per-tenant cost and budgets miss them:
+context summaries, handoff history summaries, the parallel merge, the tier
+classifier and model-tier fallback, and the planner, router, scatter, debate,
+supervised, loop, reflection and memory calls.
+
 #### Which model the gateway ran
 
 Each agent or workflow run through the gateway lists what the gateway did in
