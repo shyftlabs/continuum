@@ -168,3 +168,67 @@ def test_accepts_an_agent_response_and_its_handoff_child():
     case = EvalCase.from_run("q", parent, tools=["vector_search"])
     assert case.context == ["parent chunk", "child chunk"]
     assert contexts_from_messages(parent) == ["parent chunk", "child chunk"]
+
+
+def test_a_handoff_child_repeating_the_parents_history_is_not_counted_twice():
+    """``return_to_parent=False`` with shared tool names: each chunk appears once."""
+    from continuum.agent.types import AgentResponse, HandoffResult
+
+    parent_history = [
+        {"role": "assistant", "tool_calls": [_call("c1", "vector_search")]},
+        {"role": "tool", "tool_call_id": "c1", "content": "CHUNK-1"},
+        {"role": "assistant", "tool_calls": [_call("h1", "handoff_to_specialist")]},
+        {"role": "tool", "tool_call_id": "h1", "content": "handoff accepted"},
+    ]
+    child = AgentResponse(
+        content="2.1x",
+        agent_name="specialist",
+        messages=[
+            *parent_history,
+            {"role": "assistant", "tool_calls": [_call("c2", "vector_search")]},
+            {"role": "tool", "tool_call_id": "c2", "content": "CHUNK-2"},
+        ],
+    )
+    parent = AgentResponse(
+        content="2.1x",
+        agent_name="triage",
+        messages=parent_history,
+        handoff_result=HandoffResult(
+            handoff_id="h",
+            from_agent="triage",
+            to_agent="specialist",
+            success=True,
+            response=child,
+        ),
+    )
+    assert EvalCase.from_run("q", parent).context == ["CHUNK-1", "CHUNK-2"]
+    # Two calls that returned the same text are still two results.
+    same_text = [
+        {
+            "role": "assistant",
+            "tool_calls": [_call("a", "vector_search"), _call("b", "vector_search")],
+        },
+        {"role": "tool", "tool_call_id": "a", "content": "CHUNK-1"},
+        {"role": "tool", "tool_call_id": "b", "content": "CHUNK-1"},
+    ]
+    assert contexts_from_messages(same_text) == ["CHUNK-1", "CHUNK-1"]
+
+
+def _messages_gen():
+    yield from MESSAGES
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    [
+        pytest.param(lambda: {"messages": MESSAGES}, id="to_dict"),
+        pytest.param(_messages_gen, id="generator"),
+        pytest.param(lambda: "Net debt / EBITDA is 2.1x.", id="str"),
+        pytest.param(lambda: None, id="none"),
+    ],
+)
+def test_unsupported_input_is_rejected(unsupported):
+    with pytest.raises(TypeError, match="list of messages or an AgentResponse"):
+        contexts_from_messages(unsupported())
+    with pytest.raises(TypeError):
+        EvalCase.from_run("q", unsupported())

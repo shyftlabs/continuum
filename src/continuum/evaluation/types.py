@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -251,12 +252,26 @@ def contexts_from_messages(
     ``AgentResponse`` from a handoff with ``return_to_parent=False``, the handed-off
     agent's results (``handoff_result.response.messages``) are included too; with
     the default ``return_to_parent=True`` the parent keeps only the child's
-    answer, so the child's tool results are not available.
+    answer, so the child's tool results are not available. The child's messages
+    repeat the parent's history, so a result seen twice (same ``tool_call_id``
+    and content) is kept once.
+
+    Raises ``TypeError`` for anything else (a ``str``, a dict such as
+    ``AgentResponse.to_dict()``, a generator), rather than returning an empty
+    context that would read as "no retrieval".
     """
     if isinstance(tools, str):
         raise TypeError("tools must be a list of tool names, not a str")
+    if not isinstance(messages, (list, tuple)) and (
+        isinstance(messages, (str, bytes, Mapping)) or not hasattr(messages, "messages")
+    ):
+        raise TypeError(
+            "messages must be a list of messages or an AgentResponse, "
+            f"not {type(messages).__name__}"
+        )
     wanted = None if tools is None else set(tools)
     names: dict[str, str] = {}
+    seen: set[tuple[str, str]] = set()
     contexts: list[str] = []
     for message in _run_messages(messages):
         m = message if isinstance(message, dict) else _message_dict(message)
@@ -267,7 +282,8 @@ def contexts_from_messages(
                 fn = fn if isinstance(fn, dict) else _message_dict(fn)
                 names[call.get("id") or ""] = fn.get("name") or ""
         elif m.get("role") == "tool":
-            name = names.get(m.get("tool_call_id") or "", "")
+            call_id = m.get("tool_call_id") or ""
+            name = names.get(call_id, "")
             short = name.split("__")[-1]
             if short in _NON_CONTEXT_TOOLS or short.startswith(_HANDOFF_TOOL_PREFIX):
                 continue
@@ -276,8 +292,13 @@ def contexts_from_messages(
             content = m.get("content")
             if not isinstance(content, str):
                 content = "" if content is None else str(content)
-            if content.strip() and not _is_error_envelope(content):
-                contexts.append(content)
+            if not content.strip() or _is_error_envelope(content):
+                continue
+            if call_id:
+                if (call_id, content) in seen:
+                    continue
+                seen.add((call_id, content))
+            contexts.append(content)
     return contexts
 
 
