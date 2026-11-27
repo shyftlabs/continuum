@@ -895,7 +895,9 @@ heavy work use `@observe` or push to a queue.
 the tools returned (`ToolRound`: this round's results, the run's history,
 `tools_used`). Return a string to add it as a system message before the next
 model call (at most `after_tool_round_max_nudges` times a run, default 1), or
-`None` to carry on. System messages are not saved to the session.
+`None` to carry on. Once that many have gone in, the rule is still called after
+every round, but what it returns is ignored; `ToolRound.nudges_sent` says how
+many went in. System messages are not saved to the session.
 
 ```python
 from continuum.agent.execution.tool_round import ToolRound

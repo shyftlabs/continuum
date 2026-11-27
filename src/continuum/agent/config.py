@@ -339,7 +339,8 @@ class AgentConfig:
     # Called after each round of tool calls with what the tools returned
     # (continuum.agent.execution.tool_round.ToolRound). A returned string is added
     # as a system message before the next model call -- e.g. "those lookups were
-    # empty, try vector_search" -- at most after_tool_round_max_nudges times a run.
+    # empty, try vector_search" -- at most after_tool_round_max_nudges times a run;
+    # after that the hook is still called and its return value ignored.
     # Not saved to the session.
     after_tool_round: Callable[[Any], Any] | None = None
     after_tool_round_max_nudges: int = 1
